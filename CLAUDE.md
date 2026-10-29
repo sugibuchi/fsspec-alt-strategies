@@ -38,7 +38,8 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
   - it is called as `await strategy(fs, ..., batch_size=..., callback=...)`;
   - a callback returning a `Stop`, e.g. `Stop(cleanup=True)`, cancels it, and any other value but None is a
     `TypeError`;
-  - it returns a result object recording errors per path, rather than raising them.
+  - it returns a result object recording errors per path, rather than raising them;
+  - only `Stop(raise_error=True)` makes it raise, `OperationStopped` with the partial result.
 - Never swallow `CancelledError`.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
 - The library never chooses a strategy for the developer. Each strategy's docstring says what it assumes of the

@@ -114,28 +114,48 @@ strategy's docstring says what its steps are, e.g. a folder listed or a batch de
 - Returning anything else raises `TypeError`, so that a callback returning e.g. `True` by mistake is caught.
 - On a stop, the strategy starts no new calls and waits for those already sent. A call cut off midway would leave its
   outcome unknown.
+- From a sync method, the callback runs in fsspec's IO thread, not the caller's.
+
+#### Stop
 
 `Stop` is a frozen dataclass of options for how to stop:
 
 - `cleanup`: whether to undo what the operation did, where it can, e.g. delete the files a copy wrote. False by
   default, which keeps what is done.
+- `raise_error`: whether the strategy raises `OperationStopped` once stopped, instead of returning. False by default,
+  which returns the partial result.
 - `reason`: an optional text, kept in the result for logs and messages.
 
 Each strategy's docstring says what `cleanup` undoes for it. Work that cannot be undone, such as a deletion, is kept.
-A strategy never leaves a partly written file, with or without `cleanup`. New options are added to `Stop` with defaults,
-so that callbacks keep working.
-- From a sync method, the callback runs in fsspec's IO thread, not the caller's.
+A strategy never leaves a partly written file, with or without `cleanup`. New options are added to `Stop` with
+defaults, so that callbacks keep working.
 
 #### Results
 
-A strategy returns a result object, even when cancelled or when some paths fail. Errors on single paths are recorded
-in it, not raised.
+Without a stop, a strategy returns a result object, even when some paths fail. A stop returns the partial result, or
+raises it, as its `raise_error` says:
 
-- `complete` is False after a cancel or a failure.
+```python
+def on_progress(state):
+    if user_pressed_cancel:
+        return Stop()                   # tree_rm returns, with result.complete False
+    if state.errors:
+        return Stop(raise_error=True)   # tree_rm raises OperationStopped: fail fast
+```
+
+A result has these fields:
+
+- `complete` is False after a stop or a failure.
 - `stop` is the `Stop` a callback returned, or None.
 - `errors` maps each failed path to its exception.
 - `raise_for_errors()` raises them as an `ExceptionGroup`, for callers that want an exception.
 - Each strategy's result adds its own fields, e.g. the files deleted.
+
+`OperationStopped` carries the partial result as its `result`. When paths have failed, it is raised from their
+`ExceptionGroup`, so tracebacks show them.
+
+Errors on single paths are recorded, never raised on their own. A caller wanting to fail fast stops from the callback,
+as the state counts the errors so far.
 
 Cancelling the task itself, e.g. with `asyncio.timeout`, raises `CancelledError` as usual. The strategy then cleans up
 and never swallows it, but the partial result is lost.
