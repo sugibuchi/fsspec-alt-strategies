@@ -14,7 +14,7 @@ This library offers other ways of doing the same things. It is a third-party pro
 ## Planned features
 
 - **Tree operations** for filesystems with a hierarchical namespace: listing, finding, deleting and copying trees.
-- **Glob** that walks only the folders a pattern can match, with patterns compiled to an NFA.
+- **Glob** that lists only the folders where a pattern can still match.
 - **An abstract file class** that adapts its buffering to how a file is read. It serves both random reads of small
   ranges and bulk sequential reads, without tuning per file.
 - **Observability:** callbacks that report an operation's intermediate state. A callback's return value can cancel the

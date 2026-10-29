@@ -8,7 +8,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.control import Stop
-from fsspec_alt_strategies.glob import GlobState, _Pattern, tree_glob
+from fsspec_alt_strategies.glob import GlobState, _Prefix, tree_glob
 
 if TYPE_CHECKING:
     from fsspec_alt_strategies.testing import SimulatedFileSystem
@@ -106,5 +106,5 @@ async def test_stop_returns_what_was_matched(any_fs: SimulatedFileSystem) -> Non
         (["a", "**"], ["b"], False),
     ],
 )
-def test_pattern_alive(segments: list[str], relative: list[str], alive: bool) -> None:
-    assert _Pattern(segments).alive(relative) is alive
+def test_prefix_alive(segments: list[str], relative: list[str], alive: bool) -> None:
+    assert _Prefix(segments).alive(relative) is alive

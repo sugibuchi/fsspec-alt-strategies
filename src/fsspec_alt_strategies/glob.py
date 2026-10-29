@@ -7,9 +7,10 @@ fsspec's finds every path under the pattern's literal root, as deep as the
 pattern goes, then filters them with a regular expression. `tree_glob` walks
 the tree with `walk`, and lists a folder only if the pattern can match in it.
 
-To decide, the pattern is compiled to an NFA over path segments. Its states are
-the positions in the pattern's segments, and ``**`` loops on its own state. A
-folder is listed only while a state other than the end is still alive.
+To decide, a folder's path is matched with the pattern's segments, one by one.
+A ``**`` matches any number of segments, so only those before the first ``**``
+can rule a folder out. Without a ``**``, nor can a folder as deep as the
+pattern, as nothing below it can match.
 
 This module depends on `control` and `walk`.
 """
@@ -72,43 +73,22 @@ class GlobResult(Result):
     folders_pruned: int = 0
 
 
-class _Pattern:
-    """A glob pattern's segments, as an NFA deciding which folders to list."""
+class _Prefix:
+    """A pattern's segments before its first ``**``, which decide the folders to list."""
 
     def __init__(self, segments: list[str]) -> None:
-        self.segments = [
-            None if s == "**" else re.compile(glob_translate(s)) for s in segments
-        ]
-        self.end = len(segments)
-
-    def closure(self, states: set[int]) -> set[int]:
-        # A ** may match no segment at all: its state also stands for the next.
-        out = set(states)
-        for state in states:
-            i = state
-            while i < self.end and self.segments[i] is None:
-                i += 1
-                out.add(i)
-        return out
-
-    def step(self, states: set[int], name: str) -> set[int]:
-        out = set()
-        for i in states:
-            if i == self.end:
-                continue
-            segment = self.segments[i]
-            if segment is None:
-                out.add(i)  # The ** consumes this segment, and may go on.
-            elif segment.match(name):
-                out.add(i + 1)
-        return self.closure(out)
+        # Without a **, the pattern is as deep as its segments. With one, it can
+        # match at any depth: only the segments before it can rule a folder out.
+        self.bounded = "**" not in segments
+        if not self.bounded:
+            segments = segments[: segments.index("**")]
+        self.segments = [re.compile(glob_translate(s)) for s in segments]
 
     def alive(self, relative: list[str]) -> bool:
         """Whether the pattern can still match below a folder, at that path."""
-        states = self.closure({0})
-        for name in relative:
-            states = self.step(states, name)
-        return any(i < self.end for i in states)
+        if self.bounded and len(relative) >= len(self.segments):
+            return False
+        return all(s.match(n) for s, n in zip(self.segments, relative, strict=False))
 
 
 async def tree_glob(
@@ -228,8 +208,8 @@ class _Search:
         self.root = fs._strip_protocol(path[: slash + 1])
         self.start = len(self.root) + 1 if self.root else 0
         self.depth = _depth(path, relative, maxdepth)
-        self.pattern = _Pattern(relative.split("/"))
-        # The answer comes from fsspec's own regular expression, and the NFA
+        self.prefix = _Prefix(relative.split("/"))
+        # The answer comes from fsspec's own regular expression, and the prefix
         # only prunes. So pruning can never change the answer.
         regex = glob_translate(path + ("/" if ends_with_sep else ""))
         self.matches = re.compile(regex).match
@@ -245,7 +225,7 @@ class _Search:
         )
 
     def descend(self, entry: dict[str, Any]) -> bool:
-        if self.pattern.alive(entry["name"].rstrip("/")[self.start :].split("/")):
+        if self.prefix.alive(entry["name"].rstrip("/")[self.start :].split("/")):
             return True
         self.result.folders_pruned += 1
         return False
