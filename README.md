@@ -2,8 +2,8 @@
 
 Alternative, filesystem-independent strategies for [fsspec](https://github.com/fsspec/filesystem_spec) filesystems.
 
-> **Status:** pre-alpha. The API may change. A concurrent tree walk and a recursive delete built on it exist so
-> far. The rest below is the plan.
+> **Status:** pre-alpha. The API may change. So far, there are a concurrent tree walk and these strategies built on
+> it: find, du, a pruning glob and a recursive delete. The rest below is the plan.
 
 fsspec's design largely assumes object stores with a flat key space. Most of its tree operations expand a whole subtree
 by listing it first. That is not always efficient on filesystems with a hierarchical namespace, such as Azure Data Lake

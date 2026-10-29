@@ -56,6 +56,8 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
 - Test folders have no `__init__.py`. Never import one test file from another.
 - Test strategies on `SimulatedFileSystem`, with the fixtures of `tests/conftest.py`: `flat_fs`, `hierarchical_fs` and
   `any_fs`, which runs a test on both. Assert the requests made, from `fs.stats.calls`.
+- A strategy replacing an fsspec method answers as it does. Test it against fsspec's own, e.g.
+  `AsyncFileSystem._glob(fs, ...)`: the subclass's method may be overridden.
 
 ## Conventions
 

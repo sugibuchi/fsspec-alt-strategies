@@ -7,6 +7,9 @@
 | `src/fsspec_alt_strategies/`    | The package.                                                   |
 | `.../control.py`                | `Stop`, `OperationStopped`, `Result`, `State`: the strategy API. |
 | `.../walk.py`                   | `walk`, the concurrent folder walk under the tree strategies.  |
+| `.../find.py`                   | `tree_find`, a find listing several folders at a time.         |
+| `.../du.py`                     | `tree_du`, a tree's size from its listings alone.              |
+| `.../glob.py`                   | `tree_glob`, a glob listing only the folders it can match in.  |
 | `.../rm.py`                     | `tree_rm`, a recursive delete that deletes while it walks.     |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, with the shared fixtures in `tests/conftest.py`.    |
@@ -43,6 +46,8 @@ CI runs ruff and pytest on every supported Python version.
   `add_dir`, which make no request.
 - Assert the requests a strategy makes, e.g. `fs.stats.calls == {"list": 1, "delete": 3}`. They are what the
   strategy is for.
+- A strategy replacing an fsspec method answers as that method does. Test it against fsspec's own, called as
+  e.g. `AsyncFileSystem._glob(fs, ...)` on the same filesystem.
 - Test folders have no `__init__.py`. Share code through `conftest.py` or helpers at the top of `tests/`.
 
 ## Design
