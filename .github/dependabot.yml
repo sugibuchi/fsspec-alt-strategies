@@ -1,0 +1,19 @@
+# Dependabot keeps the workflows' actions, pinned to commit SHAs, up to date:
+# a pull request a month, its updates grouped. The Python dependencies are
+# ranges in pyproject.toml, and uv.lock is committed: Dependabot updates it too.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      python:
+        patterns: ["*"]
