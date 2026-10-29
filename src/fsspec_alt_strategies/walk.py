@@ -67,7 +67,7 @@ async def walk(
     listing that fails is yielded with its error, and the walk goes on with the
     other folders.
 
-    Unlike other strategies, `walk` takes no callback and returns no result: the
+    Unlike most strategies, `walk` takes no callback and returns no result: the
     caller drives it. Breaking out of the loop stops it. Close it with
     `contextlib.aclosing`, so that its listings in flight are cancelled at once.
 

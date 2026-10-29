@@ -9,7 +9,7 @@
 | `.../walk.py`                   | `walk`, the concurrent folder walk under the tree strategies.  |
 | `.../find.py`                   | `tree_find`, a find listing several folders at a time.         |
 | `.../du.py`                     | `tree_du`, a tree's size from its listings alone.              |
-| `.../glob.py`                   | `tree_glob`, a glob listing only the folders it can match in.  |
+| `.../glob.py`                   | `tree_glob` and `itree_glob`, a glob listing only the folders it can match in. |
 | `.../rm.py`                     | `tree_rm`, a recursive delete that deletes while it walks.     |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, with the shared fixtures in `tests/conftest.py`.    |
@@ -166,8 +166,13 @@ A result has these fields:
 Errors on single paths are recorded, never raised on their own. A caller wanting to fail fast stops from the callback,
 as the state counts the errors so far.
 
-`walk` is the one exception to this API. It is an async iterator that the caller drives, and takes no callback.
-Breaking out of its loop stops it. The strategies built on it report and stop as above.
+`walk` and the glob are the exceptions to this API:
+
+- `walk` and `itree_glob` are async iterators that the caller drives, with no callback. Breaking out of the loop stops
+  them.
+- `tree_glob` collects `itree_glob`. It returns the entries matched, sorted, and the errors, as a tuple.
+
+The other strategies built on `walk` report and stop as above.
 
 Cancelling the task itself, e.g. with `asyncio.timeout`, raises `CancelledError` as usual. The strategy then cleans up
 and never swallows it, but the partial result is lost.

@@ -1,17 +1,15 @@
-"""Tests of `tree_glob`, checked against fsspec's own ``_glob``."""
+"""Tests of `tree_glob` and `itree_glob`, checked against fsspec's own ``_glob``."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from contextlib import aclosing
+from typing import Any
 
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.control import Stop
-from fsspec_alt_strategies.glob import GlobState, _Prefix, tree_glob
-
-if TYPE_CHECKING:
-    from fsspec_alt_strategies.testing import SimulatedFileSystem
+from fsspec_alt_strategies.glob import _Prefix, itree_glob, tree_glob
+from fsspec_alt_strategies.testing import SimulatedFileSystem
 
 _PATTERNS = [
     "data",
@@ -51,21 +49,21 @@ async def test_answers_as_fsspec(
     any_fs: SimulatedFileSystem, path: str, kwargs: dict[str, Any]
 ) -> None:
     _tree(any_fs)
-    result = await tree_glob(any_fs, path, **kwargs)
-    assert result.complete
-    expected = await AsyncFileSystem._glob(any_fs, path, **kwargs)
-    assert list(result.entries) == expected
+    entries, errors = await tree_glob(any_fs, path, **kwargs)
+    assert errors == []
+    expected = await AsyncFileSystem._glob(any_fs, path, detail=True, **kwargs)
+    assert [e["name"].rstrip("/") for e in entries] == list(expected)
+    assert entries == list(expected.values())
 
 
 async def test_prunes_folders_the_pattern_cannot_match_in(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
-    result = await tree_glob(hierarchical_fs, "data/*/2024/*/part-*")
-    assert len(result.entries) == 6
+    entries, _ = await tree_glob(hierarchical_fs, "data/*/2024/*/part-*")
+    assert len(entries) == 6
     # data, the 3 tables, their 2024s: the 2023s are pruned.
     assert hierarchical_fs.stats.calls == {"list": 1 + 3 + 3 + 6}
-    assert result.folders_pruned == 3
 
     hierarchical_fs.reset_stats()
     await AsyncFileSystem._glob(hierarchical_fs, "data/*/2024/*/part-*")
@@ -76,23 +74,50 @@ async def test_double_star_prunes_after_it(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
-    result = await tree_glob(hierarchical_fs, "data/sales/**")
+    await tree_glob(hierarchical_fs, "data/sales/**")
     # Only data/sales and below: the literal root is data/sales.
-    assert result.folders_pruned == 0
     assert hierarchical_fs.stats.calls["list"] == 1 + 2 + 4
 
 
-async def test_stop_returns_what_was_matched(any_fs: SimulatedFileSystem) -> None:
+async def test_iterator_yields_as_tree_glob_finds(
+    any_fs: SimulatedFileSystem,
+) -> None:
     _tree(any_fs)
-    states: list[GlobState] = []
+    matches = [m async for m in itree_glob(any_fs, "data/**/*.parquet")]
+    entries, _ = await tree_glob(any_fs, "data/**/*.parquet")
+    assert sorted(matches, key=lambda e: e["name"]) == entries
 
-    def first_only(state: GlobState) -> Stop:
-        states.append(state)
-        return Stop()
 
-    result = await tree_glob(any_fs, "data/*", callback=first_only)
-    assert not result.complete
-    assert states[0].folders_listed == 1
+class _Forbidding(SimulatedFileSystem):
+    """Refuses to list one folder, as a storage without permission would."""
+
+    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+        if self._strip_protocol(path) == "data/sales":
+            raise PermissionError(path)
+        return await super()._ls(path, detail=detail, **kwargs)
+
+
+async def test_failed_listing_adds_its_error_and_the_search_goes_on() -> None:
+    fs = _Forbidding(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    entries, errors = await tree_glob(fs, "data/*/2024/*/*")
+    assert [type(e) for e in errors] == [PermissionError]
+    assert len(entries) == 4
+    assert not any(e["name"].startswith("data/sales/") for e in entries)
+
+    matches = [m async for m in itree_glob(fs, "data/*/2024/*/*")]
+    assert sum(isinstance(m, PermissionError) for m in matches) == 1
+
+
+async def test_breaking_out_stops_the_search() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, latency=0.05, asynchronous=True)
+    for i in range(10):
+        fs.add_file(f"root/{i}/file")
+    async with aclosing(itree_glob(fs, "root/*/file", batch_size=2)) as matches:
+        async for _ in matches:
+            break  # The first match: other listings are now in flight.
+    assert fs._in_flight == 0
+    assert fs.stats.calls["list"] < 11
 
 
 @pytest.mark.parametrize(
