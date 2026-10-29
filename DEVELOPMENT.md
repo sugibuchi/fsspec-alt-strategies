@@ -5,6 +5,9 @@
 | Path                            | Contents                                                       |
 |---------------------------------|----------------------------------------------------------------|
 | `src/fsspec_alt_strategies/`    | The package.                                                   |
+| `.../control.py`                | `Stop`, `OperationStopped`, `Result`, `State`: the strategy API. |
+| `.../walk.py`                   | `walk`, the concurrent folder walk under the tree strategies.  |
+| `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, with the shared fixtures in `tests/conftest.py`.    |
 | `.github/workflows/ci.yaml`     | Lint and tests, on pull requests and pushes to `main`.         |
 
@@ -157,6 +160,9 @@ A result has these fields:
 Errors on single paths are recorded, never raised on their own. A caller wanting to fail fast stops from the callback,
 as the state counts the errors so far.
 
+`walk` is the one exception to this API. It is an async iterator that the caller drives, and takes no callback.
+Breaking out of its loop stops it. The strategies built on it report and stop as above.
+
 Cancelling the task itself, e.g. with `asyncio.timeout`, raises `CancelledError` as usual. The strategy then cleans up
 and never swallows it, but the partial result is lost.
 
@@ -171,6 +177,8 @@ So the code stays easy to copy:
 - It depends on nothing but fsspec and the standard library.
 - Each file starts with its SPDX license header, which copies keep.
 - Each strategy depends on few shared modules, and its module docstring names them.
+- The package's `__init__.py` imports none of them, so a copy may leave out the modules it does not use. Users import
+  from the modules, e.g. `fsspec_alt_strategies.control`.
 
 `tests/test_copyable.py` checks the first three rules. It also imports a copy of the package under another name.
 

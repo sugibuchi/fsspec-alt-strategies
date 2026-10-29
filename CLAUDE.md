@@ -40,7 +40,10 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
     `TypeError`;
   - it returns a result object recording errors per path, rather than raising them;
   - only `Stop(raise_error=True)` makes it raise, `OperationStopped` with the partial result.
+- `walk` is the exception: an async iterator the caller drives, with no callback or result.
 - Never swallow `CancelledError`.
+- `__init__.py` re-exports nothing but `__version__`. Users import from each module, so a copy can leave out
+  modules it does not use.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
 - The library never chooses a strategy for the developer. Each strategy's docstring says what it assumes of the
   storage, and when it wins or loses.
