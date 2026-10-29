@@ -7,6 +7,7 @@
 | `src/fsspec_alt_strategies/`    | The package.                                                   |
 | `.../control.py`                | `Stop`, `OperationStopped`, `Result`, `State`: the strategy API. |
 | `.../walk.py`                   | `walk`, the concurrent folder walk under the tree strategies.  |
+| `.../rm.py`                     | `tree_rm`, a recursive delete that deletes while it walks.     |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, with the shared fixtures in `tests/conftest.py`.    |
 | `.github/workflows/ci.yaml`     | Lint and tests, on pull requests and pushes to `main`.         |
