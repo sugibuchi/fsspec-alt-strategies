@@ -31,8 +31,14 @@ uvx ruff format .                # format
 CI runs ruff and pytest on every supported Python version.
 
 - Tests run with pytest-asyncio in `auto` mode: an `async def` test needs no marker.
-- The fixture `memfs` is a cleared memory filesystem. `async_memfs` wraps it as an async filesystem, with fsspec's
-  `AsyncFileSystemWrapper`.
+- Tests run on `SimulatedFileSystem`, from the public `fsspec_alt_strategies.testing`. It counts the requests a real
+  storage would get, in `stats`, and can delay each by a latency.
+- Its two modes are an object store, where folders are only prefixes, and a hierarchical namespace, with real
+  folders. Test a strategy on both, with the fixture `any_fs`.
+- The fixtures `flat_fs`, `hierarchical_fs` and `any_fs` are empty async instances. Set up files with `add_file` and
+  `add_dir`, which make no request.
+- Assert the requests a strategy makes, e.g. `fs.stats.calls == {"list": 1, "delete": 3}`. They are what the
+  strategy is for.
 - Test folders have no `__init__.py`. Share code through `conftest.py` or helpers at the top of `tests/`.
 
 ## Design
@@ -104,9 +110,20 @@ strategy's docstring says what its steps are, e.g. a folder listed or a batch de
 
 - The state is a frozen dataclass of counts, such as files done and bytes done, and the path last worked on.
 - The callback may be a plain or an async function. It runs on the event loop, so it must return quickly.
-- Returning None continues. Returning `STOP` cancels the operation.
-- On `STOP`, the strategy starts no new calls and waits for those already sent. A call cut off midway would leave its
+- Returning None continues. Returning a `Stop` object cancels the operation, e.g. `return Stop(cleanup=True)`.
+- Returning anything else raises `TypeError`, so that a callback returning e.g. `True` by mistake is caught.
+- On a stop, the strategy starts no new calls and waits for those already sent. A call cut off midway would leave its
   outcome unknown.
+
+`Stop` is a frozen dataclass of options for how to stop:
+
+- `cleanup`: whether to undo what the operation did, where it can, e.g. delete the files a copy wrote. False by
+  default, which keeps what is done.
+- `reason`: an optional text, kept in the result for logs and messages.
+
+Each strategy's docstring says what `cleanup` undoes for it. Work that cannot be undone, such as a deletion, is kept.
+A strategy never leaves a partly written file, with or without `cleanup`. New options are added to `Stop` with defaults,
+so that callbacks keep working.
 - From a sync method, the callback runs in fsspec's IO thread, not the caller's.
 
 #### Results
@@ -115,7 +132,7 @@ A strategy returns a result object, even when cancelled or when some paths fail.
 in it, not raised.
 
 - `complete` is False after a cancel or a failure.
-- `cancelled` tells whether a callback returned `STOP`.
+- `stop` is the `Stop` a callback returned, or None.
 - `errors` maps each failed path to its exception.
 - `raise_for_errors()` raises them as an `ExceptionGroup`, for callers that want an exception.
 - Each strategy's result adds its own fields, e.g. the files deleted.

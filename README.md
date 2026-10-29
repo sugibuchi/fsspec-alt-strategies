@@ -33,6 +33,21 @@ The package is on PyPI, but we recommend copying the modules you use into your o
 `_contrib/strategy`. Your filesystem's behaviour then never changes with a release of this library. The modules use
 relative imports only and depend on nothing but fsspec, so a copy works under any name. Keep their license headers.
 
+## Choosing with numbers
+
+`fsspec_alt_strategies.testing.SimulatedFileSystem` is an in-memory async filesystem. It counts the requests a real
+storage would get, and delays each by a latency you set. It models an object store, or a storage with a hierarchical
+namespace. Run a strategy and fsspec's default on it, then compare their requests and times.
+
+```python
+from fsspec_alt_strategies.testing import SimulatedFileSystem
+
+fs = SimulatedFileSystem(hierarchical=True, latency=0.02)
+fs.add_file("data/2024/01/a.parquet", b"...")
+fs.rm("data", recursive=True)
+print(fs.stats.calls)  # Counter({'delete': 1})
+```
+
 ## License
 
 Apache License 2.0. See [LICENSE](https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/LICENSE).

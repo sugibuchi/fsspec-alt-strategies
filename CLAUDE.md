@@ -36,7 +36,8 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
   takes it as a parameter.
 - Every strategy follows DEVELOPMENT.md's "The strategy API":
   - it is called as `await strategy(fs, ..., batch_size=..., callback=...)`;
-  - a callback returning `STOP` cancels it;
+  - a callback returning a `Stop`, e.g. `Stop(cleanup=True)`, cancels it, and any other value but None is a
+    `TypeError`;
   - it returns a result object recording errors per path, rather than raising them.
 - Never swallow `CancelledError`.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
@@ -49,7 +50,8 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
   this and the import rules.
 - `_version.py` is written by hatch-vcs and git-ignored: never edit or commit it.
 - Test folders have no `__init__.py`. Never import one test file from another.
-- Use the fixtures `memfs` and `async_memfs` of `tests/conftest.py`.
+- Test strategies on `SimulatedFileSystem`, with the fixtures of `tests/conftest.py`: `flat_fs`, `hierarchical_fs` and
+  `any_fs`, which runs a test on both. Assert the requests made, from `fs.stats.calls`.
 
 ## Conventions
 

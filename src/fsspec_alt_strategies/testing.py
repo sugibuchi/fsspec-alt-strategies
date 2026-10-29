@@ -1,0 +1,436 @@
+# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+# SPDX-License-Identifier: Apache-2.0
+"""A simulated async filesystem, to test and benchmark strategies.
+
+Strategies win or lose by the requests they make, and by how many run at a time.
+`SimulatedFileSystem` keeps its files in memory. It counts each request a real
+storage would get, and delays each by a fixed latency.
+
+Its two modes model the two kinds of storage that strategies are chosen for:
+
+- *flat*, an object store such as S3. Folders are only prefixes of keys, so a
+  folder without files does not exist, and deleting a folder deletes each file.
+- *hierarchical*, a storage with a hierarchical namespace such as Azure Data
+  Lake Storage Gen2. Folders are real, and a folder is deleted in one request.
+
+Whether a whole subtree can be listed in one paginated request is set apart, by
+``recursive_listing``. Some hierarchical storages have it, others list one folder
+per request.
+
+This module depends on nothing else in the package.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import errno
+import math
+import time
+from collections import Counter
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+__all__ = ["CallStats", "SimulatedFileSystem"]
+
+
+@dataclass
+class CallStats:
+    """The requests a `SimulatedFileSystem` received.
+
+    Attributes
+    ----------
+    calls : collections.Counter
+        The number of requests of each kind: "list", "info", "read", "write",
+        "delete", "copy" and "mkdir". A listing counts a request per page.
+    max_concurrency : int
+        The most requests in flight at once.
+    """
+
+    calls: Counter[str] = field(default_factory=Counter)
+    max_concurrency: int = 0
+
+    @property
+    def total(self) -> int:
+        """The number of requests of all kinds."""
+        return self.calls.total()
+
+
+@dataclass
+class _File:
+    data: bytes
+    mtime: float
+
+
+def _parent_of(path: str) -> str:
+    return path.rpartition("/")[0]
+
+
+class SimulatedFileSystem(AsyncFileSystem):
+    """An in-memory async filesystem that counts and delays its requests.
+
+    Each instance has files of its own. Paths have no leading "/", and the root
+    folder is "". The methods that a real storage would answer with requests,
+    such as `_ls`, `_info` and `_rm_file`, count each request in `stats`.
+    Setting up files with `add_file` and `add_dir` makes no request.
+
+    Parameters
+    ----------
+    hierarchical : bool
+        True for a storage with real folders, False for an object store.
+        Only a hierarchical one keeps empty folders, and deletes a folder with
+        everything in it in one request.
+    recursive_listing : bool
+        Whether `_find` lists a subtree in one paginated request, as object
+        stores do. Otherwise, it walks the subtree a folder at a time.
+    latency : float
+        The seconds each request takes. Requests sent together overlap.
+    page_size : int
+        The most entries a listing request returns. Listing more takes a
+        request per page, one after another.
+    **kwargs
+        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
+
+    Attributes
+    ----------
+    stats : CallStats
+        The requests received since the filesystem was made, or since
+        `reset_stats`.
+
+    Examples
+    --------
+    >>> fs = SimulatedFileSystem(hierarchical=True, latency=0.02)
+    >>> fs.add_file("data/2024/a.parquet", b"...")
+    >>> fs.rm("data", recursive=True)
+    >>> fs.stats.calls["delete"]
+    1
+    """
+
+    protocol = "simulated"
+    root_marker = ""
+    # Each instance has files of its own: never share one between callers.
+    cachable = False
+
+    def __init__(
+        self,
+        *,
+        hierarchical: bool = False,
+        recursive_listing: bool = True,
+        latency: float = 0.0,
+        page_size: int = 1000,
+        **kwargs: Any,
+    ) -> None:
+        if page_size < 1:
+            raise ValueError(f"page_size must be positive: {page_size}")
+        super().__init__(**kwargs)
+        self.hierarchical = hierarchical
+        self.recursive_listing = recursive_listing
+        self.latency = latency
+        self.page_size = page_size
+        self.stats = CallStats()
+        self._in_flight = 0
+        self._file_data: dict[str, _File] = {}
+        # Each folder's direct children. In flat mode, a folder is here only
+        # while it holds a file, as object stores have no folders of their own.
+        self._folders: dict[str, set[str]] = {"": set()}
+
+    @classmethod
+    def _strip_protocol(cls, path: Any) -> Any:
+        if isinstance(path, list):
+            return [cls._strip_protocol(p) for p in path]
+        return super()._strip_protocol(path).lstrip("/")
+
+    # --- Setting up, without requests ---------------------------------------
+
+    def add_file(
+        self, path: str, data: bytes = b"", mtime: float | None = None
+    ) -> None:
+        """Add a file, with its parent folders, without a request.
+
+        Parameters
+        ----------
+        path : str
+            The file's path.
+        data : bytes
+            The file's contents.
+        mtime : float, optional
+            The file's modification time, as a POSIX timestamp. Defaults to now.
+        """
+        self._write(self._strip_protocol(path), data, mtime)
+
+    def add_dir(self, path: str) -> None:
+        """Add an empty folder, with its parent folders, without a request.
+
+        Raises
+        ------
+        ValueError
+            On a flat filesystem, which has no empty folders.
+        """
+        if not self.hierarchical:
+            raise ValueError("A flat filesystem has no empty folders.")
+        self._make_dirs(self._strip_protocol(path))
+
+    def reset_stats(self) -> None:
+        """Start counting requests again from zero."""
+        self.stats = CallStats()
+
+    # --- Requests -----------------------------------------------------------
+
+    async def _request(self, kind: str, count: int = 1) -> None:
+        """Wait as a storage answering ``count`` requests one after another would."""
+        for _ in range(count):
+            self.stats.calls[kind] += 1
+            self._in_flight += 1
+            self.stats.max_concurrency = max(
+                self.stats.max_concurrency, self._in_flight
+            )
+            try:
+                # Even without latency, yield to the loop, so that requests sent
+                # together overlap as they would on a real storage.
+                await asyncio.sleep(self.latency)
+            finally:
+                self._in_flight -= 1
+
+    def _pages(self, entries: int) -> int:
+        return max(1, math.ceil(entries / self.page_size))
+
+    # Each method below sends its requests first, then reads or changes the
+    # files without awaiting. So what it does is atomic, as a request is.
+
+    async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        path = self._strip_protocol(path)
+        await self._request("info")
+        if path in self._file_data or path in self._folders:
+            return self._entry(path)
+        raise FileNotFoundError(path)
+
+    async def _ls(
+        self, path: str, detail: bool = True, **kwargs: Any
+    ) -> list[dict[str, Any]] | list[str]:
+        path = self._strip_protocol(path)
+        children = self._folders.get(path)
+        await self._request("list", self._pages(len(children)) if children else 1)
+        if path in self._file_data:
+            entries = [self._entry(path)]
+        elif path in self._folders:
+            entries = [self._entry(c) for c in sorted(self._folders[path])]
+        else:
+            raise FileNotFoundError(path)
+        return entries if detail else [e["name"] for e in entries]
+
+    async def _find(
+        self,
+        path: str,
+        maxdepth: int | None = None,
+        withdirs: bool = False,
+        **kwargs: Any,
+    ) -> list[str] | dict[str, dict[str, Any]]:
+        if not self.recursive_listing or maxdepth is not None:
+            # fsspec's own walk, a folder per request.
+            return await super()._find(
+                path, maxdepth=maxdepth, withdirs=withdirs, **kwargs
+            )
+        path = self._strip_protocol(path)
+        detail = kwargs.pop("detail", False)
+        await self._request("list", self._pages(len(self._listing(path))))
+        names = self._listing(path)
+        if withdirs and path in self._folders:
+            # Object stores list only files, but their folders follow from the
+            # files' keys. fsspec's find includes the folder itself.
+            names = [*self._descendants(path), *([path] if path else [])]
+        elif not withdirs:
+            names = [n for n in names if n in self._file_data]
+        names.sort()
+        if detail:
+            return {n: self._entry(n) for n in names}
+        return names
+
+    async def _cat_file(
+        self,
+        path: str,
+        start: int | None = None,
+        end: int | None = None,
+        **kwargs: Any,
+    ) -> bytes:
+        path = self._strip_protocol(path)
+        await self._request("read")
+        return self._file(path).data[start:end]
+
+    async def _pipe_file(self, path: str, value: bytes, **kwargs: Any) -> None:
+        path = self._strip_protocol(path)
+        await self._request("write")
+        self._write(path, value)
+
+    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
+        path1, path2 = self._strip_protocol(path1), self._strip_protocol(path2)
+        # A copy on the server: one request, whatever the file's size.
+        await self._request("copy")
+        self._write(path2, self._file(path1).data)
+
+    async def _rm_file(self, path: str, **kwargs: Any) -> None:
+        path = self._strip_protocol(path)
+        await self._request("delete")
+        self._file(path)
+        self._unlink(path)
+
+    async def _rm(
+        self,
+        path: str | list[str],
+        recursive: bool = False,
+        maxdepth: int | None = None,
+        batch_size: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        batch_size = batch_size or self.batch_size
+        if self.hierarchical:
+            if maxdepth is not None:
+                raise NotImplementedError(
+                    "maxdepth: a folder is deleted in one request, all of it."
+                )
+            paths = await self._expand_path(path)
+            coros = [self._rm_path(p, recursive) for p in paths]
+        else:
+            # As fsspec does: list everything, then delete each file. Folders
+            # are only prefixes, so they go with their last file.
+            paths = await self._expand_path(
+                path, recursive=recursive, maxdepth=maxdepth
+            )
+            coros = [self._rm_file(p) for p in paths if p in self._file_data]
+        await _run_coros_in_chunks(coros, batch_size=batch_size, nofiles=True)
+
+    async def _rm_path(self, path: str, recursive: bool) -> None:
+        if path in self._file_data:
+            await self._rm_file(path)
+        elif not recursive:
+            await self._rmdir(path)
+        else:
+            await self._request("delete")
+            self._folder(path)
+            if not path:
+                raise PermissionError("The root folder cannot be deleted.")
+            self._drop(path)
+            self._detach(path)
+
+    async def _rmdir(self, path: str) -> None:
+        path = self._strip_protocol(path)
+        if not self.hierarchical:
+            return  # No request: there is no folder to delete.
+        await self._request("delete")
+        if self._folder(path):
+            raise OSError(errno.ENOTEMPTY, "Folder not empty", path)
+        if not path:
+            raise PermissionError("The root folder cannot be deleted.")
+        del self._folders[path]
+        self._detach(path)
+
+    async def _mkdir(
+        self, path: str, create_parents: bool = True, **kwargs: Any
+    ) -> None:
+        path = self._strip_protocol(path)
+        if not self.hierarchical:
+            return  # No request: a folder appears with its first file.
+        await self._request("mkdir")
+        if path in self._folders or path in self._file_data:
+            raise FileExistsError(path)
+        if not create_parents and _parent_of(path) not in self._folders:
+            raise FileNotFoundError(_parent_of(path))
+        self._make_dirs(path)
+
+    async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
+        path = self._strip_protocol(path)
+        if not self.hierarchical:
+            return  # No request: a folder appears with its first file.
+        await self._request("mkdir")
+        if path in self._folders and not exist_ok:
+            raise FileExistsError(path)
+        self._make_dirs(path)
+
+    # --- The files, without requests ----------------------------------------
+
+    def _entry(self, path: str) -> dict[str, Any]:
+        file = self._file_data.get(path)
+        if file is None:
+            return {"name": path, "size": 0, "type": "directory"}
+        return {
+            "name": path,
+            "size": len(file.data),
+            "type": "file",
+            "mtime": file.mtime,
+        }
+
+    def _file(self, path: str) -> _File:
+        if path in self._file_data:
+            return self._file_data[path]
+        if path in self._folders:
+            raise IsADirectoryError(path)
+        raise FileNotFoundError(path)
+
+    def _folder(self, path: str) -> set[str]:
+        if path in self._folders:
+            return self._folders[path]
+        if path in self._file_data:
+            raise NotADirectoryError(path)
+        raise FileNotFoundError(path)
+
+    def _descendants(self, path: str) -> Iterator[str]:
+        for child in self._folders[path]:
+            yield child
+            if child in self._folders:
+                yield from self._descendants(child)
+
+    def _listing(self, path: str) -> list[str]:
+        """What a recursive listing of ``path`` returns, before filtering."""
+        if path in self._file_data:
+            return [path]
+        if path not in self._folders:
+            return []
+        # A hierarchical storage lists its folders too; an object store only keys.
+        return [
+            p
+            for p in self._descendants(path)
+            if self.hierarchical or p in self._file_data
+        ]
+
+    def _make_dirs(self, path: str) -> None:
+        if path in self._folders:
+            return
+        if path in self._file_data:
+            raise NotADirectoryError(path)
+        parent = _parent_of(path)
+        self._make_dirs(parent)
+        self._folders[path] = set()
+        self._folders[parent].add(path)
+
+    def _write(self, path: str, data: bytes, mtime: float | None = None) -> None:
+        if path in self._folders:
+            raise IsADirectoryError(path)
+        parent = _parent_of(path)
+        self._make_dirs(parent)
+        self._file_data[path] = _File(
+            bytes(data), time.time() if mtime is None else mtime
+        )
+        self._folders[parent].add(path)
+
+    def _unlink(self, path: str) -> None:
+        del self._file_data[path]
+        self._detach(path)
+
+    def _drop(self, path: str) -> None:
+        """Forget a folder and everything in it, but not its entry in its parent."""
+        for child in self._folders.pop(path):
+            if child in self._file_data:
+                del self._file_data[child]
+            else:
+                self._drop(child)
+
+    def _detach(self, path: str) -> None:
+        parent = _parent_of(path)
+        self._folders[parent].discard(path)
+        # Without folders of their own, a folder is gone with its last file.
+        if not self.hierarchical and parent and not self._folders[parent]:
+            del self._folders[parent]
+            self._detach(parent)

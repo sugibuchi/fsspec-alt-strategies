@@ -2,34 +2,26 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import pytest
-from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
-from fsspec.implementations.memory import MemoryFileSystem
 
-if TYPE_CHECKING:
-    from collections.abc import Iterator
+from fsspec_alt_strategies.testing import SimulatedFileSystem
 
 
 @pytest.fixture
-def memfs() -> Iterator[MemoryFileSystem]:
-    """A cleared memory filesystem, cleared again after the test.
-
-    Memory filesystems share their store across instances, so a test must not
-    see another's files.
-    """
-    fs = MemoryFileSystem()
-    fs.store.clear()
-    fs.pseudo_dirs.clear()
-    fs.pseudo_dirs.append("")
-    yield fs
-    fs.store.clear()
-    fs.pseudo_dirs.clear()
-    fs.pseudo_dirs.append("")
+def flat_fs() -> SimulatedFileSystem:
+    """An empty async filesystem modelling an object store."""
+    return SimulatedFileSystem(asynchronous=True)
 
 
 @pytest.fixture
-def async_memfs(memfs: MemoryFileSystem) -> AsyncFileSystemWrapper:
-    """``memfs`` as an async filesystem, as the strategies mainly target."""
-    return AsyncFileSystemWrapper(memfs, asynchronous=True)
+def hierarchical_fs() -> SimulatedFileSystem:
+    """An empty async filesystem with a hierarchical namespace."""
+    return SimulatedFileSystem(hierarchical=True, asynchronous=True)
+
+
+@pytest.fixture(params=["flat", "hierarchical"])
+def any_fs(request: pytest.FixtureRequest) -> SimulatedFileSystem:
+    """Each of the two filesystems above, in turn."""
+    return SimulatedFileSystem(
+        hierarchical=request.param == "hierarchical", asynchronous=True
+    )
