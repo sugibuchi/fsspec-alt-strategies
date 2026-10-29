@@ -76,6 +76,11 @@ So the code stays easy to copy:
 - Each file starts with its SPDX license header, which copies keep.
 - Each strategy depends on few shared modules, and its module docstring names them.
 
+`tests/test_copyable.py` checks the first three rules. It also imports a copy of the package under another name.
+
+The version is in `_version.py`, which hatch-vcs writes when the package is built. A copy taken from a wheel or an
+installed package keeps the version it was copied at. A copy of the source tree has none, and reports "0.0.0".
+
 ### Async first
 
 Strategies target `AsyncFileSystem` first. Sync filesystems may get some features, such as observability, later.

@@ -48,6 +48,19 @@ build-backend = "hatchling.build"
 source = "vcs"
 raw-options = { 'version_scheme' = 'post-release' }
 
+# The version is written into the package, not read from the installed
+# distribution's metadata: a copy of the modules in another package keeps the
+# version it was copied at.
+[tool.hatch.build.hooks.vcs]
+version-file = "src/fsspec_alt_strategies/_version.py"
+template = '''
+# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+# SPDX-License-Identifier: Apache-2.0
+"""The version of the package, written when it is built."""
+
+__version__ = "{version}"
+'''
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/fsspec_alt_strategies"]
 
