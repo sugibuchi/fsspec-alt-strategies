@@ -55,6 +55,9 @@ async def test_answers_as_fsspec(
     assert [e["name"].rstrip("/") for e in entries] == list(expected)
     assert entries == list(expected.values())
 
+    matches = [m async for m in itree_glob(any_fs, path, **kwargs)]
+    assert sorted(matches, key=lambda e: e["name"]) == entries
+
 
 async def test_prunes_folders_the_pattern_cannot_match_in(
     hierarchical_fs: SimulatedFileSystem,
@@ -79,13 +82,27 @@ async def test_double_star_prunes_after_it(
     assert hierarchical_fs.stats.calls["list"] == 1 + 2 + 4
 
 
-async def test_iterator_yields_as_tree_glob_finds(
-    any_fs: SimulatedFileSystem,
+async def test_iterator_makes_the_same_requests(
+    hierarchical_fs: SimulatedFileSystem,
 ) -> None:
-    _tree(any_fs)
-    matches = [m async for m in itree_glob(any_fs, "data/**/*.parquet")]
-    entries, _ = await tree_glob(any_fs, "data/**/*.parquet")
-    assert sorted(matches, key=lambda e: e["name"]) == entries
+    _tree(hierarchical_fs)
+    await tree_glob(hierarchical_fs, "data/*/2024/*/part-*")
+    calls = dict(hierarchical_fs.stats.calls)
+    hierarchical_fs.reset_stats()
+    async for _ in itree_glob(hierarchical_fs, "data/*/2024/*/part-*"):
+        pass
+    assert hierarchical_fs.stats.calls == calls
+
+
+async def test_scans_subtrees_concurrently_within_batch_size() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
+    for i in range(5):
+        for j in range(5):
+            fs.add_file(f"root/{i}/{j}/file")
+    entries, _ = await tree_glob(fs, "root/*/*/file", batch_size=4)
+    assert len(entries) == 25
+    assert fs.stats.calls == {"list": 1 + 5 + 25}
+    assert fs.stats.max_concurrency == 4
 
 
 class _Forbidding(SimulatedFileSystem):

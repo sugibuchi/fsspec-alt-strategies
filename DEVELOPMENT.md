@@ -170,7 +170,8 @@ as the state counts the errors so far.
 
 - `walk` and `itree_glob` are async iterators that the caller drives, with no callback. Breaking out of the loop stops
   them.
-- `tree_glob` collects `itree_glob`. It returns the entries matched, sorted, and the errors, as a tuple.
+- `tree_glob` scans the subtrees concurrently, on its own. It returns the entries matched, sorted, and the errors, as a
+  tuple.
 
 The other strategies built on `walk` report and stop as above.
 

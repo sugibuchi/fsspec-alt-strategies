@@ -4,27 +4,30 @@
 
 `tree_glob` is an alternative to fsspec's ``_glob``, with the same answers.
 fsspec's finds every path under the pattern's literal root, as deep as the
-pattern goes, then filters them with a regular expression. `tree_glob` walks
-the tree with `walk`, and lists a folder only if the pattern can match in it.
+pattern goes, then filters them with a regular expression. `tree_glob` scans
+the subtrees concurrently, and lists a folder only if the pattern can match in
+it.
 
 To decide, a folder's path is matched with the pattern's segments, one by one.
 A ``**`` matches any number of segments, so only those before the first ``**``
 can rule a folder out. Without a ``**``, nor can a folder as deep as the
 pattern, as nothing below it can match.
 
-`itree_glob` is the same search as an async iterator, so that the matches can
-be worked on as they arrive. `tree_glob` collects them.
+`itree_glob` is the same search as an async iterator on `walk`, so that the
+matches can be worked on as they arrive.
 
 This module depends on `walk`.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 from contextlib import aclosing
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
+from fsspec.asyn import _get_batch_size
 from fsspec.utils import glob_translate
 
 from .walk import walk
@@ -71,6 +74,10 @@ async def tree_glob(
     ``**``. The paths found are filtered with fsspec's own regular expression,
     so the folders pruned change only the requests, never the answer. A folder
     that fails to list adds its error, and the rest is still searched.
+
+    Each folder's subtrees are scanned concurrently, recursively, and the
+    listings share ``batch_size`` slots. So a deep subtree never waits for a
+    shallower level to finish.
 
     It wins on storages that list one folder per request, when the pattern
     leaves folders out after its first wildcard, e.g. ``data/*/2024/*.parquet``.
@@ -123,18 +130,32 @@ async def tree_glob(
     >>> [e["name"] for e in entries], errors
     (['data/sales/2024/part-0.parquet'], [])
     """
-    found: dict[str, dict[str, Any]] = {}
-    errors: list[Exception] = []
-    async for match in itree_glob(
-        fs, path, maxdepth=maxdepth, withdirs=withdirs, batch_size=batch_size
-    ):
-        if isinstance(match, Exception):
-            errors.append(match)
-        else:
-            # Keyed by name as fsspec's _glob keys them, so a path listed twice,
-            # e.g. a folder and its marker object, is answered once.
-            found[match["name"].rstrip("/")] = match
-    return [found[name] for name in sorted(found)], errors
+    if maxdepth is not None and maxdepth < 1:
+        raise ValueError("maxdepth must be at least 1")
+    ends_with_sep = path.endswith("/")
+    path = fs._strip_protocol(path)
+    if not has_magic(path):
+        try:
+            return [await fs._info(path)], []
+        except FileNotFoundError:
+            return [], []
+    search = _Search(fs, path, ends_with_sep, withdirs, maxdepth)
+    root = search.root
+    try:
+        entries = await fs._ls(root, detail=True)
+    except (FileNotFoundError, NotADirectoryError):
+        # As fsspec's _glob: a pattern under a missing folder matches nothing.
+        return [], []
+    if any(e["name"].rstrip("/") == root and e["type"] != "directory" for e in entries):
+        # fsspec's _ls of a file lists the file itself, and nothing is below it.
+        return [], []
+    scan = _Scan(fs, search, batch_size)
+    await scan.scan(root, 1, entries)
+    found = scan.found
+    # fsspec's find includes the root folder itself, which few patterns match.
+    if root and search.matched({"name": root, "type": "directory"}):
+        found[root] = await fs._info(root)
+    return [found[name] for name in sorted(found)], scan.errors
 
 
 async def itree_glob(
@@ -145,11 +166,12 @@ async def itree_glob(
     withdirs: bool = True,
     batch_size: int | None = None,
 ) -> AsyncIterator[dict[str, Any] | Exception]:
-    """Yield the paths matching a glob pattern, as `tree_glob` finds them.
+    """Yield the paths matching a glob pattern, listing only folders it can match in.
 
-    It searches as `tree_glob` does, with the same requests, and yields each
-    match as its folder's listing arrives. So the matches are not in order. A
-    folder that fails to list yields its error, and the rest is still searched.
+    It matches and prunes as `tree_glob` does, with the same requests, but walks
+    the tree with `walk`. It yields each match as its folder's listing arrives,
+    so the matches are not in order. A folder that fails to list yields its
+    error, and the rest is still searched.
 
     Like `walk`, it takes no callback and returns no result: the caller drives
     it. Breaking out of the loop stops it. Close it with `contextlib.aclosing`,
@@ -269,6 +291,50 @@ class _Search:
         if listing.error is not None:
             return [listing.error]
         return [e for e in listing.entries if self.matched(e)]
+
+
+class _Scan:
+    """One `tree_glob` call's recursive scan, and what it found."""
+
+    def __init__(
+        self, fs: AsyncFileSystem, search: _Search, batch_size: int | None
+    ) -> None:
+        self.fs = fs
+        self.search = search
+        # Each listing takes a slot, but a folder waiting for its subfolders
+        # holds none. So the subtrees cannot starve each other of slots.
+        self.slots = asyncio.Semaphore(
+            batch_size or fs.batch_size or _get_batch_size(nofiles=True)
+        )
+        # Keyed by name as fsspec's _glob keys them, so a path listed twice,
+        # e.g. a folder and its marker object, is answered once.
+        self.found: dict[str, dict[str, Any]] = {}
+        self.errors: list[Exception] = []
+
+    async def scan(
+        self, folder: str, depth: int, entries: list[dict[str, Any]]
+    ) -> None:
+        search = self.search
+        # Some storages list a folder within itself, e.g. as its marker object.
+        entries = [e for e in entries if e["name"].rstrip("/") != folder]
+        self.found.update(
+            (e["name"].rstrip("/"), e) for e in entries if search.matched(e)
+        )
+        if search.depth is not None and depth >= search.depth:
+            return
+        async with asyncio.TaskGroup() as subtrees:
+            for e in entries:
+                if e["type"] == "directory" and search.descend(e):
+                    subtrees.create_task(self.list(e["name"].rstrip("/"), depth + 1))
+
+    async def list(self, folder: str, depth: int) -> None:
+        try:
+            async with self.slots:
+                entries = await self.fs._ls(folder, detail=True)
+        except Exception as e:
+            self.errors.append(e)
+            return
+        await self.scan(folder, depth, entries)
 
 
 def _depth(path: str, relative: str, maxdepth: int | None) -> int | None:
