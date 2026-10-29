@@ -34,6 +34,11 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
 - A strategy calls only the filesystem's primitives, such as `_ls`, `_info` and `_rm_file`. It never calls another
   high-level method, such as `_find` or `_glob`: another strategy may have replaced it. A strategy needing another
   takes it as a parameter.
+- Every strategy follows DEVELOPMENT.md's "The strategy API":
+  - it is called as `await strategy(fs, ..., batch_size=..., callback=...)`;
+  - a callback returning `STOP` cancels it;
+  - it returns a result object recording errors per path, rather than raising them.
+- Never swallow `CancelledError`.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
 - The library never chooses a strategy for the developer. Each strategy's docstring says what it assumes of the
   storage, and when it wins or loses.

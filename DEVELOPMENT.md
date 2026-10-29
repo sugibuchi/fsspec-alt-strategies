@@ -64,6 +64,65 @@ library never picks for them.
   never changes the behaviour of another.
 - A strategy needing another, or a native operation of the storage, takes it as a parameter.
 
+### The strategy API
+
+Every strategy follows the same shape, so that developers learn it once.
+
+#### Calling
+
+A strategy is an async function. The filesystem comes first, then the operation's arguments, then keyword-only
+options:
+
+```python
+result = await tree_rm(fs, "data/2024", batch_size=32, callback=on_progress)
+```
+
+- `batch_size` caps the calls running at a time, as in fsspec. None takes fsspec's default.
+- Errors before any work starts are raised, as fsspec raises them. An example is a missing root, which raises
+  `FileNotFoundError`.
+
+#### Attaching
+
+Developers attach a strategy by overriding the fsspec method themselves, in a line or two:
+
+```python
+class MyFileSystem(AsyncFileSystem):
+    async def _rm(self, path, recursive=False, **kwargs):
+        if recursive:
+            return await tree_rm(self, path, batch_size=32)
+        return await super()._rm(path, recursive=recursive, **kwargs)
+```
+
+- The override can choose a strategy per instance, e.g. from the storage's settings.
+- fsspec makes the sync method, `rm`, from the async one, `_rm`. So sync callers get the strategy too.
+- The library adds no mixins or descriptors: there is no machinery to learn.
+
+#### Callbacks
+
+A strategy takes an optional `callback`. It is called with a snapshot of the operation's state after each step. Each
+strategy's docstring says what its steps are, e.g. a folder listed or a batch deleted.
+
+- The state is a frozen dataclass of counts, such as files done and bytes done, and the path last worked on.
+- The callback may be a plain or an async function. It runs on the event loop, so it must return quickly.
+- Returning None continues. Returning `STOP` cancels the operation.
+- On `STOP`, the strategy starts no new calls and waits for those already sent. A call cut off midway would leave its
+  outcome unknown.
+- From a sync method, the callback runs in fsspec's IO thread, not the caller's.
+
+#### Results
+
+A strategy returns a result object, even when cancelled or when some paths fail. Errors on single paths are recorded
+in it, not raised.
+
+- `complete` is False after a cancel or a failure.
+- `cancelled` tells whether a callback returned `STOP`.
+- `errors` maps each failed path to its exception.
+- `raise_for_errors()` raises them as an `ExceptionGroup`, for callers that want an exception.
+- Each strategy's result adds its own fields, e.g. the files deleted.
+
+Cancelling the task itself, e.g. with `asyncio.timeout`, raises `CancelledError` as usual. The strategy then cleans up
+and never swallows it, but the partial result is lost.
+
 ### Copied, not only installed
 
 The package is on PyPI, but we recommend copying its modules into your own package, e.g. as `_contrib/strategy`. A
