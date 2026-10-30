@@ -6,7 +6,7 @@
 |---------------------------------|----------------------------------------------------------------|
 | `src/fsspec_alt_strategies/`    | The package.                                                   |
 | `.../control.py`                | `Stop`, `OperationStopped`, `Result`, `State`: the strategy API. |
-| `.../walk.py`                   | `walk`, the concurrent folder walk under the tree strategies.  |
+| `.../walk.py`                   | `iwalk`, the concurrent folder walk under the tree strategies. |
 | `.../find.py`                   | `tree_find`, a find listing several folders at a time.         |
 | `.../du.py`                     | `tree_du`, a tree's size from its listings alone.              |
 | `.../glob.py`                   | `tree_glob` and `itree_glob`, a glob listing only the folders it can match in. |
@@ -166,14 +166,21 @@ A result has these fields:
 Errors on single paths are recorded, never raised on their own. A caller wanting to fail fast stops from the callback,
 as the state counts the errors so far.
 
-`walk` and the glob are the exceptions to this API:
+The walk and the glob are the exceptions to this API:
 
-- `walk` and `itree_glob` are async iterators that the caller drives, with no callback. Breaking out of the loop stops
+- `iwalk` and `itree_glob` are async iterators that the caller drives, with no callback. Breaking out of the loop stops
   them.
-- `tree_glob` scans the subtrees concurrently, on its own. It returns the entries matched, sorted, and the errors, as a
-  tuple.
+- They yield each `_ls` entry found, and each folder's error as an exception object, mixed in one stream.
+- `tree_glob` collects `itree_glob`. It returns the entries matched, sorted, and the errors, as a tuple.
 
-The other strategies built on `walk` report and stop as above.
+The other tree strategies use the walk's private engine, `_listings`, which yields each folder's listing. They report
+and stop as above.
+
+`iwalk` is meant to replace fsspec's `walk`, so it already has two of its options:
+
+- `topdown=False` yields a folder's entries only after those of all the folders below it.
+- `raise_on_error=True` raises a folder's error instead of yielding it. With filtering, it will implement fsspec's
+  `on_error`.
 
 Cancelling the task itself, e.g. with `asyncio.timeout`, raises `CancelledError` as usual. The strategy then cleans up
 and never swallows it, but the partial result is lost.

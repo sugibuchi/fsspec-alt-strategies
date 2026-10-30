@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import _get_batch_size
 
 from .control import Result, State, _finish, _report
-from .walk import walk
+from .walk import _listings
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from fsspec.asyn import AsyncFileSystem
 
     from .control import Callback, Stop
-    from .walk import Listing
+    from .walk import _Listing
 
 __all__ = ["RmResult", "RmState", "tree_rm"]
 
@@ -80,7 +80,7 @@ async def tree_rm(
 ) -> RmResult:
     """Delete a folder and everything in it, deleting while the tree is walked.
 
-    The tree is walked with `walk`. Each folder's files are deleted as soon as
+    The tree is walked as `iwalk` walks it. Each folder's files are deleted as soon as
     the folder is listed, while other folders are still being listed. A folder
     is deleted once everything in it is, so the deepest go first.
 
@@ -133,7 +133,7 @@ async def tree_rm(
 
     See Also
     --------
-    walk : The walk under it.
+    iwalk : The walk under it.
 
     Examples
     --------
@@ -173,10 +173,10 @@ class _Deletion:
         self.waiting: deque[tuple[bool, str]] = deque()
         self.running: dict[asyncio.Task[Any], tuple[bool, str]] = {}
         # The walk's next listing, awaited along with the deletions.
-        self.next: asyncio.Task[Listing] | None = None
+        self.next: asyncio.Task[_Listing] | None = None
 
     async def run(self, path: str) -> RmResult:
-        listings = walk(self.fs, path, batch_size=self.batch_size)
+        listings = _listings(self.fs, path, batch_size=self.batch_size)
         try:
             stop = await self.delete(path, listings)
             if stop is not None:
@@ -198,7 +198,9 @@ class _Deletion:
             await asyncio.gather(*tasks, return_exceptions=True)
             await listings.aclose()
 
-    async def delete(self, path: str, listings: AsyncGenerator[Listing]) -> Stop | None:
+    async def delete(
+        self, path: str, listings: AsyncGenerator[_Listing]
+    ) -> Stop | None:
         """Delete until all is done, or a callback stops, and return its stop."""
         try:
             self.add(await anext(listings))
@@ -229,7 +231,7 @@ class _Deletion:
                     break
         return stop
 
-    def add(self, listing: Listing) -> None:
+    def add(self, listing: _Listing) -> None:
         """Queue the deletion of a listed folder's files."""
         self.current = listing.folder
         if listing.error is not None:

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .control import Result, State, _finish, _report
-from .walk import walk
+from .walk import _listings
 
 if TYPE_CHECKING:
     from fsspec.asyn import AsyncFileSystem
@@ -122,7 +122,7 @@ async def tree_du(
 
     See Also
     --------
-    walk : The walk under it.
+    iwalk : The walk under it.
     tree_find : The size of each file.
 
     Examples
@@ -135,7 +135,7 @@ async def tree_du(
     result = DuResult()
     try:
         async with aclosing(
-            walk(fs, root, maxdepth=maxdepth, batch_size=batch_size)
+            _listings(fs, root, maxdepth=maxdepth, batch_size=batch_size)
         ) as listings:
             async for listing in listings:
                 result.folders += 1

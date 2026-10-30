@@ -4,7 +4,8 @@
 
 `tree_find` is an alternative to fsspec's ``_find``, with the same answers.
 fsspec's walks a tree one folder at a time, unless the filesystem lists whole
-trees. `tree_find` lists up to ``batch_size`` folders at a time with `walk`.
+trees. `tree_find` lists up to ``batch_size`` folders at a time, as `iwalk`
+does.
 
 This module depends on `control` and `walk`.
 """
@@ -16,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .control import Result, State, _finish, _report
-from .walk import walk
+from .walk import _listings
 
 if TYPE_CHECKING:
     from fsspec.asyn import AsyncFileSystem
@@ -113,7 +114,7 @@ async def tree_find(
 
     See Also
     --------
-    walk : The walk under it.
+    iwalk : The walk under it.
 
     Examples
     --------
@@ -127,7 +128,7 @@ async def tree_find(
     listed = 0
     try:
         async with aclosing(
-            walk(fs, root, maxdepth=maxdepth, batch_size=batch_size)
+            _listings(fs, root, maxdepth=maxdepth, batch_size=batch_size)
         ) as listings:
             async for listing in listings:
                 listed += 1

@@ -40,9 +40,10 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
     `TypeError`;
   - it returns a result object recording errors per path, rather than raising them;
   - only `Stop(raise_error=True)` makes it raise, `OperationStopped` with the partial result.
-- `walk` and the glob are the exceptions, with no callback or `Result`:
-  - `walk` and `itree_glob` are async iterators the caller drives;
+- The walk and the glob are the exceptions, with no callback or `Result`:
+  - `iwalk` and `itree_glob` are async iterators the caller drives, yielding entries and exceptions;
   - `tree_glob` returns a tuple of the entries matched and the errors.
+- The tree strategies walk with `walk._listings`, which is private: never expose its `_Listing`.
 - Never swallow `CancelledError`.
 - `__init__.py` re-exports nothing but `__version__`. Users import from each module, so a copy can leave out
   modules it does not use.
