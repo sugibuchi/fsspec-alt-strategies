@@ -2,8 +2,12 @@
 
 Alternative, filesystem-independent strategies for [fsspec](https://github.com/fsspec/filesystem_spec) filesystems.
 
-> **Status:** pre-alpha. The API may change. So far, there are a concurrent tree walk and these strategies built on
-> it: find, du, a pruning glob and a recursive delete. The rest below is the plan.
+> **Status:** pre-alpha. The API may change. So far, there are:
+>
+> - a concurrent tree walk, and these strategies built on it: find, du, a pruning glob and a recursive delete;
+> - abstract file classes that adapt their buffering to how a file is read or written.
+>
+> The rest below is the plan.
 
 fsspec's design largely assumes object stores with a flat key space. Most of its tree operations expand a whole subtree
 by listing it first. That is not always efficient on filesystems with a hierarchical namespace, such as Azure Data Lake
@@ -37,7 +41,7 @@ relative imports only and depend on nothing but fsspec, so a copy works under an
 ## Choosing with numbers
 
 `fsspec_alt_strategies.testing.SimulatedFileSystem` is an in-memory async filesystem. It counts the requests a real
-storage would get, and delays each by a latency you set. It models an object store, or a storage with a hierarchical
+storage would get, and delays each by a latency and a bandwidth you set. It models an object store, or a storage with a hierarchical
 namespace. Run a strategy and fsspec's default on it, then compare their requests and times.
 
 ```python

@@ -11,6 +11,7 @@
 | `.../du.py`                     | `tree_du`, a tree's size from its listings alone.              |
 | `.../glob.py`                   | `tree_glob` and `itree_glob`, a glob listing only the folders it can match in. |
 | `.../rm.py`                     | `tree_rm`, a recursive delete that deletes while it walks.     |
+| `.../file.py`                   | File objects whose buffering adapts to how they are read or written. |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, with the shared fixtures in `tests/conftest.py`.    |
 | `.github/workflows/ci.yaml`     | Lint and tests, on pull requests and pushes to `main`.         |
@@ -39,7 +40,7 @@ CI runs ruff and pytest on every supported Python version.
 
 - Tests run with pytest-asyncio in `auto` mode: an `async def` test needs no marker.
 - Tests run on `SimulatedFileSystem`, from the public `fsspec_alt_strategies.testing`. It counts the requests a real
-  storage would get, in `stats`, and can delay each by a latency.
+  storage would get, in `stats`, and can delay each by a latency and by its bytes over a bandwidth.
 - Its two modes are an object store, where folders are only prefixes, and a hierarchical namespace, with real
   folders. Test a strategy on both, with the fixture `any_fs`.
 - The fixtures `flat_fs`, `hierarchical_fs` and `any_fs` are empty async instances. Set up files with `add_file` and
@@ -207,6 +208,18 @@ installed package keeps the version it was copied at. A copy of the source tree 
 ### Async first
 
 Strategies target `AsyncFileSystem` first. Sync filesystems may get some features, such as observability, later.
+
+### File objects
+
+File objects are the one place for classes, as a file keeps state between calls.
+
+- `file.py` has abstract classes for reading and writing. A filesystem subclasses one, implements its requests, and
+  returns it from `_open`.
+- Their requests run on an asyncio event loop, such as the filesystem's `loop`. Their sync methods wait on it through
+  fsspec's `sync`, and their async ones, such as `_read`, run on it.
+- They adapt to how a file is read or written, without settings per file. Requests cost money and time, so they send
+  as few as the reads and writes allow.
+- They follow Python's file API, not the strategy API: no callbacks, and errors are raised.
 
 ### Observable and cancellable
 

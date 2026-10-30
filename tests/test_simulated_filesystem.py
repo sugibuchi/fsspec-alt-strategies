@@ -142,6 +142,23 @@ async def test_requests_sent_together_overlap() -> None:
     assert fs.stats.total == 0
 
 
+async def test_bandwidth_delays_requests_by_their_bytes() -> None:
+    # 1 MB at 10 MB/s takes 0.1 s, on top of the latency.
+    fs = SimulatedFileSystem(bandwidth=10_000_000, asynchronous=True)
+    fs.add_file("big.bin", bytes(1_000_000))
+    loop = asyncio.get_running_loop()
+    begin = loop.time()
+    await fs._cat_file("big.bin")
+    assert loop.time() - begin >= 0.09
+    begin = loop.time()
+    await fs._cat_file("big.bin", start=0, end=1000)
+    assert loop.time() - begin < 0.05
+    await fs._pipe_file("copy.bin", bytes(500))
+    assert fs.stats.transferred == {"read": 1_001_000, "write": 500}
+    with pytest.raises(ValueError, match="bandwidth"):
+        SimulatedFileSystem(bandwidth=0)
+
+
 async def test_rm_keeps_to_batch_size(flat_fs: SimulatedFileSystem) -> None:
     for i in range(10):
         flat_fs.add_file(f"d/{i}.txt")

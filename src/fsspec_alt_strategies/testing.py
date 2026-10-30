@@ -49,10 +49,14 @@ class CallStats:
         "delete", "copy" and "mkdir". A listing counts a request per page.
     max_concurrency : int
         The most requests in flight at once.
+    transferred : collections.Counter
+        The bytes read or written by the requests of each kind: "read" and
+        "write".
     """
 
     calls: Counter[str] = field(default_factory=Counter)
     max_concurrency: int = 0
+    transferred: Counter[str] = field(default_factory=Counter)
 
     @property
     def total(self) -> int:
@@ -89,6 +93,10 @@ class SimulatedFileSystem(AsyncFileSystem):
         stores do. Otherwise, it walks the subtree a folder at a time.
     latency : float
         The seconds each request takes. Requests sent together overlap.
+    bandwidth : float, optional
+        The bytes per second each request reads or writes, as one connection
+        does. A request then takes ``latency`` plus its bytes over this. Requests
+        sent together each get it in full. No limit by default.
     page_size : int
         The most entries a listing request returns. Listing more takes a
         request per page, one after another.
@@ -121,15 +129,19 @@ class SimulatedFileSystem(AsyncFileSystem):
         hierarchical: bool = False,
         recursive_listing: bool = True,
         latency: float = 0.0,
+        bandwidth: float | None = None,
         page_size: int = 1000,
         **kwargs: Any,
     ) -> None:
         if page_size < 1:
             raise ValueError(f"page_size must be positive: {page_size}")
+        if bandwidth is not None and bandwidth <= 0:
+            raise ValueError(f"bandwidth must be positive: {bandwidth}")
         super().__init__(**kwargs)
         self.hierarchical = hierarchical
         self.recursive_listing = recursive_listing
         self.latency = latency
+        self.bandwidth = bandwidth
         self.page_size = page_size
         self.stats = CallStats()
         self._in_flight = 0
@@ -180,10 +192,17 @@ class SimulatedFileSystem(AsyncFileSystem):
 
     # --- Requests -----------------------------------------------------------
 
-    async def _request(self, kind: str, count: int = 1) -> None:
-        """Wait as a storage answering ``count`` requests one after another would."""
+    async def _request(self, kind: str, count: int = 1, size: int = 0) -> None:
+        """Wait as a storage answering ``count`` requests one after another would.
+
+        Each request reads or writes ``size`` bytes.
+        """
+        seconds = self.latency
+        if self.bandwidth is not None:
+            seconds += size / self.bandwidth
         for _ in range(count):
             self.stats.calls[kind] += 1
+            self.stats.transferred[kind] += size
             self._in_flight += 1
             self.stats.max_concurrency = max(
                 self.stats.max_concurrency, self._in_flight
@@ -191,7 +210,7 @@ class SimulatedFileSystem(AsyncFileSystem):
             try:
                 # Even without latency, yield to the loop, so that requests sent
                 # together overlap as they would on a real storage.
-                await asyncio.sleep(self.latency)
+                await asyncio.sleep(seconds)
             finally:
                 self._in_flight -= 1
 
@@ -257,12 +276,14 @@ class SimulatedFileSystem(AsyncFileSystem):
         **kwargs: Any,
     ) -> bytes:
         path = self._strip_protocol(path)
-        await self._request("read")
+        found = self._file_data.get(path)
+        size = len(found.data[start:end]) if found is not None else 0
+        await self._request("read", size=size)
         return self._file(path).data[start:end]
 
     async def _pipe_file(self, path: str, value: bytes, **kwargs: Any) -> None:
         path = self._strip_protocol(path)
-        await self._request("write")
+        await self._request("write", size=len(value))
         self._write(path, value)
 
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
