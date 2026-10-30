@@ -112,11 +112,25 @@ async def test_failed_listing_is_yielded_and_the_walk_goes_on(topdown: bool) -> 
     assert "data/2024/02/part-0.parquet" in names
 
 
-async def test_raise_on_error() -> None:
-    fs = _Forbidding(hierarchical=True, asynchronous=True)
+class _Recording(_Forbidding):
+    """Records each folder whose listing reached the storage."""
+
+    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+        self.requested.append(self._strip_protocol(path))
+        return await super()._ls(path, detail=detail, **kwargs)
+
+
+@pytest.mark.parametrize("topdown", [True, False])
+async def test_raise_on_error_stops_at_once(topdown: bool) -> None:
+    fs = _Recording(hierarchical=True, asynchronous=True)
+    fs.requested = []
     _tree(fs)
     with pytest.raises(PermissionError):
-        await _all(iwalk(fs, "data", raise_on_error=True))
+        await _all(
+            iwalk(fs, "data", topdown=topdown, raise_on_error=True, batch_size=1)
+        )
+    # data/2023 fails, and data/2024, queued behind it, is never listed.
+    assert fs.requested == ["data", "data/2023"]
     assert fs._in_flight == 0
 
 

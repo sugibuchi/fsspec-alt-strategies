@@ -116,13 +116,12 @@ async def iwalk(
             maxdepth=maxdepth,
             topdown=topdown,
             descend=descend,
+            raise_on_error=raise_on_error,
             batch_size=batch_size,
         )
     ) as listings:
         async for listing in listings:
             if listing.error is not None:
-                if raise_on_error:
-                    raise listing.error
                 yield listing.error
             for entry in listing.entries:
                 yield entry
@@ -150,6 +149,7 @@ async def _listings(
     maxdepth: int | None = None,
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
+    raise_on_error: bool = False,
     batch_size: int | None = None,
 ) -> AsyncGenerator[_Listing]:
     """Walk a folder tree as `iwalk` does, yielding each folder's listing.
@@ -158,6 +158,9 @@ async def _listings(
     not carry. A failed listing is yielded with its error, and its subfolders
     are not walked. ``path``'s own listing fails by raising, as fsspec's walk
     does, since nothing has been done yet.
+
+    With ``raise_on_error``, any failed listing raises as soon as it is seen:
+    before another listing starts, or another one done is yielded.
     """
     if maxdepth is not None and maxdepth < 1:
         raise ValueError(f"maxdepth must be at least 1: {maxdepth}")
@@ -179,7 +182,7 @@ async def _listings(
             done, _ = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 folder, depth = running.pop(task)
-                listing = _listing(task, folder, depth, root)
+                listing = _listing(task, folder, depth, root, raise_on_error)
                 subfolders = _subfolders(listing, maxdepth, descend)
                 waiting.extend((s, depth + 1) for s in subfolders)
                 # Start the next listings before yielding, so that they run
@@ -197,14 +200,20 @@ async def _listings(
 
 
 def _listing(
-    task: asyncio.Task[list[dict[str, Any]]], folder: str, depth: int, root: str
+    task: asyncio.Task[list[dict[str, Any]]],
+    folder: str,
+    depth: int,
+    root: str,
+    raise_on_error: bool,
 ) -> _Listing:
     """The listing a finished ``_ls`` task gives, or its error."""
     try:
         entries = task.result()
     except Exception as e:
-        if folder == root:
-            # Nothing has been done yet: fail as fsspec's own walk does.
+        # The root's error is raised as fsspec's own walk raises it: nothing has
+        # been done yet. Raised here, any other stops the walk before it starts
+        # another listing.
+        if folder == root or raise_on_error:
             raise
         return _Listing(folder, depth, [], e)
     if folder == root and any(
