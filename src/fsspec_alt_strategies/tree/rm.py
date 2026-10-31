@@ -12,10 +12,11 @@ This module depends on `control`, `walk` and `_jobs`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
 from ..control import Operation, State
-from ._jobs import _Job, _Jobs
+from ._jobs import _expand, _Job, _Jobs, _Roots
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -73,21 +74,28 @@ def tree_rm(
     fsspec's ``_rm`` makes fewer requests there. On a storage deleting a folder
     with everything in it in one request, that request wins.
 
+    A glob pattern deletes each path it matches, and all in it, as fsspec's
+    ``_rm`` with ``recursive=True`` does. The pattern is matched as
+    `tree_glob` matches it, then the folders matched are walked at once.
+
     Once cancelled, it starts no new listing or deletion, and yields the
     outcomes of the deletions already sent. Closed, it waits for those
     deletions without yielding them, as their outcome would otherwise be
-    unknown. Iterating it raises FileNotFoundError if ``path`` does not exist.
+    unknown. Iterating it raises FileNotFoundError if ``path`` does not exist,
+    or matches nothing.
 
     Requests: one ``_ls`` per folder, one ``_rm_file`` per file, and one
-    ``rm_folder`` per folder. At most ``batch_size`` listings and
-    ``batch_size`` deletions run at a time.
+    ``rm_folder`` per folder. A pattern adds the requests of its `tree_glob`.
+    At most ``batch_size`` listings and ``batch_size`` deletions run at a
+    time.
 
     Parameters
     ----------
     fs : fsspec.asyn.AsyncFileSystem
         The filesystem.
     path : str
-        The folder to delete. If it is a file, that file is deleted.
+        The folder to delete. If it is a file, that file is deleted. If it is a
+        glob pattern, all it matches is deleted.
     rm_folder : callable, optional
         An async function deleting an empty folder. By default, the
         filesystem's ``_rmdir`` if it has one, otherwise its ``_rm_file``, as
@@ -140,8 +148,10 @@ class _Deletion(_Jobs):
         self.files_deleted = 0
         self.folders_deleted = 0
 
-    async def prepare(self) -> str:
-        return self.path
+    async def prepare(self) -> _Roots:
+        if has_magic(self.path):
+            return await _expand(self.fs, self.path, self.batch_size)
+        return _Roots([self.path])
 
     def state(self) -> RmState:
         return RmState(

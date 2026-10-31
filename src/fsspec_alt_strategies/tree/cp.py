@@ -15,9 +15,11 @@ from dataclasses import dataclass
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
+from fsspec.utils import common_prefix
+
 from ..control import Operation, State
 from ..profile import _resolve
-from ._jobs import _Job, _Jobs
+from ._jobs import _expand, _Job, _Jobs, _Roots
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -63,6 +65,12 @@ def tree_cp(
     ``path1/x`` becomes ``path2/x``. A file is copied the same way. Existing
     files are overwritten, as fsspec's ``copy`` does.
 
+    A glob pattern copies each path it matches, and all in it, placed as
+    fsspec's ``copy`` places them. Their paths below the matches' common
+    prefix are kept under ``path2``, but a single file matched goes into
+    ``path2``. The pattern is matched as `tree_glob` matches it, then the
+    folders matched are walked at once.
+
     The tree is walked as `tree_walk` walks it. Each folder's files are copied
     as soon as the folder is listed, each by a ``_cp_file``. A folder is
     created at the destination before files are copied into it, and for each
@@ -95,7 +103,7 @@ def tree_cp(
     fs : fsspec.asyn.AsyncFileSystem
         The filesystem.
     path1 : str
-        The folder or file to copy. Patterns are not supported yet.
+        The folder or file to copy, or a glob pattern.
     path2 : str
         Where to copy it, as above.
     profile : StorageProfile, optional
@@ -111,11 +119,6 @@ def tree_cp(
         Yielding ``(source, destination)`` for each file copied, or an error.
         Its state is a `CpState`.
 
-    Raises
-    ------
-    ValueError
-        If ``path1`` is a glob pattern.
-
     See Also
     --------
     tree_walk : The walk under it.
@@ -130,17 +133,11 @@ def tree_cp(
     >>> op.state.files_copied
     1234
     """
-    _check_source(path1)
     resolved = _resolve(fs, profile)
     return Operation(
         lambda op: _Copy(fs, path1, path2, resolved, batch_size, op).outcomes(),
         CpState(),
     )
-
-
-def _check_source(path1: str) -> None:
-    if has_magic(path1):
-        raise ValueError(f"Patterns are not supported yet: {path1!r}")
 
 
 class _Copy(_Jobs):
@@ -165,7 +162,7 @@ class _Copy(_Jobs):
         self.path1 = path1
         self.path2 = path2
         self.parents_required = profile.parents_required is not False
-        self.root = ""
+        self.prefix = ""
         self.base = ""
         self.files_found = 0
         self.files_done = 0
@@ -180,12 +177,43 @@ class _Copy(_Jobs):
             files_copied=self.files_done,
         )
 
-    async def prepare(self) -> str | None:
-        """Set where ``path1`` itself goes, as fsspec's ``copy`` places it."""
-        self.root = self.fs._strip_protocol(self.path1)
+    async def prepare(self) -> _Roots | None:
+        """Set where the paths go, as fsspec's ``copy`` places them.
+
+        A path under ``self.prefix`` goes to the same place under
+        ``self.base``.
+        """
         destination = self.fs._strip_protocol(self.path2)
-        if self.root == destination:
-            return None
+        if has_magic(self.path1):
+            roots = await _expand(self.fs, self.path1, self.batch_size)
+            sources = [*roots.folders, *roots.files]
+            if not sources:
+                return roots  # Only errors, to yield.
+            self.prefix = common_prefix(sources)
+            if sources == list(roots.files) and len(sources) == 1:
+                # A single file goes into the destination.
+                self.prefix = self.prefix.rpartition("/")[0]
+            self.base = destination
+        else:
+            root = self.fs._strip_protocol(self.path1)
+            if root == destination:
+                return None
+            roots = _Roots([root])
+            sources = [root]
+            self.prefix = root
+            self.base = await self._base(root, destination)
+        for source in sources:
+            target = self.target(source)
+            if target == source and len(sources) == 1:
+                return None
+            if not source or target == source or target.startswith(source + "/"):
+                raise ValueError(
+                    f"Cannot {self.verb} {source!r} into itself: {target!r}"
+                )
+        return roots
+
+    async def _base(self, root: str, destination: str) -> str:
+        """Where ``root``, a single path, goes: into ``destination``, or onto it."""
         if self.path2.endswith("/"):
             into = True
         else:
@@ -193,31 +221,21 @@ class _Copy(_Jobs):
                 into = (await self.fs._info(destination))["type"] == "directory"
             except FileNotFoundError:
                 into = False
-        self.base = destination
-        if into and not self.path1.endswith("/"):
-            name = self.root.rsplit("/", 1)[-1]
-            self.base = f"{destination}/{name}" if destination else name
-        if self.base == self.root:
-            return None
-        if not self.root or self.base.startswith(self.root + "/"):
-            raise ValueError(
-                f"Cannot {self.verb} {self.root!r} into itself: {self.base!r}"
-            )
-        return self.root
+        if not into or self.path1.endswith("/"):
+            return destination
+        name = root.rsplit("/", 1)[-1]
+        return f"{destination}/{name}" if destination else name
 
     def target(self, path: str) -> str:
-        """Where a path under the source goes."""
-        return self.base + path[len(self.root) :]
+        """Where a path goes."""
+        if self.prefix:
+            return self.base + path[len(self.prefix) :]
+        return f"{self.base}/{path}" if self.base else path
 
     def file_root(self, path: str) -> None:
-        self.files_found = 1
-        copy = _Job("copy", path, self.base)
-        parent = self.base.rpartition("/")[0]
-        if self.parents_required and parent:
-            self.after_mkdir[parent] = [copy]
-            self.waiting.append(_Job("mkdir", "", parent))
-        else:
-            self.waiting.append(copy)
+        self.files_found += 1
+        target = self.target(path)
+        self.queue(target.rpartition("/")[0], "", [_Job("copy", path, target)])
 
     def add(self, listing: _Listing) -> None:
         copies = []
@@ -226,13 +244,23 @@ class _Copy(_Jobs):
                 name = entry["name"].rstrip("/")
                 self.files_found += 1
                 copies.append(_Job("copy", name, self.target(name)))
-        # A folder holding only folders needs no mkdir: theirs create it.
-        if not listing.entries or (copies and self.parents_required):
-            target = self.target(listing.folder)
-            self.after_mkdir[target] = copies
-            self.waiting.append(_Job("mkdir", listing.folder, target))
-        else:
+        if not listing.entries:
+            # An empty folder is made, whatever the storage.
+            self.queue(self.target(listing.folder), listing.folder, [], always=True)
+        elif copies:
+            # A folder holding only folders needs no mkdir: theirs create it.
+            self.queue(self.target(listing.folder), listing.folder, copies)
+
+    def queue(
+        self, folder: str, source: str, copies: list[_Job], *, always: bool = False
+    ) -> None:
+        """Queue copies into a destination folder, made first if needed."""
+        if not folder or not (always or self.parents_required):
             self.waiting.extend(copies)
+            return
+        if folder not in self.after_mkdir:
+            self.waiting.append(_Job("mkdir", source, folder))
+        self.after_mkdir.setdefault(folder, []).extend(copies)
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":

@@ -166,6 +166,11 @@ Those changing a tree, `tree_rm`, `tree_cp` and `tree_mv`, run their requests wi
 them along with the listings still in flight. It also drains them on `cancel()`, and waits for them on closing. A
 strategy subclasses it, saying what a listing queues, how a job runs, and what its outcome is.
 
+They take glob patterns, as fsspec's `rm`, `copy` and `mv` do. A pattern is expanded with `tree_glob` first, and
+the folders it matches are then walked at once. The expansion is not streamed into the jobs: `tree_cp` and `tree_mv`
+place paths relative to the common prefix of all the matches, as fsspec does, which is known only once the glob ends.
+The glob lists only the folders down to the pattern's depth, so the bulk of the walk still overlaps with the jobs.
+
 Their names start with `tree_`, e.g. `tree_rm` and `tree_glob`. Code using fsspec already has `rm` and `glob`, as
 methods and modules. The prefix keeps an import from shadowing them, and tells the reader which strategy is used.
 

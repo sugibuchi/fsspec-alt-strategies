@@ -27,7 +27,7 @@ from fsspec.asyn import _get_batch_size
 from ..control import Operation, State
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator, Callable, Collection
 
     from fsspec.asyn import AsyncFileSystem
 
@@ -180,7 +180,7 @@ class _Listing:
 
 async def _listings(
     fs: AsyncFileSystem,
-    path: str,
+    path: str | Collection[str],
     *,
     maxdepth: int | None = None,
     topdown: bool = True,
@@ -196,6 +196,9 @@ async def _listings(
     are not walked. ``path``'s own listing fails by raising, as fsspec's walk
     does, since nothing has been done yet.
 
+    ``path`` may be several folders, e.g. a glob's matches, walked at once, each
+    as a root. None may be inside another.
+
     With ``raise_on_error``, any failed listing raises as soon as it is seen:
     before another listing starts, or another one done is yielded.
 
@@ -203,7 +206,7 @@ async def _listings(
     are yielded as they arrive. It is an operation's ``cancelling``.
     """
     _check_maxdepth(maxdepth)
-    root = fs._strip_protocol(path)
+    roots = {fs._strip_protocol(p) for p in ([path] if isinstance(path, str) else path)}
     batch_size = batch_size or fs.batch_size or _get_batch_size(nofiles=True)
     waiting: deque[tuple[str, int]] = deque()
     running: dict[asyncio.Task[list[dict[str, Any]]], tuple[str, int]] = {}
@@ -216,14 +219,14 @@ async def _listings(
             folder, depth = waiting.popleft()
             running[asyncio.ensure_future(fs._ls(folder, detail=True))] = folder, depth
 
-    waiting.append((root, 1))
+    waiting.extend((root, 1) for root in sorted(roots))
     start()
     try:
         while running:
             done, _ = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 folder, depth = running.pop(task)
-                listing = _listing(task, folder, depth, root, raise_on_error)
+                listing = _listing(task, folder, depth, roots, raise_on_error)
                 subfolders = _subfolders(listing, maxdepth, descend)
                 waiting.extend((s, depth + 1) for s in subfolders)
                 # Start the next listings before yielding, so that they run
@@ -244,26 +247,26 @@ def _listing(
     task: asyncio.Task[list[dict[str, Any]]],
     folder: str,
     depth: int,
-    root: str,
+    roots: set[str],
     raise_on_error: bool,
 ) -> _Listing:
     """The listing a finished ``_ls`` task gives, or its error."""
     try:
         entries = task.result()
     except Exception as e:
-        # The root's error is raised as fsspec's own walk raises it: nothing has
+        # A root's error is raised as fsspec's own walk raises it: nothing has
         # been done yet. Raised here, any other stops the walk before it starts
         # another listing.
-        if folder == root or raise_on_error:
+        if folder in roots or raise_on_error:
             raise
         # Yielded among entries, the error must tell its folder itself.
         e.add_note(f"Listing {folder!r} failed.")
         return _Listing(folder, depth, [], e)
-    if folder == root and any(
-        e["name"].rstrip("/") == root and e["type"] != "directory" for e in entries
+    if folder in roots and any(
+        e["name"].rstrip("/") == folder and e["type"] != "directory" for e in entries
     ):
         # fsspec's _ls of a file lists the file itself.
-        raise NotADirectoryError(root)
+        raise NotADirectoryError(folder)
     # Some storages list a folder within itself, e.g. as its marker object.
     return _Listing(
         folder, depth, [e for e in entries if e["name"].rstrip("/") != folder]

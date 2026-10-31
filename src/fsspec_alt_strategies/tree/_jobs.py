@@ -7,7 +7,10 @@ file, as each folder's listing arrives. `_Jobs` runs both at once, up to
 ``batch_size`` jobs at a time, and yields what each step did. A subclass says
 what a listing queues, how a job runs, and what its outcome is.
 
-This module depends on `control` and `walk`.
+A glob pattern is expanded first, as fsspec's ``_expand_path`` expands it:
+its matching folders are then walked at once.
+
+This module depends on `control`, `walk` and `glob`.
 """
 
 from __future__ import annotations
@@ -20,10 +23,12 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from fsspec.asyn import _get_batch_size
 
+from ..control import collect
+from .glob import tree_glob
 from .walk import _listings
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable
+    from collections.abc import AsyncGenerator, Awaitable, Sequence
 
     from fsspec.asyn import AsyncFileSystem
 
@@ -37,6 +42,43 @@ class _Job(NamedTuple):
     kind: str
     source: str
     destination: str = ""
+
+
+class _Roots(NamedTuple):
+    """Where an operation starts: what it walks, and what it handles alone.
+
+    ``folders`` are walked, at once. A single path of unknown kind is among
+    them, as its listing tells. ``files`` are known files, e.g. glob matches.
+    ``errors`` are those found in finding the roots, yielded first.
+    """
+
+    folders: Sequence[str]
+    files: Sequence[str] = ()
+    errors: Sequence[Exception] = ()
+
+
+async def _expand(fs: AsyncFileSystem, pattern: str, batch_size: int | None) -> _Roots:
+    """The roots matching a glob pattern, as fsspec's ``_expand_path`` finds them.
+
+    A match inside a folder that matches is left out: walking the folder finds
+    it. Matching nothing raises FileNotFoundError, as fsspec does.
+    """
+    matches, errors = await collect(tree_glob(fs, pattern, batch_size=batch_size))
+    if not matches and not errors:
+        raise FileNotFoundError(pattern)
+    folders: dict[str, None] = {}
+    files: list[str] = []
+    # Sorted, a folder comes before all in it.
+    for entry in sorted(matches, key=lambda e: e["name"]):
+        name = entry["name"].rstrip("/")
+        parts = name.split("/")
+        if any("/".join(parts[:i]) in folders for i in range(1, len(parts))):
+            continue
+        if entry["type"] == "directory":
+            folders[name] = None
+        else:
+            files.append(name)
+    return _Roots(list(folders), files, errors)
 
 
 class _Jobs(ABC):
@@ -61,8 +103,8 @@ class _Jobs(ABC):
         self.next: asyncio.Task[_Listing] | None = None
 
     @abstractmethod
-    async def prepare(self) -> str | None:
-        """The folder or file to walk, or None if there is nothing to do."""
+    async def prepare(self) -> _Roots | None:
+        """What to walk, or None if there is nothing to do."""
 
     @abstractmethod
     def state(self) -> Any:
@@ -70,7 +112,7 @@ class _Jobs(ABC):
 
     @abstractmethod
     def file_root(self, path: str) -> None:
-        """Queue the jobs for ``path``, the operation's root, which is a file."""
+        """Queue the jobs for ``path``, a root of the operation, which is a file."""
 
     @abstractmethod
     def add(self, listing: _Listing) -> None:
@@ -90,11 +132,16 @@ class _Jobs(ABC):
 
     async def outcomes(self) -> AsyncGenerator[Any]:
         """Yield each outcome, as the operation does, keeping its state up to date."""
-        path = await self.prepare()
-        if path is None:
+        roots = await self.prepare()
+        if roots is None:
             return
         try:
-            async with aclosing(self.steps(path)) as steps:
+            if roots.errors:
+                self.errors += len(roots.errors)
+                self.op.state = self.state()
+                for error in roots.errors:
+                    yield error
+            async with aclosing(self.steps(roots)) as steps:
                 async for outcomes in steps:
                     self.op.state = self.state()
                     for outcome in outcomes:
@@ -103,17 +150,15 @@ class _Jobs(ABC):
             # Closing the steps waits for the jobs running, and counts them.
             self.op.state = self.state()
 
-    async def steps(self, path: str) -> AsyncGenerator[list[Any]]:
+    async def steps(self, roots: _Roots) -> AsyncGenerator[list[Any]]:
         """Run the jobs, yielding what each step did: a listing, or a job done.
 
         Closing this stops the operation: it starts nothing new, and waits for
         the jobs running, as their outcome would otherwise be unknown.
         """
-        listings = _listings(
-            self.fs, path, batch_size=self.batch_size, stopping=self.op.cancelling
-        )
+        listings = self.walk(roots)
         try:
-            yield await self.begin(path, listings)
+            yield await self.begin(roots, listings)
             while True:
                 self.start()
                 pending = [*self.running, *([self.next] if self.next else [])]
@@ -139,23 +184,45 @@ class _Jobs(ABC):
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            await listings.aclose()
+            if listings is not None:
+                await listings.aclose()
 
-    async def begin(self, path: str, listings: AsyncGenerator[_Listing]) -> list[Any]:
-        """List ``path``, or queue its own jobs if a file: the first step."""
+    def walk(self, roots: _Roots) -> AsyncGenerator[_Listing] | None:
+        """The listings of the root folders, if any, walked at once."""
+        if not roots.folders:
+            return None
+        return _listings(
+            self.fs,
+            roots.folders,
+            batch_size=self.batch_size,
+            stopping=self.op.cancelling,
+        )
+
+    async def begin(
+        self, roots: _Roots, listings: AsyncGenerator[_Listing] | None
+    ) -> list[Any]:
+        """Queue the files' jobs, and list the folders: the first step.
+
+        A single root of unknown kind is among the folders: if it is a file,
+        its listing says so, and its jobs are queued instead.
+        """
+        for path in roots.files:
+            self.file_root(path)
+        if listings is None:
+            return []
         try:
             first = await anext(listings)
-        except NotADirectoryError:
-            self.file_root(self.fs._strip_protocol(path))
+        except NotADirectoryError as e:
+            self.file_root(e.args[0])
             return []
         self.next = asyncio.ensure_future(anext(listings))
         return self.listed(first)
 
     def take(
-        self, task: asyncio.Task[Any], listings: AsyncGenerator[_Listing]
+        self, task: asyncio.Task[Any], listings: AsyncGenerator[_Listing] | None
     ) -> list[Any] | None:
         """Handle a finished task, returning its step, or None if the walk ended."""
-        if task is not self.next:
+        if task is not self.next or listings is None:
             return self.finish(task)
         self.next = None
         try:

@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.control import collect
 from fsspec_alt_strategies.testing import SimulatedFileSystem
@@ -64,6 +65,39 @@ async def test_a_file(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     assert await collect(tree_rm(any_fs, "data/README.md")) == (["data/README.md"], [])
     assert not await any_fs._exists("data/README.md")
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["data/*/01", "data/20*", "data/**/*.parquet", "data/*", "*/kept", "data/2023/0?/"],
+)
+async def test_a_pattern_deletes_what_fsspec_expands(
+    any_fs: SimulatedFileSystem, pattern: str
+) -> None:
+    _tree(any_fs)
+    expanded = set(await AsyncFileSystem._expand_path(any_fs, pattern, recursive=True))
+    before = set(any_fs._file_data)
+    _, errors = await collect(tree_rm(any_fs, pattern))
+    assert errors == []
+    assert set(any_fs._file_data) == before - expanded
+    for path in expanded:
+        assert not await any_fs._exists(path)
+
+
+async def test_a_pattern_walks_its_matches_at_once() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
+    for i in range(8):
+        fs.add_file(f"root/{i}/sub/file")
+    await collect(tree_rm(fs, "root/*", batch_size=8))
+    assert fs.stats.max_concurrency == 8
+    # The glob's listing of root, then each match and its sub folder.
+    assert fs.stats.calls["list"] == 1 + 8 + 8
+
+
+async def test_a_pattern_matching_nothing_raises(any_fs: SimulatedFileSystem) -> None:
+    _tree(any_fs)
+    with pytest.raises(FileNotFoundError):
+        await collect(tree_rm(any_fs, "data/*/13"))
 
 
 async def test_missing_root_raises(any_fs: SimulatedFileSystem) -> None:

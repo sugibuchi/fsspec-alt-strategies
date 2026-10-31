@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 from ..control import Operation, State
 from ..profile import _resolve
 from ._jobs import _Job
-from .cp import _check_source, _Copy
+from .cp import _Copy
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -71,6 +71,12 @@ def tree_mv(
     ``path1/x`` becomes ``path2/x``. A file moves the same way. Existing files
     are overwritten, as fsspec's ``mv`` does.
 
+    A glob pattern moves each path it matches, and all in it, placed as
+    fsspec's ``mv`` places them. Their paths below the matches' common
+    prefix are kept under ``path2``, but a single file matched goes into
+    ``path2``. The pattern is matched as `tree_glob` matches it, then the
+    folders matched are walked at once.
+
     The tree is walked as `tree_walk` walks it. Each folder's files are moved
     as soon as the folder is listed, each by a ``_cp_file`` then an
     ``_rm_file``. A source folder is deleted once everything in it is moved,
@@ -104,7 +110,7 @@ def tree_mv(
     fs : fsspec.asyn.AsyncFileSystem
         The filesystem.
     path1 : str
-        The folder or file to move. Patterns are not supported yet.
+        The folder or file to move, or a glob pattern.
     path2 : str
         Where to move it, as above.
     profile : StorageProfile, optional
@@ -122,11 +128,6 @@ def tree_mv(
         Yielding ``(source, destination)`` for each file and folder moved, or
         an error. Its state is an `MvState`.
 
-    Raises
-    ------
-    ValueError
-        If ``path1`` is a glob pattern.
-
     See Also
     --------
     tree_cp : The same, keeping the source.
@@ -141,7 +142,6 @@ def tree_mv(
     >>> op.state.files_moved
     1234
     """
-    _check_source(path1)
     resolved = _resolve(fs, profile)
     return Operation(
         lambda op: _Move(

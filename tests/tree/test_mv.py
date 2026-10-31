@@ -70,6 +70,18 @@ async def test_places_as_fsspec(
     assert not await any_fs._exists(path1.rstrip("/"))
 
 
+async def test_a_pattern_moves_its_matches(any_fs: SimulatedFileSystem) -> None:
+    _tree(any_fs)
+    moved, errors = await collect(tree_mv(any_fs, "data/202*", "moved"))
+    assert errors == []
+    # Relative to the matches' common prefix, "data", as fsspec places them.
+    assert await any_fs._exists("moved/2023/01/part-0.parquet")
+    assert await any_fs._exists("moved/2024/01/part-0.parquet")
+    assert not await any_fs._exists("data/2023")
+    assert await any_fs._exists("data/README.md")
+    assert ("data/2024/01/part-0.parquet", "moved/2024/01/part-0.parquet") in moved
+
+
 async def test_requests(hierarchical_fs: SimulatedFileSystem) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.add_dir("data/empty")
@@ -207,8 +219,6 @@ async def test_closing_waits_for_the_moves_sent() -> None:
 
 async def test_paths_it_refuses(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    with pytest.raises(ValueError, match="Patterns"):
-        tree_mv(any_fs, "data/*", "moved")
     with pytest.raises(ValueError, match="into itself"):
         await collect(tree_mv(any_fs, "data", "data/inner"))
     with pytest.raises(FileNotFoundError):

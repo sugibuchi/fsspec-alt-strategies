@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from fsspec.asyn import AsyncFileSystem
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.control import collect
@@ -58,6 +59,40 @@ async def test_places_as_fsspec(
     for source, content in data.items():
         assert any_fs._file_data[expected[source]].data == content
         assert any_fs._file_data[source].data == content  # The source is kept.
+
+
+@pytest.mark.parametrize(
+    ("pattern", "path2"),
+    [
+        ("data/*/01", "copied"),  # Folders, relative to their common prefix.
+        ("data/20*", "copied"),
+        ("data/**/*.parquet", "copied"),  # Files only.
+        ("data/*.md", "archive"),  # A single file goes into the destination.
+        ("data/2024/*", "copied/"),  # A single folder goes onto it.
+    ],
+)
+async def test_a_pattern_places_as_fsspec(
+    any_fs: SimulatedFileSystem, pattern: str, path2: str
+) -> None:
+    _tree(any_fs, "bucket/")
+    pattern, path2 = f"bucket/{pattern}", f"bucket/{path2}"
+    paths = await AsyncFileSystem._expand_path(any_fs, pattern, recursive=True)
+    # As fsspec's copy: a single path expanded goes into the destination.
+    destinations = other_paths(paths, path2, exists=len(paths) == 1)
+    expected = dict(zip(paths, destinations, strict=True))
+    files = [p for p in paths if p in any_fs._file_data]
+
+    copied, errors = await collect(tree_cp(any_fs, pattern, path2))
+    assert errors == []
+    assert sorted(copied) == sorted((p, expected[p]) for p in files)
+
+
+async def test_a_pattern_onto_its_own_matches_is_refused(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    with pytest.raises(ValueError, match="into itself"):
+        await collect(tree_cp(any_fs, "data/*", "data"))
 
 
 async def test_requests(hierarchical_fs: SimulatedFileSystem) -> None:
@@ -128,8 +163,6 @@ async def test_a_failure_is_yielded_and_the_rest_is_copied() -> None:
 
 async def test_paths_it_refuses(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    with pytest.raises(ValueError, match="Patterns"):
-        tree_cp(any_fs, "data/*", "copied")
     with pytest.raises(ValueError, match="Cannot copy 'data' into itself"):
         await collect(tree_cp(any_fs, "data", "data/inner"))
     with pytest.raises(FileNotFoundError):
