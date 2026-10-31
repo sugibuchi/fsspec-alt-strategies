@@ -7,11 +7,11 @@
 | `src/fsspec_alt_strategies/`    | The package.                                                   |
 | `.../control.py`                | `Operation`, `State` and `collect`: the strategy API.          |
 | `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
-| `.../tree/walk.py`              | `walk`, the concurrent folder walk under the tree strategies.  |
-| `.../tree/find.py`              | `find`, a find listing several folders at a time.              |
-| `.../tree/du.py`                | `du`, a tree's size from its listings alone.                   |
-| `.../tree/glob.py`              | `glob`, a glob listing only the folders it can match in.       |
-| `.../tree/rm.py`                | `rm`, a recursive delete that deletes while it walks.          |
+| `.../tree/walk.py`              | `tree_walk`, the concurrent folder walk under the tree strategies.  |
+| `.../tree/find.py`              | `tree_find`, a find listing several folders at a time.              |
+| `.../tree/du.py`                | `tree_du`, a tree's size from its listings alone.                   |
+| `.../tree/glob.py`              | `tree_glob`, a glob listing only the folders it can match in.       |
+| `.../tree/rm.py`                | `tree_rm`, a recursive delete that deletes while it walks.          |
 | `.../file.py`                   | File objects whose buffering adapts to how they are read or written. |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, in the package's layout, with the shared fixtures in `tests/conftest.py`. |
@@ -91,7 +91,7 @@ A strategy is a plain function returning an `Operation`. The filesystem comes fi
 then keyword-only options:
 
 ```python
-async with rm(fs, "data/2024", batch_size=32) as op:
+async with tree_rm(fs, "data/2024", batch_size=32) as op:
     async for path in op:
         if isinstance(path, Exception):
             print("failed:", path)
@@ -140,7 +140,7 @@ Developers attach a strategy by overriding the fsspec method themselves, in a fe
 class MyFileSystem(AsyncFileSystem):
     async def _rm(self, path, recursive=False, **kwargs):
         if recursive:
-            _, errors = await collect(rm(self, path, batch_size=32))
+            _, errors = await collect(tree_rm(self, path, batch_size=32))
             if errors:
                 raise ExceptionGroup("rm failed", errors)
             return
@@ -155,7 +155,10 @@ class MyFileSystem(AsyncFileSystem):
 
 The strategies in `tree/` walk with the walk's private engine, `_listings`, which yields each folder's listing.
 
-`walk` is meant to replace fsspec's `walk`, so it already has two of its options:
+Their names start with `tree_`, e.g. `tree_rm` and `tree_glob`. Code using fsspec already has `rm` and `glob`, as
+methods and modules. The prefix keeps an import from shadowing them, and tells the reader which strategy is used.
+
+`tree_walk` is meant to replace fsspec's `walk`, so it already has two of its options:
 
 - `topdown=False` yields a folder's entries only after those of all the folders below it.
 - `raise_on_error=True` raises a folder's error instead of yielding it. With filtering, it will implement fsspec's

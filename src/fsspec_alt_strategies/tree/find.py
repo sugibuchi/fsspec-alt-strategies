@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """A recursive find that lists several folders at a time.
 
-`find` is an alternative to fsspec's ``_find``, with the same paths. fsspec's
+`tree_find` is an alternative to fsspec's ``_find``, with the same paths. fsspec's
 walks a tree one folder at a time, unless the filesystem lists whole trees.
-`find` lists up to ``batch_size`` folders at a time, as `walk` does.
+`tree_find` lists up to ``batch_size`` folders at a time, as `tree_walk` does.
 
 This module depends on `control` and `walk`.
 """
@@ -23,12 +23,12 @@ if TYPE_CHECKING:
 
     from fsspec.asyn import AsyncFileSystem
 
-__all__ = ["FindState", "find"]
+__all__ = ["FindState", "tree_find"]
 
 
 @dataclass(frozen=True, kw_only=True)
 class FindState(State):
-    """The progress of a `find`.
+    """The progress of a `tree_find`.
 
     Attributes
     ----------
@@ -42,7 +42,7 @@ class FindState(State):
     found: int = 0
 
 
-def find(
+def tree_find(
     fs: AsyncFileSystem,
     path: str,
     *,
@@ -98,12 +98,12 @@ def find(
 
     See Also
     --------
-    walk : The walk under it.
+    tree_walk : The walk under it.
     fsspec_alt_strategies.control.collect : All the paths, at once.
 
     Examples
     --------
-    >>> entries, errors = await collect(find(fs, "data", batch_size=32))
+    >>> entries, errors = await collect(tree_find(fs, "data", batch_size=32))
     >>> sorted(e["name"] for e in entries), errors
     (['data/2024/01/part-0.parquet', 'data/2024/02/part-0.parquet'], [])
     """
@@ -145,7 +145,7 @@ async def _steps(
     batch_size: int | None,
     stopping: Callable[[], object],
 ) -> AsyncGenerator[tuple[str | None, list[dict[str, Any] | Exception]]]:
-    """Search as `find` does, yielding what each step found.
+    """Search as `tree_find` does, yielding what each step found.
 
     A step is a folder listed, with its folder, or the ``_info`` of ``path``
     itself, with None.

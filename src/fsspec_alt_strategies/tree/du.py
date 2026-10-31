@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The size of a tree, from its listings alone.
 
-`du` is an alternative to fsspec's ``_du``. fsspec's finds the files, then asks
-each file's size with a request of its own. `du` adds up the sizes the
+`tree_du` is an alternative to fsspec's ``_du``. fsspec's finds the files, then asks
+each file's size with a request of its own. `tree_du` adds up the sizes the
 listings already give.
 
 This module depends on `control` and `walk`.
@@ -23,12 +23,12 @@ if TYPE_CHECKING:
 
     from fsspec.asyn import AsyncFileSystem
 
-__all__ = ["DuState", "du"]
+__all__ = ["DuState", "tree_du"]
 
 
 @dataclass(frozen=True, kw_only=True)
 class DuState(State):
-    """The progress of a `du`.
+    """The progress of a `tree_du`.
 
     Attributes
     ----------
@@ -46,7 +46,7 @@ class DuState(State):
     size: int = 0
 
 
-def du(
+def tree_du(
     fs: AsyncFileSystem,
     path: str,
     *,
@@ -99,11 +99,11 @@ def du(
 
     See Also
     --------
-    walk : The walk under it.
+    tree_walk : The walk under it.
 
     Examples
     --------
-    >>> async with du(fs, "data", batch_size=32) as op:
+    >>> async with tree_du(fs, "data", batch_size=32) as op:
     ...     async for entry in op:
     ...         if isinstance(entry, Exception):
     ...             raise entry

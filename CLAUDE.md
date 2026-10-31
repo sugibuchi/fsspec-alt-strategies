@@ -42,6 +42,8 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
   - its stopping mirrors `asyncio.Task`: `cancel()` starts nothing new but yields what is in flight, and `aclose()`
     stops at once, waiting for writes in flight. There are no callbacks and no result classes.
 - The tree strategies, in `tree/`, walk with `tree.walk._listings`, which is private: never expose its `_Listing`.
+- A strategy's name tells its family, e.g. `tree_rm` and `tree_glob`, never a bare `rm` or `glob`. Code using fsspec
+  has those names already, as methods and modules.
 - Never swallow `CancelledError`.
 - The package's `__init__.py` re-exports nothing but `__version__`, and `tree/__init__.py` nothing at all. Users import
   from each module, so a copy can leave out modules it does not use.

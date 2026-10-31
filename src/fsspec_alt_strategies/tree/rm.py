@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """A recursive delete that walks the tree and deletes while it walks.
 
-`rm` is an alternative to fsspec's recursive ``_rm``. fsspec's lists the whole
-tree first, then deletes each path. `rm` deletes each folder's files as soon as
+`tree_rm` is an alternative to fsspec's recursive ``_rm``. fsspec's lists the whole
+tree first, then deletes each path. `tree_rm` deletes each folder's files as soon as
 the folder is listed, and each folder once it is empty.
 
 This module depends on `control` and `walk`.
@@ -29,12 +29,12 @@ if TYPE_CHECKING:
 
     from .walk import _Listing
 
-__all__ = ["RmState", "rm"]
+__all__ = ["RmState", "tree_rm"]
 
 
 @dataclass(frozen=True, kw_only=True)
 class RmState(State):
-    """The progress of an `rm`.
+    """The progress of a `tree_rm`.
 
     Attributes
     ----------
@@ -51,7 +51,7 @@ class RmState(State):
     folders_deleted: int = 0
 
 
-def rm(
+def tree_rm(
     fs: AsyncFileSystem,
     path: str,
     *,
@@ -60,7 +60,7 @@ def rm(
 ) -> Operation[str, RmState]:
     """Delete a folder and everything in it, deleting while the tree is walked.
 
-    The tree is walked as `walk` walks it. Each folder's files are deleted as
+    The tree is walked as `tree_walk` walks it. Each folder's files are deleted as
     soon as the folder is listed, while other folders are still being listed. A
     folder is deleted once everything in it is, so the deepest go first. A
     folder with anything in it that failed is kept.
@@ -109,11 +109,11 @@ def rm(
 
     See Also
     --------
-    walk : The walk under it.
+    tree_walk : The walk under it.
 
     Examples
     --------
-    >>> async with rm(fs, "data/2024", batch_size=32) as op:
+    >>> async with tree_rm(fs, "data/2024", batch_size=32) as op:
     ...     async for path in op:
     ...         if isinstance(path, Exception):
     ...             op.cancel()  # Stop at the first failure.
@@ -138,7 +138,7 @@ def rm(
 
 
 class _Deletion:
-    """The bookkeeping of one `rm` operation, kept apart from the function."""
+    """The bookkeeping of one `tree_rm` operation, kept apart from the function."""
 
     def __init__(
         self,

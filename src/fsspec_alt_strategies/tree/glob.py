@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """A glob that lists only the folders its pattern can match in.
 
-`glob` is an alternative to fsspec's ``_glob``, with the same matches. fsspec's
+`tree_glob` is an alternative to fsspec's ``_glob``, with the same matches. fsspec's
 finds every path under the pattern's literal root, as deep as the pattern goes,
-then filters them with a regular expression. `glob` walks the tree as `walk`
+then filters them with a regular expression. `tree_glob` walks the tree as `tree_walk`
 does, and lists a folder only if the pattern can match in it.
 
 To decide, a folder's path is matched with the pattern's segments, one by one.
@@ -35,12 +35,12 @@ if TYPE_CHECKING:
 
     from .walk import _Listing
 
-__all__ = ["GlobState", "glob"]
+__all__ = ["GlobState", "tree_glob"]
 
 
 @dataclass(frozen=True, kw_only=True)
 class GlobState(State):
-    """The progress of a `glob`.
+    """The progress of a `tree_glob`.
 
     Attributes
     ----------
@@ -54,7 +54,7 @@ class GlobState(State):
     matched: int = 0
 
 
-def glob(
+def tree_glob(
     fs: AsyncFileSystem,
     path: str,
     *,
@@ -77,7 +77,7 @@ def glob(
     leaves folders out after its first wildcard, e.g. ``data/*/2024/*.parquet``.
     fsspec's ``_glob`` then lists every folder under ``data`` as deep as the
     pattern goes. It loses on object stores, which list a whole tree in one
-    paginated request, and gains nothing over `find` with patterns such as
+    paginated request, and gains nothing over `tree_find` with patterns such as
     ``data/**/*.parquet``, which can match anywhere.
 
     Once cancelled, it lists no new folder, and yields the matches of the
@@ -113,12 +113,12 @@ def glob(
 
     See Also
     --------
-    find : Every path in a tree.
-    walk : The walk under it.
+    tree_find : Every path in a tree.
+    tree_walk : The walk under it.
 
     Examples
     --------
-    >>> async with glob(fs, "data/*/2024/*.parquet") as matches:
+    >>> async with tree_glob(fs, "data/*/2024/*.parquet") as matches:
     ...     async for match in matches:
     ...         if isinstance(match, Exception):
     ...             raise match
@@ -187,7 +187,7 @@ def _info_of(
 ) -> Callable[
     [Operation[dict[str, Any], GlobState]], AsyncGenerator[dict[str, Any] | Exception]
 ]:
-    """What a `glob` runs for a pattern without wildcards: the path's ``_info``."""
+    """What a `tree_glob` runs for a pattern without wildcards: the path's ``_info``."""
 
     async def run(
         op: Operation[dict[str, Any], GlobState],
@@ -203,7 +203,7 @@ def _info_of(
 
 
 class _Search:
-    """One `glob` call: the pattern, split and compiled."""
+    """One `tree_glob` call: the pattern, split and compiled."""
 
     def __init__(
         self,

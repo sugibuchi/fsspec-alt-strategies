@@ -1,4 +1,4 @@
-"""Tests of `du`, checked against fsspec's own ``_du``."""
+"""Tests of `tree_du`, checked against fsspec's own ``_du``."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.control import collect
-from fsspec_alt_strategies.tree.du import DuState, du
+from fsspec_alt_strategies.tree.du import DuState, tree_du
 
 if TYPE_CHECKING:
     from fsspec_alt_strategies.testing import SimulatedFileSystem
@@ -27,7 +27,7 @@ async def test_measures_as_fsspec(
     any_fs: SimulatedFileSystem, path: str, maxdepth: int | None
 ) -> None:
     _tree(any_fs)
-    op = du(any_fs, path, maxdepth=maxdepth)
+    op = tree_du(any_fs, path, maxdepth=maxdepth)
     entries, errors = await collect(op)
     assert errors == []
     total = await AsyncFileSystem._du(any_fs, path, maxdepth=maxdepth)
@@ -38,7 +38,7 @@ async def test_measures_as_fsspec(
 
 async def test_sends_no_info_per_file(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    op = du(any_fs, "data")
+    op = tree_du(any_fs, "data")
     await collect(op)
     assert op.state == DuState(
         current=op.state.current, folders_listed=7, files=5, size=221
@@ -48,7 +48,7 @@ async def test_sends_no_info_per_file(any_fs: SimulatedFileSystem) -> None:
 
 async def test_cancel_counts_what_was_listed(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    op = du(any_fs, "data", batch_size=1)
+    op = tree_du(any_fs, "data", batch_size=1)
     async for _ in op:
         op.cancel()
     # data, and data/2023 listed with it: only the README is counted.

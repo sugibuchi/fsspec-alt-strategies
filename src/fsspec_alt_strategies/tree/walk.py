@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """A concurrent walk of a folder tree, a folder per listing request.
 
-`walk` lists folders breadth first, several at a time, and yields each entry
+`tree_walk` lists folders breadth first, several at a time, and yields each entry
 as its folder's listing arrives. A ``descend`` predicate prunes the folders it
 lists, as glob needs. Its engine, ``_listings``, is also the engine under the
 other tree strategies, such as find, rm and du.
@@ -31,12 +31,12 @@ if TYPE_CHECKING:
 
     from fsspec.asyn import AsyncFileSystem
 
-__all__ = ["WalkState", "walk"]
+__all__ = ["WalkState", "tree_walk"]
 
 
 @dataclass(frozen=True, kw_only=True)
 class WalkState(State):
-    """The progress of a `walk`.
+    """The progress of a `tree_walk`.
 
     Attributes
     ----------
@@ -50,7 +50,7 @@ class WalkState(State):
     found: int = 0
 
 
-def walk(
+def tree_walk(
     fs: AsyncFileSystem,
     path: str,
     *,
@@ -120,7 +120,7 @@ def walk(
 
     Examples
     --------
-    >>> async with walk(fs, "data", batch_size=16) as entries:
+    >>> async with tree_walk(fs, "data", batch_size=16) as entries:
     ...     async for entry in entries:
     ...         if isinstance(entry, Exception):
     ...             raise entry
@@ -189,9 +189,9 @@ async def _listings(
     batch_size: int | None = None,
     stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[_Listing]:
-    """Walk a folder tree as `walk` does, yielding each folder's listing.
+    """Walk a folder tree as `tree_walk` does, yielding each folder's listing.
 
-    The tree strategies need a listing's folder, which `walk`'s entries do
+    The tree strategies need a listing's folder, which `tree_walk`'s entries do
     not carry. A failed listing is yielded with its error, and its subfolders
     are not walked. ``path``'s own listing fails by raising, as fsspec's walk
     does, since nothing has been done yet.
