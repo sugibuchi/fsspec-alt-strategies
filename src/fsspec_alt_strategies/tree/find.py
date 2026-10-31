@@ -12,14 +12,14 @@ This module depends on `control` and `walk`.
 from __future__ import annotations
 
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from ..control import Operation, State
-from .walk import _check_maxdepth, _listings
+from .walk import _check_maxdepth, _scan
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator
 
     from fsspec.asyn import AsyncFileSystem
 
@@ -112,70 +112,36 @@ def tree_find(
     async def run(
         op: Operation[dict[str, Any], FindState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
-        state = op.state
-        steps = _steps(
+        root = fs._strip_protocol(path)
+        steps = _scan(
             fs,
-            path,
+            root,
             maxdepth=maxdepth,
-            withdirs=withdirs,
             batch_size=batch_size,
             stopping=op.cancelling,
+            file_root=True,
+            folder_root=withdirs and bool(root),
         )
+        state = op.state
         async with aclosing(steps):
-            async for folder, items in steps:
-                errors = sum(isinstance(i, Exception) for i in items)
+            async for step in steps:
+                if isinstance(step, dict):
+                    # The root's own entry.
+                    op.state = state = replace(state, found=state.found + 1)
+                    yield step
+                    continue
+                found = [
+                    e for e in step.entries if withdirs or e["type"] != "directory"
+                ]
                 op.state = state = FindState(
-                    errors=state.errors + errors,
-                    current=folder or state.current,
-                    folders_listed=state.folders_listed + (folder is not None),
-                    found=state.found + len(items) - errors,
+                    errors=state.errors + (step.error is not None),
+                    current=step.folder,
+                    folders_listed=state.folders_listed + 1,
+                    found=state.found + len(found),
                 )
-                for item in items:
-                    yield item
+                if step.error is not None:
+                    yield step.error
+                for entry in found:
+                    yield entry
 
     return Operation(run, FindState())
-
-
-async def _steps(
-    fs: AsyncFileSystem,
-    path: str,
-    *,
-    maxdepth: int | None,
-    withdirs: bool,
-    batch_size: int | None,
-    stopping: Callable[[], object],
-) -> AsyncGenerator[tuple[str | None, list[dict[str, Any] | Exception]]]:
-    """Search as `tree_find` does, yielding what each step found.
-
-    A step is a folder listed, with its folder, or the ``_info`` of ``path``
-    itself, with None.
-    """
-    root = fs._strip_protocol(path)
-    listed = False
-    try:
-        async with aclosing(
-            _listings(
-                fs, root, maxdepth=maxdepth, batch_size=batch_size, stopping=stopping
-            )
-        ) as listings:
-            async for listing in listings:
-                listed = True
-                items: list[dict[str, Any] | Exception] = []
-                if listing.error is not None:
-                    items.append(listing.error)
-                items += (
-                    e for e in listing.entries if withdirs or e["type"] != "directory"
-                )
-                yield listing.folder, items
-    except FileNotFoundError:
-        if listed:
-            raise
-        # As fsspec's _find: a missing path finds nothing.
-        return
-    except NotADirectoryError:
-        if listed:
-            raise
-        yield None, [await fs._info(root)]
-        return
-    if withdirs and root and not stopping():
-        yield None, [await fs._info(root)]

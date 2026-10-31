@@ -42,7 +42,8 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
   - its stopping mirrors `asyncio.Task`: `cancel()` starts nothing new but yields what is in flight, and `aclose()`
     stops at once, waiting for writes in flight. There are no callbacks and no result classes.
 - The tree strategies, in `tree/`, walk with `tree.walk._listings`, which is private: never expose its `_Listing`.
-  Those changing a tree run their requests on `tree._jobs._Jobs`: build a new one on it, never another loop.
+  Two layers, by what a strategy sends: one that only reads builds on `tree.walk._scan`, which handles the root; one
+  that changes the storage builds on `tree._jobs._Jobs`. Never write another loop or root handling.
 - What a storage does that fsspec leaves open is declared, never detected, in `profile.StorageProfile`. A strategy
   takes `profile=`, falling back on `fs.storage_profile`, then on unknown. Unknown must be correct on any storage; a
   field only saves requests. Add a field only when a strategy saves requests with it.

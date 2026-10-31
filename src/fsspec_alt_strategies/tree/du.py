@@ -12,11 +12,11 @@ This module depends on `control` and `walk`.
 from __future__ import annotations
 
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from ..control import Operation, State
-from .walk import _check_maxdepth, _listings
+from .walk import _check_maxdepth, _scan
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -115,35 +115,38 @@ def tree_du(
     async def run(
         op: Operation[dict[str, Any], DuState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
-        root = fs._strip_protocol(path)
-        listings = _listings(
-            fs, root, maxdepth=maxdepth, batch_size=batch_size, stopping=op.cancelling
+        steps = _scan(
+            fs,
+            path,
+            maxdepth=maxdepth,
+            batch_size=batch_size,
+            stopping=op.cancelling,
+            file_root=True,
         )
         state = op.state
-        try:
-            async with aclosing(listings):
-                async for listing in listings:
-                    files = [e for e in listing.entries if e["type"] != "directory"]
-                    op.state = state = DuState(
-                        errors=state.errors + (listing.error is not None),
-                        current=listing.folder,
-                        folders_listed=state.folders_listed + 1,
-                        files=state.files + len(files),
-                        size=state.size + sum(e.get("size") or 0 for e in files),
+        async with aclosing(steps):
+            async for step in steps:
+                if isinstance(step, dict):
+                    # The root's own entry, as it is a file.
+                    op.state = state = replace(
+                        state,
+                        current=step["name"],
+                        files=state.files + 1,
+                        size=state.size + (step.get("size") or 0),
                     )
-                    if listing.error is not None:
-                        yield listing.error
-                    for entry in files:
-                        yield entry
-        except FileNotFoundError:
-            if state.folders_listed:
-                raise
-            # As fsspec's _du: a missing path measures nothing.
-        except NotADirectoryError:
-            if state.folders_listed:
-                raise
-            entry = await fs._info(root)
-            op.state = DuState(current=root, files=1, size=entry.get("size") or 0)
-            yield entry
+                    yield step
+                    continue
+                files = [e for e in step.entries if e["type"] != "directory"]
+                op.state = state = DuState(
+                    errors=state.errors + (step.error is not None),
+                    current=step.folder,
+                    folders_listed=state.folders_listed + 1,
+                    files=state.files + len(files),
+                    size=state.size + sum(e.get("size") or 0 for e in files),
+                )
+                if step.error is not None:
+                    yield step.error
+                for entry in files:
+                    yield entry
 
     return Operation(run, DuState())

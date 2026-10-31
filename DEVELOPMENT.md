@@ -159,7 +159,19 @@ class MyFileSystem(AsyncFileSystem):
 
 #### The tree strategies
 
-The strategies in `tree/` walk with the walk's private engine, `_listings`, which yields each folder's listing.
+The strategies in `tree/` walk with the walk's private engine, `_listings`, which yields each folder's listing. They
+come in two layers, by what they send:
+
+| Strategies | They send | They build on |
+|---|---|---|
+| `tree_find`, `tree_du`, `tree_glob` | Listings, and at most one `_info` for the root | `_scan` |
+| `tree_rm`, `tree_cp`, `tree_mv` | Requests changing the storage, besides the listings | `_Jobs` |
+
+`tree_walk` is `_listings` itself, made public. It raises for a missing or file root, as fsspec's `walk` does.
+
+`_scan`, in `tree/walk.py`, treats the root as fsspec's `_find` and `_glob` do. A missing root finds nothing, and a
+file root yields its own `_info` entry when asked. A folder root yields its own entry when asked, e.g. for `withdirs`.
+The strategies that only read never handle the root themselves.
 
 Those changing a tree, `tree_rm`, `tree_cp` and `tree_mv`, run their requests with a second private engine, `_Jobs` in
 `tree/_jobs.py`. It starts each folder's jobs, e.g. its files' deletions, as soon as the folder is listed, and runs

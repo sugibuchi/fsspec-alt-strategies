@@ -19,14 +19,14 @@ from __future__ import annotations
 
 import re
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
 from fsspec.utils import glob_translate
 
 from ..control import Operation, State
-from .walk import _listings
+from .walk import _scan
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -137,28 +137,28 @@ def tree_glob(
         op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         root = search.root
-        listings = _listings(
+        # As fsspec's _glob: a pattern under a missing folder, or a file,
+        # matches nothing. Its find includes the root folder itself, which few
+        # patterns match.
+        steps = _scan(
             fs,
             root,
             maxdepth=search.depth,
             descend=search.descend,
             batch_size=batch_size,
             stopping=op.cancelling,
+            folder_root=bool(root)
+            and search.matched({"name": root, "type": "directory"}),
         )
-        async with aclosing(listings):
-            try:
-                first = await anext(listings)
-            except (FileNotFoundError, NotADirectoryError):
-                # As fsspec's _glob: a pattern under a missing folder matches nothing.
-                return
-            # fsspec's find includes the root folder itself, which few patterns match.
-            if root and search.matched({"name": root, "type": "directory"}):
-                op.state = GlobState(current=root, matched=1)
-                yield await fs._info(root)
-            for match in search.matches_in(first, op):
-                yield match
-            async for listing in listings:
-                for match in search.matches_in(listing, op):
+        async with aclosing(steps):
+            async for step in steps:
+                if isinstance(step, dict):
+                    # The root's own entry, as it matches.
+                    state = op.state
+                    op.state = replace(state, matched=state.matched + 1)
+                    yield step
+                    continue
+                for match in search.matches_in(step, op):
                     yield match
 
     return Operation(run, GlobState())

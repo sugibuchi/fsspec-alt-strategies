@@ -243,6 +243,53 @@ async def _listings(
         await asyncio.gather(*running, return_exceptions=True)
 
 
+async def _scan(
+    fs: AsyncFileSystem,
+    path: str,
+    *,
+    maxdepth: int | None = None,
+    descend: Callable[[dict[str, Any]], bool] | None = None,
+    batch_size: int | None = None,
+    stopping: Callable[[], object] | None = None,
+    file_root: bool = False,
+    folder_root: bool = False,
+) -> AsyncGenerator[_Listing | dict[str, Any]]:
+    """Walk as the strategies that only read do, such as find, du and glob.
+
+    It yields each folder's listing, as ``_listings`` does, but treats ``path``
+    itself as fsspec's ``_find`` and ``_glob`` do:
+
+    - missing, it yields nothing;
+    - a file, it yields the file's ``_info`` entry if ``file_root``, else
+      nothing;
+    - a folder, it yields the folder's own ``_info`` entry after its listing,
+      if ``folder_root`` and the walk is not stopping.
+    """
+    root = fs._strip_protocol(path)
+    listed = False
+    try:
+        listings = _listings(
+            fs,
+            root,
+            maxdepth=maxdepth,
+            descend=descend,
+            batch_size=batch_size,
+            stopping=stopping,
+        )
+        async with aclosing(listings):
+            async for listing in listings:
+                first, listed = not listed, True
+                yield listing
+                if first and folder_root and not (stopping and stopping()):
+                    yield await fs._info(root)
+    except (FileNotFoundError, NotADirectoryError) as e:
+        # Only the root's own listing raises them: any later one is yielded.
+        if listed:
+            raise
+        if file_root and isinstance(e, NotADirectoryError):
+            yield await fs._info(root)
+
+
 def _listing(
     task: asyncio.Task[list[dict[str, Any]]],
     folder: str,
