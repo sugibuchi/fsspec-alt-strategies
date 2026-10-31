@@ -4,8 +4,8 @@ Alternative, filesystem-independent strategies for [fsspec](https://github.com/f
 
 > **Status:** pre-alpha. The API may change. So far, there are:
 >
-> - a concurrent tree walk, and these strategies built on it: find, du, a pruning glob, a recursive delete and a
->   recursive move;
+> - a concurrent tree walk, and these strategies built on it: find, du, a pruning glob, and a recursive delete, copy
+>   and move;
 > - storage profiles, where a developer declares what a storage does, such as whether writes need the parent folder;
 > - abstract file classes that adapt their buffering to how a file is read or written.
 >

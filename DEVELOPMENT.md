@@ -12,7 +12,9 @@
 | `.../tree/du.py`                | `tree_du`, a tree's size from its listings alone.                   |
 | `.../tree/glob.py`              | `tree_glob`, a glob listing only the folders it can match in.       |
 | `.../tree/rm.py`                | `tree_rm`, a recursive delete that deletes while it walks.          |
-| `.../tree/mv.py`                | `tree_mv`, a recursive move that moves while it walks.         |
+| `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks.        |
+| `.../tree/mv.py`                | `tree_mv`, a recursive move: a copy deleting as it goes.       |
+| `.../tree/_jobs.py`             | The private engine running a strategy's jobs, e.g. deletions, while the walk goes on. |
 | `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
 | `.../file.py`                   | File objects whose buffering adapts to how they are read or written. |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
@@ -158,6 +160,11 @@ class MyFileSystem(AsyncFileSystem):
 #### The tree strategies
 
 The strategies in `tree/` walk with the walk's private engine, `_listings`, which yields each folder's listing.
+
+Those changing a tree, `tree_rm`, `tree_cp` and `tree_mv`, run their requests with a second private engine, `_Jobs` in
+`tree/_jobs.py`. It starts each folder's jobs, e.g. its files' deletions, as soon as the folder is listed, and runs
+them along with the listings still in flight. It also drains them on `cancel()`, and waits for them on closing. A
+strategy subclasses it, saying what a listing queues, how a job runs, and what its outcome is.
 
 Their names start with `tree_`, e.g. `tree_rm` and `tree_glob`. Code using fsspec already has `rm` and `glob`, as
 methods and modules. The prefix keeps an import from shadowing them, and tells the reader which strategy is used.

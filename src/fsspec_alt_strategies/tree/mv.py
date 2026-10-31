@@ -10,26 +10,21 @@ delete, and deletes each source folder once it is empty.
 It is for storages without a rename of their own. Where a storage renames a
 file or a folder in one request, that request wins.
 
-This module depends on `control`, `profile` and `walk`.
+This module depends on `control`, `profile`, `walk`, `_jobs` and `cp`.
 """
 
 from __future__ import annotations
 
-import asyncio
-from collections import deque
-from contextlib import aclosing
 from dataclasses import dataclass
-from glob import has_magic
-from typing import TYPE_CHECKING, Any, Literal
-
-from fsspec.asyn import _get_batch_size
+from typing import TYPE_CHECKING, Any
 
 from ..control import Operation, State
 from ..profile import _resolve
-from .walk import _listings
+from ._jobs import _Job
+from .cp import _check_source, _Copy
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable
+    from collections.abc import Awaitable, Callable
 
     from fsspec.asyn import AsyncFileSystem
 
@@ -97,11 +92,8 @@ def tree_mv(
     raises FileNotFoundError if ``path1`` does not exist, and ValueError if
     ``path2`` is inside it.
 
-    Requests: one ``_info`` for ``path2``, unless it ends with "/". One ``_ls``
-    per folder, one ``_cp_file`` and one ``_rm_file`` per file, one
-    ``_makedirs`` per destination folder with files or empty, and one
-    ``rm_folder`` per folder. A storage refusing to overwrite costs an
-    ``_rm_file`` more per file it refused. At most ``batch_size`` listings and
+    Requests: as `tree_cp`, with one ``_rm_file`` more per file, and one
+    ``rm_folder`` per folder. At most ``batch_size`` listings and
     ``batch_size`` moves run at a time.
 
     The profile's ``parents_required=False`` saves the ``_makedirs`` of each
@@ -137,7 +129,7 @@ def tree_mv(
 
     See Also
     --------
-    tree_walk : The walk under it.
+    tree_cp : The same, keeping the source.
     tree_rm : The deletion it does as it goes.
 
     Examples
@@ -149,211 +141,56 @@ def tree_mv(
     >>> op.state.files_moved
     1234
     """
-    if has_magic(path1):
-        raise ValueError(f"Patterns are not supported yet: {path1!r}")
+    _check_source(path1)
     resolved = _resolve(fs, profile)
-
-    async def run(
-        op: Operation[tuple[str, str], MvState],
-    ) -> AsyncGenerator[tuple[str, str] | Exception]:
-        move = _Move(fs, resolved, rm_folder, batch_size, op)
-        try:
-            async with aclosing(move.steps(path1, path2)) as steps:
-                async for outcomes in steps:
-                    op.state = move.state()
-                    for outcome in outcomes:
-                        yield outcome
-        finally:
-            # Closing the steps waits for the moves sent, and counts them.
-            op.state = move.state()
-
-    return Operation(run, MvState())
+    return Operation(
+        lambda op: _Move(
+            fs, path1, path2, resolved, rm_folder, batch_size, op
+        ).outcomes(),
+        MvState(),
+    )
 
 
-_Kind = Literal["mkdir", "move", "rmdir"]
+class _Move(_Copy):
+    """The jobs of one `tree_mv`: a copy's, deleting each source as it goes."""
 
-
-class _Move:
-    """The bookkeeping of one `tree_mv` operation, kept apart from the function."""
+    verb = "move"
+    doing = "Moving"
 
     def __init__(
         self,
         fs: AsyncFileSystem,
+        path1: str,
+        path2: str,
         profile: StorageProfile,
         rm_folder: Callable[[str], Awaitable[Any]] | None,
         batch_size: int | None,
-        op: Operation[tuple[str, str], MvState],
+        op: Operation[Any, Any],
     ) -> None:
-        self.fs = fs
-        self.parents_required = profile.parents_required is not False
+        super().__init__(fs, path1, path2, profile, batch_size, op)
         self.rm_folder = rm_folder or getattr(fs, "_rmdir", None) or fs._rm_file
-        self.batch_size = batch_size or fs.batch_size or _get_batch_size(nofiles=True)
-        self.op = op
-        self.root = ""
-        self.base = ""
-        self.errors = 0
-        self.files_found = 0
-        self.files_moved = 0
         self.folders_moved = 0
-        self.current: str | None = None
-        # As in tree_rm: the paths in each source folder not moved yet. A folder
-        # whose count reaches zero is deleted.
-        self.remaining: dict[str, int] = {}
-        self.parents: dict[str, str] = {}
-        # The moves waiting for their destination folder, by that folder.
-        self.after_mkdir: dict[str, list[tuple[_Kind, str, str]]] = {}
-        # Requests to start, and those running: the kind, source and destination.
-        self.waiting: deque[tuple[_Kind, str, str]] = deque()
-        self.running: dict[asyncio.Task[Any], tuple[_Kind, str, str]] = {}
-        self.next: asyncio.Task[_Listing] | None = None
 
-    def target(self, path: str) -> str:
-        """Where a path under the source goes."""
-        return self.base + path[len(self.root) :]
-
-    async def steps(
-        self, path1: str, path2: str
-    ) -> AsyncGenerator[list[tuple[str, str] | Exception]]:
-        """Move, yielding what each step moved or failed, as tree_rm's steps do."""
-        if not await self.place(path1, path2):
-            return
-        listings = _listings(
-            self.fs, self.root, batch_size=self.batch_size, stopping=self.op.cancelling
+    def state(self) -> MvState:
+        return MvState(
+            errors=self.errors,
+            current=self.current,
+            files_found=self.files_found,
+            files_moved=self.files_done,
+            folders_moved=self.folders_moved,
         )
-        try:
-            yield await self.begin(listings)
-            while True:
-                self.start()
-                pending = [*self.running, *([self.next] if self.next else [])]
-                if not pending:
-                    break
-                done, _ = await asyncio.wait(
-                    pending, return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in done:
-                    if (outcome := self.take(task, listings)) is not None:
-                        yield outcome
-        except GeneratorExit:
-            self.waiting.clear()
-            while self.running:
-                done, _ = await asyncio.wait(self.running)
-                for task in done:
-                    self.finish(task)
-            raise
-        finally:
-            # Listings are only reads, so cancelling them loses nothing. The
-            # moves are cancelled only when this task itself is.
-            tasks = [*self.running, *([self.next] if self.next else [])]
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            await listings.aclose()
 
-    async def place(self, path1: str, path2: str) -> bool:
-        """Set where ``path1`` itself goes, as fsspec's ``copy`` places it.
+    def add(self, listing: _Listing) -> None:
+        self.track(listing)
+        super().add(listing)
 
-        Returns False if it is there already.
-        """
-        self.root = self.fs._strip_protocol(path1)
-        destination = self.fs._strip_protocol(path2)
-        if self.root == destination:
-            return False
-        if path2.endswith("/"):
-            into = True
-        else:
-            try:
-                into = (await self.fs._info(destination))["type"] == "directory"
-            except FileNotFoundError:
-                into = False
-        self.base = destination
-        if into and not path1.endswith("/"):
-            name = self.root.rsplit("/", 1)[-1]
-            self.base = f"{destination}/{name}" if destination else name
-        if self.base == self.root:
-            return False
-        if not self.root or self.base.startswith(self.root + "/"):
-            raise ValueError(f"Cannot move {self.root!r} into itself: {self.base!r}")
-        return True
+    def run(self, job: _Job) -> Awaitable[Any]:
+        if job.kind == "rmdir":
+            return self.rm_folder(job.source)
+        return super().run(job)
 
-    async def begin(self, listings: AsyncGenerator[_Listing]) -> list[Any]:
-        """List the source, or queue its own move if a file: the first step."""
-        try:
-            first = await anext(listings)
-        except NotADirectoryError:
-            self.files_found = 1
-            move: tuple[_Kind, str, str] = ("move", self.root, self.base)
-            parent = self.base.rpartition("/")[0]
-            if self.parents_required and parent:
-                self.after_mkdir[parent] = [move]
-                self.waiting.append(("mkdir", "", parent))
-            else:
-                self.waiting.append(move)
-            return []
-        self.next = asyncio.ensure_future(anext(listings))
-        return self.add(first)
-
-    def take(
-        self, task: asyncio.Task[Any], listings: AsyncGenerator[_Listing]
-    ) -> list[Any] | None:
-        """Handle a finished task, returning its step, or None if the walk ended."""
-        if task is not self.next:
-            return self.finish(task)
-        self.next = None
-        try:
-            listing = task.result()
-        except StopAsyncIteration:
-            return None
-        self.next = asyncio.ensure_future(anext(listings))
-        return self.add(listing)
-
-    def add(self, listing: _Listing) -> list[Any]:
-        """Queue the moves of a listed folder's files, and return its error."""
-        folder = listing.folder
-        self.current = folder
-        if listing.error is not None:
-            self.errors += 1
-            return [listing.error]
-        self.remaining[folder] = len(listing.entries)
-        moves: list[tuple[_Kind, str, str]] = []
-        for entry in listing.entries:
-            name = entry["name"].rstrip("/")
-            self.parents[name] = folder
-            if entry["type"] != "directory":
-                self.files_found += 1
-                moves.append(("move", name, self.target(name)))
-        target = self.target(folder)
-        # A folder holding only folders needs no mkdir: theirs create it.
-        if not listing.entries or (moves and self.parents_required):
-            self.after_mkdir[target] = moves
-            self.waiting.append(("mkdir", folder, target))
-        else:
-            self.waiting.extend(moves)
-        return []
-
-    def start(self) -> None:
-        if self.op.cancelling():
-            self.waiting.clear()
-        while self.waiting and len(self.running) < self.batch_size:
-            kind, source, destination = self.waiting.popleft()
-            if kind == "mkdir":
-                coro = self.fs._makedirs(destination, exist_ok=True)
-            elif kind == "move":
-                coro = self.move_file(source, destination)
-            else:
-                coro = self.rm_folder(source)
-            self.running[asyncio.ensure_future(coro)] = kind, source, destination
-
-    async def move_file(self, source: str, destination: str) -> None:
-        try:
-            try:
-                await self.fs._cp_file(source, destination)
-            except FileExistsError:
-                # The storage refuses to overwrite, which fsspec's mv does.
-                await self.fs._rm_file(destination)
-                await self.fs._cp_file(source, destination)
-        except Exception as e:
-            e.add_note(f"Moving {source!r} to {destination!r} failed.")
-            raise
+    async def copy_file(self, source: str, destination: str) -> None:
+        await super().copy_file(source, destination)
         try:
             await self.fs._rm_file(source)
         except FileNotFoundError:
@@ -365,43 +202,25 @@ class _Move:
             )
             raise
 
-    def finish(self, task: asyncio.Task[Any]) -> list[Any]:
-        """Count a finished request, queue what it allows, and return its outcome."""
-        kind, source, destination = self.running.pop(task)
-        self.current = source or destination
-        try:
-            task.result()
-        except Exception as e:
-            if kind == "rmdir" and isinstance(e, FileNotFoundError):
-                pass  # Already gone, as tree_rm counts it.
-            else:
-                if kind == "mkdir":
-                    e.add_note(f"Creating the folder {destination!r} failed.")
-                elif kind == "rmdir":
-                    e.add_note(f"Deleting the folder {source!r} failed.")
-                self.errors += 1
-                return [e]
-        if kind == "mkdir":
-            self.waiting.extend(self.after_mkdir.pop(destination))
-            if source and self.remaining[source] == 0:
-                self.waiting.append(("rmdir", source, destination))
-            return []
-        if kind == "move":
-            self.files_moved += 1
-        else:
+    def done(self, job: _Job) -> list[Any]:
+        if job.kind == "mkdir":
+            outcome = super().done(job)
+            # An empty folder: made at the destination, it can go.
+            if job.source and self.remaining[job.source] == 0:
+                self.waiting.append(_Job("rmdir", job.source, job.destination))
+            return outcome
+        if job.kind == "rmdir":
             self.folders_moved += 1
-        parent = self.parents.get(source)
-        if parent is not None:
-            self.remaining[parent] -= 1
-            if self.remaining[parent] == 0:
-                self.waiting.append(("rmdir", parent, self.target(parent)))
-        return [(source, destination)]
+        else:
+            self.files_done += 1
+        if (folder := self.child_done(job.source)) is not None:
+            self.waiting.append(_Job("rmdir", folder, self.target(folder)))
+        return [(job.source, job.destination)]
 
-    def state(self) -> MvState:
-        return MvState(
-            errors=self.errors,
-            current=self.current,
-            files_found=self.files_found,
-            files_moved=self.files_moved,
-            folders_moved=self.folders_moved,
-        )
+    def failed(self, job: _Job, error: Exception) -> list[Any]:
+        if job.kind != "rmdir":
+            return super().failed(job, error)
+        if isinstance(error, FileNotFoundError):
+            return self.done(job)  # Already gone, as tree_rm counts it.
+        error.add_note(f"Deleting the folder {job.source!r} failed.")
+        return [error]
