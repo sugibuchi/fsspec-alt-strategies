@@ -12,6 +12,8 @@
 | `.../tree/du.py`                | `tree_du`, a tree's size from its listings alone.                   |
 | `.../tree/glob.py`              | `tree_glob`, a glob listing only the folders it can match in.       |
 | `.../tree/rm.py`                | `tree_rm`, a recursive delete that deletes while it walks.          |
+| `.../tree/mv.py`                | `tree_mv`, a recursive move that moves while it walks.         |
+| `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
 | `.../file.py`                   | File objects whose buffering adapts to how they are read or written. |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, in the package's layout, with the shared fixtures in `tests/conftest.py`. |
@@ -44,6 +46,8 @@ CI runs ruff and pytest on every supported Python version.
   storage would get, in `stats`, and can delay each by a latency and by its bytes over a bandwidth.
 - Its two modes are an object store, where folders are only prefixes, and a hierarchical namespace, with real
   folders. Test a strategy on both, with the fixture `any_fs`.
+- Its options `parents_required` and `overwrite` make writes fail as some storages do. Test a strategy's profile with
+  them.
 - The fixtures `flat_fs`, `hierarchical_fs` and `any_fs` are empty async instances. Set up files with `add_file` and
   `add_dir`, which make no request.
 - Assert the requests a strategy makes, e.g. `fs.stats.calls == {"list": 1, "delete": 3}`. They are what the
@@ -163,6 +167,24 @@ methods and modules. The prefix keeps an import from shadowing them, and tells t
 - `topdown=False` yields a folder's entries only after those of all the folders below it.
 - `raise_on_error=True` raises a folder's error instead of yielding it. With filtering, it will implement fsspec's
   `on_error`.
+
+#### Storage profiles
+
+Storages answer the same request differently. Writing a file into a missing folder creates the parents on some, and
+raises `FileNotFoundError` on others. A strategy works on all of them, and a `StorageProfile` lets it send fewer
+requests.
+
+- A strategy takes `profile=` as an argument, so it works with any filesystem class, without subclassing.
+- Without one, it uses the filesystem's `storage_profile` attribute, which a filesystem class may set for all callers.
+- A field left None is unknown. The strategy then takes the way that is right on any storage, at the cost of requests.
+- So a profile only saves requests. It changes the outcome only if it is wrong, and each docstring says how.
+- The library never detects a storage's behaviour: the developer declares it.
+
+A fact gets a field only once a strategy saves requests with it. Facts that cost nothing to handle as they come have
+none. An example is a copy refused because the file exists: `tree_mv` then deletes the old file and copies again.
+
+A storage with a native operation, such as a rename of a whole folder, has no field either. The developer uses that
+operation instead of the strategy.
 
 ### Copied, not only installed
 

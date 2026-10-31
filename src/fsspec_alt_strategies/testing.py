@@ -100,6 +100,12 @@ class SimulatedFileSystem(AsyncFileSystem):
     page_size : int
         The most entries a listing request returns. Listing more takes a
         request per page, one after another.
+    parents_required : bool
+        Whether writing a file into a missing folder raises FileNotFoundError,
+        rather than creating its parents. Only on a hierarchical storage.
+    overwrite : bool
+        Whether writing onto an existing file replaces it, rather than raising
+        FileExistsError.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
@@ -131,6 +137,8 @@ class SimulatedFileSystem(AsyncFileSystem):
         latency: float = 0.0,
         bandwidth: float | None = None,
         page_size: int = 1000,
+        parents_required: bool = False,
+        overwrite: bool = True,
         **kwargs: Any,
     ) -> None:
         if page_size < 1:
@@ -143,6 +151,8 @@ class SimulatedFileSystem(AsyncFileSystem):
         self.latency = latency
         self.bandwidth = bandwidth
         self.page_size = page_size
+        self.parents_required = parents_required and hierarchical
+        self.overwrite = overwrite
         self.stats = CallStats()
         self._in_flight = 0
         self._file_data: dict[str, _File] = {}
@@ -284,13 +294,23 @@ class SimulatedFileSystem(AsyncFileSystem):
     async def _pipe_file(self, path: str, value: bytes, **kwargs: Any) -> None:
         path = self._strip_protocol(path)
         await self._request("write", size=len(value))
+        self._check_writable(path)
         self._write(path, value)
 
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         path1, path2 = self._strip_protocol(path1), self._strip_protocol(path2)
         # A copy on the server: one request, whatever the file's size.
         await self._request("copy")
-        self._write(path2, self._file(path1).data)
+        data = self._file(path1).data
+        self._check_writable(path2)
+        self._write(path2, data)
+
+    def _check_writable(self, path: str) -> None:
+        """Raise as a storage would, if its settings forbid writing ``path``."""
+        if self.parents_required and _parent_of(path) not in self._folders:
+            raise FileNotFoundError(_parent_of(path))
+        if not self.overwrite and path in self._file_data:
+            raise FileExistsError(path)
 
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         path = self._strip_protocol(path)
