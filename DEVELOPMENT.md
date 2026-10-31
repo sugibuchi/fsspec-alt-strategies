@@ -5,15 +5,16 @@
 | Path                            | Contents                                                       |
 |---------------------------------|----------------------------------------------------------------|
 | `src/fsspec_alt_strategies/`    | The package.                                                   |
-| `.../control.py`                | `Stop`, `OperationStopped`, `State`: the strategy API.         |
-| `.../walk.py`                   | `iwalk`, the concurrent folder walk under the tree strategies. |
-| `.../find.py`                   | `find` and `ifind`, a find listing several folders at a time.  |
-| `.../du.py`                     | `du`, a tree's size from its listings alone.                   |
-| `.../glob.py`                   | `glob` and `iglob`, a glob listing only the folders it can match in. |
-| `.../rm.py`                     | `rm` and `irm`, a recursive delete that deletes while it walks. |
+| `.../control.py`                | `Operation`, `State` and `collect`: the strategy API.          |
+| `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
+| `.../tree/walk.py`              | `walk`, the concurrent folder walk under the tree strategies.  |
+| `.../tree/find.py`              | `find`, a find listing several folders at a time.              |
+| `.../tree/du.py`                | `du`, a tree's size from its listings alone.                   |
+| `.../tree/glob.py`              | `glob`, a glob listing only the folders it can match in.       |
+| `.../tree/rm.py`                | `rm`, a recursive delete that deletes while it walks.          |
 | `.../file.py`                   | File objects whose buffering adapts to how they are read or written. |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
-| `tests/`                        | The tests, with the shared fixtures in `tests/conftest.py`.    |
+| `tests/`                        | The tests, in the package's layout, with the shared fixtures in `tests/conftest.py`. |
 | `.github/workflows/ci.yaml`     | Lint and tests, on pull requests and pushes to `main`.         |
 
 The only runtime dependency is fsspec. The version comes from the git tag, through hatch-vcs.
@@ -86,26 +87,60 @@ Every strategy follows the same shape, so that developers learn it once.
 
 #### Calling
 
-A strategy is an async function. The filesystem comes first, then the operation's arguments, then keyword-only
-options:
+A strategy is a plain function returning an `Operation`. The filesystem comes first, then the operation's arguments,
+then keyword-only options:
 
 ```python
-deleted, errors = await rm(fs, "data/2024", batch_size=32, callback=on_progress)
+async with rm(fs, "data/2024", batch_size=32) as op:
+    async for path in op:
+        if isinstance(path, Exception):
+            print("failed:", path)
+print(op.state.files_deleted)
 ```
 
 - `batch_size` caps the calls running at a time, as in fsspec. None takes fsspec's default.
-- Errors before any work starts are raised, as fsspec raises them. An example is a missing root, which raises
-  `FileNotFoundError`.
+- Errors in the arguments, such as a bad `maxdepth`, are raised by the call.
+- Errors ending the whole operation are raised by the iteration, as fsspec raises them. An example is a missing root,
+  which raises `FileNotFoundError`.
+
+#### Operations
+
+An `Operation` does its work as it is iterated, a few requests ahead of the caller.
+
+- It yields what it did, e.g. each path deleted, mixed with the error of each path that failed, as an exception object.
+  Errors on single paths are never raised: the caller decides what to do with each.
+- An error yielded carries its path in a note, e.g. "Deleting 'a/b' failed.", as nothing else in the stream does.
+- Its `state` is a frozen dataclass of counts so far, such as the files deleted, and the path last worked on. Each
+  strategy has its own state class.
+- It does nothing until iterated, and a slow loop body slows it. This is backpressure: it never runs far ahead.
+
+Its stopping follows `asyncio.Task`'s, so that it needs no learning:
+
+- `cancel()` asks it to stop. It starts no new request, but the loop goes on through the outcomes of those already sent,
+  then ends. It returns False if the operation is already done.
+- `cancelling()` counts the stops asked. `cancelled()` tells whether it ended after one, and `done()` whether it ended.
+- Cancelled before its first iteration, it sends nothing at all.
+- Leaving the loop early, or `aclose()`, stops it at once without yielding what is in flight. Read requests in flight
+  are then cancelled. Requests changing the storage, such as deletions, are waited for, as their outcome would
+  otherwise be unknown.
+- Use it as an `async with` block, so that leaving the block closes it.
+
+Cancelling the task iterating it, e.g. with `asyncio.timeout`, raises `CancelledError` as usual. The operation then
+cancels its requests and never swallows the error.
+
+`collect(op)` runs an operation to its end. It returns what was yielded, split into a list of items and a list of
+errors, in the order yielded. Strategies yield in the order the storage answers, so `collect` does not sort: fsspec's
+`_find` and `_glob` do.
 
 #### Attaching
 
-Developers attach a strategy by overriding the fsspec method themselves, in a line or two:
+Developers attach a strategy by overriding the fsspec method themselves, in a few lines:
 
 ```python
 class MyFileSystem(AsyncFileSystem):
     async def _rm(self, path, recursive=False, **kwargs):
         if recursive:
-            deleted, errors = await rm(self, path, batch_size=32)
+            _, errors = await collect(rm(self, path, batch_size=32))
             if errors:
                 raise ExceptionGroup("rm failed", errors)
             return
@@ -116,78 +151,15 @@ class MyFileSystem(AsyncFileSystem):
 - fsspec makes the sync method, `rm`, from the async one, `_rm`. So sync callers get the strategy too.
 - The library adds no mixins or descriptors: there is no machinery to learn.
 
-#### Callbacks
+#### The tree strategies
 
-A strategy takes an optional `callback`. It is called with a snapshot of the operation's state after each step. Each
-strategy's docstring says what its steps are, e.g. a folder listed or a batch deleted.
+The strategies in `tree/` walk with the walk's private engine, `_listings`, which yields each folder's listing.
 
-- The state is a frozen dataclass of counts, such as files done and bytes done, and the path last worked on.
-- The callback may be a plain or an async function. It runs on the event loop, so it must return quickly.
-- Returning None continues. Returning a `Stop` object cancels the operation, e.g. `return Stop(cleanup=True)`.
-- Returning anything else raises `TypeError`, so that a callback returning e.g. `True` by mistake is caught.
-- On a stop, the strategy starts no new calls and waits for those already sent. A call cut off midway would leave its
-  outcome unknown.
-- From a sync method, the callback runs in fsspec's IO thread, not the caller's.
-
-#### Stop
-
-`Stop` is a frozen dataclass of options for how to stop:
-
-- `cleanup`: whether to undo what the operation did, where it can, e.g. delete the files a copy wrote. False by
-  default, which keeps what is done.
-- `raise_error`: whether the strategy raises `OperationStopped` once stopped, instead of returning. False by default,
-  which returns the partial result.
-- `reason`: an optional text for logs and messages, in `OperationStopped`'s message.
-
-Each strategy's docstring says what `cleanup` undoes for it. Work that cannot be undone, such as a deletion, is kept.
-A strategy never leaves a partly written file, with or without `cleanup`. New options are added to `Stop` with
-defaults, so that callbacks keep working.
-
-#### Results
-
-A strategy returns plain values, not a result class: a tuple of what it did and a list of the errors. Examples:
-
-- `find` returns the `_ls` entries found, sorted, and the errors.
-- `du` returns the size, and the errors.
-- `rm` returns the paths deleted, and the errors.
-
-It returns even when some paths fail. A stop returns the partial tuple, or raises it, as its `raise_error` says:
-
-```python
-def on_progress(state):
-    if user_pressed_cancel:
-        return Stop()                   # rm returns what it deleted so far
-    if state.errors:
-        return Stop(raise_error=True)   # rm raises OperationStopped: fail fast
-```
-
-`OperationStopped` carries the partial tuple as its `result`, and the `Stop` as its `stop`. When paths have failed, it
-is raised from their `ExceptionGroup`, so tracebacks show them.
-
-Errors on single paths are collected, never raised on their own. A caller wanting to fail fast stops from the callback,
-as the state counts the errors so far.
-
-#### Iterators
-
-Strategies that find or change paths one by one also come as async iterators, named with an `i`: `iwalk`, `ifind`,
-`iglob` and `irm`.
-
-- The caller drives them, with no callback. Breaking out of the loop stops them.
-- They yield each path or `_ls` entry, and each error as an exception object, mixed in one stream.
-- `glob` takes no callback either: `iglob` serves callers wanting to watch or stop it.
-
-The tree strategies use the walk's private engine, `_listings`, which yields each folder's listing.
-
-`iwalk` is meant to replace fsspec's `walk`, so it already has two of its options:
+`walk` is meant to replace fsspec's `walk`, so it already has two of its options:
 
 - `topdown=False` yields a folder's entries only after those of all the folders below it.
 - `raise_on_error=True` raises a folder's error instead of yielding it. With filtering, it will implement fsspec's
   `on_error`.
-
-Cancelling the task itself, e.g. with `asyncio.timeout`, raises `CancelledError` as usual. The strategy then cleans up
-and never swallows it, but the partial result is lost.
-
-Errors are listed without their paths. Most of fsspec's errors name the path in their message.
 
 ### Copied, not only installed
 
@@ -200,8 +172,8 @@ So the code stays easy to copy:
 - It depends on nothing but fsspec and the standard library.
 - Each file starts with its SPDX license header, which copies keep.
 - Each strategy depends on few shared modules, and its module docstring names them.
-- The package's `__init__.py` imports none of them, so a copy may leave out the modules it does not use. Users import
-  from the modules, e.g. `fsspec_alt_strategies.control`.
+- No `__init__.py` imports the modules, so a copy may leave out those it does not use. Users import from the modules,
+  e.g. `fsspec_alt_strategies.tree.find`.
 
 `tests/test_copyable.py` checks the first three rules. It also imports a copy of the package under another name.
 
@@ -214,7 +186,7 @@ Strategies target `AsyncFileSystem` first. Sync filesystems may get some feature
 
 ### File objects
 
-File objects are the one place for classes, as a file keeps state between calls.
+File objects are, with `Operation`, the places for classes, as a file keeps state between calls.
 
 - `file.py` has abstract classes for reading and writing. A filesystem subclasses one, implements its requests, and
   returns it from `_open`.
@@ -222,12 +194,12 @@ File objects are the one place for classes, as a file keeps state between calls.
   fsspec's `sync`, and their async ones, such as `_read`, run on it.
 - They adapt to how a file is read or written, without settings per file. Requests cost money and time, so they send
   as few as the reads and writes allow.
-- They follow Python's file API, not the strategy API: no callbacks, and errors are raised.
+- They follow Python's file API, not the strategy API: errors are raised.
 
 ### Observable and cancellable
 
-Long operations take a callback. It is called with the operation's intermediate state. Its return value can ask the
-operation to stop, which then ends cleanly.
+Long operations are iterated, so the caller sees each step, and its `state` so far. The caller can cancel one, which
+then ends cleanly.
 
 ## Releases
 

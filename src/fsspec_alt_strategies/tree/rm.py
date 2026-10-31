@@ -6,9 +6,6 @@
 tree first, then deletes each path. `rm` deletes each folder's files as soon as
 the folder is listed, and each folder once it is empty.
 
-`irm` is the same deletion as an async iterator, yielding each path as it is
-deleted.
-
 This module depends on `control` and `walk`.
 """
 
@@ -22,23 +19,22 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import _get_batch_size
 
-from .control import State, _finish, _report
+from ..control import Operation, State
 from .walk import _listings
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, Awaitable, Callable
 
     from fsspec.asyn import AsyncFileSystem
 
-    from .control import Callback, Stop
     from .walk import _Listing
 
-__all__ = ["RmState", "irm", "rm"]
+__all__ = ["RmState", "rm"]
 
 
 @dataclass(frozen=True, kw_only=True)
 class RmState(State):
-    """The state of an `rm`, as its callback gets it.
+    """The progress of an `rm`.
 
     Attributes
     ----------
@@ -55,20 +51,23 @@ class RmState(State):
     folders_deleted: int = 0
 
 
-async def rm(
+def rm(
     fs: AsyncFileSystem,
     path: str,
     *,
     rm_folder: Callable[[str], Awaitable[Any]] | None = None,
     batch_size: int | None = None,
-    callback: Callback[RmState] | None = None,
-) -> tuple[list[str], list[Exception]]:
+) -> Operation[str, RmState]:
     """Delete a folder and everything in it, deleting while the tree is walked.
 
-    The tree is walked as `iwalk` walks it. Each folder's files are deleted as
+    The tree is walked as `walk` walks it. Each folder's files are deleted as
     soon as the folder is listed, while other folders are still being listed. A
     folder is deleted once everything in it is, so the deepest go first. A
     folder with anything in it that failed is kept.
+
+    It yields each file and folder once deleted, and the error of each folder
+    that failed to list or path that failed to be deleted. A path found already
+    gone is not yielded.
 
     It wins over fsspec's ``_rm`` on storages that list one folder per request
     and have no recursive delete of their own, such as Databricks volumes. The
@@ -79,14 +78,14 @@ async def rm(
     fsspec's ``_rm`` makes fewer requests there. On a storage deleting a folder
     with everything in it in one request, that request wins.
 
+    Once cancelled, it starts no new listing or deletion, and yields the
+    outcomes of the deletions already sent. Closed, it waits for those
+    deletions without yielding them, as their outcome would otherwise be
+    unknown. Iterating it raises FileNotFoundError if ``path`` does not exist.
+
     Requests: one ``_ls`` per folder, one ``_rm_file`` per file, and one
     ``rm_folder`` per folder. At most ``batch_size`` listings and
     ``batch_size`` deletions run at a time.
-
-    The callback is called after each folder listed and each path deleted or
-    failed. Once stopped, no new listing or deletion starts, and the deletions
-    already sent are waited for. ``Stop(cleanup=True)`` undoes nothing, as a
-    deletion cannot be undone.
 
     Parameters
     ----------
@@ -102,123 +101,57 @@ async def rm(
     batch_size : int, optional
         The most listings, and the most deletions, at a time. fsspec's default
         if None.
-    callback : callable, optional
-        Called with an `RmState` after each step. It may return a `Stop`.
 
     Returns
     -------
-    deleted : list of str
-        The files and folders deleted, in the order they were. A path found
-        already gone is not in it.
-    errors : list of Exception
-        The error of each folder that failed to list, and of each path that
-        failed to be deleted, in the order they failed.
-
-    Raises
-    ------
-    FileNotFoundError
-        If ``path`` does not exist.
-    OperationStopped
-        If the callback returned ``Stop(raise_error=True)``.
+    Operation
+        Yielding each path deleted, or an error. Its state is an `RmState`.
 
     See Also
     --------
-    irm : The same deletion, as an async iterator.
-    iwalk : The walk under it.
+    walk : The walk under it.
 
     Examples
     --------
-    >>> deleted, errors = await rm(fs, "data/2024", batch_size=32)
-    >>> len(deleted), errors
-    (1234, [])
-    """
-    deletion = _Deletion(fs, rm_folder, batch_size)
-    stop: Stop | None = None
-    async with aclosing(deletion.steps(path)) as steps:
-        async for _ in steps:
-            if (stop := await _report(callback, deletion.state())) is not None:
-                break
-    # Closing the steps waited for the deletions sent, and counted them.
-    return _finish((deletion.deleted, deletion.errors), stop, deletion.errors)
-
-
-async def irm(
-    fs: AsyncFileSystem,
-    path: str,
-    *,
-    rm_folder: Callable[[str], Awaitable[Any]] | None = None,
-    batch_size: int | None = None,
-) -> AsyncIterator[str | Exception]:
-    """Delete a folder and everything in it, yielding each path as it goes.
-
-    It deletes as `rm` does, with the same requests. It yields each path once
-    deleted, and the error of each folder that failed to list or path that
-    failed to be deleted.
-
-    Like `iwalk`, it takes no callback: the caller drives it. Breaking out of
-    the loop stops it: no new listing or deletion starts, and the deletions
-    already sent are waited for, though not yielded. Close it with
-    `contextlib.aclosing`, so that this happens at once. New deletions start
-    only as the caller asks for paths, so a slow loop body slows the deletion.
-
-    Parameters
-    ----------
-    fs : fsspec.asyn.AsyncFileSystem
-        The filesystem.
-    path : str
-        The folder to delete. If it is a file, that file is deleted.
-    rm_folder : callable, optional
-        An async function deleting an empty folder, as with `rm`.
-    batch_size : int, optional
-        The most listings, and the most deletions, at a time. fsspec's default
-        if None.
-
-    Yields
-    ------
-    str or Exception
-        Each file or folder deleted, or an error.
-
-    Raises
-    ------
-    FileNotFoundError
-        If ``path`` does not exist.
-
-    See Also
-    --------
-    rm : The same deletion, collected, with a callback.
-    iwalk : The walk under it.
-
-    Examples
-    --------
-    >>> from contextlib import aclosing
-    >>> async with aclosing(irm(fs, "data/2024")) as deleted:
-    ...     async for path in deleted:
+    >>> async with rm(fs, "data/2024", batch_size=32) as op:
+    ...     async for path in op:
     ...         if isinstance(path, Exception):
-    ...             raise path
-    ...         print(path)
-    data/2024/01/part-0.parquet
+    ...             op.cancel()  # Stop at the first failure.
+    ...             print(path)
+    >>> op.state.files_deleted
+    1234
     """
-    deletion = _Deletion(fs, rm_folder, batch_size)
-    async with aclosing(deletion.steps(path)) as steps:
-        async for outcomes in steps:
-            for outcome in outcomes:
-                yield outcome
+
+    async def run(op: Operation[str, RmState]) -> AsyncGenerator[str | Exception]:
+        deletion = _Deletion(fs, rm_folder, batch_size, op)
+        try:
+            async with aclosing(deletion.steps(path)) as steps:
+                async for outcomes in steps:
+                    op.state = deletion.state()
+                    for outcome in outcomes:
+                        yield outcome
+        finally:
+            # Closing the steps waits for the deletions sent, and counts them.
+            op.state = deletion.state()
+
+    return Operation(run, RmState())
 
 
 class _Deletion:
-    """The bookkeeping of one `rm` or `irm` call, kept apart from the functions."""
+    """The bookkeeping of one `rm` operation, kept apart from the function."""
 
     def __init__(
         self,
         fs: AsyncFileSystem,
         rm_folder: Callable[[str], Awaitable[Any]] | None,
         batch_size: int | None,
+        op: Operation[str, RmState],
     ) -> None:
         self.fs = fs
         self.rm_folder = rm_folder or getattr(fs, "_rmdir", None) or fs._rm_file
         self.batch_size = batch_size or fs.batch_size or _get_batch_size(nofiles=True)
-        self.deleted: list[str] = []
-        self.errors: list[Exception] = []
+        self.op = op
+        self.errors = 0
         self.files_found = 0
         self.files_deleted = 0
         self.folders_deleted = 0
@@ -241,14 +174,18 @@ class _Deletion:
         deletion: it starts nothing new, and waits for the deletions sent, as
         their outcome would otherwise be unknown.
         """
-        listings = _listings(self.fs, path, batch_size=self.batch_size)
+        listings = _listings(
+            self.fs, path, batch_size=self.batch_size, stopping=self.op.cancelling
+        )
         try:
             yield await self.begin(path, listings)
-            while self.next or self.running or self.waiting:
+            while True:
                 self.start()
+                pending = [*self.running, *([self.next] if self.next else [])]
+                if not pending:
+                    break
                 done, _ = await asyncio.wait(
-                    [*self.running, *([self.next] if self.next else [])],
-                    return_when=asyncio.FIRST_COMPLETED,
+                    pending, return_when=asyncio.FIRST_COMPLETED
                 )
                 for task in done:
                     if (outcome := self.take(task, listings)) is not None:
@@ -300,7 +237,7 @@ class _Deletion:
         """Queue the deletion of a listed folder's files, and return its error."""
         self.current = listing.folder
         if listing.error is not None:
-            self.errors.append(listing.error)
+            self.errors += 1
             return [listing.error]
         self.remaining[listing.folder] = len(listing.entries)
         for entry in listing.entries:
@@ -314,6 +251,8 @@ class _Deletion:
         return []
 
     def start(self) -> None:
+        if self.op.cancelling():
+            self.waiting.clear()
         while self.waiting and len(self.running) < self.batch_size:
             is_folder, path = self.waiting.popleft()
             coro = self.rm_folder(path) if is_folder else self.fs._rm_file(path)
@@ -330,14 +269,15 @@ class _Deletion:
             # Already gone: an object store's folder, or deleted by another.
             pass
         except Exception as e:
-            self.errors.append(e)
+            # Yielded among paths, the error must tell its path itself.
+            e.add_note(f"Deleting {path!r} failed.")
+            self.errors += 1
             return [e]
         else:
             if is_folder:
                 self.folders_deleted += 1
             else:
                 self.files_deleted += 1
-            self.deleted.append(path)
             outcome.append(path)
         parent = self.parents.get(path)
         if parent is not None:
@@ -348,7 +288,7 @@ class _Deletion:
 
     def state(self) -> RmState:
         return RmState(
-            errors=len(self.errors),
+            errors=self.errors,
             current=self.current,
             files_found=self.files_found,
             files_deleted=self.files_deleted,

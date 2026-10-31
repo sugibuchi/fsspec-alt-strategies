@@ -1,4 +1,4 @@
-"""Tests of `iwalk`, and of ``_listings``, the engine under the tree strategies."""
+"""Tests of `walk`, and of ``_listings``, the engine under the tree strategies."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from fsspec_alt_strategies.testing import SimulatedFileSystem
-from fsspec_alt_strategies.walk import _listings, iwalk
+from fsspec_alt_strategies.tree.walk import WalkState, _listings, walk
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -27,7 +27,7 @@ async def _all(items: AsyncIterator[Any]) -> list[Any]:
 
 async def test_yields_every_entry_once(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    entries = await _all(iwalk(any_fs, "data"))
+    entries = await _all(walk(any_fs, "data"))
     assert sorted(e["name"].rstrip("/") for e in entries) == [
         "data/2023",
         "data/2023/01",
@@ -52,8 +52,8 @@ def _order(entries: list[dict[str, Any]]) -> dict[str, int]:
 async def test_topdown_orders(latency: float) -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=latency, asynchronous=True)
     _tree(fs)
-    down = _order(await _all(iwalk(fs, "data", batch_size=3)))
-    up = _order(await _all(iwalk(fs, "data", topdown=False, batch_size=3)))
+    down = _order(await _all(walk(fs, "data", batch_size=3)))
+    up = _order(await _all(walk(fs, "data", topdown=False, batch_size=3)))
     for name in down:
         parent = name.rsplit("/", 1)[0]
         if parent != "data":
@@ -65,11 +65,11 @@ async def test_topdown_orders(latency: float) -> None:
 
 async def test_maxdepth(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    entries = await _all(iwalk(any_fs, "data", maxdepth=2))
+    entries = await _all(walk(any_fs, "data", maxdepth=2))
     assert len(entries) == 3 + 4
     assert any_fs.stats.calls == {"list": 3}
     with pytest.raises(ValueError, match="at least 1"):
-        await _all(iwalk(any_fs, "data", maxdepth=0))
+        await _all(walk(any_fs, "data", maxdepth=0))
 
 
 async def test_descend_prunes(any_fs: SimulatedFileSystem) -> None:
@@ -78,16 +78,16 @@ async def test_descend_prunes(any_fs: SimulatedFileSystem) -> None:
     def only_2024(entry: dict[str, Any]) -> bool:
         return entry["name"].startswith("data/2024")
 
-    await _all(iwalk(any_fs, "data", descend=only_2024))
+    await _all(walk(any_fs, "data", descend=only_2024))
     assert any_fs.stats.calls == {"list": 4}
 
 
 async def test_root_errors_are_raised(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     with pytest.raises(FileNotFoundError):
-        await _all(iwalk(any_fs, "missing"))
+        await _all(walk(any_fs, "missing"))
     with pytest.raises(NotADirectoryError):
-        await _all(iwalk(any_fs, "data/README.md"))
+        await _all(walk(any_fs, "data/README.md"))
 
 
 class _Forbidding(SimulatedFileSystem):
@@ -103,7 +103,7 @@ class _Forbidding(SimulatedFileSystem):
 async def test_failed_listing_is_yielded_and_the_walk_goes_on(topdown: bool) -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
-    items = await _all(iwalk(fs, "data", topdown=topdown))
+    items = await _all(walk(fs, "data", topdown=topdown))
     errors = [i for i in items if isinstance(i, Exception)]
     assert [type(e) for e in errors] == [PermissionError]
     names = {i["name"] for i in items if not isinstance(i, Exception)}
@@ -126,9 +126,7 @@ async def test_raise_on_error_stops_at_once(topdown: bool) -> None:
     fs.requested = []
     _tree(fs)
     with pytest.raises(PermissionError):
-        await _all(
-            iwalk(fs, "data", topdown=topdown, raise_on_error=True, batch_size=1)
-        )
+        await _all(walk(fs, "data", topdown=topdown, raise_on_error=True, batch_size=1))
     # data/2023 fails, and data/2024, queued behind it, is never listed.
     assert fs.requested == ["data", "data/2023"]
     assert fs._in_flight == 0
@@ -138,7 +136,7 @@ async def test_lists_folders_concurrently_within_batch_size() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(20):
         fs.add_file(f"root/{i:02}/file")
-    await _all(iwalk(fs, "root", batch_size=4))
+    await _all(walk(fs, "root", batch_size=4))
     assert fs.stats.calls == {"list": 21}
     assert fs.stats.max_concurrency == 4
 
@@ -147,12 +145,39 @@ async def test_closing_cancels_listings_in_flight() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.05, asynchronous=True)
     for i in range(10):
         fs.add_file(f"root/{i}/file")
-    async with aclosing(iwalk(fs, "root", batch_size=10)) as entries:
+    async with walk(fs, "root", batch_size=10) as entries:
         async for _ in entries:
             break  # The root's first entry: its ten subfolders are now in flight.
     # None is left running, and those cancelled before they started were never sent.
     assert fs._in_flight == 0
     assert fs.stats.calls["list"] < 11
+
+
+async def test_cancel_yields_the_listings_in_flight() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
+    for i in range(10):
+        fs.add_file(f"root/{i}/a")
+        fs.add_file(f"root/{i}/b")
+    op = walk(fs, "root", batch_size=4)
+    names = []
+    async for entry in op:
+        names.append(entry["name"])
+        if len(names) == 10:
+            # The root's ten entries: four subfolders are in flight.
+            op.cancel()
+    assert len(names) == 10 + 4 * 2
+    assert fs.stats.calls["list"] == 1 + 4
+    assert op.cancelled()
+    assert op.state == WalkState(
+        current=op.state.current, folders_listed=5, found=10 + 4 * 2
+    )
+
+
+async def test_failed_listing_notes_its_folder() -> None:
+    fs = _Forbidding(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    errors = [i for i in await _all(walk(fs, "data")) if isinstance(i, Exception)]
+    assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
 
 
 async def test_listings_carry_folder_and_depth(any_fs: SimulatedFileSystem) -> None:

@@ -1,16 +1,15 @@
-"""Tests of `find` and `ifind`, checked against fsspec's own ``_find``."""
+"""Tests of `find`, checked against fsspec's own ``_find``."""
 
 from __future__ import annotations
 
-from contextlib import aclosing
 from typing import Any
 
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.control import OperationStopped, Stop
-from fsspec_alt_strategies.find import FindState, find, ifind
+from fsspec_alt_strategies.control import collect
 from fsspec_alt_strategies.testing import SimulatedFileSystem
+from fsspec_alt_strategies.tree.find import FindState, find
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
@@ -20,8 +19,12 @@ def _tree(fs: SimulatedFileSystem) -> None:
     fs.add_file("data/README.md")
 
 
+def _sorted(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(entries, key=lambda e: e["name"])
+
+
 def _names(entries: list[dict[str, Any]]) -> list[str]:
-    return [e["name"].rstrip("/") for e in entries]
+    return sorted(e["name"].rstrip("/") for e in entries)
 
 
 async def _fsspec_find(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
@@ -34,31 +37,32 @@ async def _fsspec_find(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any
     [{}, {"withdirs": True}, {"maxdepth": 1}, {"maxdepth": 2, "withdirs": True}],
 )
 @pytest.mark.parametrize("path", ["data", "data/2024", "data/README.md", "missing"])
-async def test_answers_as_fsspec(
+async def test_finds_as_fsspec(
     any_fs: SimulatedFileSystem, path: str, kwargs: dict[str, Any]
 ) -> None:
     _tree(any_fs)
-    entries, errors = await find(any_fs, path, **kwargs)
+    entries, errors = await collect(find(any_fs, path, **kwargs))
     assert errors == []
     expected = await _fsspec_find(any_fs, path, detail=True, **kwargs)
     assert _names(entries) == list(expected)
-    assert entries == list(expected.values())
-
-    found = [e async for e in ifind(any_fs, path, **kwargs)]
-    assert sorted(_names(found)) == list(expected)
+    assert _sorted(entries) == list(expected.values())
 
 
 async def test_entries_are_the_listings(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    entries, _ = await find(any_fs, "data")
-    assert entries[0]["size"] == 10
+    async with find(any_fs, "data") as op:
+        entries = [e async for e in op]
+    assert all(e["size"] == 10 for e in entries if e["name"].endswith(".parquet"))
     # One listing per folder, and no _info.
     assert any_fs.stats.calls == {"list": 7}
+    assert op.state == FindState(
+        current=op.state.current, folders_listed=7, found=len(entries)
+    )
 
 
 async def test_the_whole_filesystem(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    entries, _ = await find(any_fs, "", withdirs=True)
+    entries, _ = await collect(find(any_fs, "", withdirs=True))
     assert _names(entries) == await _fsspec_find(any_fs, "", withdirs=True)
 
 
@@ -66,9 +70,14 @@ async def test_lists_folders_concurrently() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(20):
         fs.add_file(f"root/{i:02}/file")
-    entries, _ = await find(fs, "root", batch_size=5)
+    entries, _ = await collect(find(fs, "root", batch_size=5))
     assert len(entries) == 20
     assert fs.stats.max_concurrency == 5
+
+
+def test_maxdepth_is_checked_at_once(any_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        find(any_fs, "data", maxdepth=0)
 
 
 class _Forbidding(SimulatedFileSystem):
@@ -78,44 +87,38 @@ class _Forbidding(SimulatedFileSystem):
         return await super()._ls(path, detail=detail, **kwargs)
 
 
-async def test_a_failed_folder_is_reported() -> None:
+async def test_a_failed_folder_is_yielded() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
-    entries, errors = await find(fs, "data")
+    async with find(fs, "data") as op:
+        entries, errors = await collect(op)
     assert [type(e) for e in errors] == [PermissionError]
     assert _names(entries) == [
         "data/2024/01/part-0.parquet",
         "data/2024/02/part-0.parquet",
         "data/README.md",
     ]
-    found = [e async for e in ifind(fs, "data")]
-    assert sum(isinstance(e, PermissionError) for e in found) == 1
+    assert op.state.errors == 1
 
 
-async def test_stop_returns_what_was_found(any_fs: SimulatedFileSystem) -> None:
+async def test_cancel_after_the_first_listing(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    states: list[FindState] = []
-
-    def first_only(state: FindState) -> Stop:
-        states.append(state)
-        return Stop()
-
-    entries, _ = await find(any_fs, "data", callback=first_only)
-    assert _names(entries) == ["data/README.md"]
-    assert (states[0].folders_listed, states[0].found) == (1, 1)
-    stop = Stop(raise_error=True)
-    with pytest.raises(OperationStopped) as info:
-        await find(any_fs, "data", callback=lambda _: stop)
-    entries, _ = info.value.result
-    assert _names(entries) == ["data/README.md"]
-    assert info.value.stop is stop
+    op = find(any_fs, "data", batch_size=1)
+    found = []
+    async for entry in op:
+        found.append(entry["name"])
+        op.cancel()
+    # data's listing, then the one in flight with it, data/2023, which has no file.
+    assert found == ["data/README.md"]
+    assert any_fs.stats.calls["list"] <= 2
+    assert op.cancelled()
 
 
-async def test_breaking_out_stops_the_search() -> None:
+async def test_closing_stops_the_search() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.05, asynchronous=True)
     for i in range(10):
         fs.add_file(f"root/{i}/file")
-    async with aclosing(ifind(fs, "root", batch_size=2)) as found:
+    async with find(fs, "root", batch_size=2) as found:
         async for _ in found:
             break  # The first file: other listings are now in flight.
     assert fs._in_flight == 0

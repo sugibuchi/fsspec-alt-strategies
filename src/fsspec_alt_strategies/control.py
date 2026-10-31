@@ -1,66 +1,41 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""Observing and stopping strategies: callbacks and `Stop`.
+"""Operations: what the strategies return, to iterate, watch and stop.
 
-Every strategy reports its progress the same way. Its ``callback`` is called
-with a state after each step, and may return a `Stop` to cancel it. The strategy
-then returns what it did so far, or raises `OperationStopped` if the `Stop` asks
-for it.
+A strategy returns an `Operation`. It does its work as it is iterated, and
+yields what it did, path by path, mixed with the errors of the paths that
+failed. The caller handles each, and can stop the operation as an asyncio task
+is stopped: `Operation.cancel` asks it to stop, and `Operation.done` and
+`Operation.cancelled` tell how it ended.
+
+`collect` runs an operation to its end, for callers that want everything at
+once.
 
 This module depends on nothing else in the package.
 """
 
 from __future__ import annotations
 
-import inspect
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
-__all__ = ["Callback", "OperationStopped", "State", "Stop"]
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Callable
+    from typing import Self
 
-
-@dataclass(frozen=True, kw_only=True)
-class Stop:
-    """What a callback returns to stop a strategy, with how to stop.
-
-    A strategy stopped starts no new requests, and waits for those already sent.
-    New options get defaults, so that callbacks keep working.
-
-    Parameters
-    ----------
-    cleanup : bool
-        Whether to undo what the operation did, where it can, e.g. delete the
-        files a copy wrote. Each strategy's docstring says what it undoes. Work
-        that cannot be undone, such as a deletion, is kept.
-    raise_error : bool
-        Whether the strategy raises `OperationStopped` once stopped. Otherwise,
-        it returns its partial result.
-    reason : str, optional
-        Why the operation was stopped, for logs and messages.
-
-    Examples
-    --------
-    >>> def on_progress(state):
-    ...     if state.errors:
-    ...         return Stop(raise_error=True, reason="fail fast")
-    """
-
-    cleanup: bool = False
-    raise_error: bool = False
-    reason: str | None = None
+__all__ = ["Operation", "State", "collect"]
 
 
 @dataclass(frozen=True, kw_only=True)
 class State:
-    """The state of a strategy's operation, as its callback gets it.
+    """The progress of an operation, as `Operation.state` gives it.
 
     Each strategy's state adds its own counts, e.g. the files deleted.
 
     Attributes
     ----------
     errors : int
-        The paths that have failed so far.
+        The errors yielded so far.
     current : str, optional
         The path last worked on.
     """
@@ -69,55 +44,170 @@ class State:
     current: str | None = None
 
 
+T = TypeVar("T")
 S = TypeVar("S", bound=State)
-R = TypeVar("R")
-
-Callback = Callable[[S], Stop | Awaitable[Stop | None] | None]
-"""A strategy's callback: a plain or async function of its state.
-
-It returns None to go on, or a `Stop`. It runs on the event loop, so it must
-return quickly.
-"""
 
 
-class OperationStopped(Exception):
-    """Raised by a strategy that a callback stopped with ``Stop(raise_error=True)``.
+class Operation(Generic[T, S]):
+    """A strategy's work, done as it is iterated, and stopped as a task is.
 
-    When paths had failed, it is raised from their `ExceptionGroup`.
+    Iterating it yields what it did, e.g. each path deleted, and the error of
+    each path that failed, as an exception object. An error ending the whole
+    operation, such as a missing root, is raised instead.
+
+    It does its work only while iterated, a few requests ahead of the caller.
+    So a slow loop body slows it, and an operation never iterated does nothing.
+
+    Its methods follow `asyncio.Task`'s:
+
+    - `cancel` asks it to stop. It starts no new request, but goes on yielding
+      the outcomes of those already sent, then ends.
+    - `cancelling` tells whether a stop was asked, and `cancelled` whether it
+      ended so.
+    - `done` tells whether it ended, whatever the reason.
+
+    Leaving the loop early stops it at once, without yielding what is in
+    flight. Use it as an async context manager, so that this happens on
+    leaving the block: requests that only read are then cancelled, and those
+    that change the storage, e.g. deletions, are waited for.
 
     Attributes
     ----------
-    result : tuple
-        What the strategy did before it stopped, as it would have returned it.
-    stop : Stop
-        The `Stop` the callback returned.
+    state : State
+        Its progress so far. Each strategy's docstring names its state class.
+
+    Examples
+    --------
+    >>> async with rm(fs, "data/2024") as op:
+    ...     async for path in op:
+    ...         if isinstance(path, Exception):
+    ...             op.cancel()  # Stop, but see what was in flight.
+    ...             print("failed:", path)
+    >>> op.cancelled(), op.state.files_deleted
+    (True, 12)
     """
 
-    def __init__(self, result: Any, stop: Stop) -> None:
-        reason = stop.reason
-        super().__init__(f"Stopped: {reason}" if reason else "Stopped")
-        self.result = result
-        self.stop = stop
+    def __init__(
+        self,
+        run: Callable[[Operation[T, S]], AsyncGenerator[T | Exception]],
+        state: S,
+    ) -> None:
+        self.state = state
+        self._run = run
+        self._steps: AsyncGenerator[T | Exception] | None = None
+        self._cancel_requests = 0
+        self._done = False
+
+    def __repr__(self) -> str:
+        status = (
+            "cancelled"
+            if self.cancelled()
+            else "done"
+            if self._done
+            else "cancelling"
+            if self._cancel_requests
+            else "pending"
+        )
+        return f"<{type(self).__name__} {status} {self.state}>"
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> T | Exception:
+        if self._done:
+            raise StopAsyncIteration
+        if self._steps is None:
+            if self._cancel_requests:
+                # As a task cancelled before it runs: nothing is sent.
+                self._done = True
+                raise StopAsyncIteration
+            self._steps = self._run(self)
+        try:
+            return await anext(self._steps)
+        except BaseException:
+            # The end, an error ending the operation, or this task cancelled:
+            # each finishes the steps, which are done.
+            self._done = True
+            raise
+
+    def cancel(self) -> bool:
+        """Ask the operation to stop.
+
+        It starts no new request. Iterating it goes on with the outcomes of the
+        requests already sent, then ends.
+
+        Returns
+        -------
+        bool
+            False if it is already done, as `asyncio.Task.cancel` returns.
+        """
+        if self._done:
+            return False
+        self._cancel_requests += 1
+        return True
+
+    def cancelling(self) -> int:
+        """The number of stops asked, as `asyncio.Task.cancelling` counts them."""
+        return self._cancel_requests
+
+    def cancelled(self) -> bool:
+        """Whether it ended after a stop was asked, or was closed before its end."""
+        return self._done and self._cancel_requests > 0
+
+    def done(self) -> bool:
+        """Whether it ended: run to its end, stopped, closed, or failed."""
+        return self._done
+
+    async def aclose(self) -> None:
+        """Stop at once, without yielding what is in flight.
+
+        Requests that only read are cancelled. Those that change the storage,
+        e.g. deletions, are waited for, as their outcome would otherwise be
+        unknown.
+        """
+        if self._done:
+            return
+        self._cancel_requests += 1
+        try:
+            if self._steps is not None:
+                await self._steps.aclose()
+        finally:
+            self._done = True
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
 
 
-async def _report(callback: Callback[S] | None, state: S) -> Stop | None:
-    """Call a strategy's callback, and check what it returned."""
-    if callback is None:
-        return None
-    answer = callback(state)
-    if inspect.isawaitable(answer):
-        answer = await answer
-    if answer is None or isinstance(answer, Stop):
-        return answer
-    # A callback returning True or False by mistake must not pass silently.
-    raise TypeError(f"A callback must return None or a Stop, not {answer!r}")
+async def collect(operation: Operation[T, State]) -> tuple[list[T], list[Exception]]:
+    """Run an operation to its end, and return all it yielded.
 
+    Parameters
+    ----------
+    operation : Operation
+        The operation, not iterated yet.
 
-def _finish(result: R, stop: Stop | None, errors: list[Exception]) -> R:
-    """Return a strategy's result, or raise it, as its stop asks."""
-    if stop is not None and stop.raise_error:
-        cause = None
-        if errors:
-            cause = ExceptionGroup(f"{len(errors)} path(s) failed", errors)
-        raise OperationStopped(result, stop) from cause
-    return result
+    Returns
+    -------
+    items : list
+        What it yielded but errors, in the order yielded.
+    errors : list of Exception
+        The errors it yielded, in the order yielded.
+
+    Examples
+    --------
+    >>> entries, errors = await collect(find(fs, "data"))
+    >>> if errors:
+    ...     raise ExceptionGroup("find failed", errors)
+    """
+    items: list[T] = []
+    errors: list[Exception] = []
+    async with operation:
+        async for item in operation:
+            if isinstance(item, Exception):
+                errors.append(item)
+            else:
+                items.append(item)
+    return items, errors

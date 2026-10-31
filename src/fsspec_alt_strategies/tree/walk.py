@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """A concurrent walk of a folder tree, a folder per listing request.
 
-`iwalk` lists folders breadth first, several at a time, and yields each entry
+`walk` lists folders breadth first, several at a time, and yields each entry
 as its folder's listing arrives. A ``descend`` predicate prunes the folders it
 lists, as glob needs. Its engine, ``_listings``, is also the engine under the
-tree strategies, such as find, rm and du.
+other tree strategies, such as find, rm and du.
 
 It suits storages that list one folder per request, and those whose folders
 can be pruned. On object stores, one recursive listing usually costs fewer
 requests: `fsspec.asyn.AsyncFileSystem._find` there.
 
-This module depends on nothing else in the package.
+This module depends on `control`.
 """
 
 from __future__ import annotations
@@ -24,15 +24,33 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import _get_batch_size
 
+from ..control import Operation, State
+
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable
+    from collections.abc import AsyncGenerator, Callable
 
     from fsspec.asyn import AsyncFileSystem
 
-__all__ = ["iwalk"]
+__all__ = ["WalkState", "walk"]
 
 
-async def iwalk(
+@dataclass(frozen=True, kw_only=True)
+class WalkState(State):
+    """The progress of a `walk`.
+
+    Attributes
+    ----------
+    folders_listed : int
+        The folders listed so far, those that failed included.
+    found : int
+        The entries found so far.
+    """
+
+    folders_listed: int = 0
+    found: int = 0
+
+
+def walk(
     fs: AsyncFileSystem,
     path: str,
     *,
@@ -41,7 +59,7 @@ async def iwalk(
     descend: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
     batch_size: int | None = None,
-) -> AsyncIterator[dict[str, Any] | Exception]:
+) -> Operation[dict[str, Any], WalkState]:
     """Walk a folder tree, listing several folders at a time.
 
     It yields the ``_ls`` entry of each file and folder below ``path``, but not
@@ -52,13 +70,16 @@ async def iwalk(
     With ``topdown``, a folder's entries come before those below it. Without,
     they come after all of those below it, as fsspec's ``walk`` orders them.
     The listings run as concurrently either way, but bottom up holds back each
-    folder's entries until its subtree is done.
+    folder's entries until its subtree is done. So a walk bottom up that is
+    cancelled leaves out the folders whose subtrees were not done.
 
-    Unlike most strategies, `iwalk` takes no callback and returns no result:
-    the caller drives it. Breaking out of the loop stops it. Close it with
-    `contextlib.aclosing`, so that its listings in flight are cancelled at once.
-    New listings start only as the caller asks for entries, so a slow loop body
-    slows the walk.
+    Once cancelled, it lists no new folder, and yields the entries of the
+    listings in flight. Iterating it raises these errors, which end it:
+
+    - FileNotFoundError, if ``path`` does not exist;
+    - NotADirectoryError, if ``path`` is a file;
+    - with ``raise_on_error``, the error of the first folder that failed to
+      list.
 
     Requests: one ``_ls`` per folder walked, at most ``batch_size`` at a time.
 
@@ -82,35 +103,35 @@ async def iwalk(
     batch_size : int, optional
         The most listings at a time. fsspec's default if None.
 
-    Yields
-    ------
-    dict or Exception
-        The ``_ls`` entry of each file and folder found, or the error of a
-        folder that failed to list.
+    Returns
+    -------
+    Operation
+        Yielding the ``_ls`` entry of each file and folder found, or the error
+        of a folder that failed to list. Its state is a `WalkState`.
 
     Raises
     ------
-    FileNotFoundError
-        If ``path`` does not exist.
-    NotADirectoryError
-        If ``path`` is a file.
     ValueError
         If ``maxdepth`` is less than 1.
-    Exception
-        With ``raise_on_error``, the error of the first folder that failed to
-        list.
+
+    See Also
+    --------
+    fsspec_alt_strategies.control.collect : All the entries, at once.
 
     Examples
     --------
-    >>> from contextlib import aclosing
-    >>> async with aclosing(iwalk(fs, "data", batch_size=16)) as entries:
+    >>> async with walk(fs, "data", batch_size=16) as entries:
     ...     async for entry in entries:
     ...         if isinstance(entry, Exception):
     ...             raise entry
     ...         print(entry["name"], entry["type"])
     """
-    async with aclosing(
-        _listings(
+    _check_maxdepth(maxdepth)
+
+    async def run(
+        op: Operation[dict[str, Any], WalkState],
+    ) -> AsyncGenerator[dict[str, Any] | Exception]:
+        listings = _listings(
             fs,
             path,
             maxdepth=maxdepth,
@@ -118,13 +139,28 @@ async def iwalk(
             descend=descend,
             raise_on_error=raise_on_error,
             batch_size=batch_size,
+            stopping=op.cancelling,
         )
-    ) as listings:
-        async for listing in listings:
-            if listing.error is not None:
-                yield listing.error
-            for entry in listing.entries:
-                yield entry
+        state = op.state
+        async with aclosing(listings):
+            async for listing in listings:
+                op.state = state = WalkState(
+                    errors=state.errors + (listing.error is not None),
+                    current=listing.folder,
+                    folders_listed=state.folders_listed + 1,
+                    found=state.found + len(listing.entries),
+                )
+                if listing.error is not None:
+                    yield listing.error
+                for entry in listing.entries:
+                    yield entry
+
+    return Operation(run, WalkState())
+
+
+def _check_maxdepth(maxdepth: int | None) -> None:
+    if maxdepth is not None and maxdepth < 1:
+        raise ValueError(f"maxdepth must be at least 1: {maxdepth}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,19 +187,22 @@ async def _listings(
     descend: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
     batch_size: int | None = None,
+    stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[_Listing]:
-    """Walk a folder tree as `iwalk` does, yielding each folder's listing.
+    """Walk a folder tree as `walk` does, yielding each folder's listing.
 
-    The tree strategies need a listing's folder, which `iwalk`'s entries do
+    The tree strategies need a listing's folder, which `walk`'s entries do
     not carry. A failed listing is yielded with its error, and its subfolders
     are not walked. ``path``'s own listing fails by raising, as fsspec's walk
     does, since nothing has been done yet.
 
     With ``raise_on_error``, any failed listing raises as soon as it is seen:
     before another listing starts, or another one done is yielded.
+
+    Once ``stopping`` returns true, no new listing starts, and those in flight
+    are yielded as they arrive. It is an operation's ``cancelling``.
     """
-    if maxdepth is not None and maxdepth < 1:
-        raise ValueError(f"maxdepth must be at least 1: {maxdepth}")
+    _check_maxdepth(maxdepth)
     root = fs._strip_protocol(path)
     batch_size = batch_size or fs.batch_size or _get_batch_size(nofiles=True)
     waiting: deque[tuple[str, int]] = deque()
@@ -171,6 +210,8 @@ async def _listings(
     bottom_up = None if topdown else _BottomUp()
 
     def start() -> None:
+        if stopping is not None and stopping():
+            waiting.clear()
         while waiting and len(running) < batch_size:
             folder, depth = waiting.popleft()
             running[asyncio.ensure_future(fs._ls(folder, detail=True))] = folder, depth
@@ -215,6 +256,8 @@ def _listing(
         # another listing.
         if folder == root or raise_on_error:
             raise
+        # Yielded among entries, the error must tell its folder itself.
+        e.add_note(f"Listing {folder!r} failed.")
         return _Listing(folder, depth, [], e)
     if folder == root and any(
         e["name"].rstrip("/") == root and e["type"] != "directory" for e in entries

@@ -31,22 +31,20 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
 
 - Never use names suggesting ownership of fsspec's fundamentals, such as "base" or "core" packages of fsspec.
 - Each strategy is a stateless function taking a filesystem. Filesystem classes only wrap those functions. File
-  objects, in `file.py`, are the one exception: see DEVELOPMENT.md's "File objects".
+  objects, in `file.py`, and `control.Operation` are the exceptions: see DEVELOPMENT.md's "File objects".
 - A strategy calls only the filesystem's primitives, such as `_ls`, `_info` and `_rm_file`. It never calls another
   high-level method, such as `_find` or `_glob`: another strategy may have replaced it. A strategy needing another
   takes it as a parameter.
 - Every strategy follows DEVELOPMENT.md's "The strategy API":
-  - it is called as `await strategy(fs, ..., batch_size=..., callback=...)`;
-  - a callback returning a `Stop`, e.g. `Stop(cleanup=True)`, cancels it, and any other value but None is a
-    `TypeError`;
-  - it returns a plain tuple of what it did and a list of the errors, rather than raising them: no result class;
-  - only `Stop(raise_error=True)` makes it raise, `OperationStopped` with the partial tuple.
-- The iterators, `iwalk`, `ifind`, `iglob` and `irm`, take no callback. The caller drives them, and they yield entries
-  or paths mixed with exceptions. `glob` takes no callback either.
-- The tree strategies walk with `walk._listings`, which is private: never expose its `_Listing`.
+  - it is a plain function, `strategy(fs, ..., batch_size=...)`, returning an `Operation` that works as it is iterated;
+  - the operation yields what it did mixed with exception objects, one per failed path, each noting its path;
+  - it raises only errors ending the whole operation, such as a missing root;
+  - its stopping mirrors `asyncio.Task`: `cancel()` starts nothing new but yields what is in flight, and `aclose()`
+    stops at once, waiting for writes in flight. There are no callbacks and no result classes.
+- The tree strategies, in `tree/`, walk with `tree.walk._listings`, which is private: never expose its `_Listing`.
 - Never swallow `CancelledError`.
-- `__init__.py` re-exports nothing but `__version__`. Users import from each module, so a copy can leave out
-  modules it does not use.
+- The package's `__init__.py` re-exports nothing but `__version__`, and `tree/__init__.py` nothing at all. Users import
+  from each module, so a copy can leave out modules it does not use.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
 - The library never chooses a strategy for the developer. Each strategy's docstring says what it assumes of the
   storage, and when it wins or loses.

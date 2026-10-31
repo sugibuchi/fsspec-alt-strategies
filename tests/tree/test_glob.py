@@ -1,15 +1,23 @@
-"""Tests of `glob` and `iglob`, checked against fsspec's own ``_glob``."""
+"""Tests of `glob`, checked against fsspec's own ``_glob``."""
 
 from __future__ import annotations
 
-from contextlib import aclosing
 from typing import Any
 
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.glob import _Prefix, glob, iglob
+from fsspec_alt_strategies.control import collect
 from fsspec_alt_strategies.testing import SimulatedFileSystem
+from fsspec_alt_strategies.tree.glob import GlobState, _Prefix, glob
+
+
+async def _sorted_glob(
+    fs: SimulatedFileSystem, path: str, **kwargs: Any
+) -> tuple[list[dict[str, Any]], list[Exception]]:
+    entries, errors = await collect(glob(fs, path, **kwargs))
+    return sorted(entries, key=lambda e: e["name"]), errors
+
 
 _PATTERNS = [
     "data",
@@ -49,22 +57,23 @@ async def test_answers_as_fsspec(
     any_fs: SimulatedFileSystem, path: str, kwargs: dict[str, Any]
 ) -> None:
     _tree(any_fs)
-    entries, errors = await glob(any_fs, path, **kwargs)
+    entries, errors = await _sorted_glob(any_fs, path, **kwargs)
     assert errors == []
     expected = await AsyncFileSystem._glob(any_fs, path, detail=True, **kwargs)
     assert [e["name"].rstrip("/") for e in entries] == list(expected)
     assert entries == list(expected.values())
-
-    matches = [m async for m in iglob(any_fs, path, **kwargs)]
-    assert sorted(matches, key=lambda e: e["name"]) == entries
 
 
 async def test_prunes_folders_the_pattern_cannot_match_in(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
-    entries, _ = await glob(hierarchical_fs, "data/*/2024/*/part-*")
+    op = glob(hierarchical_fs, "data/*/2024/*/part-*")
+    entries, _ = await collect(op)
     assert len(entries) == 6
+    assert op.state == GlobState(
+        current=op.state.current, folders_listed=1 + 3 + 3 + 6, matched=6
+    )
     # data, the 3 tables, their 2024s: the 2023s are pruned.
     assert hierarchical_fs.stats.calls == {"list": 1 + 3 + 3 + 6}
 
@@ -77,7 +86,7 @@ async def test_double_star_prunes_after_it(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
-    await glob(hierarchical_fs, "data/sales/**")
+    await collect(glob(hierarchical_fs, "data/sales/**"))
     # Only data/sales and below: the literal root is data/sales.
     assert hierarchical_fs.stats.calls["list"] == 1 + 2 + 4
 
@@ -87,7 +96,7 @@ async def test_lists_folders_concurrently_within_batch_size() -> None:
     for i in range(5):
         for j in range(5):
             fs.add_file(f"root/{i}/{j}/file")
-    entries, _ = await glob(fs, "root/*/*/file", batch_size=4)
+    entries, _ = await collect(glob(fs, "root/*/*/file", batch_size=4))
     assert len(entries) == 25
     assert fs.stats.calls == {"list": 1 + 5 + 25}
     assert fs.stats.max_concurrency == 4
@@ -105,24 +114,29 @@ class _Forbidding(SimulatedFileSystem):
 async def test_failed_listing_adds_its_error_and_the_search_goes_on() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
-    entries, errors = await glob(fs, "data/*/2024/*/*")
+    entries, errors = await collect(glob(fs, "data/*/2024/*/*"))
     assert [type(e) for e in errors] == [PermissionError]
     assert len(entries) == 4
     assert not any(e["name"].startswith("data/sales/") for e in entries)
 
-    matches = [m async for m in iglob(fs, "data/*/2024/*/*")]
-    assert sum(isinstance(m, PermissionError) for m in matches) == 1
+
+def test_errors_in_the_pattern_are_raised_at_once(any_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        glob(any_fs, "data/**", maxdepth=0)
+    with pytest.raises(ValueError):
+        glob(any_fs, "data/a**/b")
 
 
-async def test_breaking_out_stops_the_search() -> None:
+async def test_closing_stops_the_search() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.05, asynchronous=True)
     for i in range(10):
         fs.add_file(f"root/{i}/file")
-    async with aclosing(iglob(fs, "root/*/file", batch_size=2)) as matches:
+    async with glob(fs, "root/*/file", batch_size=2) as matches:
         async for _ in matches:
             break  # The first match: other listings are now in flight.
     assert fs._in_flight == 0
     assert fs.stats.calls["list"] < 11
+    assert matches.cancelled()
 
 
 @pytest.mark.parametrize(

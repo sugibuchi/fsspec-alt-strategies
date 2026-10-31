@@ -21,8 +21,8 @@ This library offers other ways of doing the same things. It is a third-party pro
 - **Glob** that lists only the folders where a pattern can still match.
 - **An abstract file class** that adapts its buffering to how a file is read. It serves both random reads of small
   ranges and bulk sequential reads, without tuning per file.
-- **Observability:** callbacks that report an operation's intermediate state. A callback's return value can cancel the
-  operation.
+- **Observability:** operations iterated step by step, reporting their state so far. The caller can cancel one at any
+  step, and it then ends cleanly.
 
 Async filesystems come first. Some features, such as observability, may come to sync filesystems too.
 
