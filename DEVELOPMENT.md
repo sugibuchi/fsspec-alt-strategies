@@ -249,9 +249,13 @@ Strategies target `AsyncFileSystem` first. Sync filesystems may get some feature
 
 File objects are, with `Operation`, the places for classes, as a file keeps state between calls.
 
-- `file.py` has abstract classes for reading and writing, `AdaptiveReadableFile` and `AdaptiveWritableFile`. A
-  filesystem subclasses one, implements its requests, and returns it from `_open`. Their base class is private: its
-  name must not suggest fsspec's own.
+- `file.py` has abstract classes, by what the storage allows. A filesystem subclasses one, implements its requests,
+  and returns it from `_open`. Their base classes are private: their names must not suggest fsspec's own.
+  - `AdaptiveReadableFile` and `AdaptiveWritableFile` are for storages reading byte ranges and writing in parts.
+  - `LocallyBufferedFile` is for storages transferring only whole files: one download, local reads and writes, and
+    one upload if it changed. It never uploads after an exception in its `with` block.
+- Their requests are the storage's own. They never call fsspec's `_cat_file` or `_put_file`: many filesystems
+  implement these with their file objects.
 - Their requests run on an asyncio event loop, such as the filesystem's `loop`. Their sync methods wait on it through
   fsspec's `sync`, and their async ones, such as `_read`, run on it.
 - They adapt to how a file is read or written, without settings per file. Requests cost money and time, so they send

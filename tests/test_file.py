@@ -350,9 +350,13 @@ async def test_failed_part_aborts_the_upload(flat_fs: SimulatedFileSystem) -> No
     assert not await flat_fs._exists("f.bin")
 
 
-def test_only_the_adaptive_files_are_public() -> None:
+def test_the_base_class_is_not_public() -> None:
     # The base class is machinery, and its name would suggest fsspec's own.
-    assert file.__all__ == ["AdaptiveReadableFile", "AdaptiveWritableFile"]
+    assert file.__all__ == [
+        "AdaptiveReadableFile",
+        "AdaptiveWritableFile",
+        "LocallyBufferedFile",
+    ]
 
 
 async def test_a_shared_concurrency_limit_limits_files_together(

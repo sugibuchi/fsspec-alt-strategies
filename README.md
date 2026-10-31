@@ -7,7 +7,8 @@ Alternative, filesystem-independent strategies for [fsspec](https://github.com/f
 > - a concurrent tree walk, and these strategies built on it: find, du, a pruning glob, and a recursive delete, copy
 >   and move;
 > - storage profiles, where a developer declares what a storage does, such as whether writes need the parent folder;
-> - abstract file classes that adapt their buffering to how a file is read or written.
+> - abstract file classes that adapt their buffering to how a file is read or written, and one for storages
+>   transferring only whole files, which works on a local copy;
 >
 > The rest below is the plan.
 
