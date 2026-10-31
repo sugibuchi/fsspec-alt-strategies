@@ -246,10 +246,10 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
   fsspec's `sync`, and their async ones, such as `_read`, run on it.
 - They adapt to how a file is read or written, without settings per file. Requests cost money and time, so they send
   as few as the reads and writes allow.
-- Each request holds an `asyncio.Semaphore` while it runs. The caller passes one to choose the limit's scope: a file,
-  a filesystem, or the process. A write waits for it, so a shared semaphore also bounds the memory of the parts in
-  flight across files.
-- How they split work is planned apart from the semaphore, which may be shared. `spread` is how many requests a large
+- Each request holds their `concurrency_limit`, an `asyncio.Semaphore`, while it runs. The caller passes one to
+  choose the limit's scope: a file, a filesystem, or the process. A write waits for it, so a shared limit also bounds
+  the memory of the parts in flight across files.
+- How they split work is planned apart from the concurrency limit, which may be shared. `spread` is how many requests a large
   read or write is split into, and `max_readahead` caps the bytes read ahead.
 - They follow Python's file API, not the strategy API: errors are raised.
 

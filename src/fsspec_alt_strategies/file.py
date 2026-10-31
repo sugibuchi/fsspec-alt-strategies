@@ -16,8 +16,9 @@ The classes here adapt instead, from the reads and writes so far:
   in parts that grow with the bytes written, several at a time.
 
 Both run their requests on an asyncio event loop, such as a filesystem's
-``loop``, as an `asyncio.Semaphore` allows. Given one shared semaphore, files
-share its limit: the caller chooses its scope, e.g. a file, a filesystem, or
+``loop``, as their ``concurrency_limit``, an `asyncio.Semaphore`, allows.
+Given a shared one, files share its limit: the caller chooses its scope, e.g.
+a file, a filesystem, or
 the process. A filesystem subclasses them, implements their requests, and
 returns them from ``_open``.
 
@@ -46,24 +47,24 @@ _MiB = 1024 * 1024
 
 
 class _AsyncFile(io.RawIOBase):
-    """A file whose requests run on an asyncio event loop, as a semaphore allows.
+    """A file whose requests run on an asyncio event loop, under a concurrency limit.
 
     Each sync method, such as ``read``, runs its async counterpart, such as
     ``_read``, on the loop and waits for it, as fsspec's filesystems do. So the
     sync methods cannot be called on the loop itself: code there awaits the
     async ones instead.
 
-    A request holds the semaphore while it runs. A large read or write is split
-    into ``spread`` requests, which run at once as far as the semaphore allows.
-    So the semaphore also bounds the memory of the parts in flight: shared by
-    files, it bounds theirs together.
+    A request holds the concurrency limit while it runs. A large read or write
+    is split into ``spread`` requests, which run at once as far as the limit
+    allows. So the limit also bounds the memory of the parts in flight: shared
+    by files, it bounds theirs together.
 
     Its parameters are the subclasses' first ones: ``path``, ``loop``,
-    ``semaphore`` and ``spread``.
+    ``concurrency_limit`` and ``spread``.
     """
 
-    default_concurrency: int = 10
-    """The requests at a time of a file given no semaphore."""
+    default_concurrency_limit: int = 10
+    """The requests at a time of a file given no concurrency limit."""
 
     spread: int = 8
     """How many requests a large read or write is split into, to run at once."""
@@ -73,7 +74,7 @@ class _AsyncFile(io.RawIOBase):
         path: str,
         loop: asyncio.AbstractEventLoop,
         *,
-        semaphore: asyncio.Semaphore | None = None,
+        concurrency_limit: asyncio.Semaphore | None = None,
         spread: int | None = None,
     ) -> None:
         if spread is not None and spread < 1:
@@ -82,9 +83,9 @@ class _AsyncFile(io.RawIOBase):
         self.path = path
         self.loop = loop
         self.spread = spread or self.spread
-        if semaphore is None:
-            semaphore = asyncio.Semaphore(self.default_concurrency)
-        self._requests = _Requests(semaphore)
+        if concurrency_limit is None:
+            concurrency_limit = asyncio.Semaphore(self.default_concurrency_limit)
+        self._requests = _Requests(concurrency_limit)
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.path!r}>"
@@ -142,10 +143,10 @@ class _Range:
 
 
 class _Requests:
-    """A file's requests, in the order sent, each holding the semaphore while it runs."""
+    """A file's requests, in the order sent, each holding the limit while it runs."""
 
-    def __init__(self, semaphore: asyncio.Semaphore) -> None:
-        self.slots = semaphore
+    def __init__(self, concurrency_limit: asyncio.Semaphore) -> None:
+        self.slots = concurrency_limit
         self.queue: deque[_Range] = deque()
         # The first request that failed, so that writes stop at once.
         self.error: BaseException | None = None
@@ -208,8 +209,8 @@ class AdaptiveReadableFile(_AsyncFile, ABC):
     - A read that starts where the last one ended continues a run. A run that
       has read n bytes is assumed to read n more: they are fetched ahead,
       topped up once half of them are read, up to ``max_readahead`` bytes.
-      They are split into ``spread`` blocks, fetched at once as the semaphore
-      allows. Their blocks double in size up to ``max_block_size``.
+      They are split into ``spread`` blocks, fetched at once as the
+      concurrency limit allows. Their blocks double in size up to ``max_block_size``.
     - A seek within the blocks fetched keeps them and the run. A seek elsewhere
       cancels the blocks in flight and ends the run, so that scattered reads,
       such as a Parquet file's column chunks, fetch nothing ahead.
@@ -228,10 +229,10 @@ class AdaptiveReadableFile(_AsyncFile, ABC):
         The loop the fetches run on, e.g. the filesystem's ``loop``.
     size : int
         The file's size, e.g. from the filesystem's ``_info``.
-    semaphore : asyncio.Semaphore, optional
+    concurrency_limit : asyncio.Semaphore, optional
         Held by each fetch while it runs. Share one between files to limit
         their fetches together, e.g. per filesystem. The file's own, of
-        ``default_concurrency``, if None.
+        ``default_concurrency_limit``, if None.
     spread : int, optional
         How many blocks a large read or a readahead is split into, to fetch at
         once. The class attribute if None.
@@ -256,7 +257,7 @@ class AdaptiveReadableFile(_AsyncFile, ABC):
     >>> limit = asyncio.Semaphore(32)  # For all the files of a filesystem.
     >>> class MyFile(AdaptiveReadableFile):
     ...     def __init__(self, fs, path, size):
-    ...         super().__init__(path, fs.loop, size, semaphore=limit)
+    ...         super().__init__(path, fs.loop, size, concurrency_limit=limit)
     ...         self.fs = fs
     ...
     ...     async def _fetch_range(self, start, end):
@@ -281,14 +282,14 @@ class AdaptiveReadableFile(_AsyncFile, ABC):
         loop: asyncio.AbstractEventLoop,
         size: int,
         *,
-        semaphore: asyncio.Semaphore | None = None,
+        concurrency_limit: asyncio.Semaphore | None = None,
         spread: int | None = None,
         min_block_size: int | None = None,
         max_block_size: int | None = None,
         max_readahead: int | None = None,
         kept_size: int | None = None,
     ) -> None:
-        super().__init__(path, loop, semaphore=semaphore, spread=spread)
+        super().__init__(path, loop, concurrency_limit=concurrency_limit, spread=spread)
         self.size = size
         self.min_block_size = min_block_size or self.min_block_size
         self.max_block_size = max(
@@ -481,13 +482,14 @@ class AdaptiveWritableFile(_AsyncFile, ABC):
 
     - Until ``min_multipart_size`` bytes are written, they are buffered. A file
       closed by then is uploaded in one request.
-    - Beyond, parts are uploaded as soon as they fill, as the semaphore allows,
-      while writing goes on. A file that has had n bytes written is assumed to
+    - Beyond, parts are uploaded as soon as they fill, as the concurrency
+      limit allows, while writing goes on. A file that has had n bytes written is assumed to
       get n more: its parts grow, so as to split that into ``spread`` parts,
       from ``min_block_size`` up to ``max_block_size``.
-    - A write waits while the semaphore allows no upload. So the memory a file
-      holds is its parts in flight, at most one per permit, and one part being
-      filled. A semaphore shared by files bounds their parts in flight together.
+    - A write waits while the concurrency limit allows no upload. So the
+      memory a file holds is its parts in flight, at most one per permit, and
+      one part being filled. A limit shared by files bounds their parts in
+      flight together.
     - Every part but the last has at least ``min_block_size`` bytes, as storages
       such as S3 require. So ``flush`` uploads nothing.
     - A part that fails stops the writes, and closing aborts the upload. So does
@@ -500,10 +502,10 @@ class AdaptiveWritableFile(_AsyncFile, ABC):
         The file's path, for messages.
     loop : asyncio.AbstractEventLoop
         The loop the uploads run on, e.g. the filesystem's ``loop``.
-    semaphore : asyncio.Semaphore, optional
+    concurrency_limit : asyncio.Semaphore, optional
         Held by each upload while it runs. Share one between files to limit
         their uploads, and so their memory, together. The file's own, of
-        ``default_concurrency``, if None.
+        ``default_concurrency_limit``, if None.
     spread : int, optional
         How many parts the bytes written so far are split into, sizing the next
         parts. The class attribute if None.
@@ -537,13 +539,13 @@ class AdaptiveWritableFile(_AsyncFile, ABC):
         path: str,
         loop: asyncio.AbstractEventLoop,
         *,
-        semaphore: asyncio.Semaphore | None = None,
+        concurrency_limit: asyncio.Semaphore | None = None,
         spread: int | None = None,
         min_block_size: int | None = None,
         max_block_size: int | None = None,
         min_multipart_size: int | None = None,
     ) -> None:
-        super().__init__(path, loop, semaphore=semaphore, spread=spread)
+        super().__init__(path, loop, concurrency_limit=concurrency_limit, spread=spread)
         self.min_block_size = min_block_size or self.min_block_size
         self.max_block_size = max(
             max_block_size or self.max_block_size, self.min_block_size

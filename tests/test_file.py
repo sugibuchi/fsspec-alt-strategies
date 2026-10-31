@@ -84,12 +84,14 @@ async def test_sequential_reads_grow_their_blocks(flat_fs: SimulatedFileSystem) 
     assert _fetched_bytes(f) == len(data)
 
 
-async def test_read_to_the_end_splits_across_the_semaphore(
+async def test_read_to_the_end_splits_under_the_concurrency_limit(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     flat_fs.latency = 0.001
     data = os.urandom(200 * _KiB)
-    async with await _reader(flat_fs, data, semaphore=asyncio.Semaphore(4)) as f:
+    async with await _reader(
+        flat_fs, data, concurrency_limit=asyncio.Semaphore(4)
+    ) as f:
         assert await f._read() == data
     assert len(f.fetched) == 7  # 200 KiB in even parts of at most 32 KiB.
     assert flat_fs.stats.max_concurrency == 4
@@ -214,7 +216,7 @@ async def test_failed_fetch_raises_and_the_next_read_fetches_again(
 async def test_closing_cancels_fetches_in_flight(flat_fs: SimulatedFileSystem) -> None:
     flat_fs.latency = 0.05
     data = os.urandom(256 * _KiB)
-    f = await _reader(flat_fs, data, semaphore=asyncio.Semaphore(8))
+    f = await _reader(flat_fs, data, concurrency_limit=asyncio.Semaphore(8))
     await f._read(4 * _KiB)
     await f._read(64 * _KiB)  # Runs ahead: more blocks are in flight.
     await f.aclose()
@@ -254,7 +256,7 @@ class _Writer(AdaptiveWritableFile):
             "min_block_size": 4 * _KiB,
             "max_block_size": 16 * _KiB,
             "min_multipart_size": 8 * _KiB,
-            "semaphore": asyncio.Semaphore(4),
+            "concurrency_limit": asyncio.Semaphore(4),
             "spread": 4,
         }
         super().__init__(path, asyncio.get_running_loop(), **{**options, **kwargs})
@@ -353,7 +355,7 @@ def test_only_the_adaptive_files_are_public() -> None:
     assert file.__all__ == ["AdaptiveReadableFile", "AdaptiveWritableFile"]
 
 
-async def test_a_shared_semaphore_limits_files_together(
+async def test_a_shared_concurrency_limit_limits_files_together(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     flat_fs.latency = 0.002
@@ -362,19 +364,19 @@ async def test_a_shared_semaphore_limits_files_together(
     flat_fs.add_file("b.bin", data)
     limit = asyncio.Semaphore(3)
     loop = asyncio.get_running_loop()
-    a = _Reader(flat_fs, "a.bin", len(data), loop, semaphore=limit)
-    b = _Reader(flat_fs, "b.bin", len(data), loop, semaphore=limit)
+    a = _Reader(flat_fs, "a.bin", len(data), loop, concurrency_limit=limit)
+    b = _Reader(flat_fs, "b.bin", len(data), loop, concurrency_limit=limit)
     async with a, b:
         assert await asyncio.gather(a._read(), b._read()) == [data, data]
     # Each read alone is 7 parts: together, they still run 3 at a time.
     assert flat_fs.stats.max_concurrency == 3
 
 
-async def test_a_shared_semaphore_bounds_the_parts_in_flight(
+async def test_a_shared_concurrency_limit_bounds_the_parts_in_flight(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     limit = asyncio.Semaphore(2)
-    writers = [_Writer(flat_fs, f"{i}.bin", semaphore=limit) for i in range(3)]
+    writers = [_Writer(flat_fs, f"{i}.bin", concurrency_limit=limit) for i in range(3)]
     in_flight = 0
     most = 0
 
@@ -399,7 +401,7 @@ async def test_a_shared_semaphore_bounds_the_parts_in_flight(
                 await writer._write(b"x" * 1000)
 
     await asyncio.gather(*(write(w) for w in writers))
-    # Writes wait for the semaphore: the three files never had more than two
+    # Writes wait for the concurrency limit: the three files never had more than two
     # parts in flight, so never held more than those in memory.
     assert most == 2
     for i in range(3):
