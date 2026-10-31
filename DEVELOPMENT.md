@@ -97,16 +97,20 @@ A strategy is a plain function returning an `Operation`. The filesystem comes fi
 then keyword-only options:
 
 ```python
-async with tree_rm(fs, "data/2024", max_concurrency=32) as op:
+limit = asyncio.Semaphore(32)  # Shared by all that uses the storage, files included.
+async with tree_rm(fs, "data/2024", concurrency_limit=limit) as op:
     async for path in op:
         if isinstance(path, Exception):
             print("failed:", path)
 print(op.state.files_deleted)
 ```
 
-- `max_concurrency` caps the requests running at a time, 32 by default. It is not fsspec's `batch_size`, which is how
-  many coroutines fsspec gathers at once, sized from the limit of open files. Requests to one storage need a limit of
-  their own: high enough to hide each request's latency, and low enough not to be throttled.
+- `concurrency_limit` is an `asyncio.Semaphore`, of which each request holds a permit while it runs. Shared, it limits
+  several operations, and the file objects, together: the caller chooses its scope. Without one, an operation has its
+  own, of 32.
+- That default is not fsspec's `batch_size`, which is how many coroutines fsspec gathers at once, sized from the limit
+  of open files. Requests to one storage need a limit of their own: high enough to hide each request's latency, and
+  low enough not to be throttled.
 - Errors in the arguments, such as a bad `maxdepth`, are raised by the call.
 - Errors ending the whole operation are raised by the iteration, as fsspec raises them. An example is a missing root,
   which raises `FileNotFoundError`.
@@ -146,9 +150,15 @@ Developers attach a strategy by overriding the fsspec method themselves, in a fe
 
 ```python
 class MyFileSystem(AsyncFileSystem):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # One limit for the filesystem's operations and files. It belongs to the
+        # loop it is first used on, as fsspec's own requests do.
+        self.limit = asyncio.Semaphore(32)
+
     async def _rm(self, path, recursive=False, **kwargs):
         if recursive:
-            _, errors = await collect(tree_rm(self, path, max_concurrency=32))
+            _, errors = await collect(tree_rm(self, path, concurrency_limit=self.limit))
             if errors:
                 raise ExceptionGroup("rm failed", errors)
             return

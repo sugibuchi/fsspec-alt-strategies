@@ -3,9 +3,10 @@
 """The engine under the tree strategies that change a tree, such as tree_rm.
 
 They walk the tree as tree_walk does, and start their jobs, e.g. deleting a
-file, as each folder's listing arrives. `_Jobs` runs both at once, up to
-``max_concurrency`` jobs at a time, and yields what each step did. A subclass says
-what a listing queues, how a job runs, and what its outcome is.
+file, as each folder's listing arrives. `_Jobs` runs both at once, each
+request holding a permit of one concurrency limit, and yields what each step
+did. A subclass says what a listing queues, how a job runs, and what its
+outcome is.
 
 A glob pattern is expanded first, as fsspec's ``_expand_path`` expands it:
 its matching folders are then walked at once.
@@ -23,7 +24,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..control import collect
 from .glob import tree_glob
-from .walk import _listings, _max_concurrency
+from .walk import _limit, _listings, _Permits
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
@@ -56,7 +57,7 @@ class _Roots(NamedTuple):
 
 
 async def _expand(
-    fs: AsyncFileSystem, pattern: str, max_concurrency: int | None
+    fs: AsyncFileSystem, pattern: str, concurrency_limit: asyncio.Semaphore | None
 ) -> _Roots:
     """The roots matching a glob pattern, as fsspec's ``_expand_path`` finds them.
 
@@ -64,7 +65,7 @@ async def _expand(
     it. Matching nothing raises FileNotFoundError, as fsspec does.
     """
     matches, errors = await collect(
-        tree_glob(fs, pattern, max_concurrency=max_concurrency)
+        tree_glob(fs, pattern, concurrency_limit=concurrency_limit)
     )
     if not matches and not errors:
         raise FileNotFoundError(pattern)
@@ -87,10 +88,15 @@ class _Jobs(ABC):
     """The jobs of one operation, run while its tree is walked."""
 
     def __init__(
-        self, fs: AsyncFileSystem, max_concurrency: int | None, op: Operation[Any, Any]
+        self,
+        fs: AsyncFileSystem,
+        concurrency_limit: asyncio.Semaphore | None,
+        op: Operation[Any, Any],
     ) -> None:
         self.fs = fs
-        self.max_concurrency = _max_concurrency(max_concurrency)
+        # The listings, the jobs, and a pattern's glob share it.
+        self.concurrency_limit = _limit(concurrency_limit)
+        self.permits = _Permits(self.concurrency_limit)
         self.op = op
         self.errors = 0
         self.current: str | None = None
@@ -162,9 +168,8 @@ class _Jobs(ABC):
         try:
             yield await self.begin(roots, listings)
             while True:
-                self.start()
-                pending = [*self.running, *([self.next] if self.next else [])]
-                if not pending:
+                await self.start()
+                if not (pending := self.pending()):
                     break
                 done, _ = await asyncio.wait(
                     pending, return_when=asyncio.FIRST_COMPLETED
@@ -186,8 +191,16 @@ class _Jobs(ABC):
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            await self.permits.close()
             if listings is not None:
                 await listings.aclose()
+
+    def pending(self) -> list[asyncio.Task[Any]]:
+        """What to wait for: the jobs, the next listing, and a permit if needed."""
+        pending = [*self.running, *([self.next] if self.next else [])]
+        if self.waiting:
+            pending.append(self.permits.waiter())
+        return pending
 
     def walk(self, roots: _Roots) -> AsyncGenerator[_Listing] | None:
         """The listings of the root folders, if any, walked at once."""
@@ -196,7 +209,7 @@ class _Jobs(ABC):
         return _listings(
             self.fs,
             roots.folders,
-            max_concurrency=self.max_concurrency,
+            concurrency_limit=self.concurrency_limit,
             stopping=self.op.cancelling,
         )
 
@@ -223,9 +236,11 @@ class _Jobs(ABC):
     def take(
         self, task: asyncio.Task[Any], listings: AsyncGenerator[_Listing] | None
     ) -> list[Any] | None:
-        """Handle a finished task, returning its step, or None if the walk ended."""
-        if task is not self.next or listings is None:
+        """Handle a finished task, returning its step, or None if it has none."""
+        if task in self.running:
             return self.finish(task)
+        if task is not self.next or listings is None:
+            return None  # The waiter's permit, which start takes.
         self.next = None
         try:
             listing = task.result()
@@ -242,12 +257,12 @@ class _Jobs(ABC):
         self.add(listing)
         return []
 
-    def start(self) -> None:
+    async def start(self) -> None:
         if self.op.cancelling():
             self.waiting.clear()
-        while self.waiting and len(self.running) < self.max_concurrency:
+        while self.waiting and await self.permits.take():
             job = self.waiting.popleft()
-            self.running[asyncio.ensure_future(self.run(job))] = job
+            self.running[self.permits.start(self.run(job))] = job
 
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
         job = self.running.pop(task)

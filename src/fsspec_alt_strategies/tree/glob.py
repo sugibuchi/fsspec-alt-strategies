@@ -26,9 +26,10 @@ from typing import TYPE_CHECKING, Any
 from fsspec.utils import glob_translate
 
 from ..control import Operation, State
-from .walk import _max_concurrency, _scan
+from .walk import _scan
 
 if TYPE_CHECKING:
+    import asyncio
     from collections.abc import AsyncGenerator, Callable
 
     from fsspec.asyn import AsyncFileSystem
@@ -60,7 +61,7 @@ def tree_glob(
     *,
     maxdepth: int | None = None,
     withdirs: bool = True,
-    max_concurrency: int | None = None,
+    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[dict[str, Any], GlobState]:
     """Find the paths matching a glob pattern, listing only folders it can match in.
 
@@ -83,8 +84,8 @@ def tree_glob(
     Once cancelled, it lists no new folder, and yields the matches of the
     listings in flight.
 
-    Requests: one ``_ls`` per folder the pattern can match in, at most
-    ``max_concurrency`` at a time. One ``_info`` for a pattern without wildcards, or
+    Requests: one ``_ls`` per folder the pattern can match in, as
+    ``concurrency_limit`` allows. One ``_info`` for a pattern without wildcards, or
     one matching its literal root folder itself, e.g. ``data/**``.
 
     Parameters
@@ -97,8 +98,9 @@ def tree_glob(
         How deep a ``**`` goes, as with fsspec's ``_glob``. No limit by default.
     withdirs : bool
         Whether folders can match, as with fsspec's ``_glob``.
-    max_concurrency : int, optional
-        The most listings at a time. 32 if None.
+    concurrency_limit : asyncio.Semaphore, optional
+        Held by each request while it runs. Share one to limit several
+        operations, or files, together. The operation's own, of 32, if None.
 
     Returns
     -------
@@ -127,7 +129,6 @@ def tree_glob(
     """
     if maxdepth is not None and maxdepth < 1:
         raise ValueError("maxdepth must be at least 1")
-    _max_concurrency(max_concurrency)
     ends_with_sep = path.endswith("/")
     path = fs._strip_protocol(path)
     if not has_magic(path):
@@ -146,7 +147,7 @@ def tree_glob(
             root,
             maxdepth=search.depth,
             descend=search.descend,
-            max_concurrency=max_concurrency,
+            concurrency_limit=concurrency_limit,
             stopping=op.cancelling,
             folder_root=bool(root)
             and search.matched({"name": root, "type": "directory"}),

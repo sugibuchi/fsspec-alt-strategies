@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 from ..control import Operation, State
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Collection
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Collection
 
     from fsspec.asyn import AsyncFileSystem
 
@@ -56,7 +56,7 @@ def tree_walk(
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
-    max_concurrency: int | None = None,
+    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[dict[str, Any], WalkState]:
     """Walk a folder tree, listing several folders at a time.
 
@@ -79,7 +79,7 @@ def tree_walk(
     - with ``raise_on_error``, the error of the first folder that failed to
       list.
 
-    Requests: one ``_ls`` per folder walked, at most ``max_concurrency`` at a time.
+    Requests: one ``_ls`` per folder walked, as ``concurrency_limit`` allows.
 
     Parameters
     ----------
@@ -98,8 +98,9 @@ def tree_walk(
     raise_on_error : bool
         Whether a folder that fails to list raises its error, ending the walk,
         rather than yielding it.
-    max_concurrency : int, optional
-        The most listings at a time. 32 if None.
+    concurrency_limit : asyncio.Semaphore, optional
+        Held by each request while it runs. Share one to limit several
+        operations, or files, together. The operation's own, of 32, if None.
 
     Returns
     -------
@@ -118,14 +119,14 @@ def tree_walk(
 
     Examples
     --------
-    >>> async with tree_walk(fs, "data", max_concurrency=16) as entries:
+    >>> limit = asyncio.Semaphore(16)  # Shared, e.g. by a filesystem's operations.
+    >>> async with tree_walk(fs, "data", concurrency_limit=limit) as entries:
     ...     async for entry in entries:
     ...         if isinstance(entry, Exception):
     ...             raise entry
     ...         print(entry["name"], entry["type"])
     """
     _check_maxdepth(maxdepth)
-    _max_concurrency(max_concurrency)
 
     async def run(
         op: Operation[dict[str, Any], WalkState],
@@ -137,7 +138,7 @@ def tree_walk(
             topdown=topdown,
             descend=descend,
             raise_on_error=raise_on_error,
-            max_concurrency=max_concurrency,
+            concurrency_limit=concurrency_limit,
             stopping=op.cancelling,
         )
         state = op.state
@@ -162,8 +163,8 @@ def _check_maxdepth(maxdepth: int | None) -> None:
         raise ValueError(f"maxdepth must be at least 1: {maxdepth}")
 
 
-_DEFAULT_MAX_CONCURRENCY = 32
-"""The most requests a tree strategy runs at a time, unless given another.
+_DEFAULT_CONCURRENCY_LIMIT = 32
+"""The requests at a time of a tree strategy given no concurrency limit.
 
 fsspec's ``batch_size`` does not fit here. It is how many coroutines fsspec
 gathers at once, sized from the limit of open files, e.g. 1280. The requests
@@ -173,13 +174,59 @@ throttled.
 """
 
 
-def _max_concurrency(max_concurrency: int | None) -> int:
-    """The most requests at a time: the one given, or the default."""
-    if max_concurrency is None:
-        return _DEFAULT_MAX_CONCURRENCY
-    if max_concurrency < 1:
-        raise ValueError(f"max_concurrency must be at least 1: {max_concurrency}")
-    return max_concurrency
+def _limit(concurrency_limit: asyncio.Semaphore | None) -> asyncio.Semaphore:
+    """The concurrency limit given, or an operation's own."""
+    if concurrency_limit is None:
+        return asyncio.Semaphore(_DEFAULT_CONCURRENCY_LIMIT)
+    return concurrency_limit
+
+
+class _Permits:
+    """An operation's share of a concurrency limit, taken as its requests start.
+
+    A request takes a permit to start, and gives it back once done. When none
+    is free, `waiter` is a task getting the next one: awaited along with the
+    operation's own requests, it picks up the permits that others sharing the
+    limit give back.
+    """
+
+    def __init__(self, limit: asyncio.Semaphore) -> None:
+        self.limit = limit
+        self.waiting: asyncio.Task[bool] | None = None
+
+    async def take(self) -> bool:
+        """Take a permit if one is free now, or got by the waiter."""
+        if self.waiting is not None:
+            if not self.waiting.done():
+                return False
+            self.waiting = None  # Its permit is now this operation's.
+            return True
+        if self.limit.locked():
+            return False
+        await self.limit.acquire()  # A permit is free: this does not wait.
+        return True
+
+    def waiter(self) -> asyncio.Task[bool]:
+        """A task done once the next permit is this operation's."""
+        if self.waiting is None:
+            self.waiting = asyncio.ensure_future(self.limit.acquire())
+        return self.waiting
+
+    def start(self, request: Awaitable[Any]) -> asyncio.Task[Any]:
+        """Run a request with a permit taken, giving it back once done."""
+        task = asyncio.ensure_future(request)
+        task.add_done_callback(lambda _: self.limit.release())
+        return task
+
+    async def close(self) -> None:
+        """Stop waiting for a permit, and give back one got but not used."""
+        task, self.waiting = self.waiting, None
+        if task is None:
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if not task.cancelled() and task.exception() is None:
+            self.limit.release()
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +252,7 @@ async def _listings(
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
-    max_concurrency: int | None = None,
+    concurrency_limit: asyncio.Semaphore | None = None,
     stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[_Listing]:
     """Walk a folder tree as `tree_walk` does, yielding each folder's listing.
@@ -223,43 +270,50 @@ async def _listings(
 
     Once ``stopping`` returns true, no new listing starts, and those in flight
     are yielded as they arrive. It is an operation's ``cancelling``.
+
+    Each listing holds a permit of ``concurrency_limit`` while it runs.
     """
     _check_maxdepth(maxdepth)
     roots = {fs._strip_protocol(p) for p in ([path] if isinstance(path, str) else path)}
-    max_concurrency = _max_concurrency(max_concurrency)
+    permits = _Permits(_limit(concurrency_limit))
     waiting: deque[tuple[str, int]] = deque()
     running: dict[asyncio.Task[list[dict[str, Any]]], tuple[str, int]] = {}
     bottom_up = None if topdown else _BottomUp()
 
-    def start() -> None:
+    async def start() -> None:
         if stopping is not None and stopping():
             waiting.clear()
-        while waiting and len(running) < max_concurrency:
+        while waiting and await permits.take():
             folder, depth = waiting.popleft()
-            running[asyncio.ensure_future(fs._ls(folder, detail=True))] = folder, depth
+            running[permits.start(fs._ls(folder, detail=True))] = folder, depth
 
     waiting.extend((root, 1) for root in sorted(roots))
-    start()
+    await start()
     try:
-        while running:
-            done, _ = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+        while running or waiting:
+            pending = [*running, *([permits.waiter()] if waiting else [])]
+            done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
+                if task not in running:
+                    continue  # The waiter's permit, which start takes.
                 folder, depth = running.pop(task)
                 listing = _listing(task, folder, depth, roots, raise_on_error)
                 subfolders = _subfolders(listing, maxdepth, descend)
                 waiting.extend((s, depth + 1) for s in subfolders)
                 # Start the next listings before yielding, so that they run
                 # while the caller handles this one.
-                start()
+                await start()
                 if bottom_up is None:
                     yield listing
                 else:
                     for ready in bottom_up.add(listing, subfolders):
                         yield ready
+            await start()
     finally:
         for task in running:
             task.cancel()
         await asyncio.gather(*running, return_exceptions=True)
+        await permits.close()
 
 
 async def _scan(
@@ -268,7 +322,7 @@ async def _scan(
     *,
     maxdepth: int | None = None,
     descend: Callable[[dict[str, Any]], bool] | None = None,
-    max_concurrency: int | None = None,
+    concurrency_limit: asyncio.Semaphore | None = None,
     stopping: Callable[[], object] | None = None,
     file_root: bool = False,
     folder_root: bool = False,
@@ -292,7 +346,7 @@ async def _scan(
             root,
             maxdepth=maxdepth,
             descend=descend,
-            max_concurrency=max_concurrency,
+            concurrency_limit=concurrency_limit,
             stopping=stopping,
         )
         async with aclosing(listings):

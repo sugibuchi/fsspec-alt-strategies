@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -174,7 +175,9 @@ async def test_cancel_yields_the_copies_sent() -> None:
     for i in range(10):
         fs.add_file(f"root/file-{i}")
     profile = StorageProfile(parents_required=False)
-    op = tree_cp(fs, "root", "copied", profile=profile, max_concurrency=10)
+    op = tree_cp(
+        fs, "root", "copied", profile=profile, concurrency_limit=asyncio.Semaphore(10)
+    )
     copied = []
     async for pair in op:
         copied.append(pair)

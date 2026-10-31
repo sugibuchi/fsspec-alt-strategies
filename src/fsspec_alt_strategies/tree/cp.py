@@ -20,9 +20,9 @@ from fsspec.utils import common_prefix
 from ..control import Operation, State
 from ..profile import _resolve
 from ._jobs import _expand, _Job, _Jobs, _Roots
-from .walk import _max_concurrency
 
 if TYPE_CHECKING:
+    import asyncio
     from collections.abc import Awaitable
 
     from fsspec.asyn import AsyncFileSystem
@@ -55,7 +55,7 @@ def tree_cp(
     path2: str,
     *,
     profile: StorageProfile | None = None,
-    max_concurrency: int | None = None,
+    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[tuple[str, str], CpState]:
     """Copy a folder and everything in it, copying while the tree is walked.
 
@@ -93,8 +93,8 @@ def tree_cp(
     Requests: one ``_info`` for ``path2``, unless it ends with "/". One ``_ls``
     per folder, one ``_cp_file`` per file, and one ``_makedirs`` per
     destination folder with files or empty. A storage refusing to overwrite
-    costs an ``_rm_file`` and a ``_cp_file`` more per file it refused. At most
-    ``max_concurrency`` listings and ``max_concurrency`` copies run at a time.
+    costs an ``_rm_file`` and a ``_cp_file`` more per file it refused. Each
+    request holds a permit of ``concurrency_limit`` while it runs.
 
     The profile's ``parents_required=False`` saves the ``_makedirs`` of each
     folder with files, as their copies create it.
@@ -110,8 +110,9 @@ def tree_cp(
     profile : StorageProfile, optional
         What the storage does. The filesystem's ``storage_profile`` if None, if
         it has one.
-    max_concurrency : int, optional
-        The most listings, and the most copies, at a time. 32 if None.
+    concurrency_limit : asyncio.Semaphore, optional
+        Held by each request while it runs. Share one to limit several
+        operations, or files, together. The operation's own, of 32, if None.
 
     Returns
     -------
@@ -133,10 +134,9 @@ def tree_cp(
     >>> op.state.files_copied
     1234
     """
-    _max_concurrency(max_concurrency)
     resolved = _resolve(fs, profile)
     return Operation(
-        lambda op: _Copy(fs, path1, path2, resolved, max_concurrency, op).outcomes(),
+        lambda op: _Copy(fs, path1, path2, resolved, concurrency_limit, op).outcomes(),
         CpState(),
     )
 
@@ -156,10 +156,10 @@ class _Copy(_Jobs):
         path1: str,
         path2: str,
         profile: StorageProfile,
-        max_concurrency: int | None,
+        concurrency_limit: asyncio.Semaphore | None,
         op: Operation[Any, Any],
     ) -> None:
-        super().__init__(fs, max_concurrency, op)
+        super().__init__(fs, concurrency_limit, op)
         self.path1 = path1
         self.path2 = path2
         self.parents_required = profile.parents_required is not False
@@ -186,7 +186,7 @@ class _Copy(_Jobs):
         """
         destination = self.fs._strip_protocol(self.path2)
         if has_magic(self.path1):
-            roots = await _expand(self.fs, self.path1, self.max_concurrency)
+            roots = await _expand(self.fs, self.path1, self.concurrency_limit)
             sources = [*roots.folders, *roots.files]
             if not sources:
                 return roots  # Only errors, to yield.

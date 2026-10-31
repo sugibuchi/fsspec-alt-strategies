@@ -4,7 +4,7 @@
 
 `tree_find` is an alternative to fsspec's ``_find``, with the same paths. fsspec's
 walks a tree one folder at a time, unless the filesystem lists whole trees.
-`tree_find` lists up to ``max_concurrency`` folders at a time, as `tree_walk` does.
+`tree_find` lists several folders at a time, as `tree_walk` does.
 
 This module depends on `control` and `walk`.
 """
@@ -16,9 +16,10 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from ..control import Operation, State
-from .walk import _check_maxdepth, _max_concurrency, _scan
+from .walk import _check_maxdepth, _scan
 
 if TYPE_CHECKING:
+    import asyncio
     from collections.abc import AsyncGenerator
 
     from fsspec.asyn import AsyncFileSystem
@@ -48,7 +49,7 @@ def tree_find(
     *,
     maxdepth: int | None = None,
     withdirs: bool = False,
-    max_concurrency: int | None = None,
+    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[dict[str, Any], FindState]:
     """Find the files in a tree, listing several folders at a time.
 
@@ -67,7 +68,7 @@ def tree_find(
     Once cancelled, it lists no new folder, and yields the paths of the
     listings in flight.
 
-    Requests: one ``_ls`` per folder, at most ``max_concurrency`` at a time. One
+    Requests: one ``_ls`` per folder, as ``concurrency_limit`` allows. One
     ``_info`` more for ``path`` itself, if a file, or a folder with
     ``withdirs``.
 
@@ -82,8 +83,9 @@ def tree_find(
         limit by default.
     withdirs : bool
         Whether to find folders too, ``path`` included.
-    max_concurrency : int, optional
-        The most listings at a time. 32 if None.
+    concurrency_limit : asyncio.Semaphore, optional
+        Held by each request while it runs. Share one to limit several
+        operations, or files, together. The operation's own, of 32, if None.
 
     Returns
     -------
@@ -103,12 +105,11 @@ def tree_find(
 
     Examples
     --------
-    >>> entries, errors = await collect(tree_find(fs, "data", max_concurrency=32))
+    >>> entries, errors = await collect(tree_find(fs, "data"))
     >>> sorted(e["name"] for e in entries), errors
     (['data/2024/01/part-0.parquet', 'data/2024/02/part-0.parquet'], [])
     """
     _check_maxdepth(maxdepth)
-    _max_concurrency(max_concurrency)
 
     async def run(
         op: Operation[dict[str, Any], FindState],
@@ -118,7 +119,7 @@ def tree_find(
             fs,
             root,
             maxdepth=maxdepth,
-            max_concurrency=max_concurrency,
+            concurrency_limit=concurrency_limit,
             stopping=op.cancelling,
             file_root=True,
             folder_root=withdirs and bool(root),

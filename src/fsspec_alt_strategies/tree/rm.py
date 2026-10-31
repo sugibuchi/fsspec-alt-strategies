@@ -17,9 +17,9 @@ from typing import TYPE_CHECKING, Any
 
 from ..control import Operation, State
 from ._jobs import _expand, _Job, _Jobs, _Roots
-from .walk import _max_concurrency
 
 if TYPE_CHECKING:
+    import asyncio
     from collections.abc import Awaitable, Callable
 
     from fsspec.asyn import AsyncFileSystem
@@ -53,7 +53,7 @@ def tree_rm(
     path: str,
     *,
     rm_folder: Callable[[str], Awaitable[Any]] | None = None,
-    max_concurrency: int | None = None,
+    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[str, RmState]:
     """Delete a folder and everything in it, deleting while the tree is walked.
 
@@ -87,8 +87,8 @@ def tree_rm(
 
     Requests: one ``_ls`` per folder, one ``_rm_file`` per file, and one
     ``rm_folder`` per folder. A pattern adds the requests of its `tree_glob`.
-    At most ``max_concurrency`` listings and ``max_concurrency`` deletions run at a
-    time.
+    Each request holds a permit of ``concurrency_limit`` while it
+    runs.
 
     Parameters
     ----------
@@ -102,8 +102,9 @@ def tree_rm(
         filesystem's ``_rmdir`` if it has one, otherwise its ``_rm_file``, as
         fsspec's ``_rm`` does. A FileNotFoundError from it counts as deleted, as
         object stores have no folders to delete.
-    max_concurrency : int, optional
-        The most listings, and the most deletions, at a time. 32 if None.
+    concurrency_limit : asyncio.Semaphore, optional
+        Held by each request while it runs. Share one to limit several
+        operations, or files, together. The operation's own, of 32, if None.
 
     Returns
     -------
@@ -116,7 +117,7 @@ def tree_rm(
 
     Examples
     --------
-    >>> async with tree_rm(fs, "data/2024", max_concurrency=32) as op:
+    >>> async with tree_rm(fs, "data/2024") as op:
     ...     async for path in op:
     ...         if isinstance(path, Exception):
     ...             op.cancel()  # Stop at the first failure.
@@ -124,9 +125,8 @@ def tree_rm(
     >>> op.state.files_deleted
     1234
     """
-    _max_concurrency(max_concurrency)
     return Operation(
-        lambda op: _Deletion(fs, path, rm_folder, max_concurrency, op).outcomes(),
+        lambda op: _Deletion(fs, path, rm_folder, concurrency_limit, op).outcomes(),
         RmState(),
     )
 
@@ -139,10 +139,10 @@ class _Deletion(_Jobs):
         fs: AsyncFileSystem,
         path: str,
         rm_folder: Callable[[str], Awaitable[Any]] | None,
-        max_concurrency: int | None,
+        concurrency_limit: asyncio.Semaphore | None,
         op: Operation[str, RmState],
     ) -> None:
-        super().__init__(fs, max_concurrency, op)
+        super().__init__(fs, concurrency_limit, op)
         self.path = path
         self.rm_folder = rm_folder or getattr(fs, "_rmdir", None) or fs._rm_file
         self.files_found = 0
@@ -151,7 +151,7 @@ class _Deletion(_Jobs):
 
     async def prepare(self) -> _Roots:
         if has_magic(self.path):
-            return await _expand(self.fs, self.path, self.max_concurrency)
+            return await _expand(self.fs, self.path, self.concurrency_limit)
         return _Roots([self.path])
 
     def state(self) -> RmState:

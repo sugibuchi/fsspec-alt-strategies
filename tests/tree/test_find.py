@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -70,7 +71,9 @@ async def test_lists_folders_concurrently() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(20):
         fs.add_file(f"root/{i:02}/file")
-    entries, _ = await collect(tree_find(fs, "root", max_concurrency=5))
+    entries, _ = await collect(
+        tree_find(fs, "root", concurrency_limit=asyncio.Semaphore(5))
+    )
     assert len(entries) == 20
     assert fs.stats.max_concurrency == 5
 
@@ -103,7 +106,7 @@ async def test_a_failed_folder_is_yielded() -> None:
 
 async def test_cancel_after_the_first_listing(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    op = tree_find(any_fs, "data", max_concurrency=1)
+    op = tree_find(any_fs, "data", concurrency_limit=asyncio.Semaphore(1))
     found = []
     async for entry in op:
         found.append(entry["name"])
@@ -118,7 +121,7 @@ async def test_closing_stops_the_search() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.05, asynchronous=True)
     for i in range(10):
         fs.add_file(f"root/{i}/file")
-    async with tree_find(fs, "root", max_concurrency=2) as found:
+    async with tree_find(fs, "root", concurrency_limit=asyncio.Semaphore(2)) as found:
         async for _ in found:
             break  # The first file: other listings are now in flight.
     assert fs._in_flight == 0

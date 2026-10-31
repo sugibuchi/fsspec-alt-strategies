@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -96,7 +97,9 @@ async def test_lists_folders_concurrently_within_batch_size() -> None:
     for i in range(5):
         for j in range(5):
             fs.add_file(f"root/{i}/{j}/file")
-    entries, _ = await collect(tree_glob(fs, "root/*/*/file", max_concurrency=4))
+    entries, _ = await collect(
+        tree_glob(fs, "root/*/*/file", concurrency_limit=asyncio.Semaphore(4))
+    )
     assert len(entries) == 25
     assert fs.stats.calls == {"list": 1 + 5 + 25}
     assert fs.stats.max_concurrency == 4
@@ -131,7 +134,9 @@ async def test_closing_stops_the_search() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.05, asynchronous=True)
     for i in range(10):
         fs.add_file(f"root/{i}/file")
-    async with tree_glob(fs, "root/*/file", max_concurrency=2) as matches:
+    async with tree_glob(
+        fs, "root/*/file", concurrency_limit=asyncio.Semaphore(2)
+    ) as matches:
         async for _ in matches:
             break  # The first match: other listings are now in flight.
     assert fs._in_flight == 0

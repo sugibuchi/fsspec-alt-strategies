@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 import pytest
@@ -48,7 +49,7 @@ async def test_sends_no_info_per_file(any_fs: SimulatedFileSystem) -> None:
 
 async def test_cancel_counts_what_was_listed(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    op = tree_du(any_fs, "data", max_concurrency=1)
+    op = tree_du(any_fs, "data", concurrency_limit=asyncio.Semaphore(1))
     async for _ in op:
         op.cancel()
     # data, and data/2023 listed with it: only the README is counted.

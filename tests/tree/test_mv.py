@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -208,7 +209,9 @@ async def test_closing_waits_for_the_moves_sent() -> None:
     for i in range(10):
         fs.add_file(f"root/file-{i}")
     profile = StorageProfile(parents_required=False)
-    async with tree_mv(fs, "root", "moved", profile=profile, max_concurrency=10) as op:
+    async with tree_mv(
+        fs, "root", "moved", profile=profile, concurrency_limit=asyncio.Semaphore(10)
+    ) as op:
         async for _ in op:
             break  # The first file: the nine others were sent with it.
     assert fs._in_flight == 0
@@ -233,7 +236,9 @@ async def test_cancel_yields_the_moves_sent() -> None:
     for i in range(10):
         fs.add_file(f"root/file-{i}")
     profile = StorageProfile(parents_required=False)
-    op = tree_mv(fs, "root", "moved", profile=profile, max_concurrency=10)
+    op = tree_mv(
+        fs, "root", "moved", profile=profile, concurrency_limit=asyncio.Semaphore(10)
+    )
     moved = []
     async for pair in op:
         moved.append(pair)

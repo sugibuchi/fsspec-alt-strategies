@@ -88,7 +88,7 @@ async def test_a_pattern_walks_its_matches_at_once() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(8):
         fs.add_file(f"root/{i}/sub/file")
-    await collect(tree_rm(fs, "root/*", max_concurrency=8))
+    await collect(tree_rm(fs, "root/*", concurrency_limit=asyncio.Semaphore(8)))
     assert fs.stats.max_concurrency == 8
     # The glob's listing of root, then each match and its sub folder.
     assert fs.stats.calls["list"] == 1 + 8 + 8
@@ -150,7 +150,7 @@ async def test_deletes_concurrently_within_batch_size() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(40):
         fs.add_file(f"root/file-{i:02}")
-    await collect(tree_rm(fs, "root", max_concurrency=8))
+    await collect(tree_rm(fs, "root", concurrency_limit=asyncio.Semaphore(8)))
     assert fs.stats.calls == {"list": 1, "delete": 41}
     assert fs.stats.max_concurrency == 8
 
@@ -168,7 +168,7 @@ async def test_cancel_yields_the_deletions_sent() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
     for i in range(10):
         fs.add_file(f"root/file-{i}")
-    op = tree_rm(fs, "root", max_concurrency=10)
+    op = tree_rm(fs, "root", concurrency_limit=asyncio.Semaphore(10))
     deleted = []
     async for path in op:
         deleted.append(path)
@@ -183,7 +183,7 @@ async def test_cancel_after_the_listing() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
     fs.add_file("root/sub/file")
     fs.add_file("root/file")
-    op = tree_rm(fs, "root", max_concurrency=10)
+    op = tree_rm(fs, "root", concurrency_limit=asyncio.Semaphore(10))
     async for path in op:
         op.cancel()
         assert path == "root/file"
@@ -207,7 +207,7 @@ async def test_closing_waits_for_the_deletions_sent() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
     for i in range(10):
         fs.add_file(f"root/file-{i}")
-    async with tree_rm(fs, "root", max_concurrency=10) as op:
+    async with tree_rm(fs, "root", concurrency_limit=asyncio.Semaphore(10)) as op:
         async for _ in op:
             break  # The first file: the nine others were sent with it.
     assert fs.stats.calls["delete"] == 10
@@ -221,7 +221,9 @@ async def test_cancelling_the_task_leaves_nothing_running() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.05, asynchronous=True)
     for i in range(10):
         fs.add_file(f"root/{i}/file")
-    task = asyncio.ensure_future(collect(tree_rm(fs, "root", max_concurrency=10)))
+    task = asyncio.ensure_future(
+        collect(tree_rm(fs, "root", concurrency_limit=asyncio.Semaphore(10)))
+    )
     await asyncio.sleep(0.07)  # The root is listed; its subfolders are in flight.
     task.cancel()
     with pytest.raises(asyncio.CancelledError):

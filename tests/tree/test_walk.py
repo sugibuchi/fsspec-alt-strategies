@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
@@ -52,8 +53,14 @@ def _order(entries: list[dict[str, Any]]) -> dict[str, int]:
 async def test_topdown_orders(latency: float) -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=latency, asynchronous=True)
     _tree(fs)
-    down = _order(await _all(tree_walk(fs, "data", max_concurrency=3)))
-    up = _order(await _all(tree_walk(fs, "data", topdown=False, max_concurrency=3)))
+    down = _order(
+        await _all(tree_walk(fs, "data", concurrency_limit=asyncio.Semaphore(3)))
+    )
+    up = _order(
+        await _all(
+            tree_walk(fs, "data", topdown=False, concurrency_limit=asyncio.Semaphore(3))
+        )
+    )
     for name in down:
         parent = name.rsplit("/", 1)[0]
         if parent != "data":
@@ -128,7 +135,11 @@ async def test_raise_on_error_stops_at_once(topdown: bool) -> None:
     with pytest.raises(PermissionError):
         await _all(
             tree_walk(
-                fs, "data", topdown=topdown, raise_on_error=True, max_concurrency=1
+                fs,
+                "data",
+                topdown=topdown,
+                raise_on_error=True,
+                concurrency_limit=asyncio.Semaphore(1),
             )
         )
     # data/2023 fails, and data/2024, queued behind it, is never listed.
@@ -140,27 +151,71 @@ async def test_lists_folders_concurrently_within_batch_size() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(20):
         fs.add_file(f"root/{i:02}/file")
-    await _all(tree_walk(fs, "root", max_concurrency=4))
+    await _all(tree_walk(fs, "root", concurrency_limit=asyncio.Semaphore(4)))
     assert fs.stats.calls == {"list": 21}
     assert fs.stats.max_concurrency == 4
 
 
-async def test_max_concurrency_defaults_to_its_own() -> None:
+async def test_the_concurrency_limit_defaults_to_its_own() -> None:
     # Not fsspec's batch size, which is sized from the limit of open files.
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(100):
         fs.add_file(f"root/{i:03}/file")
     await _all(tree_walk(fs, "root"))
     assert fs.stats.max_concurrency == 32
-    with pytest.raises(ValueError, match="max_concurrency"):
-        tree_walk(fs, "root", max_concurrency=0)
+
+
+async def _all_permits_back(limit: asyncio.Semaphore, permits: int) -> None:
+    for _ in range(permits):
+        await asyncio.wait_for(limit.acquire(), 0.1)
+
+
+async def test_a_shared_limit_spans_operations() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
+    for i in range(10):
+        fs.add_file(f"a/{i}/file")
+        fs.add_file(f"b/{i}/file")
+    limit = asyncio.Semaphore(3)
+    await asyncio.gather(
+        _all(tree_walk(fs, "a", concurrency_limit=limit)),
+        _all(tree_walk(fs, "b", concurrency_limit=limit)),
+    )
+    # Each alone would list 10 folders at once: together, still 3 at a time.
+    assert fs.stats.max_concurrency == 3
+    await _all_permits_back(limit, 3)
+
+
+async def test_waits_for_a_permit_another_gives_back() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    limit = asyncio.Semaphore(1)
+    await limit.acquire()  # Held by another file, or operation.
+    walk = asyncio.ensure_future(_all(tree_walk(fs, "data", concurrency_limit=limit)))
+    await asyncio.sleep(0.01)
+    assert fs.stats.calls == {}
+    limit.release()
+    assert len(await walk) == 11
+    await _all_permits_back(limit, 1)
+
+
+async def test_closing_gives_every_permit_back() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, latency=0.05, asynchronous=True)
+    for i in range(10):
+        fs.add_file(f"root/{i}/file")
+    limit = asyncio.Semaphore(4)
+    async with tree_walk(fs, "root", concurrency_limit=limit) as entries:
+        async for _ in entries:
+            break  # Listings in flight, and a waiter for the next permit.
+    await _all_permits_back(limit, 4)
 
 
 async def test_closing_cancels_listings_in_flight() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.05, asynchronous=True)
     for i in range(10):
         fs.add_file(f"root/{i}/file")
-    async with tree_walk(fs, "root", max_concurrency=10) as entries:
+    async with tree_walk(
+        fs, "root", concurrency_limit=asyncio.Semaphore(10)
+    ) as entries:
         async for _ in entries:
             break  # The root's first entry: its ten subfolders are now in flight.
     # None is left running, and those cancelled before they started were never sent.
@@ -173,7 +228,7 @@ async def test_cancel_yields_the_listings_in_flight() -> None:
     for i in range(10):
         fs.add_file(f"root/{i}/a")
         fs.add_file(f"root/{i}/b")
-    op = tree_walk(fs, "root", max_concurrency=4)
+    op = tree_walk(fs, "root", concurrency_limit=asyncio.Semaphore(4))
     names = []
     async for entry in op:
         names.append(entry["name"])
@@ -209,7 +264,9 @@ async def test_bottom_up_listings_come_after_their_subfolders() -> None:
     _tree(fs)
     folders = [
         lst.folder
-        async for lst in _listings(fs, "data", topdown=False, max_concurrency=2)
+        async for lst in _listings(
+            fs, "data", topdown=False, concurrency_limit=asyncio.Semaphore(2)
+        )
     ]
     assert folders[-1] == "data"
     for i, folder in enumerate(folders):
