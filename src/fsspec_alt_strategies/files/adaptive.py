@@ -371,6 +371,15 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
       any failure or cancellation while closing: the file is written whole, or
       not at all.
 
+    Closing stages the file, then publishes it. For a transaction, a
+    `~fsspec_alt_strategies.files.transaction.StagedTransaction` calls the two
+    steps apart, or drops what was staged:
+
+    - `_stage` uploads all but the request making the file visible: the parts,
+      but not the multipart upload's completion. A small file stays buffered.
+    - `_publish` completes the multipart upload, or uploads the small file.
+    - `_unstage` aborts the multipart upload, or drops the small file.
+
     Parameters
     ----------
     path : str
@@ -429,6 +438,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         self._pos = 0
         self._buffer = bytearray()
         self._multipart = False
+        # "open" for writing, then "staged", then "published" or "dropped".
+        self._state = "open"
+        self._parts: list[Any] = []
 
     @abstractmethod
     async def _upload_all(self, data: bytes) -> None:
@@ -476,6 +488,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     async def _write(self, data: Any) -> int:
         """Write bytes, as ``write`` does."""
         self._check_open()
+        self._check_writing()
         self._raise_failed_upload()
         size = len(memoryview(data).cast("B"))
         self._buffer += data
@@ -483,21 +496,60 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         await self._upload_buffer(closing=False)
         return size
 
-    async def _close(self) -> None:
+    def _check_writing(self) -> None:
+        if self._state != "open":
+            raise ValueError(f"I/O operation on a {self._state} file: {self.path}")
+
+    async def _stage(self) -> None:
+        """Upload all but what makes the file visible, or abort on failure."""
+        self._check_open()
+        self._check_writing()
         try:
             self._raise_failed_upload()
-            await self._upload_buffer(closing=True)
-            if self._multipart:
-                parts = await asyncio.gather(*(r.task for r in self._requests.queue))
-                await self._complete_multipart_upload(list(parts))
+            if self._multipart or len(self._buffer) >= self.min_multipart_size:
+                await self._upload_buffer(closing=True)
+                tasks = [r.task for r in self._requests.queue]
+                self._parts = list(await asyncio.gather(*tasks))
         except BaseException:
-            if self._multipart:
-                await self._requests.cancel_all()
-                await self._abort_multipart_upload()
+            await self._unstage()
             raise
+        self._state = "staged"
+
+    async def _publish(self) -> None:
+        """Make the staged file visible, or abort on failure."""
+        if self._state != "staged":
+            raise ValueError(f"Publishing a {self._state} file: {self.path}")
+        try:
+            if self._multipart:
+                await self._complete_multipart_upload(self._parts)
+            else:
+                # Even an empty file is created.
+                await self._upload_all(bytes(self._buffer))
+        except BaseException:
+            await self._unstage()
+            raise
+        self._state = "published"
+        self._buffer = bytearray()
+
+    async def _unstage(self) -> None:
+        """Drop all written: abort the multipart upload, leaving no file."""
+        if self._state in ("published", "dropped"):
+            return
+        self._state = "dropped"
+        self._buffer = bytearray()
+        await self._requests.cancel_all()
+        if self._multipart:
+            await self._abort_multipart_upload()
+
+    async def _close(self) -> None:
+        try:
+            if self._state == "open":
+                await self._stage()
+            if self._state == "staged":
+                await self._publish()
         finally:
             self._buffer = bytearray()
-            await self._requests.cancel_all()
+            await super()._close()
 
     def _raise_failed_upload(self) -> None:
         if (error := self._requests.error) is not None:
@@ -507,11 +559,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         """Upload the parts the buffer fills, or all of it when ``closing``."""
         buffer = self._buffer
         if not self._multipart and len(buffer) < self.min_multipart_size:
-            if closing:
-                # Even an empty file is created.
-                await self._upload_all(bytes(buffer))
-                buffer.clear()
-            return
+            return  # A small file, uploaded whole on publishing.
         block = _block_size(
             len(buffer) if closing else self._pos,
             self.min_block_size,

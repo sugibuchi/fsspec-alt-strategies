@@ -19,6 +19,7 @@
 | `.../files/`                    | Base classes for a filesystem's file objects, by what its storage allows. |
 | `.../files/adaptive.py`         | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts. |
 | `.../files/buffered.py`         | `LocallyBufferedFile`, for storages transferring only whole files. |
+| `.../files/transaction.py`      | Wrappers writing a file in a transaction, by strategy: a temporary path, a local buffer, or staging. |
 | `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, in the package's layout, with the shared fixtures in `tests/conftest.py`. |
@@ -269,6 +270,13 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 - How they split work is planned apart from the concurrency limit, which may be shared. `spread` is how many requests a large
   read or write is split into, and `max_readahead` caps the bytes read ahead.
 - They follow Python's file API, not the strategy API: errors are raised.
+- They know nothing of fsspec's transactions. How a file stays invisible until commit depends on the storage, so
+  `files/transaction.py` wraps a file in a strategy for it. A filesystem's `_open` returns the wrapper when
+  `autocommit` is False:
+  - `TempPathTransaction` writes to a hidden temporary path, renamed on commit;
+  - `LocalBufferTransaction` writes to a local buffer, written to the file on commit;
+  - `StagedTransaction` has the file upload all but what makes it visible. A file supports it with three private
+    steps, `_stage`, `_publish` and `_unstage`, which closing runs as stage then publish.
 
 ### Observable and cancellable
 

@@ -1,0 +1,244 @@
+"""Tests of `files.transaction`, alone and in fsspec's own transactions."""
+
+from __future__ import annotations
+
+from typing import IO, Any
+
+import pytest
+
+from fsspec_alt_strategies.files.adaptive import AdaptiveWritableFile
+from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
+from fsspec_alt_strategies.files.transaction import (
+    LocalBufferTransaction,
+    StagedTransaction,
+    TempPathTransaction,
+)
+from fsspec_alt_strategies.testing import SimulatedFileSystem
+
+_KiB = 1024
+
+
+class _Parts(AdaptiveWritableFile):
+    """Writes to a `SimulatedFileSystem` in parts, visible only once completed."""
+
+    def __init__(self, fs: SimulatedFileSystem, path: str) -> None:
+        super().__init__(
+            path,
+            fs.loop,
+            min_block_size=4 * _KiB,
+            max_block_size=8 * _KiB,
+            min_multipart_size=4 * _KiB,
+        )
+        self.fs = fs
+        self.parts: dict[int, bytes] = {}
+        self.aborted = False
+
+    async def _upload_all(self, data: bytes) -> None:
+        await self.fs._pipe_file(self.path, data)
+
+    async def _start_multipart_upload(self) -> None:
+        pass
+
+    async def _upload_part(
+        self, data: bytes, start: int, end: int, index: int, last: bool
+    ) -> Any:
+        self.parts[index] = data
+        return index
+
+    async def _complete_multipart_upload(self, parts: list[Any]) -> None:
+        await self.fs._pipe_file(self.path, b"".join(self.parts[i] for i in parts))
+
+    async def _abort_multipart_upload(self) -> None:
+        self.aborted = True
+
+
+class _Whole(LocallyBufferedFile):
+    """A file of a `SimulatedFileSystem` read and written whole."""
+
+    def __init__(self, fs: SimulatedFileSystem, path: str, mode: str) -> None:
+        super().__init__(path, fs.loop, mode)
+        self.fs = fs
+
+    async def _download(self, target: IO[bytes]) -> None:
+        target.write(await self.fs._cat_file(self.path))
+
+    async def _upload(self, source: IO[bytes]) -> None:
+        await self.fs._pipe_file(self.path, source.read())
+
+    async def _exists(self) -> bool:
+        return await self.fs._exists(self.path)
+
+
+@pytest.fixture
+def fs() -> SimulatedFileSystem:
+    # A sync filesystem: the wrappers' methods wait on its loop.
+    return SimulatedFileSystem(hierarchical=True)
+
+
+_BIG = b"x" * (20 * _KiB)  # Uploaded in parts.
+
+
+def test_temp_path_is_renamed_on_commit(fs: SimulatedFileSystem) -> None:
+    f = TempPathTransaction(fs, "data/f.bin", lambda p: _Parts(fs, p))
+    f.write(_BIG)
+    f.close()
+    # Written in full, but at a hidden path beside it.
+    assert not fs.exists("data/f.bin")
+    assert fs.cat_file(f.temp_path) == _BIG
+    assert f.temp_path.startswith("data/.f.bin.")
+    f.commit()
+    assert fs.cat_file("data/f.bin") == _BIG
+    assert not fs.exists(f.temp_path)
+
+
+def test_temp_path_is_deleted_on_discard(fs: SimulatedFileSystem) -> None:
+    f = TempPathTransaction(fs, "f.bin", lambda p: _Parts(fs, p))
+    f.write(b"abc")
+    f.discard()
+    assert fs.ls("", detail=False) == []
+    # Discarded before a write, the temporary file never existed.
+    TempPathTransaction(fs, "g.bin", lambda p: _Parts(fs, p)).discard()
+
+
+def test_temp_path_uses_the_rename_given(fs: SimulatedFileSystem) -> None:
+    renamed = []
+
+    async def rename(source: str, destination: str) -> None:
+        renamed.append((source, destination))
+        await fs._cp_file(source, destination)
+        await fs._rm_file(source)
+
+    f = TempPathTransaction(fs, "f.bin", lambda p: _Parts(fs, p), rename=rename)
+    f.write(b"abc")
+    f.commit()  # Closes it first.
+    assert renamed == [(f.temp_path, "f.bin")]
+    assert fs.cat_file("f.bin") == b"abc"
+
+
+def test_local_buffer_sends_nothing_before_commit(fs: SimulatedFileSystem) -> None:
+    f = LocalBufferTransaction("f.bin", lambda p: _Parts(fs, p))
+    f.write(_BIG)
+    f.seek(0)
+    assert f.read(3) == b"xxx"  # The buffer's, not the file's.
+    f.close()
+    assert fs.stats.calls == {}
+    f.commit()
+    assert fs.cat_file("f.bin") == _BIG
+
+    fs.reset_stats()
+    g = LocalBufferTransaction("g.bin", lambda p: _Parts(fs, p))
+    g.write(b"abc")
+    g.discard()
+    assert fs.stats.calls == {}
+
+
+def test_local_buffer_appends_in_the_mode_given(fs: SimulatedFileSystem) -> None:
+    fs.pipe_file("f.bin", b"old,")
+    f = LocalBufferTransaction("f.bin", lambda p: _Whole(fs, p, "ab"))
+    f.write(b"new")
+    f.commit()
+    assert fs.cat_file("f.bin") == b"old,new"
+
+
+def test_staged_multipart_is_completed_on_commit(fs: SimulatedFileSystem) -> None:
+    file = _Parts(fs, "f.bin")
+    f = StagedTransaction(file)
+    f.write(_BIG)
+    f.close()
+    # The parts are uploaded, but the upload is not completed.
+    assert file.parts
+    assert not fs.exists("f.bin")
+    f.commit()
+    assert fs.cat_file("f.bin") == _BIG
+    assert file.closed
+
+
+def test_staged_multipart_is_aborted_on_discard(fs: SimulatedFileSystem) -> None:
+    file = _Parts(fs, "f.bin")
+    f = StagedTransaction(file)
+    f.write(_BIG)
+    f.close()
+    f.discard()
+    assert file.aborted
+    assert not fs.exists("f.bin")
+
+
+def test_staged_small_files_wait_for_commit(fs: SimulatedFileSystem) -> None:
+    for file in (_Parts(fs, "a.bin"), _Whole(fs, "b.bin", "wb")):
+        f = StagedTransaction(file)
+        f.write(b"abc")
+        f.close()
+        assert not fs.exists(file.path)
+        f.commit()
+        assert fs.cat_file(file.path) == b"abc"
+
+
+def test_staged_exclusive_creation_fails_on_first_use(fs: SimulatedFileSystem) -> None:
+    fs.pipe_file("f.bin", b"old")
+    f = StagedTransaction(_Whole(fs, "f.bin", "xb"))
+    with pytest.raises(FileExistsError):
+        f.write(b"new")
+    f.discard()
+    assert fs.cat_file("f.bin") == b"old"
+
+
+def test_an_exception_in_the_block_discards(fs: SimulatedFileSystem) -> None:
+    file = _Parts(fs, "f.bin")
+    with pytest.raises(RuntimeError), StagedTransaction(file) as f:
+        f.write(_BIG)
+        raise RuntimeError("failed midway")
+    assert file.aborted
+    with pytest.raises(ValueError, match="discarded"):
+        f.commit()
+
+
+def test_commit_and_discard_settle_once(fs: SimulatedFileSystem) -> None:
+    f = StagedTransaction(_Parts(fs, "f.bin"))
+    f.write(b"abc")
+    f.commit()
+    f.commit()  # Already committed: nothing more.
+    with pytest.raises(ValueError, match="committed"):
+        f.discard()
+    with pytest.raises(ValueError, match="closed"):
+        f.write(b"more")
+
+
+class _TransactionalFS(SimulatedFileSystem):
+    """Opens files for writing in the strategy set, inside fsspec's transactions."""
+
+    strategy = "staged"
+
+    def _open(
+        self, path: str, mode: str = "rb", autocommit: bool = True, **kwargs: Any
+    ) -> Any:
+        path = self._strip_protocol(path)
+        if autocommit:
+            return _Parts(self, path)
+        if self.strategy == "temp":
+            return TempPathTransaction(self, path, lambda p: _Parts(self, p))
+        if self.strategy == "buffer":
+            return LocalBufferTransaction(path, lambda p: _Parts(self, p))
+        return StagedTransaction(_Parts(self, path))
+
+
+@pytest.mark.parametrize("strategy", ["temp", "buffer", "staged"])
+def test_in_fsspec_transactions(strategy: str) -> None:
+    fs = _TransactionalFS(hierarchical=True)
+    fs.strategy = strategy
+    with fs.transaction:
+        for name in ("a", "b"):
+            with fs.open(f"out/{name}.bin", "wb") as f:
+                f.write(_BIG)
+        # Nothing is visible before the transaction ends.
+        assert not fs.exists("out/a.bin")
+    assert fs.cat_file("out/a.bin") == fs.cat_file("out/b.bin") == _BIG
+
+    with pytest.raises(RuntimeError), fs.transaction:
+        with fs.open("out/c.bin", "wb") as f:
+            f.write(_BIG)
+        raise RuntimeError("the transaction failed")
+    assert fs.ls("out", detail=False) == ["out/a.bin", "out/b.bin"]
+
+    with fs.open("out/d.bin", "wb") as f:  # No transaction: written at once.
+        f.write(b"d")
+    assert fs.cat_file("out/d.bin") == b"d"
