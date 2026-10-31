@@ -9,7 +9,7 @@ from typing import IO, Any
 
 import pytest
 
-from fsspec_alt_strategies.file import LocallyBufferedFile
+from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.testing import SimulatedFileSystem
 
 

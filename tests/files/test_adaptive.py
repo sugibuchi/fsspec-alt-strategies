@@ -1,4 +1,4 @@
-"""Tests of the adaptive file objects, on `SimulatedFileSystem`."""
+"""Tests of `files.adaptive`, on `SimulatedFileSystem`."""
 
 from __future__ import annotations
 
@@ -11,8 +11,11 @@ from typing import Any
 
 import pytest
 
-from fsspec_alt_strategies import file
-from fsspec_alt_strategies.file import AdaptiveReadableFile, AdaptiveWritableFile
+from fsspec_alt_strategies.files import adaptive
+from fsspec_alt_strategies.files.adaptive import (
+    AdaptiveReadableFile,
+    AdaptiveWritableFile,
+)
 from fsspec_alt_strategies.testing import SimulatedFileSystem
 
 _KiB = 1024
@@ -352,11 +355,7 @@ async def test_failed_part_aborts_the_upload(flat_fs: SimulatedFileSystem) -> No
 
 def test_the_base_class_is_not_public() -> None:
     # The base class is machinery, and its name would suggest fsspec's own.
-    assert file.__all__ == [
-        "AdaptiveReadableFile",
-        "AdaptiveWritableFile",
-        "LocallyBufferedFile",
-    ]
+    assert adaptive.__all__ == ["AdaptiveReadableFile", "AdaptiveWritableFile"]
 
 
 async def test_a_shared_concurrency_limit_limits_files_together(

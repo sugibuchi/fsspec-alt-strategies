@@ -31,7 +31,7 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
 
 - Never use names suggesting ownership of fsspec's fundamentals, such as "base" or "core" packages of fsspec.
 - Each strategy is a stateless function taking a filesystem. Filesystem classes only wrap those functions. File
-  objects, in `file.py`, and `control.Operation` are the exceptions: see DEVELOPMENT.md's "File objects".
+  objects, in `files/`, and `control.Operation` are the exceptions: see DEVELOPMENT.md's "File objects".
 - A strategy calls only the filesystem's primitives, such as `_ls`, `_info` and `_rm_file`. It never calls another
   high-level method, such as `_find` or `_glob`: another strategy may have replaced it. A strategy needing another
   takes it as a parameter.

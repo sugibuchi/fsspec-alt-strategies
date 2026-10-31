@@ -16,7 +16,10 @@
 | `.../tree/mv.py`                | `tree_mv`, a recursive move: a copy deleting as it goes.       |
 | `.../tree/_jobs.py`             | The private engine running a strategy's jobs, e.g. deletions, while the walk goes on. |
 | `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
-| `.../file.py`                   | File objects whose buffering adapts to how they are read or written. |
+| `.../files/`                    | Base classes for a filesystem's file objects, by what its storage allows. |
+| `.../files/adaptive.py`         | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts. |
+| `.../files/buffered.py`         | `LocallyBufferedFile`, for storages transferring only whole files. |
+| `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, in the package's layout, with the shared fixtures in `tests/conftest.py`. |
 | `.github/workflows/ci.yaml`     | Lint and tests, on pull requests and pushes to `main`.         |
@@ -249,7 +252,7 @@ Strategies target `AsyncFileSystem` first. Sync filesystems may get some feature
 
 File objects are, with `Operation`, the places for classes, as a file keeps state between calls.
 
-- `file.py` has abstract classes, by what the storage allows. A filesystem subclasses one, implements its requests,
+- `files/` has abstract classes, by what the storage allows. A filesystem subclasses one, implements its requests,
   and returns it from `_open`. Their base classes are private: their names must not suggest fsspec's own.
   - `AdaptiveReadableFile` and `AdaptiveWritableFile` are for storages reading byte ranges and writing in parts.
   - `LocallyBufferedFile` is for storages transferring only whole files: one download, local reads and writes, and
