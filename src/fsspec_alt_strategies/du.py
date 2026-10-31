@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """The size of a tree, from its listings alone.
 
-`tree_du` is an alternative to fsspec's ``_du`` with ``total=True``. fsspec's
-finds the files, then asks each file's size with a request of its own.
-`tree_du` adds up the sizes the listings already give.
+`du` is an alternative to fsspec's ``_du`` with ``total=True``. fsspec's finds
+the files, then asks each file's size with a request of its own. `du` adds up
+the sizes the listings already give.
 
 This module depends on `control` and `walk`.
 """
@@ -15,20 +15,20 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .control import Result, State, _finish, _report
+from .control import State, _finish, _report
 from .walk import _listings
 
 if TYPE_CHECKING:
     from fsspec.asyn import AsyncFileSystem
 
-    from .control import Callback
+    from .control import Callback, Stop
 
-__all__ = ["DuResult", "DuState", "tree_du"]
+__all__ = ["DuState", "du"]
 
 
 @dataclass(frozen=True, kw_only=True)
 class DuState(State):
-    """The state of a `tree_du`, as its callback gets it.
+    """The state of a `du`, as its callback gets it.
 
     Attributes
     ----------
@@ -45,39 +45,20 @@ class DuState(State):
     size: int = 0
 
 
-@dataclass(kw_only=True)
-class DuResult(Result):
-    """The size of a tree, as a `tree_du` measured it.
-
-    Attributes
-    ----------
-    files : int
-        The files counted.
-    folders : int
-        The folders listed, ``path`` and those that failed included.
-    size : int
-        The files' total size, in bytes. It is what fsspec's ``_du`` returns.
-    """
-
-    files: int = 0
-    folders: int = 0
-    size: int = 0
-
-
-async def tree_du(
+async def du(
     fs: AsyncFileSystem,
     path: str,
     *,
     maxdepth: int | None = None,
     batch_size: int | None = None,
     callback: Callback[DuState] | None = None,
-) -> DuResult:
+) -> tuple[int, list[Exception]]:
     """Measure a tree's size from its listings, listing several folders at a time.
 
     It assumes that ``_ls`` gives each file's size, as fsspec's filesystems do.
     A missing ``path`` measures nothing, as with fsspec's ``_du``. A file
-    measures itself. A folder that fails to list is in ``errors``, and the
-    rest of the tree is still measured.
+    measures itself. A folder that fails to list adds its error, and the rest
+    of the tree is still measured.
 
     It wins over fsspec's ``_du`` on any storage, as it sends no ``_info`` per
     file. On object stores, which list a whole tree in one paginated request,
@@ -85,7 +66,7 @@ async def tree_du(
     requests still.
 
     For each file's size, as fsspec's ``_du`` gives with ``total=False``, use
-    `tree_find`: each of its entries has its ``size``.
+    `find`: each of its entries has its ``size``.
 
     Requests: one ``_ls`` per folder, at most ``batch_size`` at a time. One
     ``_info`` for ``path``, if a file.
@@ -110,8 +91,10 @@ async def tree_du(
 
     Returns
     -------
-    DuResult
-        The size, the counts, and the folders that failed.
+    size : int
+        The files' total size, in bytes. It is what fsspec's ``_du`` returns.
+    errors : list of Exception
+        The error of each folder that failed to list, in the order they failed.
 
     Raises
     ------
@@ -123,45 +106,44 @@ async def tree_du(
     See Also
     --------
     iwalk : The walk under it.
-    tree_find : The size of each file.
+    find : The size of each file.
 
     Examples
     --------
-    >>> result = await tree_du(fs, "data", batch_size=32)
-    >>> result.size, result.files
-    (73400320, 70)
+    >>> await du(fs, "data", batch_size=32)
+    (73400320, [])
     """
     root = fs._strip_protocol(path)
-    result = DuResult()
+    size = files = folders = 0
+    errors: list[Exception] = []
+    stop: Stop | None = None
     try:
         async with aclosing(
             _listings(fs, root, maxdepth=maxdepth, batch_size=batch_size)
         ) as listings:
             async for listing in listings:
-                result.folders += 1
+                folders += 1
                 if listing.error is not None:
-                    result.errors[listing.folder] = listing.error
+                    errors.append(listing.error)
                 for entry in listing.entries:
                     if entry["type"] != "directory":
-                        result.files += 1
-                        result.size += entry.get("size") or 0
+                        files += 1
+                        size += entry.get("size") or 0
                 state = DuState(
-                    errors=len(result.errors),
+                    errors=len(errors),
                     current=listing.folder,
-                    folders_listed=result.folders,
-                    files=result.files,
-                    size=result.size,
+                    folders_listed=folders,
+                    files=files,
+                    size=size,
                 )
                 if (stop := await _report(callback, state)) is not None:
-                    result.stop = stop
                     break
     except FileNotFoundError:
-        if result.folders:
+        if folders:
             raise
         # As fsspec's _du: a missing path measures nothing.
     except NotADirectoryError:
-        if result.folders:
+        if folders:
             raise
-        result.files = 1
-        result.size = (await fs._info(root)).get("size") or 0
-    return _finish(result)
+        size = (await fs._info(root)).get("size") or 0
+    return _finish((size, errors), stop, errors)

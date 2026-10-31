@@ -1,4 +1,4 @@
-"""Tests of `control`: `Stop`, results, and how callbacks are called."""
+"""Tests of `control`: `Stop`, how callbacks are called, and stopping."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import pytest
 
 from fsspec_alt_strategies.control import (
     OperationStopped,
-    Result,
     State,
     Stop,
     _finish,
@@ -47,38 +46,25 @@ async def test_report_refuses_other_answers(answer: object) -> None:
         await _report(lambda _: answer, State())
 
 
-def test_result_complete() -> None:
-    assert Result().complete
-    assert not Result(stop=Stop()).complete
-    assert not Result(errors={"a": OSError("a")}).complete
-
-
-def test_raise_for_errors() -> None:
-    Result().raise_for_errors()
-    error = PermissionError("a")
-    with pytest.raises(ExceptionGroup) as info:
-        Result(errors={"a": error}).raise_for_errors()
-    assert info.value.exceptions == (error,)
-
-
 def test_finish_returns_unless_asked_to_raise() -> None:
-    for result in (Result(), Result(stop=Stop()), Result(errors={"a": OSError()})):
-        assert _finish(result) is result
+    result = ([], [])
+    for stop, errors in ((None, []), (Stop(), []), (None, [OSError()])):
+        assert _finish(result, stop, errors) is result
 
 
 def test_finish_raises_with_the_result_and_the_errors() -> None:
     error = PermissionError("a")
-    result = Result(
-        stop=Stop(raise_error=True, reason="fail fast"), errors={"a": error}
-    )
+    result = ([], [error])
+    stop = Stop(raise_error=True, reason="fail fast")
     with pytest.raises(OperationStopped, match="fail fast") as info:
-        _finish(result)
+        _finish(result, stop, [error])
     assert info.value.result is result
+    assert info.value.stop is stop
     assert isinstance(info.value.__cause__, ExceptionGroup)
     assert info.value.__cause__.exceptions == (error,)
 
 
 def test_finish_raises_without_errors() -> None:
     with pytest.raises(OperationStopped) as info:
-        _finish(Result(stop=Stop(raise_error=True)))
+        _finish(([], []), Stop(raise_error=True), [])
     assert info.value.__cause__ is None

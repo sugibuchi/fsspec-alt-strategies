@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """A glob that lists only the folders its pattern can match in.
 
-`tree_glob` is an alternative to fsspec's ``_glob``, with the same answers.
+`glob` is an alternative to fsspec's ``_glob``, with the same answers.
 fsspec's finds every path under the pattern's literal root, as deep as the
-pattern goes, then filters them with a regular expression. `tree_glob` walks
+pattern goes, then filters them with a regular expression. `glob` walks
 the tree as `iwalk` does, and lists a folder only if the pattern can match in
 it.
 
@@ -13,8 +13,8 @@ A ``**`` matches any number of segments, so only those before the first ``**``
 can rule a folder out. Without a ``**``, nor can a folder as deep as the
 pattern, as nothing below it can match.
 
-`itree_glob` is the same search as an async iterator, so that the matches can
-be worked on as they arrive. `tree_glob` collects them.
+`iglob` is the same search as an async iterator, so that the matches can
+be worked on as they arrive. `glob` collects them.
 
 This module depends on `walk`.
 """
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
     from .walk import _Listing
 
-__all__ = ["itree_glob", "tree_glob"]
+__all__ = ["glob", "iglob"]
 
 
 class _Prefix:
@@ -58,7 +58,7 @@ class _Prefix:
         return all(s.match(n) for s, n in zip(self.segments, relative, strict=False))
 
 
-async def tree_glob(
+async def glob(
     fs: AsyncFileSystem,
     path: str,
     *,
@@ -77,14 +77,14 @@ async def tree_glob(
     leaves folders out after its first wildcard, e.g. ``data/*/2024/*.parquet``.
     fsspec's ``_glob`` then lists every folder under ``data`` as deep as the
     pattern goes. It loses on object stores, which list a whole tree in one
-    paginated request, and gains nothing over `tree_find` with patterns such as
+    paginated request, and gains nothing over `find` with patterns such as
     ``data/**/*.parquet``, which can match anywhere.
 
     Requests: one ``_ls`` per folder the pattern can match in, at most
     ``batch_size`` at a time. One ``_info`` for a pattern without wildcards, or
     one matching its literal root folder itself, e.g. ``data/**``.
 
-    It takes no callback: `itree_glob` serves callers wanting to watch or stop
+    It takes no callback: `iglob` serves callers wanting to watch or stop
     the search.
 
     Parameters
@@ -115,18 +115,18 @@ async def tree_glob(
 
     See Also
     --------
-    itree_glob : The same search, as an async iterator.
-    tree_find : Every path in a tree.
+    iglob : The same search, as an async iterator.
+    find : Every path in a tree.
 
     Examples
     --------
-    >>> entries, errors = await tree_glob(fs, "data/*/2024/*.parquet")
+    >>> entries, errors = await glob(fs, "data/*/2024/*.parquet")
     >>> [e["name"] for e in entries], errors
     (['data/sales/2024/part-0.parquet'], [])
     """
     found: dict[str, dict[str, Any]] = {}
     errors: list[Exception] = []
-    async for match in itree_glob(
+    async for match in iglob(
         fs, path, maxdepth=maxdepth, withdirs=withdirs, batch_size=batch_size
     ):
         if isinstance(match, Exception):
@@ -138,7 +138,7 @@ async def tree_glob(
     return [found[name] for name in sorted(found)], errors
 
 
-async def itree_glob(
+async def iglob(
     fs: AsyncFileSystem,
     path: str,
     *,
@@ -148,7 +148,7 @@ async def itree_glob(
 ) -> AsyncIterator[dict[str, Any] | Exception]:
     """Yield the paths matching a glob pattern, listing only folders it can match in.
 
-    It matches and prunes as `tree_glob` does, with the same requests. It yields
+    It matches and prunes as `glob` does, with the same requests. It yields
     each match as its folder's listing arrives, so the matches are not in
     order. A folder that fails to list yields its error, and the rest is still
     searched.
@@ -183,13 +183,13 @@ async def itree_glob(
 
     See Also
     --------
-    tree_glob : The same search, collected and sorted.
+    glob : The same search, collected and sorted.
     iwalk : The walk under it.
 
     Examples
     --------
     >>> from contextlib import aclosing
-    >>> async with aclosing(itree_glob(fs, "data/*/2024/*.parquet")) as matches:
+    >>> async with aclosing(iglob(fs, "data/*/2024/*.parquet")) as matches:
     ...     async for match in matches:
     ...         if isinstance(match, Exception):
     ...             raise match
@@ -229,7 +229,7 @@ async def itree_glob(
 
 
 class _Search:
-    """One `tree_glob` call: the pattern, split and compiled."""
+    """One `glob` call: the pattern, split and compiled."""
 
     def __init__(
         self,

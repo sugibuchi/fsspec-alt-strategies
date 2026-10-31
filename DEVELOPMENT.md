@@ -5,12 +5,12 @@
 | Path                            | Contents                                                       |
 |---------------------------------|----------------------------------------------------------------|
 | `src/fsspec_alt_strategies/`    | The package.                                                   |
-| `.../control.py`                | `Stop`, `OperationStopped`, `Result`, `State`: the strategy API. |
+| `.../control.py`                | `Stop`, `OperationStopped`, `State`: the strategy API.         |
 | `.../walk.py`                   | `iwalk`, the concurrent folder walk under the tree strategies. |
-| `.../find.py`                   | `tree_find`, a find listing several folders at a time.         |
-| `.../du.py`                     | `tree_du`, a tree's size from its listings alone.              |
-| `.../glob.py`                   | `tree_glob` and `itree_glob`, a glob listing only the folders it can match in. |
-| `.../rm.py`                     | `tree_rm`, a recursive delete that deletes while it walks.     |
+| `.../find.py`                   | `find` and `ifind`, a find listing several folders at a time.  |
+| `.../du.py`                     | `du`, a tree's size from its listings alone.                   |
+| `.../glob.py`                   | `glob` and `iglob`, a glob listing only the folders it can match in. |
+| `.../rm.py`                     | `rm` and `irm`, a recursive delete that deletes while it walks. |
 | `.../file.py`                   | File objects whose buffering adapts to how they are read or written. |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, with the shared fixtures in `tests/conftest.py`.    |
@@ -90,7 +90,7 @@ A strategy is an async function. The filesystem comes first, then the operation'
 options:
 
 ```python
-result = await tree_rm(fs, "data/2024", batch_size=32, callback=on_progress)
+deleted, errors = await rm(fs, "data/2024", batch_size=32, callback=on_progress)
 ```
 
 - `batch_size` caps the calls running at a time, as in fsspec. None takes fsspec's default.
@@ -105,7 +105,10 @@ Developers attach a strategy by overriding the fsspec method themselves, in a li
 class MyFileSystem(AsyncFileSystem):
     async def _rm(self, path, recursive=False, **kwargs):
         if recursive:
-            return await tree_rm(self, path, batch_size=32)
+            deleted, errors = await rm(self, path, batch_size=32)
+            if errors:
+                raise ExceptionGroup("rm failed", errors)
+            return
         return await super()._rm(path, recursive=recursive, **kwargs)
 ```
 
@@ -134,7 +137,7 @@ strategy's docstring says what its steps are, e.g. a folder listed or a batch de
   default, which keeps what is done.
 - `raise_error`: whether the strategy raises `OperationStopped` once stopped, instead of returning. False by default,
   which returns the partial result.
-- `reason`: an optional text, kept in the result for logs and messages.
+- `reason`: an optional text for logs and messages, in `OperationStopped`'s message.
 
 Each strategy's docstring says what `cleanup` undoes for it. Work that cannot be undone, such as a deletion, is kept.
 A strategy never leaves a partly written file, with or without `cleanup`. New options are added to `Stop` with
@@ -142,40 +145,38 @@ defaults, so that callbacks keep working.
 
 #### Results
 
-Without a stop, a strategy returns a result object, even when some paths fail. A stop returns the partial result, or
-raises it, as its `raise_error` says:
+A strategy returns plain values, not a result class: a tuple of what it did and a list of the errors. Examples:
+
+- `find` returns the `_ls` entries found, sorted, and the errors.
+- `du` returns the size, and the errors.
+- `rm` returns the paths deleted, and the errors.
+
+It returns even when some paths fail. A stop returns the partial tuple, or raises it, as its `raise_error` says:
 
 ```python
 def on_progress(state):
     if user_pressed_cancel:
-        return Stop()                   # tree_rm returns, with result.complete False
+        return Stop()                   # rm returns what it deleted so far
     if state.errors:
-        return Stop(raise_error=True)   # tree_rm raises OperationStopped: fail fast
+        return Stop(raise_error=True)   # rm raises OperationStopped: fail fast
 ```
 
-A result has these fields:
+`OperationStopped` carries the partial tuple as its `result`, and the `Stop` as its `stop`. When paths have failed, it
+is raised from their `ExceptionGroup`, so tracebacks show them.
 
-- `complete` is False after a stop or a failure.
-- `stop` is the `Stop` a callback returned, or None.
-- `errors` maps each failed path to its exception.
-- `raise_for_errors()` raises them as an `ExceptionGroup`, for callers that want an exception.
-- Each strategy's result adds its own fields, e.g. the files deleted.
-
-`OperationStopped` carries the partial result as its `result`. When paths have failed, it is raised from their
-`ExceptionGroup`, so tracebacks show them.
-
-Errors on single paths are recorded, never raised on their own. A caller wanting to fail fast stops from the callback,
+Errors on single paths are collected, never raised on their own. A caller wanting to fail fast stops from the callback,
 as the state counts the errors so far.
 
-The walk and the glob are the exceptions to this API:
+#### Iterators
 
-- `iwalk` and `itree_glob` are async iterators that the caller drives, with no callback. Breaking out of the loop stops
-  them.
-- They yield each `_ls` entry found, and each folder's error as an exception object, mixed in one stream.
-- `tree_glob` collects `itree_glob`. It returns the entries matched, sorted, and the errors, as a tuple.
+Strategies that find or change paths one by one also come as async iterators, named with an `i`: `iwalk`, `ifind`,
+`iglob` and `irm`.
 
-The other tree strategies use the walk's private engine, `_listings`, which yields each folder's listing. They report
-and stop as above.
+- The caller drives them, with no callback. Breaking out of the loop stops them.
+- They yield each path or `_ls` entry, and each error as an exception object, mixed in one stream.
+- `glob` takes no callback either: `iglob` serves callers wanting to watch or stop it.
+
+The tree strategies use the walk's private engine, `_listings`, which yields each folder's listing.
 
 `iwalk` is meant to replace fsspec's `walk`, so it already has two of its options:
 
@@ -185,6 +186,8 @@ and stop as above.
 
 Cancelling the task itself, e.g. with `asyncio.timeout`, raises `CancelledError` as usual. The strategy then cleans up
 and never swallows it, but the partial result is lost.
+
+Errors are listed without their paths. Most of fsspec's errors name the path in their message.
 
 ### Copied, not only installed
 

@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""Observing and stopping strategies: callbacks, `Stop`, and results.
+"""Observing and stopping strategies: callbacks and `Stop`.
 
 Every strategy reports its progress the same way. Its ``callback`` is called
 with a state after each step, and may return a `Stop` to cancel it. The strategy
-then returns a `Result`, or raises `OperationStopped` if the `Stop` asks for it.
+then returns what it did so far, or raises `OperationStopped` if the `Stop` asks
+for it.
 
 This module depends on nothing else in the package.
 """
@@ -13,10 +14,10 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from typing import TypeVar
+from dataclasses import dataclass
+from typing import Any, TypeVar
 
-__all__ = ["Callback", "OperationStopped", "Result", "State", "Stop"]
+__all__ = ["Callback", "OperationStopped", "State", "Stop"]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -36,7 +37,7 @@ class Stop:
         Whether the strategy raises `OperationStopped` once stopped. Otherwise,
         it returns its partial result.
     reason : str, optional
-        Why the operation was stopped, kept in the result for logs and messages.
+        Why the operation was stopped, for logs and messages.
 
     Examples
     --------
@@ -69,6 +70,7 @@ class State:
 
 
 S = TypeVar("S", bound=State)
+R = TypeVar("R")
 
 Callback = Callable[[S], Stop | Awaitable[Stop | None] | None]
 """A strategy's callback: a plain or async function of its state.
@@ -78,42 +80,6 @@ return quickly.
 """
 
 
-@dataclass(kw_only=True)
-class Result:
-    """What a strategy did, even when stopped or when some paths failed.
-
-    Each strategy's result adds its own fields, e.g. the files deleted.
-
-    Attributes
-    ----------
-    stop : Stop, optional
-        The `Stop` a callback returned, if any.
-    errors : dict of str to Exception
-        Each path that failed, with its error.
-    """
-
-    stop: Stop | None = None
-    errors: dict[str, Exception] = field(default_factory=dict)
-
-    @property
-    def complete(self) -> bool:
-        """Whether the operation ran to its end without failures."""
-        return self.stop is None and not self.errors
-
-    def raise_for_errors(self) -> None:
-        """Raise the paths' errors, if any, as one exception.
-
-        Raises
-        ------
-        ExceptionGroup
-            Of the errors in `errors`.
-        """
-        if self.errors:
-            raise ExceptionGroup(
-                f"{len(self.errors)} path(s) failed", list(self.errors.values())
-            )
-
-
 class OperationStopped(Exception):
     """Raised by a strategy that a callback stopped with ``Stop(raise_error=True)``.
 
@@ -121,14 +87,17 @@ class OperationStopped(Exception):
 
     Attributes
     ----------
-    result : Result
-        What the strategy did before it stopped.
+    result : tuple
+        What the strategy did before it stopped, as it would have returned it.
+    stop : Stop
+        The `Stop` the callback returned.
     """
 
-    def __init__(self, result: Result) -> None:
-        reason = result.stop.reason if result.stop else None
+    def __init__(self, result: Any, stop: Stop) -> None:
+        reason = stop.reason
         super().__init__(f"Stopped: {reason}" if reason else "Stopped")
         self.result = result
+        self.stop = stop
 
 
 async def _report(callback: Callback[S] | None, state: S) -> Stop | None:
@@ -144,13 +113,11 @@ async def _report(callback: Callback[S] | None, state: S) -> Stop | None:
     raise TypeError(f"A callback must return None or a Stop, not {answer!r}")
 
 
-def _finish(result: Result) -> Result:
+def _finish(result: R, stop: Stop | None, errors: list[Exception]) -> R:
     """Return a strategy's result, or raise it, as its stop asks."""
-    if result.stop is not None and result.stop.raise_error:
+    if stop is not None and stop.raise_error:
         cause = None
-        if result.errors:
-            cause = ExceptionGroup(
-                f"{len(result.errors)} path(s) failed", list(result.errors.values())
-            )
-        raise OperationStopped(result) from cause
+        if errors:
+            cause = ExceptionGroup(f"{len(errors)} path(s) failed", errors)
+        raise OperationStopped(result, stop) from cause
     return result

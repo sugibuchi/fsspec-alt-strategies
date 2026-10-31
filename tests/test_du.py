@@ -1,4 +1,4 @@
-"""Tests of `tree_du`, checked against fsspec's own ``_du``."""
+"""Tests of `du`, checked against fsspec's own ``_du``."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.control import Stop
-from fsspec_alt_strategies.du import DuState, tree_du
+from fsspec_alt_strategies.du import DuState, du
 
 if TYPE_CHECKING:
     from fsspec_alt_strategies.testing import SimulatedFileSystem
@@ -27,15 +27,13 @@ async def test_answers_as_fsspec(
     any_fs: SimulatedFileSystem, path: str, maxdepth: int | None
 ) -> None:
     _tree(any_fs)
-    result = await tree_du(any_fs, path, maxdepth=maxdepth)
     expected = await AsyncFileSystem._du(any_fs, path, maxdepth=maxdepth)
-    assert (result.complete, result.size) == (True, expected)
+    assert await du(any_fs, path, maxdepth=maxdepth) == (expected, [])
 
 
 async def test_sends_no_info_per_file(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    result = await tree_du(any_fs, "data")
-    assert (result.size, result.files, result.folders) == (221, 5, 7)
+    assert await du(any_fs, "data") == (221, [])
     assert any_fs.stats.calls == {"list": 7}
 
 
@@ -47,6 +45,5 @@ async def test_stop_returns_the_size_so_far(any_fs: SimulatedFileSystem) -> None
         states.append(state)
         return Stop()
 
-    result = await tree_du(any_fs, "data", callback=first_only)
-    assert (result.complete, result.size, result.files) == (False, 1, 1)
-    assert (states[0].size, states[0].folders_listed) == (1, 1)
+    assert await du(any_fs, "data", callback=first_only) == (1, [])
+    assert (states[0].size, states[0].files, states[0].folders_listed) == (1, 1, 1)

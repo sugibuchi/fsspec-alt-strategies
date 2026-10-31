@@ -39,11 +39,10 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
   - it is called as `await strategy(fs, ..., batch_size=..., callback=...)`;
   - a callback returning a `Stop`, e.g. `Stop(cleanup=True)`, cancels it, and any other value but None is a
     `TypeError`;
-  - it returns a result object recording errors per path, rather than raising them;
-  - only `Stop(raise_error=True)` makes it raise, `OperationStopped` with the partial result.
-- The walk and the glob are the exceptions, with no callback or `Result`:
-  - `iwalk` and `itree_glob` are async iterators the caller drives, yielding entries and exceptions;
-  - `tree_glob` returns a tuple of the entries matched and the errors.
+  - it returns a plain tuple of what it did and a list of the errors, rather than raising them: no result class;
+  - only `Stop(raise_error=True)` makes it raise, `OperationStopped` with the partial tuple.
+- The iterators, `iwalk`, `ifind`, `iglob` and `irm`, take no callback. The caller drives them, and they yield entries
+  or paths mixed with exceptions. `glob` takes no callback either.
 - The tree strategies walk with `walk._listings`, which is private: never expose its `_Listing`.
 - Never swallow `CancelledError`.
 - `__init__.py` re-exports nothing but `__version__`. Users import from each module, so a copy can leave out
