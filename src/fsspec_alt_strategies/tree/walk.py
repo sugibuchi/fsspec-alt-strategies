@@ -22,8 +22,6 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from fsspec.asyn import _get_batch_size
-
 from ..control import Operation, State
 
 if TYPE_CHECKING:
@@ -58,7 +56,7 @@ def tree_walk(
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
-    batch_size: int | None = None,
+    max_concurrency: int | None = None,
 ) -> Operation[dict[str, Any], WalkState]:
     """Walk a folder tree, listing several folders at a time.
 
@@ -81,7 +79,7 @@ def tree_walk(
     - with ``raise_on_error``, the error of the first folder that failed to
       list.
 
-    Requests: one ``_ls`` per folder walked, at most ``batch_size`` at a time.
+    Requests: one ``_ls`` per folder walked, at most ``max_concurrency`` at a time.
 
     Parameters
     ----------
@@ -100,8 +98,8 @@ def tree_walk(
     raise_on_error : bool
         Whether a folder that fails to list raises its error, ending the walk,
         rather than yielding it.
-    batch_size : int, optional
-        The most listings at a time. fsspec's default if None.
+    max_concurrency : int, optional
+        The most listings at a time. 32 if None.
 
     Returns
     -------
@@ -120,13 +118,14 @@ def tree_walk(
 
     Examples
     --------
-    >>> async with tree_walk(fs, "data", batch_size=16) as entries:
+    >>> async with tree_walk(fs, "data", max_concurrency=16) as entries:
     ...     async for entry in entries:
     ...         if isinstance(entry, Exception):
     ...             raise entry
     ...         print(entry["name"], entry["type"])
     """
     _check_maxdepth(maxdepth)
+    _max_concurrency(max_concurrency)
 
     async def run(
         op: Operation[dict[str, Any], WalkState],
@@ -138,7 +137,7 @@ def tree_walk(
             topdown=topdown,
             descend=descend,
             raise_on_error=raise_on_error,
-            batch_size=batch_size,
+            max_concurrency=max_concurrency,
             stopping=op.cancelling,
         )
         state = op.state
@@ -161,6 +160,26 @@ def tree_walk(
 def _check_maxdepth(maxdepth: int | None) -> None:
     if maxdepth is not None and maxdepth < 1:
         raise ValueError(f"maxdepth must be at least 1: {maxdepth}")
+
+
+_DEFAULT_MAX_CONCURRENCY = 32
+"""The most requests a tree strategy runs at a time, unless given another.
+
+fsspec's ``batch_size`` does not fit here. It is how many coroutines fsspec
+gathers at once, sized from the limit of open files, e.g. 1280. The requests
+of a tree strategy all go to one storage, so they need a limit of their own:
+high enough to hide each request's latency, and low enough not to be
+throttled.
+"""
+
+
+def _max_concurrency(max_concurrency: int | None) -> int:
+    """The most requests at a time: the one given, or the default."""
+    if max_concurrency is None:
+        return _DEFAULT_MAX_CONCURRENCY
+    if max_concurrency < 1:
+        raise ValueError(f"max_concurrency must be at least 1: {max_concurrency}")
+    return max_concurrency
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,7 +205,7 @@ async def _listings(
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
-    batch_size: int | None = None,
+    max_concurrency: int | None = None,
     stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[_Listing]:
     """Walk a folder tree as `tree_walk` does, yielding each folder's listing.
@@ -207,7 +226,7 @@ async def _listings(
     """
     _check_maxdepth(maxdepth)
     roots = {fs._strip_protocol(p) for p in ([path] if isinstance(path, str) else path)}
-    batch_size = batch_size or fs.batch_size or _get_batch_size(nofiles=True)
+    max_concurrency = _max_concurrency(max_concurrency)
     waiting: deque[tuple[str, int]] = deque()
     running: dict[asyncio.Task[list[dict[str, Any]]], tuple[str, int]] = {}
     bottom_up = None if topdown else _BottomUp()
@@ -215,7 +234,7 @@ async def _listings(
     def start() -> None:
         if stopping is not None and stopping():
             waiting.clear()
-        while waiting and len(running) < batch_size:
+        while waiting and len(running) < max_concurrency:
             folder, depth = waiting.popleft()
             running[asyncio.ensure_future(fs._ls(folder, detail=True))] = folder, depth
 
@@ -249,7 +268,7 @@ async def _scan(
     *,
     maxdepth: int | None = None,
     descend: Callable[[dict[str, Any]], bool] | None = None,
-    batch_size: int | None = None,
+    max_concurrency: int | None = None,
     stopping: Callable[[], object] | None = None,
     file_root: bool = False,
     folder_root: bool = False,
@@ -273,7 +292,7 @@ async def _scan(
             root,
             maxdepth=maxdepth,
             descend=descend,
-            batch_size=batch_size,
+            max_concurrency=max_concurrency,
             stopping=stopping,
         )
         async with aclosing(listings):

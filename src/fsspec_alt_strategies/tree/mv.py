@@ -22,6 +22,7 @@ from ..control import Operation, State
 from ..profile import _resolve
 from ._jobs import _Job
 from .cp import _Copy
+from .walk import _max_concurrency
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -60,7 +61,7 @@ def tree_mv(
     *,
     profile: StorageProfile | None = None,
     rm_folder: Callable[[str], Awaitable[Any]] | None = None,
-    batch_size: int | None = None,
+    max_concurrency: int | None = None,
 ) -> Operation[tuple[str, str], MvState]:
     """Move a folder and everything in it, moving while the tree is walked.
 
@@ -99,8 +100,8 @@ def tree_mv(
     ``path2`` is inside it.
 
     Requests: as `tree_cp`, with one ``_rm_file`` more per file, and one
-    ``rm_folder`` per folder. At most ``batch_size`` listings and
-    ``batch_size`` moves run at a time.
+    ``rm_folder`` per folder. At most ``max_concurrency`` listings and
+    ``max_concurrency`` moves run at a time.
 
     The profile's ``parents_required=False`` saves the ``_makedirs`` of each
     folder with files, as their copies create it.
@@ -118,9 +119,8 @@ def tree_mv(
         it has one.
     rm_folder : callable, optional
         An async function deleting an empty folder, as with `tree_rm`.
-    batch_size : int, optional
-        The most listings, and the most moves, at a time. fsspec's default if
-        None.
+    max_concurrency : int, optional
+        The most listings, and the most moves, at a time. 32 if None.
 
     Returns
     -------
@@ -142,10 +142,11 @@ def tree_mv(
     >>> op.state.files_moved
     1234
     """
+    _max_concurrency(max_concurrency)
     resolved = _resolve(fs, profile)
     return Operation(
         lambda op: _Move(
-            fs, path1, path2, resolved, rm_folder, batch_size, op
+            fs, path1, path2, resolved, rm_folder, max_concurrency, op
         ).outcomes(),
         MvState(),
     )
@@ -164,10 +165,10 @@ class _Move(_Copy):
         path2: str,
         profile: StorageProfile,
         rm_folder: Callable[[str], Awaitable[Any]] | None,
-        batch_size: int | None,
+        max_concurrency: int | None,
         op: Operation[Any, Any],
     ) -> None:
-        super().__init__(fs, path1, path2, profile, batch_size, op)
+        super().__init__(fs, path1, path2, profile, max_concurrency, op)
         self.rm_folder = rm_folder or getattr(fs, "_rmdir", None) or fs._rm_file
         self.folders_moved = 0
 

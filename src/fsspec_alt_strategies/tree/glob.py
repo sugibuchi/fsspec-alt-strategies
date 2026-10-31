@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec.utils import glob_translate
 
 from ..control import Operation, State
-from .walk import _scan
+from .walk import _max_concurrency, _scan
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -60,7 +60,7 @@ def tree_glob(
     *,
     maxdepth: int | None = None,
     withdirs: bool = True,
-    batch_size: int | None = None,
+    max_concurrency: int | None = None,
 ) -> Operation[dict[str, Any], GlobState]:
     """Find the paths matching a glob pattern, listing only folders it can match in.
 
@@ -84,7 +84,7 @@ def tree_glob(
     listings in flight.
 
     Requests: one ``_ls`` per folder the pattern can match in, at most
-    ``batch_size`` at a time. One ``_info`` for a pattern without wildcards, or
+    ``max_concurrency`` at a time. One ``_info`` for a pattern without wildcards, or
     one matching its literal root folder itself, e.g. ``data/**``.
 
     Parameters
@@ -97,8 +97,8 @@ def tree_glob(
         How deep a ``**`` goes, as with fsspec's ``_glob``. No limit by default.
     withdirs : bool
         Whether folders can match, as with fsspec's ``_glob``.
-    batch_size : int, optional
-        The most listings at a time. fsspec's default if None.
+    max_concurrency : int, optional
+        The most listings at a time. 32 if None.
 
     Returns
     -------
@@ -127,6 +127,7 @@ def tree_glob(
     """
     if maxdepth is not None and maxdepth < 1:
         raise ValueError("maxdepth must be at least 1")
+    _max_concurrency(max_concurrency)
     ends_with_sep = path.endswith("/")
     path = fs._strip_protocol(path)
     if not has_magic(path):
@@ -145,7 +146,7 @@ def tree_glob(
             root,
             maxdepth=search.depth,
             descend=search.descend,
-            batch_size=batch_size,
+            max_concurrency=max_concurrency,
             stopping=op.cancelling,
             folder_root=bool(root)
             and search.matched({"name": root, "type": "directory"}),

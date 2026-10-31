@@ -97,14 +97,16 @@ A strategy is a plain function returning an `Operation`. The filesystem comes fi
 then keyword-only options:
 
 ```python
-async with tree_rm(fs, "data/2024", batch_size=32) as op:
+async with tree_rm(fs, "data/2024", max_concurrency=32) as op:
     async for path in op:
         if isinstance(path, Exception):
             print("failed:", path)
 print(op.state.files_deleted)
 ```
 
-- `batch_size` caps the calls running at a time, as in fsspec. None takes fsspec's default.
+- `max_concurrency` caps the requests running at a time, 32 by default. It is not fsspec's `batch_size`, which is how
+  many coroutines fsspec gathers at once, sized from the limit of open files. Requests to one storage need a limit of
+  their own: high enough to hide each request's latency, and low enough not to be throttled.
 - Errors in the arguments, such as a bad `maxdepth`, are raised by the call.
 - Errors ending the whole operation are raised by the iteration, as fsspec raises them. An example is a missing root,
   which raises `FileNotFoundError`.
@@ -146,7 +148,7 @@ Developers attach a strategy by overriding the fsspec method themselves, in a fe
 class MyFileSystem(AsyncFileSystem):
     async def _rm(self, path, recursive=False, **kwargs):
         if recursive:
-            _, errors = await collect(tree_rm(self, path, batch_size=32))
+            _, errors = await collect(tree_rm(self, path, max_concurrency=32))
             if errors:
                 raise ExceptionGroup("rm failed", errors)
             return

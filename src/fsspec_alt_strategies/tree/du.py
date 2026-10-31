@@ -16,7 +16,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from ..control import Operation, State
-from .walk import _check_maxdepth, _scan
+from .walk import _check_maxdepth, _max_concurrency, _scan
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -51,7 +51,7 @@ def tree_du(
     path: str,
     *,
     maxdepth: int | None = None,
-    batch_size: int | None = None,
+    max_concurrency: int | None = None,
 ) -> Operation[dict[str, Any], DuState]:
     """Measure a tree's size from its listings, listing several folders at a time.
 
@@ -71,7 +71,7 @@ def tree_du(
 
     Once cancelled, it lists no new folder, and counts the listings in flight.
 
-    Requests: one ``_ls`` per folder, at most ``batch_size`` at a time. One
+    Requests: one ``_ls`` per folder, at most ``max_concurrency`` at a time. One
     ``_info`` for ``path``, if a file.
 
     Parameters
@@ -83,8 +83,8 @@ def tree_du(
     maxdepth : int, optional
         The deepest level to measure: 1 counts only the files in ``path``. No
         limit by default.
-    batch_size : int, optional
-        The most listings at a time. fsspec's default if None.
+    max_concurrency : int, optional
+        The most listings at a time. 32 if None.
 
     Returns
     -------
@@ -103,7 +103,7 @@ def tree_du(
 
     Examples
     --------
-    >>> async with tree_du(fs, "data", batch_size=32) as op:
+    >>> async with tree_du(fs, "data", max_concurrency=32) as op:
     ...     async for entry in op:
     ...         if isinstance(entry, Exception):
     ...             raise entry
@@ -111,6 +111,7 @@ def tree_du(
     (73400320, 70)
     """
     _check_maxdepth(maxdepth)
+    _max_concurrency(max_concurrency)
 
     async def run(
         op: Operation[dict[str, Any], DuState],
@@ -119,7 +120,7 @@ def tree_du(
             fs,
             path,
             maxdepth=maxdepth,
-            batch_size=batch_size,
+            max_concurrency=max_concurrency,
             stopping=op.cancelling,
             file_root=True,
         )

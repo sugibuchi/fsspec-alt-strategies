@@ -36,7 +36,7 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
   high-level method, such as `_find` or `_glob`: another strategy may have replaced it. A strategy needing another
   takes it as a parameter.
 - Every strategy follows DEVELOPMENT.md's "The strategy API":
-  - it is a plain function, `strategy(fs, ..., batch_size=...)`, returning an `Operation` that works as it is iterated;
+  - it is a plain function, `strategy(fs, ..., max_concurrency=...)`, returning an `Operation` that works as it is iterated;
   - the operation yields what it did mixed with exception objects, one per failed path, each noting its path;
   - it raises only errors ending the whole operation, such as a missing root;
   - its stopping mirrors `asyncio.Task`: `cancel()` starts nothing new but yields what is in flight, and `aclose()`

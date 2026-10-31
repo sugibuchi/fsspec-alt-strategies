@@ -4,7 +4,7 @@
 
 They walk the tree as tree_walk does, and start their jobs, e.g. deleting a
 file, as each folder's listing arrives. `_Jobs` runs both at once, up to
-``batch_size`` jobs at a time, and yields what each step did. A subclass says
+``max_concurrency`` jobs at a time, and yields what each step did. A subclass says
 what a listing queues, how a job runs, and what its outcome is.
 
 A glob pattern is expanded first, as fsspec's ``_expand_path`` expands it:
@@ -21,11 +21,9 @@ from collections import deque
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from fsspec.asyn import _get_batch_size
-
 from ..control import collect
 from .glob import tree_glob
-from .walk import _listings
+from .walk import _listings, _max_concurrency
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
@@ -57,13 +55,17 @@ class _Roots(NamedTuple):
     errors: Sequence[Exception] = ()
 
 
-async def _expand(fs: AsyncFileSystem, pattern: str, batch_size: int | None) -> _Roots:
+async def _expand(
+    fs: AsyncFileSystem, pattern: str, max_concurrency: int | None
+) -> _Roots:
     """The roots matching a glob pattern, as fsspec's ``_expand_path`` finds them.
 
     A match inside a folder that matches is left out: walking the folder finds
     it. Matching nothing raises FileNotFoundError, as fsspec does.
     """
-    matches, errors = await collect(tree_glob(fs, pattern, batch_size=batch_size))
+    matches, errors = await collect(
+        tree_glob(fs, pattern, max_concurrency=max_concurrency)
+    )
     if not matches and not errors:
         raise FileNotFoundError(pattern)
     folders: dict[str, None] = {}
@@ -85,10 +87,10 @@ class _Jobs(ABC):
     """The jobs of one operation, run while its tree is walked."""
 
     def __init__(
-        self, fs: AsyncFileSystem, batch_size: int | None, op: Operation[Any, Any]
+        self, fs: AsyncFileSystem, max_concurrency: int | None, op: Operation[Any, Any]
     ) -> None:
         self.fs = fs
-        self.batch_size = batch_size or fs.batch_size or _get_batch_size(nofiles=True)
+        self.max_concurrency = _max_concurrency(max_concurrency)
         self.op = op
         self.errors = 0
         self.current: str | None = None
@@ -194,7 +196,7 @@ class _Jobs(ABC):
         return _listings(
             self.fs,
             roots.folders,
-            batch_size=self.batch_size,
+            max_concurrency=self.max_concurrency,
             stopping=self.op.cancelling,
         )
 
@@ -243,7 +245,7 @@ class _Jobs(ABC):
     def start(self) -> None:
         if self.op.cancelling():
             self.waiting.clear()
-        while self.waiting and len(self.running) < self.batch_size:
+        while self.waiting and len(self.running) < self.max_concurrency:
             job = self.waiting.popleft()
             self.running[asyncio.ensure_future(self.run(job))] = job
 

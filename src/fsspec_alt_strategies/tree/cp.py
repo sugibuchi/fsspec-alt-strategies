@@ -20,6 +20,7 @@ from fsspec.utils import common_prefix
 from ..control import Operation, State
 from ..profile import _resolve
 from ._jobs import _expand, _Job, _Jobs, _Roots
+from .walk import _max_concurrency
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -54,7 +55,7 @@ def tree_cp(
     path2: str,
     *,
     profile: StorageProfile | None = None,
-    batch_size: int | None = None,
+    max_concurrency: int | None = None,
 ) -> Operation[tuple[str, str], CpState]:
     """Copy a folder and everything in it, copying while the tree is walked.
 
@@ -93,7 +94,7 @@ def tree_cp(
     per folder, one ``_cp_file`` per file, and one ``_makedirs`` per
     destination folder with files or empty. A storage refusing to overwrite
     costs an ``_rm_file`` and a ``_cp_file`` more per file it refused. At most
-    ``batch_size`` listings and ``batch_size`` copies run at a time.
+    ``max_concurrency`` listings and ``max_concurrency`` copies run at a time.
 
     The profile's ``parents_required=False`` saves the ``_makedirs`` of each
     folder with files, as their copies create it.
@@ -109,9 +110,8 @@ def tree_cp(
     profile : StorageProfile, optional
         What the storage does. The filesystem's ``storage_profile`` if None, if
         it has one.
-    batch_size : int, optional
-        The most listings, and the most copies, at a time. fsspec's default if
-        None.
+    max_concurrency : int, optional
+        The most listings, and the most copies, at a time. 32 if None.
 
     Returns
     -------
@@ -133,9 +133,10 @@ def tree_cp(
     >>> op.state.files_copied
     1234
     """
+    _max_concurrency(max_concurrency)
     resolved = _resolve(fs, profile)
     return Operation(
-        lambda op: _Copy(fs, path1, path2, resolved, batch_size, op).outcomes(),
+        lambda op: _Copy(fs, path1, path2, resolved, max_concurrency, op).outcomes(),
         CpState(),
     )
 
@@ -155,10 +156,10 @@ class _Copy(_Jobs):
         path1: str,
         path2: str,
         profile: StorageProfile,
-        batch_size: int | None,
+        max_concurrency: int | None,
         op: Operation[Any, Any],
     ) -> None:
-        super().__init__(fs, batch_size, op)
+        super().__init__(fs, max_concurrency, op)
         self.path1 = path1
         self.path2 = path2
         self.parents_required = profile.parents_required is not False
@@ -185,7 +186,7 @@ class _Copy(_Jobs):
         """
         destination = self.fs._strip_protocol(self.path2)
         if has_magic(self.path1):
-            roots = await _expand(self.fs, self.path1, self.batch_size)
+            roots = await _expand(self.fs, self.path1, self.max_concurrency)
             sources = [*roots.folders, *roots.files]
             if not sources:
                 return roots  # Only errors, to yield.
