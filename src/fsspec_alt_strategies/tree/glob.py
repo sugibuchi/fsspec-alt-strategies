@@ -54,24 +54,6 @@ class GlobState(State):
     matched: int = 0
 
 
-class _Prefix:
-    """A pattern's segments before its first ``**``, which decide the folders to list."""
-
-    def __init__(self, segments: list[str]) -> None:
-        # Without a **, the pattern is as deep as its segments. With one, it can
-        # match at any depth: only the segments before it can rule a folder out.
-        self.bounded = "**" not in segments
-        if not self.bounded:
-            segments = segments[: segments.index("**")]
-        self.segments = [re.compile(glob_translate(s)) for s in segments]
-
-    def alive(self, relative: list[str]) -> bool:
-        """Whether the pattern can still match below a folder, at that path."""
-        if self.bounded and len(relative) >= len(self.segments):
-            return False
-        return all(s.match(n) for s, n in zip(self.segments, relative, strict=False))
-
-
 def glob(
     fs: AsyncFileSystem,
     path: str,
@@ -180,6 +162,24 @@ def glob(
                     yield match
 
     return Operation(run, GlobState())
+
+
+class _Prefix:
+    """A pattern's segments before its first ``**``, which decide the folders to list."""
+
+    def __init__(self, segments: list[str]) -> None:
+        # Without a **, the pattern is as deep as its segments. With one, it can
+        # match at any depth: only the segments before it can rule a folder out.
+        self.bounded = "**" not in segments
+        if not self.bounded:
+            segments = segments[: segments.index("**")]
+        self.segments = [re.compile(glob_translate(s)) for s in segments]
+
+    def alive(self, relative: list[str]) -> bool:
+        """Whether the pattern can still match below a folder, at that path."""
+        if self.bounded and len(relative) >= len(self.segments):
+            return False
+        return all(s.match(n) for s, n in zip(self.segments, relative, strict=False))
 
 
 def _info_of(
