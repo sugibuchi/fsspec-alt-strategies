@@ -11,10 +11,8 @@ from typing import Any
 
 import pytest
 
-from fsspec_alt_strategies.file import (
-    AbstractAsyncReadableFile,
-    AbstractAsyncWritableFile,
-)
+from fsspec_alt_strategies import file
+from fsspec_alt_strategies.file import AdaptiveReadableFile, AdaptiveWritableFile
 from fsspec_alt_strategies.testing import SimulatedFileSystem
 
 _KiB = 1024
@@ -23,7 +21,7 @@ _KiB = 1024
 _BLOCKS = {"min_block_size": 4 * _KiB, "max_block_size": 32 * _KiB}
 
 
-class _Reader(AbstractAsyncReadableFile):
+class _Reader(AdaptiveReadableFile):
     """Fetches from a `SimulatedFileSystem`, recording each range."""
 
     def __init__(
@@ -86,12 +84,12 @@ async def test_sequential_reads_grow_their_blocks(flat_fs: SimulatedFileSystem) 
     assert _fetched_bytes(f) == len(data)
 
 
-async def test_read_to_the_end_splits_across_the_slots(
+async def test_read_to_the_end_splits_across_the_semaphore(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     flat_fs.latency = 0.001
     data = os.urandom(200 * _KiB)
-    async with await _reader(flat_fs, data, max_concurrency=4) as f:
+    async with await _reader(flat_fs, data, semaphore=asyncio.Semaphore(4)) as f:
         assert await f._read() == data
     assert len(f.fetched) == 7  # 200 KiB in even parts of at most 32 KiB.
     assert flat_fs.stats.max_concurrency == 4
@@ -216,7 +214,7 @@ async def test_failed_fetch_raises_and_the_next_read_fetches_again(
 async def test_closing_cancels_fetches_in_flight(flat_fs: SimulatedFileSystem) -> None:
     flat_fs.latency = 0.05
     data = os.urandom(256 * _KiB)
-    f = await _reader(flat_fs, data, max_concurrency=8)
+    f = await _reader(flat_fs, data, semaphore=asyncio.Semaphore(8))
     await f._read(4 * _KiB)
     await f._read(64 * _KiB)  # Runs ahead: more blocks are in flight.
     await f.aclose()
@@ -248,7 +246,7 @@ async def test_sync_methods_refuse_to_run_on_the_loop(
             f.read(1)
 
 
-class _Writer(AbstractAsyncWritableFile):
+class _Writer(AdaptiveWritableFile):
     """Uploads to a `SimulatedFileSystem`, recording each request."""
 
     def __init__(self, fs: SimulatedFileSystem, path: str, **kwargs: Any) -> None:
@@ -256,7 +254,8 @@ class _Writer(AbstractAsyncWritableFile):
             "min_block_size": 4 * _KiB,
             "max_block_size": 16 * _KiB,
             "min_multipart_size": 8 * _KiB,
-            "max_concurrency": 4,
+            "semaphore": asyncio.Semaphore(4),
+            "spread": 4,
         }
         super().__init__(path, asyncio.get_running_loop(), **{**options, **kwargs})
         self.fs = fs
@@ -347,3 +346,76 @@ async def test_failed_part_aborts_the_upload(flat_fs: SimulatedFileSystem) -> No
             await f.aclose()
     assert f.requests[-1] == "abort"
     assert not await flat_fs._exists("f.bin")
+
+
+def test_only_the_adaptive_files_are_public() -> None:
+    # The base class is machinery, and its name would suggest fsspec's own.
+    assert file.__all__ == ["AdaptiveReadableFile", "AdaptiveWritableFile"]
+
+
+async def test_a_shared_semaphore_limits_files_together(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    flat_fs.latency = 0.002
+    data = os.urandom(200 * _KiB)
+    flat_fs.add_file("a.bin", data)
+    flat_fs.add_file("b.bin", data)
+    limit = asyncio.Semaphore(3)
+    loop = asyncio.get_running_loop()
+    a = _Reader(flat_fs, "a.bin", len(data), loop, semaphore=limit)
+    b = _Reader(flat_fs, "b.bin", len(data), loop, semaphore=limit)
+    async with a, b:
+        assert await asyncio.gather(a._read(), b._read()) == [data, data]
+    # Each read alone is 7 parts: together, they still run 3 at a time.
+    assert flat_fs.stats.max_concurrency == 3
+
+
+async def test_a_shared_semaphore_bounds_the_parts_in_flight(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    limit = asyncio.Semaphore(2)
+    writers = [_Writer(flat_fs, f"{i}.bin", semaphore=limit) for i in range(3)]
+    in_flight = 0
+    most = 0
+
+    def counting(writer: _Writer) -> None:
+        upload = writer._upload_part
+
+        async def counted(*args: Any) -> Any:
+            nonlocal in_flight, most
+            in_flight += 1
+            most = max(most, in_flight)
+            try:
+                return await upload(*args)
+            finally:
+                in_flight -= 1
+
+        writer._upload_part = counted  # type: ignore[method-assign]
+
+    async def write(writer: _Writer) -> None:
+        counting(writer)
+        async with writer:
+            for _ in range(100):
+                await writer._write(b"x" * 1000)
+
+    await asyncio.gather(*(write(w) for w in writers))
+    # Writes wait for the semaphore: the three files never had more than two
+    # parts in flight, so never held more than those in memory.
+    assert most == 2
+    for i in range(3):
+        assert await flat_fs._cat_file(f"{i}.bin") == b"x" * 100_000
+
+
+async def test_readahead_is_capped(flat_fs: SimulatedFileSystem) -> None:
+    data = os.urandom(512 * _KiB)
+    ahead = []
+    async with await _reader(flat_fs, data, max_readahead=16 * _KiB) as f:
+        while await f._read(4 * _KiB):
+            if f._requests.queue:
+                ahead.append(f._requests.queue[-1].end - f._pos)
+    assert max(ahead) <= 16 * _KiB
+
+
+async def test_spread_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="spread"):
+        await _reader(flat_fs, b"abc", spread=0)

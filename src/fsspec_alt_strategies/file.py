@@ -9,15 +9,17 @@ And a file is opened long before its reads show which kind it gets.
 
 The classes here adapt instead, from the reads and writes so far:
 
-- `AbstractAsyncReadableFile` fetches small blocks for scattered reads. The
-  longer a run of sequential reads, the bigger its blocks, and the further
-  ahead it fetches them, several at a time.
-- `AbstractAsyncWritableFile` uploads small files in one request, and larger
-  ones in parts that grow with the bytes written, several at a time.
+- `AdaptiveReadableFile` fetches small blocks for scattered reads. The longer
+  a run of sequential reads, the bigger its blocks, and the further ahead it
+  fetches them, several at a time.
+- `AdaptiveWritableFile` uploads small files in one request, and larger ones
+  in parts that grow with the bytes written, several at a time.
 
 Both run their requests on an asyncio event loop, such as a filesystem's
-``loop``. A filesystem subclasses them, implements their requests, and returns
-them from ``_open``.
+``loop``, as an `asyncio.Semaphore` allows. Given one shared semaphore, files
+share its limit: the caller chooses its scope, e.g. a file, a filesystem, or
+the process. A filesystem subclasses them, implements their requests, and
+returns them from ``_open``.
 
 This module depends on nothing else in the package.
 """
@@ -38,55 +40,51 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from typing import Self
 
-__all__ = [
-    "AbstractAsyncFile",
-    "AbstractAsyncReadableFile",
-    "AbstractAsyncWritableFile",
-]
+__all__ = ["AdaptiveReadableFile", "AdaptiveWritableFile"]
 
 _MiB = 1024 * 1024
 
 
-class AbstractAsyncFile(io.RawIOBase):
-    """A file whose requests run on an asyncio event loop, several at a time.
+class _AsyncFile(io.RawIOBase):
+    """A file whose requests run on an asyncio event loop, as a semaphore allows.
 
     Each sync method, such as ``read``, runs its async counterpart, such as
     ``_read``, on the loop and waits for it, as fsspec's filesystems do. So the
     sync methods cannot be called on the loop itself: code there awaits the
     async ones instead.
 
-    Parameters
-    ----------
-    path : str
-        The file's path, for messages.
-    loop : asyncio.AbstractEventLoop
-        The loop the requests run on, e.g. the filesystem's ``loop``.
-    max_concurrency : int, optional
-        The most requests at a time. ``default_max_concurrency`` if None.
+    A request holds the semaphore while it runs. A large read or write is split
+    into ``spread`` requests, which run at once as far as the semaphore allows.
+    So the semaphore also bounds the memory of the parts in flight: shared by
+    files, it bounds theirs together.
 
-    Raises
-    ------
-    ValueError
-        If ``max_concurrency`` is less than 1.
+    Its parameters are the subclasses' first ones: ``path``, ``loop``,
+    ``semaphore`` and ``spread``.
     """
 
-    default_max_concurrency: int = 10
-    """The most requests at a time, unless the constructor is given another."""
+    default_concurrency: int = 10
+    """The requests at a time of a file given no semaphore."""
+
+    spread: int = 8
+    """How many requests a large read or write is split into, to run at once."""
 
     def __init__(
         self,
         path: str,
         loop: asyncio.AbstractEventLoop,
         *,
-        max_concurrency: int | None = None,
+        semaphore: asyncio.Semaphore | None = None,
+        spread: int | None = None,
     ) -> None:
-        if max_concurrency is not None and max_concurrency < 1:
-            raise ValueError(f"max_concurrency must be at least 1: {max_concurrency}")
+        if spread is not None and spread < 1:
+            raise ValueError(f"spread must be at least 1: {spread}")
         super().__init__()
         self.path = path
         self.loop = loop
-        self.max_concurrency = max_concurrency or self.default_max_concurrency
-        self._requests = _Requests(self.max_concurrency)
+        self.spread = spread or self.spread
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(self.default_concurrency)
+        self._requests = _Requests(semaphore)
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.path!r}>"
@@ -144,10 +142,10 @@ class _Range:
 
 
 class _Requests:
-    """A file's requests, in the order sent, at most ``limit`` running at a time."""
+    """A file's requests, in the order sent, each holding the semaphore while it runs."""
 
-    def __init__(self, limit: int) -> None:
-        self.slots = asyncio.Semaphore(limit)
+    def __init__(self, semaphore: asyncio.Semaphore) -> None:
+        self.slots = semaphore
         self.queue: deque[_Range] = deque()
         # The first request that failed, so that writes stop at once.
         self.error: BaseException | None = None
@@ -181,20 +179,20 @@ class _Requests:
         await self.cancel(ranges)
 
 
-def _block_size(target: int, smallest: int, largest: int, concurrency: int) -> int:
-    """The block size for ``target`` bytes, in ``concurrency`` requests at most.
+def _block_size(target: int, smallest: int, largest: int, parts: int) -> int:
+    """The block size for ``target`` bytes, in ``parts`` requests at most.
 
     It is ``smallest`` times a power of 2, so that blocks stay aligned, and at
     most ``largest``.
     """
-    needed = math.ceil(target / concurrency)
+    needed = math.ceil(target / parts)
     if needed <= smallest:
         return smallest
     doublings = (math.ceil(needed / smallest) - 1).bit_length()
     return min(smallest << doublings, largest)
 
 
-class AbstractAsyncReadableFile(AbstractAsyncFile, ABC):
+class AdaptiveReadableFile(_AsyncFile, ABC):
     """A file read through blocks fetched as its reads show how it is read.
 
     It assumes a storage where a request's latency outweighs the bytes it
@@ -209,8 +207,9 @@ class AbstractAsyncReadableFile(AbstractAsyncFile, ABC):
       it, e.g. a Parquet file's footer and its metadata.
     - A read that starts where the last one ended continues a run. A run that
       has read n bytes is assumed to read n more: they are fetched ahead,
-      topped up once half of them are read. Their blocks double in size up to
-      ``max_block_size``, and up to ``max_concurrency`` are fetched at a time.
+      topped up once half of them are read, up to ``max_readahead`` bytes.
+      They are split into ``spread`` blocks, fetched at once as the semaphore
+      allows. Their blocks double in size up to ``max_block_size``.
     - A seek within the blocks fetched keeps them and the run. A seek elsewhere
       cancels the blocks in flight and ends the run, so that scattered reads,
       such as a Parquet file's column chunks, fetch nothing ahead.
@@ -229,22 +228,35 @@ class AbstractAsyncReadableFile(AbstractAsyncFile, ABC):
         The loop the fetches run on, e.g. the filesystem's ``loop``.
     size : int
         The file's size, e.g. from the filesystem's ``_info``.
-    max_concurrency : int, optional
-        The most fetches at a time. ``default_max_concurrency`` if None.
+    semaphore : asyncio.Semaphore, optional
+        Held by each fetch while it runs. Share one between files to limit
+        their fetches together, e.g. per filesystem. The file's own, of
+        ``default_concurrency``, if None.
+    spread : int, optional
+        How many blocks a large read or a readahead is split into, to fetch at
+        once. The class attribute if None.
     min_block_size, max_block_size : int, optional
         The smallest and largest request. The class attributes if None.
+    max_readahead : int, optional
+        The most bytes fetched ahead of the reads. The class attribute if None.
     kept_size : int, optional
         The most bytes of fetched blocks kept. The class attribute if None.
 
+    Raises
+    ------
+    ValueError
+        If ``spread`` is less than 1.
+
     See Also
     --------
-    AbstractAsyncWritableFile : Its counterpart for writing.
+    AdaptiveWritableFile : Its counterpart for writing.
 
     Examples
     --------
-    >>> class MyFile(AbstractAsyncReadableFile):
+    >>> limit = asyncio.Semaphore(32)  # For all the files of a filesystem.
+    >>> class MyFile(AdaptiveReadableFile):
     ...     def __init__(self, fs, path, size):
-    ...         super().__init__(path, fs.loop, size)
+    ...         super().__init__(path, fs.loop, size, semaphore=limit)
     ...         self.fs = fs
     ...
     ...     async def _fetch_range(self, start, end):
@@ -257,6 +269,9 @@ class AbstractAsyncReadableFile(AbstractAsyncFile, ABC):
     max_block_size: int = 8 * _MiB
     """The largest request. Larger reads are split, to fetch the parts together."""
 
+    max_readahead: int = 64 * _MiB
+    """The most bytes fetched ahead of the reads, in a run of sequential reads."""
+
     kept_size: int = 8 * _MiB
     """The most bytes of fetched blocks kept for reads that come back to them."""
 
@@ -266,17 +281,20 @@ class AbstractAsyncReadableFile(AbstractAsyncFile, ABC):
         loop: asyncio.AbstractEventLoop,
         size: int,
         *,
-        max_concurrency: int | None = None,
+        semaphore: asyncio.Semaphore | None = None,
+        spread: int | None = None,
         min_block_size: int | None = None,
         max_block_size: int | None = None,
+        max_readahead: int | None = None,
         kept_size: int | None = None,
     ) -> None:
-        super().__init__(path, loop, max_concurrency=max_concurrency)
+        super().__init__(path, loop, semaphore=semaphore, spread=spread)
         self.size = size
         self.min_block_size = min_block_size or self.min_block_size
         self.max_block_size = max(
             max_block_size or self.max_block_size, self.min_block_size
         )
+        self.max_readahead = max_readahead or self.max_readahead
         self.kept_size = self.kept_size if kept_size is None else kept_size
         self._pos = 0
         # The bytes read in sequence since the last seek away.
@@ -384,11 +402,11 @@ class AbstractAsyncReadableFile(AbstractAsyncFile, ABC):
             return
         # A run that has read n bytes is assumed to read n more. Topping them up
         # only once half are read keeps the requests few and large.
-        ahead = min(self._run + end - pos, self.max_block_size * self.max_concurrency)
+        ahead = min(self._run + end - pos, self.max_readahead)
         start = queue[-1].end
         if start - end < ahead // 2:
             block = _block_size(
-                ahead, self.min_block_size, self.max_block_size, self.max_concurrency
+                ahead, self.min_block_size, self.max_block_size, self.spread
             )
             await self._send(start, end + ahead, block)
 
@@ -455,7 +473,7 @@ class AbstractAsyncReadableFile(AbstractAsyncFile, ABC):
         return None
 
 
-class AbstractAsyncWritableFile(AbstractAsyncFile, ABC):
+class AdaptiveWritableFile(_AsyncFile, ABC):
     """A file written in one upload, or in parts sized as its writes show.
 
     A subclass implements the storage's requests: one upload for small files,
@@ -463,10 +481,13 @@ class AbstractAsyncWritableFile(AbstractAsyncFile, ABC):
 
     - Until ``min_multipart_size`` bytes are written, they are buffered. A file
       closed by then is uploaded in one request.
-    - Beyond, parts are uploaded as soon as they fill, up to
-      ``max_concurrency`` at a time, while writing goes on. A file that has had
-      n bytes written is assumed to get n more: its parts grow, so as to use the
-      slots, from ``min_block_size`` up to ``max_block_size``.
+    - Beyond, parts are uploaded as soon as they fill, as the semaphore allows,
+      while writing goes on. A file that has had n bytes written is assumed to
+      get n more: its parts grow, so as to split that into ``spread`` parts,
+      from ``min_block_size`` up to ``max_block_size``.
+    - A write waits while the semaphore allows no upload. So the memory a file
+      holds is its parts in flight, at most one per permit, and one part being
+      filled. A semaphore shared by files bounds their parts in flight together.
     - Every part but the last has at least ``min_block_size`` bytes, as storages
       such as S3 require. So ``flush`` uploads nothing.
     - A part that fails stops the writes, and closing aborts the upload. So does
@@ -479,17 +500,27 @@ class AbstractAsyncWritableFile(AbstractAsyncFile, ABC):
         The file's path, for messages.
     loop : asyncio.AbstractEventLoop
         The loop the uploads run on, e.g. the filesystem's ``loop``.
-    max_concurrency : int, optional
-        The most part uploads at a time. ``default_max_concurrency`` if None.
+    semaphore : asyncio.Semaphore, optional
+        Held by each upload while it runs. Share one between files to limit
+        their uploads, and so their memory, together. The file's own, of
+        ``default_concurrency``, if None.
+    spread : int, optional
+        How many parts the bytes written so far are split into, sizing the next
+        parts. The class attribute if None.
     min_block_size, max_block_size : int, optional
         The smallest and largest part. The class attributes if None.
     min_multipart_size : int, optional
         The size from which a multipart upload is used. The class attribute if
         None.
 
+    Raises
+    ------
+    ValueError
+        If ``spread`` is less than 1.
+
     See Also
     --------
-    AbstractAsyncReadableFile : Its counterpart for reading.
+    AdaptiveReadableFile : Its counterpart for reading.
     """
 
     min_block_size: int = 5 * _MiB
@@ -506,12 +537,13 @@ class AbstractAsyncWritableFile(AbstractAsyncFile, ABC):
         path: str,
         loop: asyncio.AbstractEventLoop,
         *,
-        max_concurrency: int | None = None,
+        semaphore: asyncio.Semaphore | None = None,
+        spread: int | None = None,
         min_block_size: int | None = None,
         max_block_size: int | None = None,
         min_multipart_size: int | None = None,
     ) -> None:
-        super().__init__(path, loop, max_concurrency=max_concurrency)
+        super().__init__(path, loop, semaphore=semaphore, spread=spread)
         self.min_block_size = min_block_size or self.min_block_size
         self.max_block_size = max(
             max_block_size or self.max_block_size, self.min_block_size
@@ -607,7 +639,7 @@ class AbstractAsyncWritableFile(AbstractAsyncFile, ABC):
             len(buffer) if closing else self._pos,
             self.min_block_size,
             self.max_block_size,
-            self.max_concurrency,
+            self.spread,
         )
         offset = self._pos - len(buffer)
         taken = 0

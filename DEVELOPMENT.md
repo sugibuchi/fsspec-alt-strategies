@@ -239,12 +239,18 @@ Strategies target `AsyncFileSystem` first. Sync filesystems may get some feature
 
 File objects are, with `Operation`, the places for classes, as a file keeps state between calls.
 
-- `file.py` has abstract classes for reading and writing. A filesystem subclasses one, implements its requests, and
-  returns it from `_open`.
+- `file.py` has abstract classes for reading and writing, `AdaptiveReadableFile` and `AdaptiveWritableFile`. A
+  filesystem subclasses one, implements its requests, and returns it from `_open`. Their base class is private: its
+  name must not suggest fsspec's own.
 - Their requests run on an asyncio event loop, such as the filesystem's `loop`. Their sync methods wait on it through
   fsspec's `sync`, and their async ones, such as `_read`, run on it.
 - They adapt to how a file is read or written, without settings per file. Requests cost money and time, so they send
   as few as the reads and writes allow.
+- Each request holds an `asyncio.Semaphore` while it runs. The caller passes one to choose the limit's scope: a file,
+  a filesystem, or the process. A write waits for it, so a shared semaphore also bounds the memory of the parts in
+  flight across files.
+- How they split work is planned apart from the semaphore, which may be shared. `spread` is how many requests a large
+  read or write is split into, and `max_readahead` caps the bytes read ahead.
 - They follow Python's file API, not the strategy API: errors are raised.
 
 ### Observable and cancellable
