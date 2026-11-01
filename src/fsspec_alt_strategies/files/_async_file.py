@@ -24,9 +24,8 @@ _MiB = 1024 * 1024
 
 _T = TypeVar("_T")
 
-# The cleanups of abandoned files, until they end: a loop holds its tasks only
-# weakly.
-_abandoned: set[asyncio.Task[None]] = set()
+# The aborts scheduled, until they end: a loop holds its tasks only weakly.
+_aborting: set[concurrent.futures.Future[None]] = set()
 
 
 class _AsyncFile(io.RawIOBase):
@@ -50,9 +49,9 @@ class _AsyncFile(io.RawIOBase):
     A request holds the concurrency limit while it runs. Shared by files, the
     limit bounds their requests together, and so the memory these hold.
 
-    A file the garbage collector finds open is abandoned, not closed: a file
+    A file the garbage collector finds open is aborted, not closed: a file
     never closed was never finished, so nothing written is kept. It warns with
-    a ResourceWarning, and ``_abandon`` undoes its requests, e.g. aborting an
+    a ResourceWarning, and ``_abort`` undoes its requests, e.g. aborting an
     upload. The collector waits for that, as closing would. On the loop's own
     thread, it runs as a task instead, once the thread returns to the loop.
     With the loop not running, e.g. at exit, nothing can undo the requests.
@@ -165,16 +164,16 @@ class _AsyncFile(io.RawIOBase):
             io.RawIOBase.close(self)
             return
         warnings.warn(
-            f"Unclosed file {self.path!r}, abandoned: nothing written is kept",
+            f"Unclosed file {self.path!r}, aborted: nothing written is kept",
             ResourceWarning,
             stacklevel=1,  # A finalizer has no caller to point at.
             source=self,
         )
         try:
             if self._on_its_loop():
-                self._abandon_later()
+                self._do_abort_soon()
             elif self.loop.is_running():
-                self._sync(self._abandon())
+                self._sync(self._abort())
             # Else nothing can undo the requests, e.g. at exit: they stay, as
             # if the process had died.
         finally:
@@ -187,21 +186,29 @@ class _AsyncFile(io.RawIOBase):
         except RuntimeError:
             return False
 
-    def _abandon_later(self) -> None:
-        """Close the file on its loop's thread, running `_abandon` as a task.
+    def _do_abort_soon(self) -> concurrent.futures.Future[None] | None:
+        """Close the file without waiting, scheduling `_abort` on the loop.
 
-        The task runs once this thread returns to the loop: nothing can wait
-        for it here. It sends nothing more, and keeps nothing written. A file
-        closed already is abandoned as well, e.g. one whose upload waits for a
-        transaction's commit.
+        It works from any thread, the loop's own too, where nothing can wait
+        for the abort. The file sends nothing more, and keeps nothing written.
+        A file closed already is aborted as well, e.g. one whose upload waits
+        for a transaction's commit. It returns the abort's future, or None if
+        the loop is closed, where nothing can run.
         """
-        task = self.loop.create_task(self._abandon())
-        _abandoned.add(task)
-        task.add_done_callback(_abandoned.discard)
+        future = None
+        if not self.loop.is_closed():
+            coro = self._abort()
+            try:
+                future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+                _aborting.add(future)
+                future.add_done_callback(_aborting.discard)
+            except RuntimeError:
+                coro.close()  # The loop closed meanwhile.
         io.RawIOBase.close(self)
+        return future
 
-    async def _abandon(self) -> None:
-        """Undo the requests of a file collected unclosed: a subclass adds to it."""
+    async def _abort(self) -> None:
+        """Undo the file's requests, keeping nothing: a subclass adds to it."""
         await self._requests.cancel_all()
 
     async def __aenter__(self) -> Self:

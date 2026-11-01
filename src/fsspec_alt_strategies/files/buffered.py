@@ -318,11 +318,11 @@ class LocallyBufferedFile(_AsyncFile, ABC):
                 buffer.close()
             await super()._close()
 
-    async def _abandon(self) -> None:
+    async def _abort(self) -> None:
         buffer, self._buffer = self._buffer, None
         if buffer is not None:
             buffer.close()
-        await super()._abandon()
+        await super()._abort()
 
     def __exit__(self, exc_type: object, *exc_info: object) -> None:
         if exc_type is not None:

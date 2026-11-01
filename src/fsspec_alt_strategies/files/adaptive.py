@@ -586,9 +586,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
             self._buffer = bytearray()
             await self._requests.cancel_all()
 
-    async def _abandon(self) -> None:
+    async def _abort(self) -> None:
         self._buffer = bytearray()
-        await super()._abandon()
+        await super()._abort()
         if self._multipart:
             await self._abort_multipart_upload()
 

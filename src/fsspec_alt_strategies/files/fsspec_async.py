@@ -46,7 +46,7 @@ class AsyncFileAdapter:
 
     Unlike fsspec's, leaving an ``async with`` block by an exception discards a
     locally buffered file's changes, as leaving a ``with`` block does. Close
-    it: the garbage collector abandons a file left open, keeping nothing
+    it: the garbage collector aborts a file left open, keeping nothing
     written.
 
     Parameters

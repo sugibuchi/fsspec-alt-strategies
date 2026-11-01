@@ -531,7 +531,7 @@ class AdaptiveWritableTransaction(FileTransaction):
             if self._last is not None:
                 self.file._sync(self._last())
         except BaseException:
-            self._abort()
+            self._abort_upload()
             raise
 
     def discard(self) -> None:
@@ -539,16 +539,16 @@ class AdaptiveWritableTransaction(FileTransaction):
         self._last = None
         if self.file._on_its_loop():
             # Nothing can wait there, e.g. when collected there: the file
-            # aborts its upload later, closed or not.
+            # aborts its upload soon, closed or not.
             self._multipart = False
-            self.file._abandon_later()
+            self.file._do_abort_soon()
         elif not self.file.closed:
             with contextlib.suppress(_Discarded):
                 self.file.close()
         else:
-            self._abort()
+            self._abort_upload()
 
-    def _abort(self) -> None:
+    def _abort_upload(self) -> None:
         if self._multipart:
             self._multipart = False
             self.file._sync(self.file._abort_multipart_upload())
@@ -591,7 +591,7 @@ class LocallyBufferedTransaction(FileTransaction):
     def discard(self) -> None:
         if self.file._on_its_loop():
             # Nothing can wait there, e.g. when collected there.
-            self.file._abandon_later()
+            self.file._do_abort_soon()
         else:
             self.file.discard()
             self.file.close()
