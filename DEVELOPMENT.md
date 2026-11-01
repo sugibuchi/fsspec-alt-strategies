@@ -273,12 +273,11 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 - They know nothing of fsspec's transactions. How a file stays invisible until commit depends on the storage, so
   `files/transaction.py` holds it in a `FileTransaction`, an ABC with four steps: `start_staging()` opens the
   file written to, `end_staging()` ends the writing on closing, then `commit()`, or `discard()` instead. One
-  `TransactionFile` takes any of them. A filesystem's `_open` returns it when
-  `autocommit` is False. Two strategies are provided: `TempPathTransaction` writes to a hidden temporary path,
-  renamed on commit, and `LocalBufferTransaction` writes to a local buffer, written to the file on commit.
+  `TransactionFile` takes any of them. A filesystem's `_open` returns it when `autocommit` is False.
+- Two strategies are provided: `TempPathTransaction` writes to a hidden temporary path, renamed on commit, and
+  `LocalBufferTransaction` writes to a local buffer, written to the file on commit.
 - A storage with a way of its own, such as completing a multipart upload only on commit, gets a subclass of
-  `FileTransaction`. The package's files help it with three private steps, `_stage`, `_publish` and `_unstage`, which
-  closing runs as stage then publish.
+  `FileTransaction`. The file objects know nothing of it.
 
 ### Observable and cancellable
 

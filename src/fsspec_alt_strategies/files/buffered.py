@@ -44,11 +44,6 @@ class LocallyBufferedFile(_AsyncFile, ABC):
     - The download and the upload each hold the concurrency limit. Reads and
       writes after the download are local: they never wait on the loop.
 
-    Closing stages the file, then publishes it. A subclass's
-    `~fsspec_alt_strategies.files.transaction.FileTransaction` may call the two
-    steps apart, or drop what was staged: `_stage` keeps the buffer,
-    `_publish` uploads it, and `_unstage` drops it.
-
     Modes are binary: "rb", "wb", "ab" and "xb", each with "+" too. Appending
     writes at the end, wherever the position is. Exclusive creation, "x", asks
     `_exists` first, and raises FileExistsError: another may still create the
@@ -135,8 +130,6 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         # Whether closing uploads: a new file is uploaded even if empty.
         self._changed = self._kind in "wx"
         self._discarded = False
-        # "open", then "staged", then "published" or "dropped".
-        self._state = "open"
 
     @abstractmethod
     async def _download(self, target: IO[bytes]) -> None:
@@ -239,8 +232,6 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         return self._write_to(await self._load(), data)
 
     def _write_to(self, buffer: IO[bytes], data: Any) -> int:
-        if self._state != "open":
-            raise ValueError(f"I/O operation on a {self._state} file: {self.path}")
         if self._kind == "a":
             buffer.seek(0, io.SEEK_END)
         size = len(memoryview(data).cast("B"))
@@ -274,55 +265,17 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         """Upload nothing on closing: the changes are lost."""
         self._discarded = True
 
-    def _uploads(self) -> bool:
-        return self._changed and not self._discarded
-
-    async def _stage(self) -> None:
-        """Get the file ready to upload, keeping its buffer: "x" checks here."""
-        self._check_open()
-        if self._state != "open":
-            raise ValueError(f"Staging a {self._state} file: {self.path}")
-        try:
-            if self._uploads():
-                await self._load()
-        except BaseException:
-            await self._unstage()
-            raise
-        self._state = "staged"
-
-    async def _publish(self) -> None:
-        """Upload the staged file, if it changed, and drop its buffer."""
-        if self._state != "staged":
-            raise ValueError(f"Publishing a {self._state} file: {self.path}")
-        try:
-            if self._uploads() and self._buffer is not None:
-                self._buffer.seek(0)
-                async with self._requests.slots:
-                    await self._upload(self._buffer)
-        finally:
-            self._release()
-        self._state = "published"
-
-    async def _unstage(self) -> None:
-        """Drop the buffer, uploading nothing."""
-        if self._state in ("published", "dropped"):
-            return
-        self._state = "dropped"
-        self._release()
-
-    def _release(self) -> None:
-        buffer, self._buffer = self._buffer, None
-        if buffer is not None:
-            buffer.close()
-
     async def _close(self) -> None:
         try:
-            if self._state == "open":
-                await self._stage()
-            if self._state == "staged":
-                await self._publish()
+            if self._changed and not self._discarded:
+                buffer = await self._load()
+                buffer.seek(0)
+                async with self._requests.slots:
+                    await self._upload(buffer)
         finally:
-            self._release()
+            buffer, self._buffer = self._buffer, None
+            if buffer is not None:
+                buffer.close()
             await super()._close()
 
     def __exit__(self, exc_type: object, *exc_info: object) -> None:
