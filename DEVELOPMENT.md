@@ -271,8 +271,8 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
   read or write is split into, and `max_readahead` caps the bytes read ahead.
 - They follow Python's file API, not the strategy API: errors are raised.
 - They know nothing of fsspec's transactions. How a file stays invisible until commit depends on the storage, so
-  `files/transaction.py` holds it in a `FileTransaction`, an ABC with three steps: `stage()` opens the file written
-  to, then `commit()` or `discard()`. One `TransactionFile` takes any of them. A filesystem's `_open` returns it when
+  `files/transaction.py` holds it in a `FileTransaction`, an ABC with four steps: `stage()` opens the file written
+  to, `finish()` ends the writing on closing, then `commit()`, or `discard()` instead. One `TransactionFile` takes any of them. A filesystem's `_open` returns it when
   `autocommit` is False. Two strategies are provided: `TempPathTransaction` writes to a hidden temporary path,
   renamed on commit, and `LocalBufferTransaction` writes to a local buffer, written to the file on commit.
 - A storage with a way of its own, such as completing a multipart upload only on commit, gets a subclass of

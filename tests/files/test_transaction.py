@@ -166,7 +166,7 @@ def test_commit_and_discard_settle_once() -> None:
     f.write(b"abc")
     f.commit()
     f.commit()  # Already committed: nothing more.
-    assert t.steps == ["stage", "commit"]
+    assert t.steps == ["stage", "finish", "commit"]
     with pytest.raises(ValueError, match="committed"):
         f.discard()
     with pytest.raises(ValueError, match="closed"):
@@ -193,6 +193,10 @@ class _Recorded(FileTransaction):
         self.steps.append("stage")
         return self.file
 
+    def finish(self) -> None:
+        self.steps.append("finish")
+        self.file.close()
+
     def commit(self) -> None:
         self.steps.append("commit")
 
@@ -206,7 +210,7 @@ def test_a_transaction_of_its_own() -> None:
     assert t.steps == ["stage"]
     f.write(b"abc")
     f.commit()
-    assert t.steps == ["stage", "commit"]
+    assert t.steps == ["stage", "finish", "commit"]
     assert t.file.closed
 
     t = _Recorded("g.bin", io.BytesIO())
@@ -222,7 +226,7 @@ def test_a_failed_close_is_never_committed() -> None:
     with pytest.raises(ValueError, match="failed"):
         f.commit()
     f.discard()
-    assert t.steps == ["stage", "discard"]
+    assert t.steps == ["stage", "finish", "discard"]
 
 
 class _TransactionalFS(SimulatedFileSystem):
