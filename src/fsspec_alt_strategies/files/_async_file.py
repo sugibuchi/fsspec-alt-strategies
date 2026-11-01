@@ -50,11 +50,12 @@ class _AsyncFile(io.RawIOBase):
     A request holds the concurrency limit while it runs. Shared by files, the
     limit bounds their requests together, and so the memory these hold.
 
-    A file the garbage collector finds open is abandoned, not closed: it warns
-    with a ResourceWarning, and ``_abandon`` undoes its requests, e.g. aborting
-    an upload. Closing would wait on the loop, which may be this thread's own,
-    stopped or closed. And a file never closed was never finished: nothing
-    written is kept.
+    A file the garbage collector finds open is abandoned, not closed: a file
+    never closed was never finished, so nothing written is kept. It warns with
+    a ResourceWarning, and ``_abandon`` undoes its requests, e.g. aborting an
+    upload. The collector waits for that, as closing would. On the loop's own
+    thread, or with the loop not running, waiting would never end: there, it
+    is only scheduled on the loop.
 
     Its parameters are the subclasses' first ones: ``path``, ``loop`` and
     ``concurrency_limit``.
@@ -163,14 +164,24 @@ class _AsyncFile(io.RawIOBase):
         # Unlike io.IOBase, never closes: see the class docstring.
         if self.closed:
             return
-        if getattr(self, "loop", None) is not None:
-            warnings.warn(
-                f"Unclosed file {self.path!r}, abandoned: nothing written is kept",
-                ResourceWarning,
-                stacklevel=1,  # A finalizer has no caller to point at.
-                source=self,
-            )
-        self._abandon_later()
+        if getattr(self, "loop", None) is None:
+            # The constructor failed before the loop was set: no request was sent.
+            io.RawIOBase.close(self)
+            return
+        warnings.warn(
+            f"Unclosed file {self.path!r}, abandoned: nothing written is kept",
+            ResourceWarning,
+            stacklevel=1,  # A finalizer has no caller to point at.
+            source=self,
+        )
+        try:
+            self._sync(self._abandon())
+        except RuntimeError:
+            # On the loop's own thread, or the loop not running: waiting would
+            # never end.
+            self._abandon_later()
+        finally:
+            io.RawIOBase.close(self)
 
     def _abandon_later(self) -> None:
         """Close the file without waiting, scheduling `_abandon` on the loop.

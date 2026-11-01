@@ -9,6 +9,7 @@ import io
 import os
 import random
 import struct
+import time
 from typing import Any
 
 import pytest
@@ -478,6 +479,23 @@ async def test_file_collected_unclosed_aborts_its_upload(
         await asyncio.sleep(0.001)
     assert requests == ["start", "abort"]
     assert not await flat_fs._exists("f.bin")
+
+
+def test_file_collected_unclosed_off_its_loop_waits_for_the_abort() -> None:
+    fs = SimulatedFileSystem()  # Sync: its loop runs in a thread of its own.
+
+    async def open_file() -> _Writer:
+        return _Writer(fs, "f.bin")
+
+    f = asyncio.run_coroutine_threadsafe(open_file(), fs.loop).result()
+    requests = f.requests
+    f.write(b"x" * 20 * _KiB)
+    time.sleep(0.05)  # The parts end, and with them their hold on f.
+    with pytest.warns(ResourceWarning, match="Unclosed"):
+        del f
+        gc.collect()
+    assert requests == ["start", "abort"]  # Already: waited for, not scheduled.
+    assert not fs.exists("f.bin")
 
 
 async def test_failed_part_aborts_the_upload(flat_fs: SimulatedFileSystem) -> None:
