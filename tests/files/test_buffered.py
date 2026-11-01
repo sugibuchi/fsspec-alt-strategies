@@ -105,6 +105,30 @@ def test_exclusive_creation(fs: SimulatedFileSystem) -> None:
     assert fs.cat_file("fresh.bin") == b"x"
 
 
+class _Exclusive(_Whole):
+    """Creates files only if absent, as a conditional request does."""
+
+    async def _create(self, source: IO[bytes]) -> None:
+        # One request on a real storage, e.g. a PUT with If-None-Match: *.
+        if await self.fs._exists(self.path):
+            raise FileExistsError(self.path)
+        await self._upload(source)
+
+
+@pytest.mark.parametrize("cls", [_Whole, _Exclusive])
+def test_a_file_created_meanwhile(fs: SimulatedFileSystem, cls: type) -> None:
+    f = cls(fs, "new.bin", "xb")
+    f.write(b"mine")  # Checked here: no file yet.
+    fs.pipe_file("new.bin", b"theirs")  # Another client creates it.
+    if cls is _Exclusive:
+        with pytest.raises(FileExistsError):
+            f.close()
+        assert fs.cat_file("new.bin") == b"theirs"
+    else:
+        f.close()  # The race the default leaves: theirs is overwritten.
+        assert fs.cat_file("new.bin") == b"mine"
+
+
 def test_an_exception_in_the_block_uploads_nothing(fs: SimulatedFileSystem) -> None:
     with pytest.raises(RuntimeError), _Whole(fs, "data/f.bin", "r+b") as f:
         f.write(b"half")

@@ -47,8 +47,10 @@ class LocallyBufferedFile(_AsyncFile, ABC):
 
     Modes are binary: "rb", "wb", "ab" and "xb", each with "+" too. Appending
     writes at the end, wherever the position is. Exclusive creation, "x", asks
-    `_exists` first, and raises FileExistsError: another may still create the
-    file before the upload.
+    `_exists` first, and raises FileExistsError, as early as Python's files do.
+    Another client may still create the file before the upload, which then
+    overwrites it. A storage that can upload a file only if it does not exist,
+    e.g. with If-None-Match, closes that race by overriding `_create`.
 
     Parameters
     ----------
@@ -146,6 +148,15 @@ class LocallyBufferedFile(_AsyncFile, ABC):
     @abstractmethod
     async def _exists(self) -> bool:
         """Whether the file exists, for exclusive creation."""
+
+    async def _create(self, source: IO[bytes]) -> None:
+        """Upload a new file as `_upload` does, for exclusive creation.
+
+        If the storage can, it uploads only if no file exists, in the same
+        request, and raises FileExistsError otherwise. By default, it is
+        `_upload`, which overwrites a file created since `_exists` was asked.
+        """
+        await self._upload(source)
 
     def readable(self) -> bool:
         self._check_open()
@@ -298,7 +309,8 @@ class LocallyBufferedFile(_AsyncFile, ABC):
                 buffer = await self._load()
                 buffer.seek(0)
                 async with self._requests.concurrency_limit:
-                    await self._upload(buffer)
+                    upload = self._create if self._kind == "x" else self._upload
+                    await upload(buffer)
         finally:
             buffer, self._buffer = self._buffer, None
             if buffer is not None:
