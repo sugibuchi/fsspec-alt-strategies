@@ -32,17 +32,6 @@ def _running_loop() -> asyncio.AbstractEventLoop | None:
         return None
 
 
-def _as_coroutine(awaitable: Awaitable[_T]) -> Coroutine[Any, Any, _T]:
-    """``awaitable`` as a coroutine, which `asyncio.run_coroutine_threadsafe` takes."""
-    if asyncio.iscoroutine(awaitable):
-        return awaitable
-
-    async def awaiting() -> _T:
-        return await awaitable
-
-    return awaiting()
-
-
 class _AsyncFile(io.RawIOBase):
     """A file whose requests run on an asyncio event loop, under a concurrency limit.
 
@@ -91,9 +80,8 @@ class _AsyncFile(io.RawIOBase):
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.path!r}>"
 
-    def _sync(self, awaitable: Awaitable[_T]) -> _T:
-        """Wait for ``awaitable`` to run on the loop, from another thread."""
-        coro = _as_coroutine(awaitable)
+    def _sync(self, coro: Coroutine[Any, Any, _T]) -> _T:
+        """Wait for ``coro`` to run on the loop, from another thread."""
         if _running_loop() is self.loop:
             coro.close()  # Never awaited, without a warning.
             raise RuntimeError(
