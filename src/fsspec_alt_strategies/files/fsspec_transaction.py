@@ -429,19 +429,29 @@ class AdaptiveWritableTransaction(FileTransaction):
     until then. Uploaded parts take storage until commit: if the process dies
     first, they stay until the storage expires them.
 
+    On some storages, the last part makes the file visible, e.g. Google Cloud
+    Storage's resumable uploads. ``hold_last_part`` holds it back too, in
+    memory, until commit uploads it.
+
     Parameters
     ----------
     file : AdaptiveWritableFile
         The file, open for writing.
+    hold_last_part : bool
+        Whether the last part waits for commit, for storages where it makes
+        the file visible.
 
     Examples
     --------
     >>> f = TransactionFile(AdaptiveWritableTransaction(MyFile(fs, path)))
     """
 
-    def __init__(self, file: AdaptiveWritableFile) -> None:
+    def __init__(
+        self, file: AdaptiveWritableFile, *, hold_last_part: bool = False
+    ) -> None:
         super().__init__(file.path)
         self.file = file
+        self.hold_last_part = hold_last_part
         # The request making the file visible, once closing held it back.
         self._last: Callable[[], Awaitable[None]] | None = None
         self._multipart = False
@@ -450,18 +460,37 @@ class AdaptiveWritableTransaction(FileTransaction):
     def start_staging(self) -> IO[bytes]:
         file = self.file
         complete, upload_all = file._complete_multipart_upload, file._upload_all
+        upload_part = file._upload_part
+        # The last part's upload, once closing held it back.
+        held: list[Callable[[], Awaitable[Any]]] = []
+
+        async def hold_last_part(
+            data: bytes, start: int, end: int, index: int, last: bool
+        ) -> Any:
+            if not last:
+                return await upload_part(data, start, end, index, last)
+            held.append(lambda: upload_part(data, start, end, index, last))
+            return None  # Replaced on commit by what its upload returns.
 
         async def hold_completion(parts: list[Any]) -> None:
             if self._discarding:
                 raise _Discarded  # The file aborts the upload.
             self._multipart = True
-            self._last = lambda: complete(parts)
+
+            async def last() -> None:
+                if held:
+                    parts[-1] = await held[0]()
+                await complete(parts)
+
+            self._last = last
 
         async def hold_upload(data: bytes) -> None:
             self._last = lambda: upload_all(data)
 
         file._complete_multipart_upload = hold_completion  # type: ignore[method-assign]
         file._upload_all = hold_upload  # type: ignore[method-assign]
+        if self.hold_last_part:
+            file._upload_part = hold_last_part  # type: ignore[method-assign]
         return file
 
     def end_staging(self) -> None:

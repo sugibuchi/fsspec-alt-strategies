@@ -431,6 +431,18 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
       any failure or cancellation while closing: the file is written whole, or
       not at all.
 
+    Some storages take parts only in order, one at a time, e.g. Google Cloud
+    Storage's resumable uploads, where each part but the last is a multiple of
+    256 KiB:
+
+    - ``sequential`` sends a part only once the one before it is uploaded.
+      Waiting, it holds no permit of the concurrency limit, which files may
+      share. ``spread`` of 1 then suits best: fewer, larger parts.
+    - ``block_alignment`` makes every part but the last a multiple of it, by
+      rounding ``min_block_size`` up and ``max_block_size`` down to it.
+    - The last part is the one given ``last``: with the file's size, as its
+      ``end``. A storage where it makes the file visible completes nothing.
+
     Parameters
     ----------
     path : str
@@ -449,11 +461,17 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     min_multipart_size : int, optional
         The size from which a multipart upload is used. The class attribute if
         None.
+    sequential : bool, optional
+        Whether parts are uploaded one at a time, in order. The class attribute
+        if None.
+    block_alignment : int, optional
+        What every part but the last is a multiple of. The class attribute if
+        None.
 
     Raises
     ------
     ValueError
-        If ``spread`` is less than 1.
+        If ``spread`` or ``block_alignment`` is less than 1.
 
     See Also
     --------
@@ -469,6 +487,12 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     min_multipart_size: int = 5 * _MiB
     """The size from which a file is uploaded in parts."""
 
+    sequential: bool = False
+    """Whether parts are uploaded one at a time, in order, as some storages need."""
+
+    block_alignment: int = 1
+    """What every part but the last is a multiple of, e.g. 256 KiB for GCS."""
+
     mode: str = "wb"
     """The mode, as fsspec's files have it: only writing, from the start."""
 
@@ -482,13 +506,26 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         min_block_size: int | None = None,
         max_block_size: int | None = None,
         min_multipart_size: int | None = None,
+        sequential: bool | None = None,
+        block_alignment: int | None = None,
     ) -> None:
+        if block_alignment is not None and block_alignment < 1:
+            # Before the file exists: nothing is left to close.
+            raise ValueError(f"block_alignment must be at least 1: {block_alignment}")
         super().__init__(path, loop, concurrency_limit=concurrency_limit, spread=spread)
-        self.min_block_size = min_block_size or self.min_block_size
+        self.block_alignment = block_alignment or self.block_alignment
+        align = self.block_alignment
+        # Blocks are min_block_size times a power of 2, or max_block_size: so
+        # aligning both aligns every part but the last.
+        self.min_block_size = (
+            -(-(min_block_size or self.min_block_size) // align) * align
+        )
         self.max_block_size = max(
-            max_block_size or self.max_block_size, self.min_block_size
+            (max_block_size or self.max_block_size) // align * align,
+            self.min_block_size,
         )
         self.min_multipart_size = min_multipart_size or self.min_multipart_size
+        self.sequential = self.sequential if sequential is None else sequential
         self._pos = 0
         self._buffer = bytearray()
         self._multipart = False
@@ -596,6 +633,10 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
             if not self._multipart:
                 await self._start_multipart_upload()
                 self._multipart = True
+            elif self.sequential:
+                # Waiting holds no permit: files sharing the limit go on.
+                await asyncio.wait([self._requests.queue[-1].task])
+                self._raise_failed_upload()
             start = offset + taken
             await self._requests.send(
                 start,

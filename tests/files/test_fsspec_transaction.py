@@ -151,6 +151,46 @@ def test_local_buffer_appends_in_the_mode_given(fs: SimulatedFileSystem) -> None
     assert fs.cat_file("f.bin") == b"old,new"
 
 
+class _Resumable(_Parts):
+    """Uploads parts in order, the last one making the file visible, as GCS does."""
+
+    sequential = True
+
+    async def _upload_part(
+        self, data: bytes, start: int, end: int, index: int, last: bool
+    ) -> Any:
+        self.parts[index] = data
+        if last:
+            await self.fs._pipe_file(
+                self.path, b"".join(self.parts[i] for i in sorted(self.parts))
+            )
+        return index
+
+    async def _complete_multipart_upload(self, parts: list[Any]) -> None:
+        self.completed = parts  # The last part completed the upload.
+
+
+@pytest.mark.parametrize("commit", [True, False])
+def test_adaptive_holds_back_a_last_part_that_publishes(
+    fs: SimulatedFileSystem, commit: bool
+) -> None:
+    file = _Resumable(fs, "f.bin")
+    f = TransactionFile(AdaptiveWritableTransaction(file, hold_last_part=True))
+    f.write(_BIG)
+    f.close()
+    # All parts but the last are uploaded, and nothing is visible.
+    assert 0 < len(file.parts) < 5
+    assert not fs.exists("f.bin")
+    if commit:
+        f.commit()
+        assert fs.cat_file("f.bin") == _BIG
+        assert file.completed == list(range(len(file.completed)))
+    else:
+        f.discard()
+        assert file.aborted
+        assert not fs.exists("f.bin")
+
+
 def test_adaptive_completes_the_upload_on_commit(fs: SimulatedFileSystem) -> None:
     file = _Parts(fs, "f.bin")
     f = TransactionFile(AdaptiveWritableTransaction(file))
