@@ -312,6 +312,28 @@ def test_undecided_file_collected_on_its_loop_aborts_later(
     assert not fs.exists("f.bin")
 
 
+def test_temp_path_collected_on_the_loop_is_deleted_later(
+    fs: SimulatedFileSystem,
+) -> None:
+    files = [_temp(fs, "f.bin")]
+    files[0].write(b"abc")
+    files[0].close()
+    assert fs.ls("", detail=False) != []
+
+    async def collect() -> None:
+        # Where the sync delete cannot wait: it runs on a thread of its own.
+        with pytest.warns(ResourceWarning, match="Undecided"):
+            files.clear()
+            gc.collect()
+
+    asyncio.run_coroutine_threadsafe(collect(), fs.loop).result()
+    for _ in range(100):
+        if not fs.ls("", detail=False):
+            break
+        time.sleep(0.01)
+    assert fs.ls("", detail=False) == []
+
+
 class _SDKWriter:
     """An SDK's file-like object: only write and close, write returning nothing."""
 

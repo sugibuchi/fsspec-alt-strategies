@@ -195,9 +195,8 @@ class _AsyncFile(io.RawIOBase):
 
         It works from any thread, the loop's own too, where nothing can wait
         for the abort. The file sends nothing more, and keeps nothing written.
-        A file closed already is aborted as well, e.g. one whose upload waits
-        for a transaction's commit. It returns the abort's future, or None if
-        the loop is closed, where nothing can run.
+        It returns the abort's future, or None if the loop is closed, where
+        nothing can run.
         """
         future = None
         if not self.loop.is_closed():
