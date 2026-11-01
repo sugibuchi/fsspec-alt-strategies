@@ -1,4 +1,4 @@
-"""Tests of `files.fsspec_async`: the file objects awaited on their loop."""
+"""Tests of `files.fsspec_async`: the file objects as `open_async` returns them."""
 
 from __future__ import annotations
 

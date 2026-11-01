@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""The file objects of this package, used from async code on their loop.
+"""fsspec's ``open_async``, on top of this package's file objects.
 
-A file object's sync methods, such as ``read``, wait on the filesystem's loop.
-Called on that loop, they would wait on themselves. Async code there awaits
-the methods of an `AsyncFileAdapter` instead, as fsspec's ``open_async``
-returns:
+``AsyncFileSystem.open_async`` returns a file whose methods are awaited, with
+the API of fsspec's ``AbstractAsyncStreamedFile``. An `AsyncFileAdapter`
+gives that API to the file objects of `files.adaptive` and `files.buffered`,
+so that a filesystem implements its requests once, for both ``open`` and
+``open_async``:
 
 >>> async def open_async(self, path, mode="rb", **kwargs):
 ...     return AsyncFileAdapter(MyFile(self, path, mode))
@@ -29,7 +30,7 @@ __all__ = ["AsyncFileAdapter"]
 
 
 class AsyncFileAdapter:
-    """A file object of this package, with methods to await on its loop.
+    """A file object of this package, as fsspec's ``open_async`` returns it.
 
     Each method awaits the file's async counterpart of the sync one, e.g.
     ``read`` awaits what the file's ``read`` waits for. As in fsspec's async

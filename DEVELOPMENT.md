@@ -20,7 +20,7 @@
 | `.../files/adaptive.py`         | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts. |
 | `.../files/buffered.py`         | `LocallyBufferedFile`, for storages transferring only whole files. |
 | `.../files/fsspec_transaction.py` | Files written in a transaction, by strategy: a temporary path, a local buffer, or the storage's own. |
-| `.../files/fsspec_async.py`     | `AsyncFileAdapter`, awaiting the file objects' methods on their loop, for `open_async`. |
+| `.../files/fsspec_async.py`     | `AsyncFileAdapter`, giving the file objects the API of those `open_async` returns. |
 | `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, in the package's layout, with the shared fixtures in `tests/conftest.py`. |
@@ -271,9 +271,9 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 - How they split work is planned apart from the concurrency limit, which may be shared. `spread` is how many requests a large
   read or write is split into, and `max_readahead` caps the bytes read ahead.
 - They follow Python's file API, not the strategy API: errors are raised.
-- Their sync methods wait on the loop, so code on the loop cannot call them. `files/fsspec_async.py` has
-  `AsyncFileAdapter`, whose methods await the files' async counterparts, such as `_read`. A filesystem's `open_async`
-  returns it. The files declare those counterparts in `_AsyncFile` and keep only the sync API themselves.
+- fsspec's `open_async` returns a file whose methods are awaited. `files/fsspec_async.py` has `AsyncFileAdapter`,
+  giving our files that API, so that `open` and `open_async` share a filesystem's requests. Its methods await the
+  files' async counterparts, such as `_read`, which `_AsyncFile` declares. The files keep only the sync API themselves.
 - They know nothing of fsspec's transactions. How a file stays invisible until commit depends on the storage, so
   `files/fsspec_transaction.py` holds it in a `FileTransaction`, an ABC with four steps: `start_staging()` opens
   the file written to, `end_staging()` ends the writing on closing, then `commit()`, or `discard()` instead. One
