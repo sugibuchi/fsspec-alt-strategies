@@ -44,9 +44,9 @@ class LocallyBufferedFile(_AsyncFile, ABC):
     - The download and the upload each hold the concurrency limit. Reads and
       writes after the download are local: they never wait on the loop.
 
-    Closing stages the file, then publishes it. For a transaction, a
-    `~fsspec_alt_strategies.files.transaction.StagedTransaction` calls the two
-    steps apart, or drops what was staged: `_stage` keeps the buffer,
+    Closing stages the file, then publishes it. A subclass's
+    `~fsspec_alt_strategies.files.transaction.FileTransaction` may call the two
+    steps apart, or drop what was staged: `_stage` keeps the buffer,
     `_publish` uploads it, and `_unstage` drops it.
 
     Modes are binary: "rb", "wb", "ab" and "xb", each with "+" too. Appending

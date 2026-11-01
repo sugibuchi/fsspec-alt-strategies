@@ -13,18 +13,17 @@ the strategy, for one file:
   clients may see the temporary file.
 - `LocalBufferTransaction` writes to a local buffer, written to the file on
   commit. It suits any storage, holding the file's bytes locally until then.
-- `StagedTransaction` has the file upload all but what makes it visible,
-  e.g. the parts of a multipart upload but not its completion. It costs
-  nothing more, but needs a file that stages, as the file objects of
-  `files.adaptive` and `files.buffered` do.
 
-A storage with a way of its own, e.g. a native transaction, gets a subclass of
-`FileTransaction`. `TransactionFile` is the file fsspec gets, for any of them.
-A filesystem's ``_open`` returns it when ``autocommit`` is False:
+A storage with a way of its own gets a subclass of `FileTransaction`: e.g. one
+uploading the parts of a multipart upload, but completing it only on commit.
+`TransactionFile` is the file fsspec gets, for any of them. A filesystem's
+``_open`` returns it when ``autocommit`` is False:
 
 >>> def _open(self, path, mode="rb", autocommit=True, **kwargs):
-...     f = MyFile(self, path, mode)
-...     return f if autocommit else TransactionFile(StagedTransaction(f))
+...     if autocommit:
+...         return MyFile(self, path, mode)
+...     opener = lambda p: MyFile(self, p, mode)
+...     return TransactionFile(LocalBufferTransaction(path, opener))
 
 A `TransactionFile` is a file: text and compression wrappers work on it. Its
 methods are sync, as fsspec's transactions are: call them from a thread other
@@ -32,7 +31,7 @@ than the filesystem's loop, as fsspec's sync API. fsspec commits a
 transaction's files one after another: a transaction is not atomic across
 files.
 
-This module imports the rest of the package only for type checking.
+This module depends on nothing else in the package.
 """
 
 from __future__ import annotations
@@ -52,13 +51,9 @@ if TYPE_CHECKING:
 
     from fsspec.asyn import AsyncFileSystem
 
-    from .adaptive import AdaptiveWritableFile
-    from .buffered import LocallyBufferedFile
-
 __all__ = [
     "FileTransaction",
     "LocalBufferTransaction",
-    "StagedTransaction",
     "TempPathTransaction",
     "TransactionFile",
 ]
@@ -197,7 +192,7 @@ class TransactionFile(_Proxy):
 
     Examples
     --------
-    >>> f = TransactionFile(StagedTransaction(MyFile(fs, path, "wb")))
+    >>> f = TransactionFile(LocalBufferTransaction(path, open_file))
     """
 
     def __init__(self, transaction: FileTransaction) -> None:
@@ -391,57 +386,3 @@ class LocalBufferTransaction(FileTransaction):
     def discard(self) -> None:
         if self._buffer is not None:
             self._buffer.close()
-
-
-class _Staging(_Proxy):
-    """A file of this package's that closing stages, without publishing it."""
-
-    def close(self) -> None:
-        if self.closed:
-            return
-        try:
-            # Once dropped, e.g. by a discard before closing, nothing is staged.
-            if self._file._state == "open":
-                sync(self._file.loop, self._file._stage)
-        finally:
-            super().close()
-
-
-class StagedTransaction(FileTransaction):
-    """A file staged on closing, and published on commit.
-
-    The file uploads all but what makes it visible when closed: e.g. the parts
-    of a multipart upload, but not its completion. Commit publishes it, and
-    discard drops it: e.g. completes, or aborts, the multipart upload.
-
-    It costs nothing more than writing the file without a transaction, and
-    other clients see nothing until commit. Staged uploads take storage until
-    then: if the process dies first, they stay until the storage expires them.
-
-    It needs a file of this package's, which stages. For another file, write a
-    `FileTransaction` with the storage's own steps.
-
-    Parameters
-    ----------
-    file : AdaptiveWritableFile or LocallyBufferedFile
-        The file, open for writing.
-
-    Examples
-    --------
-    >>> f = TransactionFile(StagedTransaction(MyFile(fs, path, "wb")))
-    """
-
-    def __init__(self, file: AdaptiveWritableFile | LocallyBufferedFile) -> None:
-        super().__init__(file.path)
-        self.file = file
-
-    def stage(self) -> io.IOBase:
-        return _Staging(self.file, self.path)
-
-    def commit(self) -> None:
-        sync(self.file.loop, self.file._publish)
-        self.file.close()
-
-    def discard(self) -> None:
-        sync(self.file.loop, self.file._unstage)
-        self.file.close()

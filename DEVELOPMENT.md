@@ -19,7 +19,7 @@
 | `.../files/`                    | Base classes for a filesystem's file objects, by what its storage allows. |
 | `.../files/adaptive.py`         | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts. |
 | `.../files/buffered.py`         | `LocallyBufferedFile`, for storages transferring only whole files. |
-| `.../files/transaction.py`      | Files written in a transaction, by strategy: a temporary path, a local buffer, staging, or the storage's own. |
+| `.../files/transaction.py`      | Files written in a transaction, by strategy: a temporary path, a local buffer, or the storage's own. |
 | `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, in the package's layout, with the shared fixtures in `tests/conftest.py`. |
@@ -273,12 +273,11 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 - They know nothing of fsspec's transactions. How a file stays invisible until commit depends on the storage, so
   `files/transaction.py` holds it in a `FileTransaction`, an ABC with three steps: `stage()` opens the file written
   to, then `commit()` or `discard()`. One `TransactionFile` takes any of them. A filesystem's `_open` returns it when
-  `autocommit` is False. The strategies provided are:
-  - `TempPathTransaction`, writing to a hidden temporary path, renamed on commit;
-  - `LocalBufferTransaction`, writing to a local buffer, written to the file on commit;
-  - `StagedTransaction`, having the file upload all but what makes it visible. The package's files support it with
-    three private steps, `_stage`, `_publish` and `_unstage`, which closing runs as stage then publish.
-- A storage with a way of its own, such as a native transaction, gets a subclass of `FileTransaction`.
+  `autocommit` is False. Two strategies are provided: `TempPathTransaction` writes to a hidden temporary path,
+  renamed on commit, and `LocalBufferTransaction` writes to a local buffer, written to the file on commit.
+- A storage with a way of its own, such as completing a multipart upload only on commit, gets a subclass of
+  `FileTransaction`. The package's files help it with three private steps, `_stage`, `_publish` and `_unstage`, which
+  closing runs as stage then publish.
 
 ### Observable and cancellable
 

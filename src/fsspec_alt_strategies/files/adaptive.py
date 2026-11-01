@@ -371,9 +371,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
       any failure or cancellation while closing: the file is written whole, or
       not at all.
 
-    Closing stages the file, then publishes it. For a transaction, a
-    `~fsspec_alt_strategies.files.transaction.StagedTransaction` calls the two
-    steps apart, or drops what was staged:
+    Closing stages the file, then publishes it. A subclass's
+    `~fsspec_alt_strategies.files.transaction.FileTransaction` may call the two
+    steps apart, or drop what was staged:
 
     - `_stage` uploads all but the request making the file visible: the parts,
       but not the multipart upload's completion. A small file stays buffered.

@@ -12,7 +12,6 @@ from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.transaction import (
     FileTransaction,
     LocalBufferTransaction,
-    StagedTransaction,
     TempPathTransaction,
     TransactionFile,
 )
@@ -151,63 +150,23 @@ def test_local_buffer_appends_in_the_mode_given(fs: SimulatedFileSystem) -> None
     assert fs.cat_file("f.bin") == b"old,new"
 
 
-def test_staged_multipart_is_completed_on_commit(fs: SimulatedFileSystem) -> None:
-    file = _Parts(fs, "f.bin")
-    f = TransactionFile(StagedTransaction(file))
-    f.write(_BIG)
-    f.close()
-    # The parts are uploaded, but the upload is not completed.
-    assert file.parts
-    assert not fs.exists("f.bin")
-    f.commit()
-    assert fs.cat_file("f.bin") == _BIG
-    assert file.closed
-
-
-def test_staged_multipart_is_aborted_on_discard(fs: SimulatedFileSystem) -> None:
-    file = _Parts(fs, "f.bin")
-    f = TransactionFile(StagedTransaction(file))
-    f.write(_BIG)
-    f.close()
-    f.discard()
-    assert file.aborted
-    assert not fs.exists("f.bin")
-
-
-def test_staged_small_files_wait_for_commit(fs: SimulatedFileSystem) -> None:
-    for file in (_Parts(fs, "a.bin"), _Whole(fs, "b.bin", "wb")):
-        f = TransactionFile(StagedTransaction(file))
+def test_an_exception_in_the_block_discards() -> None:
+    t = _Recorded("f.bin", io.BytesIO())
+    with pytest.raises(RuntimeError), TransactionFile(t) as f:
         f.write(b"abc")
-        f.close()
-        assert not fs.exists(file.path)
-        f.commit()
-        assert fs.cat_file(file.path) == b"abc"
-
-
-def test_staged_exclusive_creation_fails_on_first_use(fs: SimulatedFileSystem) -> None:
-    fs.pipe_file("f.bin", b"old")
-    f = TransactionFile(StagedTransaction(_Whole(fs, "f.bin", "xb")))
-    with pytest.raises(FileExistsError):
-        f.write(b"new")
-    f.discard()
-    assert fs.cat_file("f.bin") == b"old"
-
-
-def test_an_exception_in_the_block_discards(fs: SimulatedFileSystem) -> None:
-    file = _Parts(fs, "f.bin")
-    with pytest.raises(RuntimeError), TransactionFile(StagedTransaction(file)) as f:
-        f.write(_BIG)
         raise RuntimeError("failed midway")
-    assert file.aborted
+    assert t.steps == ["stage", "discard"]
     with pytest.raises(ValueError, match="discarded"):
         f.commit()
 
 
-def test_commit_and_discard_settle_once(fs: SimulatedFileSystem) -> None:
-    f = TransactionFile(StagedTransaction(_Parts(fs, "f.bin")))
+def test_commit_and_discard_settle_once() -> None:
+    t = _Recorded("f.bin", io.BytesIO())
+    f = TransactionFile(t)
     f.write(b"abc")
     f.commit()
     f.commit()  # Already committed: nothing more.
+    assert t.steps == ["stage", "commit"]
     with pytest.raises(ValueError, match="committed"):
         f.discard()
     with pytest.raises(ValueError, match="closed"):
@@ -269,7 +228,7 @@ def test_a_failed_close_is_never_committed() -> None:
 class _TransactionalFS(SimulatedFileSystem):
     """Opens files for writing in the strategy set, inside fsspec's transactions."""
 
-    strategy = "staged"
+    strategy = "buffer"
 
     def _open(
         self, path: str, mode: str = "rb", autocommit: bool = True, **kwargs: Any
@@ -279,13 +238,11 @@ class _TransactionalFS(SimulatedFileSystem):
             return _Parts(self, path)
         if self.strategy == "temp":
             return _temp(self, path)
-        if self.strategy == "buffer":
-            t = LocalBufferTransaction(path, lambda p: _Parts(self, p))
-            return TransactionFile(t)
-        return TransactionFile(StagedTransaction(_Parts(self, path)))
+        t = LocalBufferTransaction(path, lambda p: _Parts(self, p))
+        return TransactionFile(t)
 
 
-@pytest.mark.parametrize("strategy", ["temp", "buffer", "staged"])
+@pytest.mark.parametrize("strategy", ["temp", "buffer"])
 def test_in_fsspec_transactions(strategy: str) -> None:
     fs = _TransactionalFS(hierarchical=True)
     fs.strategy = strategy
