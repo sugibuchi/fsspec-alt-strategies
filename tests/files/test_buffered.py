@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import gc
 import io
 from typing import IO, Any
 
@@ -56,6 +57,15 @@ def test_opening_downloads_nothing_until_used(fs: SimulatedFileSystem) -> None:
         f.load()
     f.close()
     assert fs.stats.calls == {"read": 1}
+
+
+def test_file_collected_unclosed_uploads_nothing(fs: SimulatedFileSystem) -> None:
+    f = _Whole(fs, "new.bin", "wb")
+    f.write(b"hello")
+    with pytest.warns(ResourceWarning, match="Unclosed"):
+        del f
+        gc.collect()
+    assert not fs.exists("new.bin")
 
 
 def test_updates_in_place(fs: SimulatedFileSystem) -> None:

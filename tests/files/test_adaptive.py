@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import gc
 import io
 import os
 import random
@@ -459,6 +460,24 @@ async def test_subclass_sizes_the_parts(flat_fs: SimulatedFileSystem) -> None:
     assert len(sizes) > 2
     assert all(size % (4 * _KiB) == 0 for size in sizes[:-1])
     assert await flat_fs._cat_file("f.bin") == data
+
+
+async def test_file_collected_unclosed_aborts_its_upload(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    f = _Writer(flat_fs, "f.bin")
+    requests = f.requests
+    for _ in range(20):
+        await f._write(b"x" * 1000)
+    await asyncio.sleep(0.01)  # The parts end, and with them their hold on f.
+    # Collected on its own loop, where closing could not wait for it.
+    with pytest.warns(ResourceWarning, match="Unclosed"):
+        del f
+        gc.collect()
+    for _ in range(10):
+        await asyncio.sleep(0.001)
+    assert requests == ["start", "abort"]
+    assert not await flat_fs._exists("f.bin")
 
 
 async def test_failed_part_aborts_the_upload(flat_fs: SimulatedFileSystem) -> None:

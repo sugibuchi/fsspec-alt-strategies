@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import io
+import warnings
 from abc import abstractmethod
 from collections import deque
 from dataclasses import dataclass
@@ -22,6 +23,10 @@ if TYPE_CHECKING:
 _MiB = 1024 * 1024
 
 _T = TypeVar("_T")
+
+# The cleanups of files collected unclosed, until they end: a loop holds its
+# tasks only weakly.
+_abandoned: set[concurrent.futures.Future[None]] = set()
 
 
 class _AsyncFile(io.RawIOBase):
@@ -44,6 +49,12 @@ class _AsyncFile(io.RawIOBase):
 
     A request holds the concurrency limit while it runs. Shared by files, the
     limit bounds their requests together, and so the memory these hold.
+
+    A file the garbage collector finds open is abandoned, not closed: it warns
+    with a ResourceWarning, and ``_abandon`` undoes its requests, e.g. aborting
+    an upload. Closing would wait on the loop, which may be this thread's own,
+    stopped or closed. And a file never closed was never finished: nothing
+    written is kept.
 
     Its parameters are the subclasses' first ones: ``path``, ``loop`` and
     ``concurrency_limit``.
@@ -143,6 +154,34 @@ class _AsyncFile(io.RawIOBase):
             super().close()
             return
         self._sync(self.aclose())
+
+    def __del__(self) -> None:
+        # Unlike io.IOBase, never closes: see the class docstring.
+        if self.closed:
+            return
+        loop = getattr(self, "loop", None)
+        if loop is not None:
+            warnings.warn(
+                f"Unclosed file {self.path!r}, abandoned: nothing written is kept",
+                ResourceWarning,
+                stacklevel=1,  # A finalizer has no caller to point at.
+                source=self,
+            )
+            if not loop.is_closed():
+                coro = self._abandon()
+                try:
+                    # Scheduled, not waited for: it runs once the loop does.
+                    future = asyncio.run_coroutine_threadsafe(coro, loop)
+                except RuntimeError:
+                    coro.close()  # The loop closed meanwhile.
+                else:
+                    _abandoned.add(future)
+                    future.add_done_callback(_abandoned.discard)
+        io.RawIOBase.close(self)
+
+    async def _abandon(self) -> None:
+        """Undo the requests of a file collected unclosed: a subclass adds to it."""
+        await self._requests.cancel_all()
 
     async def __aenter__(self) -> Self:
         return self

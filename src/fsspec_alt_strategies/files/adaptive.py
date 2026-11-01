@@ -431,8 +431,8 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     - Every part but the last has at least ``min_block_size`` bytes, as storages
       such as S3 require. So ``flush`` uploads nothing.
     - A part that fails stops the writes, and closing aborts the upload. So does
-      any failure or cancellation while closing: the file is written whole, or
-      not at all.
+      any failure or cancellation while closing, or the garbage collector
+      finding the file open: the file is written whole, or not at all.
 
     Some storages take parts only in order, one at a time, e.g. Google Cloud
     Storage's resumable uploads, where each part but the last is a multiple of
@@ -585,6 +585,12 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         finally:
             self._buffer = bytearray()
             await self._requests.cancel_all()
+
+    async def _abandon(self) -> None:
+        self._buffer = bytearray()
+        await super()._abandon()
+        if self._multipart:
+            await self._abort_multipart_upload()
 
     def _raise_failed_upload(self) -> None:
         if (error := self._requests.error) is not None:

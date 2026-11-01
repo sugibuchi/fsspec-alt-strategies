@@ -528,7 +528,8 @@ class LocallyBufferedTransaction(FileTransaction):
     It costs nothing more than writing the file without a transaction, and
     other clients see nothing until commit. Exclusive creation, "x", is checked
     on the first write, or on commit. If neither commit nor discard comes, the
-    file uploads when garbage collected, as any open file of its class does.
+    file uploads nothing: the garbage collector abandons it, as any open file
+    of its class.
 
     Parameters
     ----------

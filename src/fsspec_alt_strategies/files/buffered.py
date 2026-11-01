@@ -39,7 +39,8 @@ class LocallyBufferedFile(_AsyncFile, ABC):
       ``spool_size`` bytes, then on disk. It is deleted on closing.
     - Closing uploads the buffer, only if it was written or truncated, or the
       file is new. Leaving a ``with`` block by an exception, or `discard`,
-      uploads nothing: the file is written whole, or not at all.
+      uploads nothing: the file is written whole, or not at all. So does a
+      file the garbage collector finds open.
     - ``max_size`` caps the file: downloading, writing or truncating beyond it
       raises OSError with ``errno.EFBIG``.
     - The download and the upload each hold the concurrency limit. Reads and
@@ -316,6 +317,12 @@ class LocallyBufferedFile(_AsyncFile, ABC):
             if buffer is not None:
                 buffer.close()
             await super()._close()
+
+    async def _abandon(self) -> None:
+        buffer, self._buffer = self._buffer, None
+        if buffer is not None:
+            buffer.close()
+        await super()._abandon()
 
     def __exit__(self, exc_type: object, *exc_info: object) -> None:
         if exc_type is not None:

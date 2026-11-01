@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import io
 from typing import IO, Any
 
@@ -243,6 +244,18 @@ def test_locally_buffered_uploads_on_commit(fs: SimulatedFileSystem) -> None:
     g.close()
     g.discard()
     assert file.closed
+    assert fs.stats.calls == {}
+
+
+def test_locally_buffered_left_undecided_uploads_nothing(
+    fs: SimulatedFileSystem,
+) -> None:
+    f = TransactionFile(LocallyBufferedTransaction(_Whole(fs, "f.bin", "wb")))
+    f.write(b"abc")
+    f.close()
+    with pytest.warns(ResourceWarning, match="Unclosed"):
+        del f
+        gc.collect()
     assert fs.stats.calls == {}
 
 
