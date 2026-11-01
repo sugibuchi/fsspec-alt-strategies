@@ -24,14 +24,6 @@ _MiB = 1024 * 1024
 _T = TypeVar("_T")
 
 
-def _running_loop() -> asyncio.AbstractEventLoop | None:
-    """The loop running in this thread, if any."""
-    try:
-        return asyncio.get_running_loop()
-    except RuntimeError:
-        return None
-
-
 class _AsyncFile(io.RawIOBase):
     """A file whose requests run on an asyncio event loop, under a concurrency limit.
 
@@ -82,7 +74,11 @@ class _AsyncFile(io.RawIOBase):
 
     def _sync(self, coro: Coroutine[Any, Any, _T]) -> _T:
         """Wait for ``coro`` to run on the loop, from another thread."""
-        if _running_loop() is self.loop:
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is self.loop:
             coro.close()  # Never awaited, without a warning.
             raise RuntimeError(
                 f"Waiting on its own loop, which would never run: {self.path}"

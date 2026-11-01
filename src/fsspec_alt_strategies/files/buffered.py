@@ -7,16 +7,14 @@ This module depends on `_async_file`.
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import io
 import tempfile
 from abc import ABC, abstractmethod
-from typing import IO, TYPE_CHECKING, Any
+from typing import IO, Any
 
-from ._async_file import _AsyncFile, _MiB, _running_loop
-
-if TYPE_CHECKING:
-    import asyncio
+from ._async_file import _AsyncFile, _MiB
 
 __all__ = ["LocallyBufferedFile"]
 
@@ -179,7 +177,11 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         """
         self._check_open()
         if self._buffer is None:
-            if _running_loop() is self.loop:
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is self.loop:
                 raise RuntimeError(
                     f"Not loaded yet, on its loop: await aload(): {self.path}"
                 )
