@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import io
 import os
 import random
@@ -267,6 +268,67 @@ async def test_sync_methods_refuse_to_run_on_the_loop(
     async with await _reader(flat_fs, b"abc") as f:
         with pytest.raises(RuntimeError, match="own loop"):
             f.read(1)
+
+
+class _Store:
+    """One object of a versioned storage, which another client may replace."""
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.version = "v1"
+
+    def replace(self, data: bytes) -> None:
+        self.data = data
+        self.version = f"v{int(self.version[1:]) + 1}"
+
+
+class _Versioned(AdaptiveReadableFile):
+    """Reads a `_Store` by range, asking for the version if ``conditional``."""
+
+    def __init__(self, store: _Store, conditional: bool, **kwargs: Any) -> None:
+        super().__init__(
+            "f.bin", asyncio.get_running_loop(), len(store.data), **_BLOCKS, **kwargs
+        )
+        self.store = store
+        self.conditional = conditional
+
+    async def _fetch_range(self, start: int, end: int) -> bytes:
+        await asyncio.sleep(0)
+        store = self.store
+        if self.conditional and self.version not in (None, store.version):
+            # The storage refuses, e.g. with 412 Precondition Failed.
+            raise OSError(errno.ESTALE, "Precondition failed", self.path)
+        self._pin_version(store.version)
+        return store.data[start:end]
+
+
+@pytest.mark.parametrize("conditional", [False, True])
+async def test_reads_one_version(conditional: bool) -> None:
+    old, new = os.urandom(256 * _KiB), os.urandom(256 * _KiB)
+    store = _Store(old)
+    async with _Versioned(store, conditional) as f:
+        assert await f._read(8 * _KiB) == old[: 8 * _KiB]
+        assert f.version == "v1"  # Pinned by the first response.
+        store.replace(new)
+        # Elsewhere, so that it fetches from the new version: never mixed.
+        await f._seek(200 * _KiB)
+        with pytest.raises(OSError) as raised:
+            await f._read(4 * _KiB)
+        assert raised.value.errno == errno.ESTALE
+        # And again: the file stays pinned to the version it began reading.
+        with pytest.raises(OSError) as raised:
+            await f._read(4 * _KiB)
+        assert raised.value.errno == errno.ESTALE
+
+
+async def test_reads_the_version_given() -> None:
+    store = _Store(b"x" * 10)
+    async with _Versioned(store, conditional=False, version="v1") as f:
+        assert await f._read() == b"x" * 10
+    store.replace(b"y" * 10)
+    async with _Versioned(store, conditional=False, version="v1") as f:
+        with pytest.raises(OSError, match="from version v1 to v2"):
+            await f._read()
 
 
 class _Writer(AdaptiveWritableFile):

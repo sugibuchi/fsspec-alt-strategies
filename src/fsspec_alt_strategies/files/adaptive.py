@@ -16,6 +16,7 @@ This module depends on `_async_file`.
 from __future__ import annotations
 
 import asyncio
+import errno
 import io
 import math
 from abc import ABC, abstractmethod
@@ -96,6 +97,17 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
     mix both kinds. It loses on storages whose requests are cheap, where
     fetching a block for a few bytes reads more than needed.
 
+    Its many requests read one version of the file, even if another client
+    replaces it meanwhile: the blocks of two versions never mix.
+
+    - ``version`` is the version read, e.g. an ETag or a version id from the
+      filesystem's ``_info``. If None, the first response pins it.
+    - `_fetch_range` asks for ``version`` when the storage can, e.g. with
+      If-Match or a version id, so that the storage refuses another one.
+    - `_fetch_range` passes the version each response came from to
+      `_pin_version`. Another version raises OSError with ``errno.ESTALE``,
+      even on storages that cannot ask for one.
+
     Parameters
     ----------
     path : str
@@ -117,6 +129,8 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         The most bytes fetched ahead of the reads. The class attribute if None.
     kept_size : int, optional
         The most bytes of fetched blocks kept. The class attribute if None.
+    version : str, optional
+        The version of the file to read. The first response's if None.
 
     Raises
     ------
@@ -137,6 +151,16 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
     ...
     ...     async def _fetch_range(self, start, end):
     ...         return await self.fs._cat_file(self.path, start=start, end=end)
+
+    Pinning the version, on a storage reading by ETag:
+
+    >>> class MyPinnedFile(AdaptiveReadableFile):
+    ...     async def _fetch_range(self, start, end):
+    ...         data, etag = await self.client.get(
+    ...             self.path, start, end, if_match=self.version
+    ...         )
+    ...         self._pin_version(etag)
+    ...         return data
     """
 
     min_block_size: int = _MiB // 2
@@ -166,9 +190,11 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         max_block_size: int | None = None,
         max_readahead: int | None = None,
         kept_size: int | None = None,
+        version: str | None = None,
     ) -> None:
         super().__init__(path, loop, concurrency_limit=concurrency_limit, spread=spread)
         self.size = size
+        self.version = version
         self.min_block_size = min_block_size or self.min_block_size
         self.max_block_size = max(
             max_block_size or self.max_block_size, self.min_block_size
@@ -186,7 +212,26 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
 
     @abstractmethod
     async def _fetch_range(self, start: int, end: int) -> bytes:
-        """Fetch the bytes [start, end) of the file in one request."""
+        """Fetch the bytes [start, end) of the file in one request.
+
+        It asks for ``version`` if the storage can, and passes the version the
+        response came from to `_pin_version` if the storage tells it.
+        """
+
+    def _pin_version(self, version: str) -> None:
+        """Pin the version read, or raise if a response came from another one.
+
+        Fetches run at once, so the first to arrive pins it. A storage that
+        cannot ask for a version still never mixes two: the read raises.
+        """
+        if self.version is None:
+            self.version = version
+        elif version != self.version:
+            raise OSError(
+                errno.ESTALE,
+                f"Changed while read, from version {self.version} to {version}",
+                self.path,
+            )
 
     def readable(self) -> bool:
         self._check_open()
