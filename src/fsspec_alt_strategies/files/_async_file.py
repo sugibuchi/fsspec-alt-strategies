@@ -31,9 +31,10 @@ class _AsyncFile(io.RawIOBase):
     sync methods cannot be called on the loop itself: code there awaits the
     async ones instead, through `files.fsspec_async.AsyncFileAdapter`.
 
-    The async counterparts are ``_read``, ``_write``, ``_seek``, ``_tell``,
-    ``_truncate``, ``_flush`` and ``aclose``. A file not supporting one keeps
-    the default here, which raises `io.UnsupportedOperation`.
+    The async counterparts are ``_read``, ``_write``, ``_flush`` and
+    ``aclose``. A file not supporting one keeps the default here, which raises
+    `io.UnsupportedOperation`. ``seek`` and ``tell`` have none: as in fsspec's
+    async files, they send no request, once ``_prepare`` has run.
 
     ``flush`` is abstract, taking ``force`` as fsspec's files do: each class
     decides what flushing sends, and whether the file shows what was written
@@ -48,6 +49,9 @@ class _AsyncFile(io.RawIOBase):
 
     default_concurrency_limit: int = 10
     """The requests at a time of a file given no concurrency limit."""
+
+    mode: str
+    """The mode, e.g. "rb", as fsspec's files have it."""
 
     def __init__(
         self,
@@ -84,17 +88,12 @@ class _AsyncFile(io.RawIOBase):
         """Write as ``write`` does."""
         raise self._unsupported("write")
 
-    async def _seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
-        """Move as ``seek`` does."""
-        raise self._unsupported("seek")
+    async def _prepare(self) -> None:
+        """Send what ``seek`` and ``tell`` need, e.g. a download, before either.
 
-    async def _tell(self) -> int:
-        """The position, as ``tell`` gives it: a subclass sending no request."""
-        return self.tell()
-
-    async def _truncate(self, size: int | None = None) -> int:
-        """Truncate as ``truncate`` does."""
-        raise self._unsupported("truncate")
+        Opening a file sends nothing. Async code awaits this first, so that
+        ``seek`` and ``tell`` need not wait on the loop it runs on.
+        """
 
     @abstractmethod
     def flush(self, force: bool = False) -> None:

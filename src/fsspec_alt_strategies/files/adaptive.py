@@ -151,6 +151,9 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
     kept_size: int = 8 * _MiB
     """The most bytes of fetched blocks kept for reads that come back to them."""
 
+    mode: str = "rb"
+    """The mode, as fsspec's files have it: only reading."""
+
     def __init__(
         self,
         path: str,
@@ -173,6 +176,8 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         self.max_readahead = max_readahead or self.max_readahead
         self.kept_size = self.kept_size if kept_size is None else kept_size
         self._pos = 0
+        # Where the blocks fetched were last settled: seeks only move _pos.
+        self._settled = 0
         # The bytes read in sequence since the last seek away.
         self._run = 0
         # Blocks no longer ahead of the position, by start, the least recently used first.
@@ -211,12 +216,30 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         return len(data)
 
     def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        # Only moves: the next read drops the blocks the seek left behind. So
+        # seeking sends nothing, and awaits nothing, as in fsspec's async files.
         self._check_open()
-        return self._sync(self._seek, offset, whence)
+        if whence == io.SEEK_SET:
+            pos = offset
+        elif whence == io.SEEK_CUR:
+            pos = self._pos + offset
+        elif whence == io.SEEK_END:
+            pos = self.size + offset
+        else:
+            raise ValueError(f"Invalid whence: {whence}")
+        if pos < 0:
+            raise ValueError(f"Negative seek position: {pos}")
+        self._pos = pos
+        return pos
+
+    async def _seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        """Move to a position, as ``seek`` does."""
+        return self.seek(offset, whence)
 
     async def _read(self, size: int = -1) -> bytes:
         """Read up to ``size`` bytes, or to the end if negative, as ``read`` does."""
         self._check_open()
+        await self._settle()
         pos = self._pos
         if size == 0 or pos >= self.size:
             return b""
@@ -234,37 +257,26 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         self._advance(end)
         return data
 
-    async def _seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
-        """Move to a position, as ``seek`` does."""
-        self._check_open()
-        if whence == io.SEEK_SET:
-            pos = offset
-        elif whence == io.SEEK_CUR:
-            pos = self._pos + offset
-        elif whence == io.SEEK_END:
-            pos = self.size + offset
-        else:
-            raise ValueError(f"Invalid whence: {whence}")
-        if pos < 0:
-            raise ValueError(f"Negative seek position: {pos}")
+    async def _settle(self) -> None:
+        """Drop the blocks the seeks since the last read left behind."""
+        pos = self._pos
+        if pos == self._settled:
+            return
+        self._settled = pos
         queue = self._requests.queue
-        if pos == self._pos:
-            return pos
         if queue and queue[0].start <= pos <= queue[-1].end:
             # Many readers seek before each read, even in sequence: within the
             # blocks fetched, or right after them, the run goes on.
             behind = []
-            while queue[0].end <= pos:
+            while queue and queue[0].end <= pos:
                 behind.append(queue.popleft())
             await self._drop(behind)
         else:
             await self._drop_all()
-        self._pos = pos
-        return pos
 
     def _advance(self, end: int) -> None:
         self._run += end - self._pos
-        self._pos = end
+        self._pos = self._settled = end
 
     async def _fetch(self, pos: int, end: int) -> None:
         """Send the fetches for [pos, end), and those ahead of it a run calls for."""
@@ -411,6 +423,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
 
     min_multipart_size: int = 5 * _MiB
     """The size from which a file is uploaded in parts."""
+
+    mode: str = "wb"
+    """The mode, as fsspec's files have it: only writing, from the start."""
 
     def __init__(
         self,

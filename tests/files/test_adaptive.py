@@ -130,6 +130,24 @@ async def test_seeking_to_where_it_is_keeps_the_run(
     assert seeking.fetched == plain.fetched
 
 
+async def test_seeking_away_and_back_before_reading_keeps_the_run(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    # A seek only moves: the next read settles the blocks, where it reads.
+    data = os.urandom(512 * _KiB)
+    async with await _reader(flat_fs, data) as plain:
+        while await plain._read(4 * _KiB):
+            pass
+    async with await _reader(flat_fs, data) as seeking:
+        while True:
+            here = seeking.tell()
+            seeking.seek(0, io.SEEK_END)
+            seeking.seek(here)
+            if not await seeking._read(4 * _KiB):
+                break
+    assert seeking.fetched == plain.fetched
+
+
 def _parquet_like(
     row_groups: int, columns: int, chunk: int
 ) -> tuple[bytes, list[list[tuple[int, int]]]]:

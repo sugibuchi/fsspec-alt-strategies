@@ -192,6 +192,20 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         self._buffer = buffer
         return buffer
 
+    @property
+    def size(self) -> int | None:
+        """The file's size so far, once downloaded or created: None before."""
+        if self._buffer is None:
+            return None
+        pos = self._buffer.tell()
+        size = self._buffer.seek(0, io.SEEK_END)
+        self._buffer.seek(pos)
+        return size
+
+    async def _prepare(self) -> None:
+        # Downloaded, the position is known: seek and tell stay local.
+        await self._load()
+
     def _local(self) -> IO[bytes]:
         self.load()
         assert self._buffer is not None
@@ -253,21 +267,9 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         self._check_open()
         return self._local().tell()
 
-    async def _tell(self) -> int:
-        """The position, as ``tell`` gives it."""
-        self._check_open()
-        return (await self._load()).tell()
-
     def truncate(self, size: int | None = None) -> int:
         self._check_writable()
-        return self._truncate_to(self._local(), size)
-
-    async def _truncate(self, size: int | None = None) -> int:
-        """Truncate as ``truncate`` does."""
-        self._check_writable()
-        return self._truncate_to(await self._load(), size)
-
-    def _truncate_to(self, buffer: IO[bytes], size: int | None) -> int:
+        buffer = self._local()
         size = buffer.tell() if size is None else size
         _check_size(size, self.max_size, self.path)
         self._changed = True

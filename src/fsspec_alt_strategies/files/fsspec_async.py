@@ -9,7 +9,7 @@ so that a filesystem implements its requests once, for both ``open`` and
 ``open_async``:
 
 >>> async def open_async(self, path, mode="rb", **kwargs):
-...     return AsyncFileAdapter(MyFile(self, path, mode))
+...     return await AsyncFileAdapter.open(MyFile(self, path, mode))
 
 The adapter only awaits what the file implements already: the file objects
 stay files, with Python's sync API.
@@ -32,34 +32,57 @@ __all__ = ["AsyncFileAdapter"]
 class AsyncFileAdapter:
     """A file object of this package, as fsspec's ``open_async`` returns it.
 
-    Each method awaits the file's async counterpart of the sync one, e.g.
-    ``read`` awaits what the file's ``read`` waits for. As in fsspec's async
-    files, ``read``, ``write``, ``flush`` and ``close`` are awaited. So are
-    ``seek``, ``tell`` and ``truncate``, unlike in fsspec's: they may send a
-    request, e.g. a `~fsspec_alt_strategies.files.buffered.LocallyBufferedFile`
-    downloading first. ``readable``, ``writable`` and ``seekable`` send none.
+    As in fsspec's ``AbstractAsyncStreamedFile``:
 
-    Leaving an ``async with`` block closes the file as leaving a ``with``
-    block does, e.g. discarding a locally buffered file's changes on an
-    exception. Close it: an open file closed by the garbage collector waits
-    on the loop, which may be the running one.
+    - ``read``, ``write``, ``flush`` and ``close`` are awaited. Each awaits the
+      file's async counterpart of the sync method, e.g. ``_read``.
+    - ``seek``, ``tell``, ``readable``, ``writable`` and ``seekable`` are not:
+      they send no request.
+    - ``path``, ``mode``, ``size``, ``loc``, ``closed`` and ``info`` describe
+      the file.
+
+    Create it with `open`, which awaits what ``seek`` and ``tell`` need first,
+    e.g. a locally buffered file's download.
+
+    Unlike fsspec's, leaving an ``async with`` block by an exception discards a
+    locally buffered file's changes, as leaving a ``with`` block does. Close
+    it: an open file closed by the garbage collector waits on the loop, which
+    may be the running one.
 
     Parameters
     ----------
     file : AdaptiveReadableFile, AdaptiveWritableFile or LocallyBufferedFile
-        The file. Its methods run on its ``loop``: the adapter's raise
+        The file. Its requests run on its ``loop``: the awaited methods raise
         RuntimeError on another one.
 
     Examples
     --------
-    >>> async with AsyncFileAdapter(MyFile(fs, path, "rb")) as f:
+    >>> async def open_async(self, path, mode="rb", **kwargs):
+    ...     return await AsyncFileAdapter.open(MyFile(self, path, mode))
+    >>> async with await fs.open_async(path) as f:
     ...     header = await f.read(8)
-    ...     await f.seek(-8, io.SEEK_END)
+    ...     f.seek(-8, io.SEEK_END)
     ...     footer = await f.read()
     """
 
     def __init__(self, file: _AsyncFile) -> None:
         self.file = file
+
+    @classmethod
+    async def open(cls, file: _AsyncFile) -> Self:
+        """Adapt a file, once it has sent what ``seek`` and ``tell`` need.
+
+        A locally buffered file downloads here, as fsspec's async files learn
+        their size on opening. So a missing file raises here, and the file is
+        closed.
+        """
+        adapter = cls(file)
+        try:
+            await adapter._on_loop()._prepare()
+        except BaseException:
+            await file.aclose()
+            raise
+        return adapter
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.file!r}>"
@@ -69,8 +92,28 @@ class AsyncFileAdapter:
         return self.file.path
 
     @property
+    def mode(self) -> str:
+        return self.file.mode
+
+    @property
+    def size(self) -> int | None:
+        """The file's size: None if not known, e.g. while writing it."""
+        return getattr(self.file, "size", None)
+
+    @property
     def closed(self) -> bool:
         return self.file.closed
+
+    @property
+    def loc(self) -> int:
+        """The position, as fsspec's files keep it."""
+        return self.file.tell()
+
+    def info(self) -> dict[str, Any]:
+        """The file's details, as fsspec's ``info`` gives them, when reading."""
+        if not self.file.readable():
+            raise ValueError("Info not available while writing")
+        return {"name": self.path, "size": self.size, "type": "file"}
 
     def _on_loop(self) -> _AsyncFile:
         """The file, once checked that this runs on its loop."""
@@ -87,23 +130,17 @@ class AsyncFileAdapter:
     def seekable(self) -> bool:
         return self.file.seekable()
 
-    async def read(self, size: int | None = -1) -> bytes:
-        return await self._on_loop()._read(-1 if size is None else size)
+    def seek(self, loc: int, whence: int = io.SEEK_SET) -> int:
+        return self.file.seek(loc, whence)
 
-    async def readall(self) -> bytes:
-        return await self.read(-1)
+    def tell(self) -> int:
+        return self.file.tell()
+
+    async def read(self, length: int | None = -1) -> bytes:
+        return await self._on_loop()._read(-1 if length is None else length)
 
     async def write(self, data: Any) -> int:
         return await self._on_loop()._write(data)
-
-    async def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
-        return await self._on_loop()._seek(offset, whence)
-
-    async def tell(self) -> int:
-        return await self._on_loop()._tell()
-
-    async def truncate(self, size: int | None = None) -> int:
-        return await self._on_loop()._truncate(size)
 
     async def flush(self, force: bool = False) -> None:
         await self._on_loop()._flush(force)
