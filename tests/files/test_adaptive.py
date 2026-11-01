@@ -9,6 +9,8 @@ import io
 import os
 import random
 import struct
+import subprocess
+import sys
 import time
 from typing import Any
 
@@ -496,6 +498,49 @@ def test_file_collected_unclosed_off_its_loop_waits_for_the_abort() -> None:
         gc.collect()
     assert requests == ["start", "abort"]  # Already: waited for, not scheduled.
     assert not fs.exists("f.bin")
+
+
+_LEFT_OPEN_AT_EXIT = """
+from fsspec.asyn import get_loop
+
+from fsspec_alt_strategies.files.adaptive import AdaptiveWritableFile
+from fsspec_alt_strategies.files.fsspec_transaction import (
+    AdaptiveWritableTransaction,
+    TransactionFile,
+)
+
+
+class Writer(AdaptiveWritableFile):
+    async def _upload_all(self, data): pass
+    async def _start_multipart_upload(self): pass
+    async def _upload_part(self, data, start, end, index, last): return index
+    async def _complete_multipart_upload(self, parts): pass
+    async def _abort_multipart_upload(self): pass
+
+
+def open_file():
+    sizes = {"min_block_size": 1024, "max_block_size": 1024}
+    return Writer("f.bin", get_loop(), min_multipart_size=1024, **sizes)
+
+
+# Module globals: finalized during shutdown, once the loop's thread is frozen.
+f = open_file()
+f.write(b"x" * 4096)
+t = TransactionFile(AdaptiveWritableTransaction(open_file()))
+t.write(b"x" * 4096)
+"""
+
+
+def test_files_left_open_at_exit_do_not_hang_it() -> None:
+    # The loop's daemon thread is frozen during shutdown, but its loop still
+    # looks running: waiting for it would never end.
+    done = subprocess.run(
+        [sys.executable, "-c", _LEFT_OPEN_AT_EXIT],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr.decode()
 
 
 async def test_failed_part_aborts_the_upload(flat_fs: SimulatedFileSystem) -> None:

@@ -51,6 +51,7 @@ from __future__ import annotations
 import contextlib
 import io
 import shutil
+import sys
 import tempfile
 import uuid
 import warnings
@@ -148,7 +149,8 @@ class TransactionFile(io.RawIOBase):
 
     The garbage collector discards a file neither committed nor discarded,
     warning with a ResourceWarning. A discard failing there, e.g. on the loop
-    of the file staged, leaves what was staged, as if the process had died.
+    of the file staged, leaves what was staged, as if the process had died. So
+    does the interpreter shutting down, when no discard is tried.
 
     Parameters
     ----------
@@ -291,6 +293,10 @@ class TransactionFile(io.RawIOBase):
             stacklevel=1,  # A finalizer has no caller to point at.
             source=self,
         )
+        if sys.is_finalizing():
+            # A discard may wait on a loop whose thread is frozen now: what was
+            # staged stays, as if the process had died.
+            return
         with contextlib.suppress(Exception):
             self.discard()
 

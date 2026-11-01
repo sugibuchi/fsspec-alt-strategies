@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import io
+import sys
 import warnings
 from abc import abstractmethod
 from collections import deque
@@ -54,7 +55,9 @@ class _AsyncFile(io.RawIOBase):
     a ResourceWarning, and ``_abort`` undoes its requests, e.g. aborting an
     upload. The collector waits for that, as closing would. On the loop's own
     thread, it runs as a task instead, once the thread returns to the loop.
-    With the loop not running, e.g. at exit, nothing can undo the requests.
+    With the loop not running, or the interpreter shutting down, nothing can
+    undo the requests: they stay, as if the process had died. Stopping the
+    loop before exit is its owner's concern, e.g. fsspec's.
 
     Its parameters are the subclasses' first ones: ``path``, ``loop`` and
     ``concurrency_limit``.
@@ -90,8 +93,9 @@ class _AsyncFile(io.RawIOBase):
             raise RuntimeError(
                 f"Waiting on its own loop, which would never run: {self.path}"
             )
-        if not self.loop.is_running():
-            # E.g. at exit, once the loop's thread is gone: waiting would hang.
+        if not self.loop.is_running() or sys.is_finalizing():
+            # During shutdown, the loop's daemon thread is frozen, yet its loop
+            # still looks running: waiting would hang, as on a stopped loop.
             coro.close()
             raise RuntimeError(f"Waiting on a loop that is not running: {self.path}")
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
@@ -172,7 +176,7 @@ class _AsyncFile(io.RawIOBase):
         try:
             if self._on_its_loop():
                 self._do_abort_soon()
-            elif self.loop.is_running():
+            elif self.loop.is_running() and not sys.is_finalizing():
                 self._sync(self._abort())
             # Else nothing can undo the requests, e.g. at exit: they stay, as
             # if the process had died.
