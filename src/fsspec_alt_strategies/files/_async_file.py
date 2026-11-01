@@ -185,11 +185,10 @@ class _AsyncFile(io.RawIOBase):
             try:
                 # Scheduled, not waited for: it runs once the loop does.
                 future = asyncio.run_coroutine_threadsafe(coro, loop)
-            except RuntimeError:
-                coro.close()  # The loop closed meanwhile.
-            else:
                 _abandoned.add(future)
                 future.add_done_callback(_abandoned.discard)
+            except RuntimeError:
+                coro.close()  # The loop closed meanwhile.
         io.RawIOBase.close(self)
 
     async def _abandon(self) -> None:
