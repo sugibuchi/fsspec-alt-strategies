@@ -7,14 +7,16 @@ This module depends on `_async_file`.
 
 from __future__ import annotations
 
-import asyncio
 import errno
 import io
 import tempfile
 from abc import ABC, abstractmethod
-from typing import IO, Any
+from typing import IO, TYPE_CHECKING, Any
 
 from ._async_file import _AsyncFile, _MiB
+
+if TYPE_CHECKING:
+    import asyncio
 
 __all__ = ["LocallyBufferedFile"]
 
@@ -172,19 +174,12 @@ class LocallyBufferedFile(_AsyncFile, ABC):
     def _ensure_loaded(self) -> IO[bytes]:
         """The buffer, once the file is open and loaded: each operation's precondition.
 
-        Loading waits on the loop. So on the loop itself, the file must be
-        loaded already, by `aload` or an awaited read or write.
+        Loading waits on the loop, which raises RuntimeError on the loop
+        itself. So there, the file must be loaded already, by `aload` or an
+        awaited read or write.
         """
         self._check_open()
         if self._buffer is None:
-            try:
-                running = asyncio.get_running_loop()
-            except RuntimeError:
-                running = None
-            if running is self.loop:
-                raise RuntimeError(
-                    f"Not loaded yet, on its loop: await aload(): {self.path}"
-                )
             self._sync(self._load())
         assert self._buffer is not None
         return self._buffer

@@ -148,7 +148,7 @@ async def test_an_unloaded_buffered_file_cannot_seek_on_its_loop(
 ) -> None:
     fs.pipe_file("f.bin", b"0123456789")
     file = _Whole(fs, "f.bin", "rb")
-    with pytest.raises(RuntimeError, match="aload"):
+    with pytest.raises(RuntimeError, match="own loop"):
         file.tell()
     # An awaited read loads it: then seek and tell are local.
     f = AsyncFileAdapter(file)
