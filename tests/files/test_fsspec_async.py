@@ -88,7 +88,7 @@ async def test_reads_and_seeks_as_bytesio(fs: SimulatedFileSystem) -> None:
     data = os.urandom(100 * _KiB)
     fs.pipe_file("f.bin", data)
     reference = io.BytesIO(data)
-    async with await AsyncFileAdapter.open(_Reader(fs, "f.bin", len(data))) as f:
+    async with AsyncFileAdapter(_Reader(fs, "f.bin", len(data))) as f:
         assert (f.mode, f.size, f.readable(), f.writable()) == ("rb", len(data), 1, 0)
         assert f.info() == {"name": "f.bin", "size": len(data), "type": "file"}
         assert await f.read(10) == reference.read(10)
@@ -104,7 +104,7 @@ async def test_reads_and_seeks_as_bytesio(fs: SimulatedFileSystem) -> None:
 async def test_writes_in_parts(fs: SimulatedFileSystem) -> None:
     data = os.urandom(40 * _KiB)
     file = _Writer(fs, "f.bin")
-    async with await AsyncFileAdapter.open(file) as f:
+    async with AsyncFileAdapter(file) as f:
         assert (f.mode, f.size) == ("wb", None)
         with pytest.raises(ValueError, match="writing"):
             f.info()
@@ -124,8 +124,10 @@ async def test_writes_in_parts(fs: SimulatedFileSystem) -> None:
 async def test_a_locally_buffered_file(fs: SimulatedFileSystem) -> None:
     fs.pipe_file("f.bin", b"0123456789")
     fs.reset_stats()
-    async with await AsyncFileAdapter.open(_Whole(fs, "f.bin", "r+b")) as f:
-        # Downloaded on opening: seek and tell are local.
+    file = _Whole(fs, "f.bin", "r+b")
+    await file.aload()
+    async with AsyncFileAdapter(file) as f:
+        # Loaded first: seek and tell are local.
         assert fs.stats.calls == {"read": 1}
         assert (f.size, f.tell()) == (10, 0)
         f.seek(4)
@@ -135,22 +137,29 @@ async def test_a_locally_buffered_file(fs: SimulatedFileSystem) -> None:
 
     # An exception in the block discards the changes, as in a with block.
     with pytest.raises(RuntimeError):
-        async with await AsyncFileAdapter.open(_Whole(fs, "f.bin", "wb")) as f:
+        async with AsyncFileAdapter(_Whole(fs, "f.bin", "wb")) as f:
             await f.write(b"lost")
             raise RuntimeError("failed midway")
     assert fs.cat_file("f.bin") == b"0123ab6789"
 
 
-async def test_opening_a_missing_file_raises(fs: SimulatedFileSystem) -> None:
-    file = _Whole(fs, "missing.bin", "rb")
-    with pytest.raises(FileNotFoundError):
-        await AsyncFileAdapter.open(file)
-    assert file.closed
+async def test_an_unloaded_buffered_file_cannot_seek_on_its_loop(
+    fs: SimulatedFileSystem,
+) -> None:
+    fs.pipe_file("f.bin", b"0123456789")
+    file = _Whole(fs, "f.bin", "rb")
+    with pytest.raises(RuntimeError, match="aload"):
+        file.tell()
+    # An awaited read loads it: then seek and tell are local.
+    f = AsyncFileAdapter(file)
+    assert await f.read(2) == b"01"
+    assert f.seek(-1, io.SEEK_END) == 9
+    await f.close()
 
 
 async def test_refuses_another_loop(fs: SimulatedFileSystem) -> None:
     # The file's loop is the filesystem's, not the running one.
     file = _Whole(fs, "f.bin", "wb", loop=fs.loop)
     with pytest.raises(RuntimeError, match="outside the loop"):
-        await AsyncFileAdapter.open(file)
+        await AsyncFileAdapter(file).write(b"x")
     file.close()

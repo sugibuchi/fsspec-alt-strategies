@@ -34,7 +34,7 @@ class _AsyncFile(io.RawIOBase):
     The async counterparts are ``_read``, ``_write``, ``_flush`` and
     ``aclose``. A file not supporting one keeps the default here, which raises
     `io.UnsupportedOperation`. ``seek`` and ``tell`` have none: as in fsspec's
-    async files, they send no request, once ``_prepare`` has run.
+    async files, they must send no request on the loop.
 
     ``flush`` is abstract, taking ``force`` as fsspec's files do: each class
     decides what flushing sends, and whether the file shows what was written
@@ -87,13 +87,6 @@ class _AsyncFile(io.RawIOBase):
     async def _write(self, data: Any) -> int:
         """Write as ``write`` does."""
         raise self._unsupported("write")
-
-    async def _prepare(self) -> None:
-        """Send what ``seek`` and ``tell`` need, e.g. a download, before either.
-
-        Opening a file sends nothing. Async code awaits this first, so that
-        ``seek`` and ``tell`` need not wait on the loop it runs on.
-        """
 
     @abstractmethod
     def flush(self, force: bool = False) -> None:

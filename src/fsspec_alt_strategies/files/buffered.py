@@ -7,16 +7,14 @@ This module depends on `_async_file`.
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import io
 import tempfile
 from abc import ABC, abstractmethod
-from typing import IO, TYPE_CHECKING, Any
+from typing import IO, Any
 
 from ._async_file import _AsyncFile, _MiB
-
-if TYPE_CHECKING:
-    import asyncio
 
 __all__ = ["LocallyBufferedFile"]
 
@@ -33,7 +31,8 @@ class LocallyBufferedFile(_AsyncFile, ABC):
 
     - Nothing is downloaded until the first read, write, seek or tell, or
       `load`. A filesystem's ``_open`` may call `load`, so that a missing file
-      raises there, as fsspec's files do.
+      raises there, as fsspec's files do. Its ``open_async`` awaits `aload`:
+      on the loop, seek and tell cannot wait for the download.
     - The buffer is a `tempfile.SpooledTemporaryFile`: in memory up to
       ``spool_size`` bytes, then on disk. It is deleted on closing.
     - Closing uploads the buffer, only if it was written or truncated, or the
@@ -160,12 +159,34 @@ class LocallyBufferedFile(_AsyncFile, ABC):
 
     def load(self) -> None:
         """Download the file now, if not yet, so that a missing file raises now."""
+        self._ensure_loaded()
+
+    async def aload(self) -> None:
+        """Download the file now, if not yet: `load`'s async counterpart.
+
+        A filesystem's ``open_async`` awaits it, so that seek and tell need no
+        request on the loop.
+        """
+        await self._load()
+
+    def _ensure_loaded(self) -> IO[bytes]:
+        """The buffer, once the file is open and loaded: each operation's precondition.
+
+        Loading waits on the loop. So on the loop itself, the file must be
+        loaded already, by `aload` or an awaited read or write.
+        """
         self._check_open()
         if self._buffer is None:
+            if _running_loop() is self.loop:
+                raise RuntimeError(
+                    f"Not loaded yet, on its loop: await aload(): {self.path}"
+                )
             self._sync(self._load)
+        assert self._buffer is not None
+        return self._buffer
 
     async def _load(self) -> IO[bytes]:
-        """The buffer, downloaded first if not yet: `load`'s async counterpart."""
+        """The buffer, once the file is open and loaded: `_ensure_loaded` on the loop."""
         self._check_open()
         if self._buffer is not None:
             return self._buffer
@@ -202,15 +223,6 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         self._buffer.seek(pos)
         return size
 
-    async def _prepare(self) -> None:
-        # Downloaded, the position is known: seek and tell stay local.
-        await self._load()
-
-    def _local(self) -> IO[bytes]:
-        self.load()
-        assert self._buffer is not None
-        return self._buffer
-
     def _check_readable(self) -> None:
         if not self.readable():
             raise io.UnsupportedOperation(f"File not open for reading: {self.path}")
@@ -221,7 +233,7 @@ class LocallyBufferedFile(_AsyncFile, ABC):
 
     def read(self, size: int | None = -1) -> bytes:
         self._check_readable()
-        return self._local().read(-1 if size is None else size)
+        return self._ensure_loaded().read(-1 if size is None else size)
 
     def readall(self) -> bytes:
         return self.read(-1)
@@ -238,7 +250,7 @@ class LocallyBufferedFile(_AsyncFile, ABC):
 
     def write(self, data: Any) -> int:
         self._check_writable()
-        return self._write_to(self._local(), data)
+        return self._write_to(self._ensure_loaded(), data)
 
     async def _write(self, data: Any) -> int:
         """Write as ``write`` does."""
@@ -255,21 +267,18 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         return size
 
     def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
-        self._check_open()
-        return self._local().seek(offset, whence)
+        return self._ensure_loaded().seek(offset, whence)
 
     async def _seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
         """Move as ``seek`` does."""
-        self._check_open()
         return (await self._load()).seek(offset, whence)
 
     def tell(self) -> int:
-        self._check_open()
-        return self._local().tell()
+        return self._ensure_loaded().tell()
 
     def truncate(self, size: int | None = None) -> int:
         self._check_writable()
-        buffer = self._local()
+        buffer = self._ensure_loaded()
         size = buffer.tell() if size is None else size
         _check_size(size, self.max_size, self.path)
         self._changed = True
@@ -306,6 +315,13 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         if exc_type is not None:
             self.discard()
         await self.aclose()
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
 
 
 def _check_size(size: int, max_size: int | None, path: str) -> None:

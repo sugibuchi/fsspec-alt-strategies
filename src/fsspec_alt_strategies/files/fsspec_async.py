@@ -9,7 +9,7 @@ so that a filesystem implements its requests once, for both ``open`` and
 ``open_async``:
 
 >>> async def open_async(self, path, mode="rb", **kwargs):
-...     return await AsyncFileAdapter.open(MyFile(self, path, mode))
+...     return AsyncFileAdapter(MyFile(self, path, mode))
 
 The adapter only awaits what the file implements already: the file objects
 stay files, with Python's sync API.
@@ -41,8 +41,9 @@ class AsyncFileAdapter:
     - ``path``, ``mode``, ``size``, ``loc``, ``closed`` and ``info`` describe
       the file.
 
-    Create it with `open`, which awaits what ``seek`` and ``tell`` need first,
-    e.g. a locally buffered file's download.
+    ``seek`` and ``tell`` run the file's own: they must need no request. A
+    `~fsspec_alt_strategies.files.buffered.LocallyBufferedFile` needs its
+    download first: ``open_async`` awaits its ``aload`` before adapting it.
 
     Unlike fsspec's, leaving an ``async with`` block by an exception discards a
     locally buffered file's changes, as leaving a ``with`` block does. Close
@@ -58,7 +59,9 @@ class AsyncFileAdapter:
     Examples
     --------
     >>> async def open_async(self, path, mode="rb", **kwargs):
-    ...     return await AsyncFileAdapter.open(MyFile(self, path, mode))
+    ...     f = MyLocallyBufferedFile(self, path, mode)
+    ...     await f.aload()  # So that a missing file raises here.
+    ...     return AsyncFileAdapter(f)
     >>> async with await fs.open_async(path) as f:
     ...     header = await f.read(8)
     ...     f.seek(-8, io.SEEK_END)
@@ -67,22 +70,6 @@ class AsyncFileAdapter:
 
     def __init__(self, file: _AsyncFile) -> None:
         self.file = file
-
-    @classmethod
-    async def open(cls, file: _AsyncFile) -> Self:
-        """Adapt a file, once it has sent what ``seek`` and ``tell`` need.
-
-        A locally buffered file downloads here, as fsspec's async files learn
-        their size on opening. So a missing file raises here, and the file is
-        closed.
-        """
-        adapter = cls(file)
-        try:
-            await adapter._on_loop()._prepare()
-        except BaseException:
-            await file.aclose()
-            raise
-        return adapter
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.file!r}>"
