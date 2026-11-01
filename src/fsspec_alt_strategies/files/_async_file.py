@@ -28,7 +28,11 @@ class _AsyncFile(io.RawIOBase):
     Each sync method, such as ``read``, runs its async counterpart, such as
     ``_read``, on the loop and waits for it, as fsspec's filesystems do. So the
     sync methods cannot be called on the loop itself: code there awaits the
-    async ones instead.
+    async ones instead, through `files.asynchronous.AsyncFileAdapter`.
+
+    The async counterparts are ``_read``, ``_write``, ``_seek``, ``_tell``,
+    ``_truncate`` and ``aclose``. A file not supporting one keeps the default
+    here, which raises `io.UnsupportedOperation`.
 
     A request holds the concurrency limit while it runs. Shared by files, the
     limit bounds their requests together, and so the memory these hold.
@@ -63,6 +67,29 @@ class _AsyncFile(io.RawIOBase):
     def _check_open(self) -> None:
         if self.closed:
             raise ValueError(f"I/O operation on closed file: {self.path}")
+
+    def _unsupported(self, operation: str) -> io.UnsupportedOperation:
+        return io.UnsupportedOperation(f"{operation} on {self.path}")
+
+    async def _read(self, size: int = -1) -> bytes:
+        """Read as ``read`` does."""
+        raise self._unsupported("read")
+
+    async def _write(self, data: Any) -> int:
+        """Write as ``write`` does."""
+        raise self._unsupported("write")
+
+    async def _seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        """Move as ``seek`` does."""
+        raise self._unsupported("seek")
+
+    async def _tell(self) -> int:
+        """The position, as ``tell`` gives it: a subclass sending no request."""
+        return self.tell()
+
+    async def _truncate(self, size: int | None = None) -> int:
+        """Truncate as ``truncate`` does."""
+        raise self._unsupported("truncate")
 
     async def _close(self) -> None:
         """Finish the file's requests: what a subclass adds to closing."""

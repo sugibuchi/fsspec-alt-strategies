@@ -253,9 +253,21 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         self._check_open()
         return self._local().tell()
 
+    async def _tell(self) -> int:
+        """The position, as ``tell`` gives it."""
+        self._check_open()
+        return (await self._load()).tell()
+
     def truncate(self, size: int | None = None) -> int:
         self._check_writable()
-        buffer = self._local()
+        return self._truncate_to(self._local(), size)
+
+    async def _truncate(self, size: int | None = None) -> int:
+        """Truncate as ``truncate`` does."""
+        self._check_writable()
+        return self._truncate_to(await self._load(), size)
+
+    def _truncate_to(self, buffer: IO[bytes], size: int | None) -> int:
         size = buffer.tell() if size is None else size
         _check_size(size, self.max_size, self.path)
         self._changed = True
