@@ -1,12 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""File objects written in a transaction, visible only once committed.
+"""fsspec's transactions, on top of file objects that know nothing of them.
 
 fsspec opens a file with ``autocommit=False`` inside ``with fs.transaction:``.
 When the block ends, it calls the file's ``commit()``, or its ``discard()`` if
-the block raised. How a file stays invisible until then depends on the
-storage. So the file objects stay plain files, and a `FileTransaction` holds
-the strategy, for one file:
+the block raised. This module serves two aims:
+
+- It implements the typical strategies keeping a file invisible until then,
+  so that each filesystem does not write its own.
+- It adds them on top of file objects that exist already, which need no
+  support of their own. Those may be a storage SDK's own file-like objects,
+  needing only the methods used, such as ``write`` and ``close``.
+
+A `FileTransaction` holds the strategy, for one file:
 
 - `TempPathTransaction` writes to a temporary path beside the file, renamed
   on commit. It suits any storage, best one renaming in one request. Other
@@ -48,7 +54,7 @@ import shutil
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import IO, TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -111,7 +117,7 @@ class FileTransaction(ABC):
         return f"<{type(self).__name__} {self.path!r}>"
 
     @abstractmethod
-    def start_staging(self) -> io.IOBase:
+    def start_staging(self) -> IO[bytes]:
         """Open the file the reads and writes go to."""
 
     @abstractmethod
@@ -163,21 +169,32 @@ class TransactionFile(io.RawIOBase):
         if self.closed:
             raise ValueError(f"I/O operation on closed file: {self.path}")
 
-    def readable(self) -> bool:
+    def _method(self, name: str) -> Any:
+        """The staged file's method, which a file-like object may lack."""
         self._check_open()
-        return self._file.readable()
+        method = getattr(self._file, name, None)
+        if method is None:
+            raise io.UnsupportedOperation(f"{name} on {self.path}")
+        return method
+
+    def _can(self, query: str, method: str) -> bool:
+        # A file-like object lacking e.g. readable() can read if it has read().
+        self._check_open()
+        if (answer := getattr(self._file, query, None)) is not None:
+            return answer()
+        return hasattr(self._file, method)
+
+    def readable(self) -> bool:
+        return self._can("readable", "read")
 
     def writable(self) -> bool:
-        self._check_open()
-        return self._file.writable()
+        return self._can("writable", "write")
 
     def seekable(self) -> bool:
-        self._check_open()
-        return self._file.seekable()
+        return self._can("seekable", "seek")
 
     def read(self, size: int | None = -1) -> bytes:
-        self._check_open()
-        return self._file.read(-1 if size is None else size)
+        return self._method("read")(-1 if size is None else size)
 
     def readall(self) -> bytes:
         return self.read(-1)
@@ -188,25 +205,25 @@ class TransactionFile(io.RawIOBase):
         return len(data)
 
     def write(self, data: Any) -> int:
-        self._check_open()
-        return self._file.write(data)
+        written = self._method("write")(data)
+        # Some SDKs' files return nothing, having written all.
+        return len(memoryview(data).cast("B")) if written is None else written
 
     def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
-        self._check_open()
-        return self._file.seek(offset, whence)
+        return self._method("seek")(offset, whence)
 
     def tell(self) -> int:
-        self._check_open()
-        return self._file.tell()
+        return self._method("tell")()
 
     def truncate(self, size: int | None = None) -> int:
-        self._check_open()
-        return self._file.truncate(size)
+        return self._method("truncate")(size)
 
     def flush(self) -> None:
         # io.IOBase.close flushes after end_staging or discard closed the file.
-        if not self.closed and not self._file.closed:
-            self._file.flush()
+        if self.closed or getattr(self._file, "closed", False):
+            return
+        if (flush := getattr(self._file, "flush", None)) is not None:
+            flush()
 
     def close(self) -> None:
         """Finish the writing. It stays invisible until `commit`."""
@@ -278,7 +295,7 @@ class TempPathTransaction(FileTransaction):
     path : str
         The file's path.
     open_file : callable
-        Opens a plain file for writing at the path given: the temporary one.
+        Opens a file-like object for writing at the path given: the temporary one.
     rename : callable
         Moves a file from its first path to its second, overwriting it, e.g.
         the storage's own rename.
@@ -299,7 +316,7 @@ class TempPathTransaction(FileTransaction):
     def __init__(
         self,
         path: str,
-        open_file: Callable[[str], io.IOBase],
+        open_file: Callable[[str], IO[bytes]],
         rename: Callable[[str, str], object],
         delete: Callable[[str], object],
         *,
@@ -310,9 +327,9 @@ class TempPathTransaction(FileTransaction):
         self.rename = rename
         self.delete = delete
         self.temp_path = temp_path or _temp_path(path)
-        self._file: io.IOBase | None = None
+        self._file: IO[bytes] | None = None
 
-    def start_staging(self) -> io.IOBase:
+    def start_staging(self) -> IO[bytes]:
         self._file = self.open_file(self.temp_path)
         return self._file
 
@@ -349,7 +366,7 @@ class LocalBufferTransaction(FileTransaction):
     path : str
         The file's path.
     open_file : callable
-        Opens a plain file for writing at the path given, in the mode wanted:
+        Opens a file-like object for writing at the path given, in the mode wanted:
         e.g. "ab" appends the buffer on commit.
     spool_size : int
         The most bytes buffered in memory, beyond which the buffer moves to
@@ -364,7 +381,7 @@ class LocalBufferTransaction(FileTransaction):
     def __init__(
         self,
         path: str,
-        open_file: Callable[[str], io.IOBase],
+        open_file: Callable[[str], IO[bytes]],
         *,
         spool_size: int = 8 * _MiB,
     ) -> None:
@@ -373,7 +390,7 @@ class LocalBufferTransaction(FileTransaction):
         self.spool_size = spool_size
         self._buffer: Any = None
 
-    def start_staging(self) -> io.IOBase:
+    def start_staging(self) -> IO[bytes]:
         self._buffer = tempfile.SpooledTemporaryFile(max_size=self.spool_size)  # noqa: SIM115
         return self._buffer
 
@@ -383,7 +400,8 @@ class LocalBufferTransaction(FileTransaction):
     def commit(self) -> None:
         try:
             self._buffer.seek(0)
-            with self.open_file(self.path) as f:
+            # Only close(): a file-like object may not be a context manager.
+            with contextlib.closing(self.open_file(self.path)) as f:
                 shutil.copyfileobj(self._buffer, f, _MiB)
         finally:
             self._buffer.close()
@@ -429,7 +447,7 @@ class AdaptiveWritableTransaction(FileTransaction):
         self._multipart = False
         self._discarding = False
 
-    def start_staging(self) -> io.IOBase:
+    def start_staging(self) -> IO[bytes]:
         file = self.file
         complete, upload_all = file._complete_multipart_upload, file._upload_all
 
@@ -497,7 +515,7 @@ class LocallyBufferedTransaction(FileTransaction):
         super().__init__(file.path)
         self.file = file
 
-    def start_staging(self) -> io.IOBase:
+    def start_staging(self) -> IO[bytes]:
         return self.file
 
     def end_staging(self) -> None:

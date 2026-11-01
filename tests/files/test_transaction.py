@@ -206,6 +206,42 @@ def test_locally_buffered_uploads_on_commit(fs: SimulatedFileSystem) -> None:
     assert fs.stats.calls == {}
 
 
+class _SDKWriter:
+    """An SDK's file-like object: only write and close, write returning nothing."""
+
+    def __init__(self, fs: SimulatedFileSystem, path: str) -> None:
+        self.fs = fs
+        self.path = path
+        self.data = bytearray()
+
+    def write(self, data: bytes) -> None:
+        self.data += data
+
+    def close(self) -> None:
+        self.fs.pipe_file(self.path, bytes(self.data))
+
+
+@pytest.mark.parametrize("strategy", ["temp", "buffer"])
+def test_an_sdk_file_like_object(fs: SimulatedFileSystem, strategy: str) -> None:
+    def open_file(p: str) -> Any:
+        return _SDKWriter(fs, p)
+
+    if strategy == "temp":
+        t: FileTransaction = TempPathTransaction("f.bin", open_file, fs.mv, fs.rm_file)
+    else:
+        t = LocalBufferTransaction("f.bin", open_file)
+    f = TransactionFile(t)
+    assert f.writable()
+    assert f.write(b"abc") == 3
+    if strategy == "temp":  # Written to the object itself, which cannot.
+        with pytest.raises(io.UnsupportedOperation):
+            f.truncate()
+    f.close()
+    assert not fs.exists("f.bin")
+    f.commit()
+    assert fs.cat_file("f.bin") == b"abc"
+
+
 def test_an_exception_in_the_block_discards() -> None:
     t = _Recorded("f.bin", io.BytesIO())
     with pytest.raises(RuntimeError), TransactionFile(t) as f:
