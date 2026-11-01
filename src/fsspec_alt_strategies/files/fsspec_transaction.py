@@ -48,7 +48,6 @@ classes only for type checking.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import io
 import shutil
@@ -538,7 +537,7 @@ class AdaptiveWritableTransaction(FileTransaction):
     def discard(self) -> None:
         self._discarding = True
         self._last = None
-        if _on_loop_of(self.file):
+        if self.file._on_its_loop():
             # Nothing can wait there, e.g. when collected there: the file
             # aborts its upload later, closed or not.
             self._multipart = False
@@ -590,17 +589,9 @@ class LocallyBufferedTransaction(FileTransaction):
         self.file.close()
 
     def discard(self) -> None:
-        if _on_loop_of(self.file):
+        if self.file._on_its_loop():
             # Nothing can wait there, e.g. when collected there.
             self.file._abandon_later()
         else:
             self.file.discard()
             self.file.close()
-
-
-def _on_loop_of(file: Any) -> bool:
-    """Whether this runs on the file's loop, where nothing can wait for it."""
-    try:
-        return asyncio.get_running_loop() is file.loop
-    except RuntimeError:
-        return False

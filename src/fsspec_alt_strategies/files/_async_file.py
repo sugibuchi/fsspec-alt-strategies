@@ -24,9 +24,9 @@ _MiB = 1024 * 1024
 
 _T = TypeVar("_T")
 
-# The cleanups of files collected unclosed, until they end: a loop holds its
-# tasks only weakly.
-_abandoned: set[concurrent.futures.Future[None]] = set()
+# The cleanups of abandoned files, until they end: a loop holds its tasks only
+# weakly.
+_abandoned: set[asyncio.Task[None]] = set()
 
 
 class _AsyncFile(io.RawIOBase):
@@ -54,8 +54,8 @@ class _AsyncFile(io.RawIOBase):
     never closed was never finished, so nothing written is kept. It warns with
     a ResourceWarning, and ``_abandon`` undoes its requests, e.g. aborting an
     upload. The collector waits for that, as closing would. On the loop's own
-    thread, or with the loop not running, waiting would never end: there, it
-    is only scheduled on the loop.
+    thread, it runs as a task instead, once the thread returns to the loop.
+    With the loop not running, e.g. at exit, nothing can undo the requests.
 
     Its parameters are the subclasses' first ones: ``path``, ``loop`` and
     ``concurrency_limit``.
@@ -86,11 +86,7 @@ class _AsyncFile(io.RawIOBase):
 
     def _sync(self, coro: Coroutine[Any, Any, _T]) -> _T:
         """Wait for ``coro`` to run on the loop, from another thread."""
-        try:
-            running = asyncio.get_running_loop()
-        except RuntimeError:
-            running = None
-        if running is self.loop:
+        if self._on_its_loop():
             coro.close()  # Never awaited, without a warning.
             raise RuntimeError(
                 f"Waiting on its own loop, which would never run: {self.path}"
@@ -175,31 +171,33 @@ class _AsyncFile(io.RawIOBase):
             source=self,
         )
         try:
-            self._sync(self._abandon())
-        except RuntimeError:
-            # On the loop's own thread, or the loop not running: waiting would
-            # never end.
-            self._abandon_later()
+            if self._on_its_loop():
+                self._abandon_later()
+            elif self.loop.is_running():
+                self._sync(self._abandon())
+            # Else nothing can undo the requests, e.g. at exit: they stay, as
+            # if the process had died.
         finally:
             io.RawIOBase.close(self)
 
-    def _abandon_later(self) -> None:
-        """Close the file without waiting, scheduling `_abandon` on the loop.
+    def _on_its_loop(self) -> bool:
+        """Whether this runs on the file's loop, where nothing can wait for it."""
+        try:
+            return asyncio.get_running_loop() is self.loop
+        except RuntimeError:
+            return False
 
-        It sends nothing more, and keeps nothing written, from any thread: the
-        loop's own too. A file closed already is abandoned as well, e.g. one
-        whose upload waits for a transaction's commit.
+    def _abandon_later(self) -> None:
+        """Close the file on its loop's thread, running `_abandon` as a task.
+
+        The task runs once this thread returns to the loop: nothing can wait
+        for it here. It sends nothing more, and keeps nothing written. A file
+        closed already is abandoned as well, e.g. one whose upload waits for a
+        transaction's commit.
         """
-        loop = getattr(self, "loop", None)
-        if loop is not None and not loop.is_closed():
-            coro = self._abandon()
-            try:
-                # Scheduled, not waited for: it runs once the loop does.
-                future = asyncio.run_coroutine_threadsafe(coro, loop)
-                _abandoned.add(future)
-                future.add_done_callback(_abandoned.discard)
-            except RuntimeError:
-                coro.close()  # The loop closed meanwhile.
+        task = self.loop.create_task(self._abandon())
+        _abandoned.add(task)
+        task.add_done_callback(_abandoned.discard)
         io.RawIOBase.close(self)
 
     async def _abandon(self) -> None:

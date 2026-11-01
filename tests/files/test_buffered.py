@@ -75,10 +75,10 @@ def test_waiting_on_a_loop_not_running_raises() -> None:
     # It would wait forever, e.g. at exit once the loop's thread is gone.
     with pytest.raises(RuntimeError, match="not running"):
         f.load()
+    # Collected, it gives up undoing its requests, rather than wait.
     with pytest.warns(ResourceWarning, match="Unclosed"):
         del f
         gc.collect()
-    loop.run_until_complete(asyncio.sleep(0))  # The abandoned file's cleanup.
     loop.close()
 
 
