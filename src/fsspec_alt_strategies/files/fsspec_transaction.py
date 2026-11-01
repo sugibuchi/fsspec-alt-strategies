@@ -470,7 +470,7 @@ class AdaptiveWritableTransaction(FileTransaction):
     def commit(self) -> None:
         try:
             if self._last is not None:
-                self.file._sync(self._last)
+                self.file._sync(self._last())
         except BaseException:
             self._abort()
             raise
@@ -487,7 +487,7 @@ class AdaptiveWritableTransaction(FileTransaction):
     def _abort(self) -> None:
         if self._multipart:
             self._multipart = False
-            self.file._sync(self.file._abort_multipart_upload)
+            self.file._sync(self.file._abort_multipart_upload())
 
 
 class LocallyBufferedTransaction(FileTransaction):

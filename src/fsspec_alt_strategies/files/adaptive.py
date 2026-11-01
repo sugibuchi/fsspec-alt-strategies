@@ -205,7 +205,7 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
 
     def read(self, size: int | None = -1) -> bytes:
         self._check_open()
-        return self._sync(self._read, -1 if size is None else size)
+        return self._sync(self._read(-1 if size is None else size))
 
     def readall(self) -> bytes:
         return self.read(-1)
@@ -484,7 +484,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
 
     def write(self, data: Any) -> int:
         self._check_open()
-        return self._sync(self._write, data)
+        return self._sync(self._write(data))
 
     def flush(self, force: bool = False) -> None:
         # A part smaller than min_block_size can only be the last: parts are

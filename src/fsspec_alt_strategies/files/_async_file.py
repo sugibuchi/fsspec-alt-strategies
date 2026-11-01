@@ -8,19 +8,39 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import io
 from abc import abstractmethod
 from collections import deque
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
-
-from fsspec.asyn import sync
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Coroutine
     from typing import Self
 
 _MiB = 1024 * 1024
+
+_T = TypeVar("_T")
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    """The loop running in this thread, if any."""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _as_coroutine(awaitable: Awaitable[_T]) -> Coroutine[Any, Any, _T]:
+    """``awaitable`` as a coroutine, which `asyncio.run_coroutine_threadsafe` takes."""
+    if asyncio.iscoroutine(awaitable):
+        return awaitable
+
+    async def awaiting() -> _T:
+        return await awaitable
+
+    return awaiting()
 
 
 class _AsyncFile(io.RawIOBase):
@@ -28,8 +48,9 @@ class _AsyncFile(io.RawIOBase):
 
     Each sync method, such as ``read``, runs its async counterpart, such as
     ``_read``, on the loop and waits for it, as fsspec's filesystems do. So the
-    sync methods cannot be called on the loop itself: code there awaits the
-    async ones instead, through `files.fsspec_async.AsyncFileAdapter`.
+    sync methods cannot be called on the loop itself, where they raise
+    RuntimeError: code there awaits the async ones instead, through
+    `files.fsspec_async.AsyncFileAdapter`.
 
     The async counterparts are ``_read``, ``_write``, ``_flush`` and
     ``aclose``. A file not supporting one keeps the default here, which raises
@@ -70,8 +91,24 @@ class _AsyncFile(io.RawIOBase):
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.path!r}>"
 
-    def _sync(self, func: Callable[..., Awaitable[Any]], *args: Any) -> Any:
-        return sync(self.loop, func, *args)
+    def _sync(self, awaitable: Awaitable[_T]) -> _T:
+        """Wait for ``awaitable`` to run on the loop, from another thread."""
+        coro = _as_coroutine(awaitable)
+        if _running_loop() is self.loop:
+            coro.close()  # Never awaited, without a warning.
+            raise RuntimeError(
+                f"Waiting on its own loop, which would never run: {self.path}"
+            )
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        try:
+            # In steps, so that Ctrl+C interrupts the wait, even on Windows.
+            while not concurrent.futures.wait([future], timeout=1).done:
+                pass
+            return future.result()
+        except BaseException:
+            # E.g. KeyboardInterrupt while waiting: the coroutine stops too.
+            future.cancel()
+            raise
 
     def _check_open(self) -> None:
         if self.closed:
@@ -121,7 +158,7 @@ class _AsyncFile(io.RawIOBase):
             # The constructor failed before the loop was set: no request was sent.
             super().close()
             return
-        self._sync(self.aclose)
+        self._sync(self.aclose())
 
     async def __aenter__(self) -> Self:
         return self
