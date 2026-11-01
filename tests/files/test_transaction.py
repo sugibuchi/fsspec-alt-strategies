@@ -10,8 +10,10 @@ import pytest
 from fsspec_alt_strategies.files.adaptive import AdaptiveWritableFile
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.transaction import (
+    AdaptiveWritableTransaction,
     FileTransaction,
     LocalBufferTransaction,
+    LocallyBufferedTransaction,
     TempPathTransaction,
     TransactionFile,
 )
@@ -149,6 +151,61 @@ def test_local_buffer_appends_in_the_mode_given(fs: SimulatedFileSystem) -> None
     assert fs.cat_file("f.bin") == b"old,new"
 
 
+def test_adaptive_completes_the_upload_on_commit(fs: SimulatedFileSystem) -> None:
+    file = _Parts(fs, "f.bin")
+    f = TransactionFile(AdaptiveWritableTransaction(file))
+    f.write(_BIG)
+    f.close()
+    # The parts are uploaded, but the upload is not completed.
+    assert file.parts
+    assert not fs.exists("f.bin")
+    f.commit()
+    assert fs.cat_file("f.bin") == _BIG
+
+
+def test_adaptive_uploads_a_small_file_on_commit(fs: SimulatedFileSystem) -> None:
+    f = TransactionFile(AdaptiveWritableTransaction(_Parts(fs, "f.bin")))
+    f.write(b"abc")
+    f.close()
+    assert fs.stats.calls == {}
+    f.commit()
+    assert fs.cat_file("f.bin") == b"abc"
+
+
+@pytest.mark.parametrize("closed", [True, False])
+@pytest.mark.parametrize("data", [_BIG, b"abc"])
+def test_adaptive_discard_leaves_no_file(
+    fs: SimulatedFileSystem, data: bytes, closed: bool
+) -> None:
+    file = _Parts(fs, "f.bin")
+    f = TransactionFile(AdaptiveWritableTransaction(file))
+    f.write(data)
+    if closed:
+        f.close()
+    f.discard()
+    assert file.closed
+    assert file.aborted == (len(data) > 4 * _KiB)
+    assert not fs.exists("f.bin")
+
+
+def test_locally_buffered_uploads_on_commit(fs: SimulatedFileSystem) -> None:
+    f = TransactionFile(LocallyBufferedTransaction(_Whole(fs, "f.bin", "wb")))
+    f.write(b"abc")
+    f.close()
+    assert fs.stats.calls == {}
+    f.commit()
+    assert fs.cat_file("f.bin") == b"abc"
+
+    fs.reset_stats()
+    file = _Whole(fs, "g.bin", "wb")
+    g = TransactionFile(LocallyBufferedTransaction(file))
+    g.write(b"abc")
+    g.close()
+    g.discard()
+    assert file.closed
+    assert fs.stats.calls == {}
+
+
 def test_an_exception_in_the_block_discards() -> None:
     t = _Recorded("f.bin", io.BytesIO())
     with pytest.raises(RuntimeError), TransactionFile(t) as f:
@@ -241,11 +298,16 @@ class _TransactionalFS(SimulatedFileSystem):
             return _Parts(self, path)
         if self.strategy == "temp":
             return _temp(self, path)
+        if self.strategy == "adaptive":
+            return TransactionFile(AdaptiveWritableTransaction(_Parts(self, path)))
+        if self.strategy == "buffered":
+            t = LocallyBufferedTransaction(_Whole(self, path, "wb"))
+            return TransactionFile(t)
         t = LocalBufferTransaction(path, lambda p: _Parts(self, p))
         return TransactionFile(t)
 
 
-@pytest.mark.parametrize("strategy", ["temp", "buffer"])
+@pytest.mark.parametrize("strategy", ["temp", "buffer", "adaptive", "buffered"])
 def test_in_fsspec_transactions(strategy: str) -> None:
     fs = _TransactionalFS(hierarchical=True)
     fs.strategy = strategy

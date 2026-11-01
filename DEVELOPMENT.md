@@ -274,10 +274,13 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
   `files/transaction.py` holds it in a `FileTransaction`, an ABC with four steps: `start_staging()` opens the
   file written to, `end_staging()` ends the writing on closing, then `commit()`, or `discard()` instead. One
   `TransactionFile` takes any of them. A filesystem's `_open` returns it when `autocommit` is False.
-- Two strategies are provided: `TempPathTransaction` writes to a hidden temporary path, renamed on commit, and
-  `LocalBufferTransaction` writes to a local buffer, written to the file on commit.
-- A storage with a way of its own, such as completing a multipart upload only on commit, gets a subclass of
-  `FileTransaction`. The file objects know nothing of it.
+- The strategies provided are:
+  - `TempPathTransaction`, writing to a hidden temporary path, renamed on commit, for any file;
+  - `LocalBufferTransaction`, writing to a local buffer, written to the file on commit, for any file;
+  - `AdaptiveWritableTransaction`, holding an adaptive file's last request, which makes it visible, until commit;
+  - `LocallyBufferedTransaction`, closing a locally buffered file, which uploads it, only on commit.
+- The file objects know nothing of transactions. `AdaptiveWritableTransaction` stands in for the file's two last
+  requests, on that file only. A storage with a way of its own gets a subclass of `FileTransaction`.
 
 ### Observable and cancellable
 

@@ -13,9 +13,14 @@ the strategy, for one file:
   clients may see the temporary file.
 - `LocalBufferTransaction` writes to a local buffer, written to the file on
   commit. It suits any storage, holding the file's bytes locally until then.
+- `AdaptiveWritableTransaction` has an
+  `~fsspec_alt_strategies.files.adaptive.AdaptiveWritableFile` upload its
+  parts, but complete the upload only on commit. It costs nothing more.
+- `LocallyBufferedTransaction` has a
+  `~fsspec_alt_strategies.files.buffered.LocallyBufferedFile` upload its
+  buffer only on commit. It costs nothing more.
 
-A storage with a way of its own gets a subclass of `FileTransaction`: e.g. one
-uploading the parts of a multipart upload, but completing it only on commit.
+A storage with a way of its own gets a subclass of `FileTransaction`.
 `TransactionFile` is the file fsspec gets, for any of them. A filesystem's
 ``_open`` returns it when ``autocommit`` is False:
 
@@ -31,7 +36,8 @@ than the filesystem's loop, as fsspec's sync API. fsspec commits a
 transaction's files one after another: a transaction is not atomic across
 files.
 
-This module depends on nothing but the standard library.
+This module depends on nothing but the standard library: it imports the file
+classes only for type checking.
 """
 
 from __future__ import annotations
@@ -45,11 +51,16 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
+
+    from .adaptive import AdaptiveWritableFile
+    from .buffered import LocallyBufferedFile
 
 __all__ = [
+    "AdaptiveWritableTransaction",
     "FileTransaction",
     "LocalBufferTransaction",
+    "LocallyBufferedTransaction",
     "TempPathTransaction",
     "TransactionFile",
 ]
@@ -380,3 +391,121 @@ class LocalBufferTransaction(FileTransaction):
     def discard(self) -> None:
         if self._buffer is not None:
             self._buffer.close()
+
+
+class _Discarded(Exception):
+    """Raised in a file's closing, so that the file aborts its upload."""
+
+
+class AdaptiveWritableTransaction(FileTransaction):
+    """An adaptive file uploading its parts on closing, completed on commit.
+
+    The file's last request, the one making it visible, waits for commit: the
+    multipart upload's completion, or a small file's upload. The transaction
+    stands in for the file's ``_complete_multipart_upload`` and
+    ``_upload_all``, on that file only, so as to hold that request back.
+    Discard aborts the multipart upload, or drops the small file.
+
+    It costs nothing more than writing the file without a transaction, and
+    other clients see nothing until commit. A small file is held in memory
+    until then. Uploaded parts take storage until commit: if the process dies
+    first, they stay until the storage expires them.
+
+    Parameters
+    ----------
+    file : AdaptiveWritableFile
+        The file, open for writing.
+
+    Examples
+    --------
+    >>> f = TransactionFile(AdaptiveWritableTransaction(MyFile(fs, path)))
+    """
+
+    def __init__(self, file: AdaptiveWritableFile) -> None:
+        super().__init__(file.path)
+        self.file = file
+        # The request making the file visible, once closing held it back.
+        self._last: Callable[[], Awaitable[None]] | None = None
+        self._multipart = False
+        self._discarding = False
+
+    def start_staging(self) -> io.IOBase:
+        file = self.file
+        complete, upload_all = file._complete_multipart_upload, file._upload_all
+
+        async def hold_completion(parts: list[Any]) -> None:
+            if self._discarding:
+                raise _Discarded  # The file aborts the upload.
+            self._multipart = True
+            self._last = lambda: complete(parts)
+
+        async def hold_upload(data: bytes) -> None:
+            self._last = lambda: upload_all(data)
+
+        file._complete_multipart_upload = hold_completion  # type: ignore[method-assign]
+        file._upload_all = hold_upload  # type: ignore[method-assign]
+        return file
+
+    def end_staging(self) -> None:
+        self.file.close()
+
+    def commit(self) -> None:
+        try:
+            if self._last is not None:
+                self.file._sync(self._last)
+        except BaseException:
+            self._abort()
+            raise
+
+    def discard(self) -> None:
+        self._discarding = True
+        if not self.file.closed:
+            with contextlib.suppress(_Discarded):
+                self.file.close()
+        else:
+            self._abort()
+        self._last = None
+
+    def _abort(self) -> None:
+        if self._multipart:
+            self._multipart = False
+            self.file._sync(self.file._abort_multipart_upload)
+
+
+class LocallyBufferedTransaction(FileTransaction):
+    """A locally buffered file, uploaded on commit.
+
+    The file holds its bytes locally until closed: so closing it waits for
+    commit. Discard closes it after its own ``discard``, uploading nothing.
+
+    It costs nothing more than writing the file without a transaction, and
+    other clients see nothing until commit. Exclusive creation, "x", is checked
+    on the first write, or on commit. If neither commit nor discard comes, the
+    file uploads when garbage collected, as any open file of its class does.
+
+    Parameters
+    ----------
+    file : LocallyBufferedFile
+        The file, open for writing.
+
+    Examples
+    --------
+    >>> f = TransactionFile(LocallyBufferedTransaction(MyFile(fs, path, "wb")))
+    """
+
+    def __init__(self, file: LocallyBufferedFile) -> None:
+        super().__init__(file.path)
+        self.file = file
+
+    def start_staging(self) -> io.IOBase:
+        return self.file
+
+    def end_staging(self) -> None:
+        pass  # The file keeps its buffer for commit.
+
+    def commit(self) -> None:
+        self.file.close()
+
+    def discard(self) -> None:
+        self.file.discard()
+        self.file.close()
