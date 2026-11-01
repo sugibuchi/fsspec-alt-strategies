@@ -90,11 +90,10 @@ async def test_reads_and_seeks_as_bytesio(fs: SimulatedFileSystem) -> None:
     reference = io.BytesIO(data)
     async with AsyncFileAdapter(_Reader(fs, "f.bin", len(data))) as f:
         assert (f.mode, f.size, f.readable(), f.writable()) == ("rb", len(data), 1, 0)
-        assert f.info() == {"name": "f.bin", "size": len(data), "type": "file"}
         assert await f.read(10) == reference.read(10)
         # Not awaited, as in fsspec's async files: seeking sends nothing.
         assert f.seek(-8, io.SEEK_END) == reference.seek(-8, io.SEEK_END)
-        assert f.tell() == f.loc == reference.tell()
+        assert f.tell() == reference.tell()
         assert await f.read() == reference.read()
         with pytest.raises(io.UnsupportedOperation):
             await f.write(b"x")
@@ -106,8 +105,6 @@ async def test_writes_in_parts(fs: SimulatedFileSystem) -> None:
     file = _Writer(fs, "f.bin")
     async with AsyncFileAdapter(file) as f:
         assert (f.mode, f.size) == ("wb", None)
-        with pytest.raises(ValueError, match="writing"):
-            f.info()
         for i in range(0, len(data), 3 * _KiB):
             await f.write(data[i : i + 3 * _KiB])
         await f.flush()

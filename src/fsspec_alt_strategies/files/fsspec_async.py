@@ -38,8 +38,7 @@ class AsyncFileAdapter:
       file's async counterpart of the sync method, e.g. ``_read``.
     - ``seek``, ``tell``, ``readable``, ``writable`` and ``seekable`` are not:
       they send no request.
-    - ``path``, ``mode``, ``size``, ``loc``, ``closed`` and ``info`` describe
-      the file.
+    - ``path``, ``mode``, ``size`` and ``closed`` describe the file.
 
     ``seek`` and ``tell`` run the file's own: they must need no request. A
     `~fsspec_alt_strategies.files.buffered.LocallyBufferedFile` needs its
@@ -90,17 +89,6 @@ class AsyncFileAdapter:
     @property
     def closed(self) -> bool:
         return self.file.closed
-
-    @property
-    def loc(self) -> int:
-        """The position, as fsspec's files keep it."""
-        return self.file.tell()
-
-    def info(self) -> dict[str, Any]:
-        """The file's details, as fsspec's ``info`` gives them, when reading."""
-        if not self.file.readable():
-            raise ValueError("Info not available while writing")
-        return {"name": self.path, "size": self.size, "type": "file"}
 
     def _on_loop(self) -> _AsyncFile:
         """The file, once checked that this runs on its loop."""
