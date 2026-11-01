@@ -440,24 +440,25 @@ async def test_sequential_parts_go_one_at_a_time_in_order(
     assert await flat_fs._cat_file("f.bin") == data
 
 
-async def test_parts_are_aligned(flat_fs: SimulatedFileSystem) -> None:
-    f = _Writer(
-        flat_fs,
-        "f.bin",
-        min_block_size=5 * _KiB,
-        max_block_size=27 * _KiB,
-        block_alignment=4 * _KiB,
+class _AlignedWriter(_Writer):
+    """Keeps every part but the last a multiple of 4 KiB, as GCS does of 256 KiB."""
+
+    def _block_size(self, target: int) -> int:
+        return -(-super()._block_size(target) // (4 * _KiB)) * 4 * _KiB
+
+
+async def test_subclass_sizes_the_parts(flat_fs: SimulatedFileSystem) -> None:
+    f = _AlignedWriter(
+        flat_fs, "f.bin", min_block_size=5 * _KiB, max_block_size=27 * _KiB
     )
-    assert (f.min_block_size, f.max_block_size) == (8 * _KiB, 24 * _KiB)
     data = os.urandom(301 * _KiB)
     async with f:
         for i in range(0, len(data), 1000):
             await f._write(data[i : i + 1000])
     sizes = [end - start for start, end, _, _ in (f.parts[i] for i in sorted(f.parts))]
+    assert len(sizes) > 2
     assert all(size % (4 * _KiB) == 0 for size in sizes[:-1])
     assert await flat_fs._cat_file("f.bin") == data
-    with pytest.raises(ValueError, match="block_alignment"):
-        _Writer(flat_fs, "g.bin", block_alignment=-1)
 
 
 async def test_failed_part_aborts_the_upload(flat_fs: SimulatedFileSystem) -> None:

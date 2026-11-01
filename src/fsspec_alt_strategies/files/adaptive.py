@@ -42,6 +42,9 @@ class _AdaptiveFile(_AsyncFile):
     spread: int = 8
     """How many requests a large read or write is split into, to run at once."""
 
+    min_block_size: int
+    max_block_size: int
+
     def __init__(
         self,
         path: str,
@@ -55,18 +58,21 @@ class _AdaptiveFile(_AsyncFile):
         super().__init__(path, loop, concurrency_limit=concurrency_limit)
         self.spread = spread or self.spread
 
+    def _block_size(self, target: int) -> int:
+        """The block size for ``target`` bytes, in ``spread`` requests at most.
 
-def _block_size(target: int, smallest: int, largest: int, parts: int) -> int:
-    """The block size for ``target`` bytes, in ``parts`` requests at most.
-
-    It is ``smallest`` times a power of 2, so that blocks stay aligned, and at
-    most ``largest``.
-    """
-    needed = math.ceil(target / parts)
-    if needed <= smallest:
-        return smallest
-    doublings = (math.ceil(needed / smallest) - 1).bit_length()
-    return min(smallest << doublings, largest)
+        It is ``min_block_size`` times a power of 2, so that blocks stay
+        aligned, and at most ``max_block_size``. A subclass may override it for
+        a storage's own rule, e.g. rounding to the multiple of a size it needs.
+        A writer still sends every part but the last at least
+        ``min_block_size``, with the last taking the rest.
+        """
+        smallest = self.min_block_size
+        needed = math.ceil(target / self.spread)
+        if needed <= smallest:
+            return smallest
+        doublings = (math.ceil(needed / smallest) - 1).bit_length()
+        return min(smallest << doublings, self.max_block_size)
 
 
 class AdaptiveReadableFile(_AdaptiveFile, ABC):
@@ -341,10 +347,7 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         ahead = min(self._run + end - pos, self.max_readahead)
         start = queue[-1].end
         if start - end < ahead // 2:
-            block = _block_size(
-                ahead, self.min_block_size, self.max_block_size, self.spread
-            )
-            await self._send(start, end + ahead, block)
+            await self._send(start, end + ahead, self._block_size(ahead))
 
     async def _send(self, start: int, stop: int, largest: int | None = None) -> None:
         """Fetch [start, stop), within the file, in even parts of at most ``largest``."""
@@ -438,8 +441,8 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     - ``sequential`` sends a part only once the one before it is uploaded.
       Waiting, it holds no permit of the concurrency limit, which files may
       share. ``spread`` of 1 then suits best: fewer, larger parts.
-    - ``block_alignment`` makes every part but the last a multiple of it, by
-      rounding ``min_block_size`` up and ``max_block_size`` down to it.
+    - Every part but the last has the size ``_block_size`` returns. A subclass
+      overrides it to keep parts a multiple of 256 KiB, or any other rule.
     - The last part is the one given ``last``: with the file's size, as its
       ``end``. A storage where it makes the file visible completes nothing.
 
@@ -464,14 +467,11 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     sequential : bool, optional
         Whether parts are uploaded one at a time, in order. The class attribute
         if None.
-    block_alignment : int, optional
-        What every part but the last is a multiple of. The class attribute if
-        None.
 
     Raises
     ------
     ValueError
-        If ``spread`` or ``block_alignment`` is less than 1.
+        If ``spread`` is less than 1.
 
     See Also
     --------
@@ -490,9 +490,6 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     sequential: bool = False
     """Whether parts are uploaded one at a time, in order, as some storages need."""
 
-    block_alignment: int = 1
-    """What every part but the last is a multiple of, e.g. 256 KiB for GCS."""
-
     mode: str = "wb"
     """The mode, as fsspec's files have it: only writing, from the start."""
 
@@ -507,22 +504,11 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         max_block_size: int | None = None,
         min_multipart_size: int | None = None,
         sequential: bool | None = None,
-        block_alignment: int | None = None,
     ) -> None:
-        if block_alignment is not None and block_alignment < 1:
-            # Before the file exists: nothing is left to close.
-            raise ValueError(f"block_alignment must be at least 1: {block_alignment}")
         super().__init__(path, loop, concurrency_limit=concurrency_limit, spread=spread)
-        self.block_alignment = block_alignment or self.block_alignment
-        align = self.block_alignment
-        # Blocks are min_block_size times a power of 2, or max_block_size: so
-        # aligning both aligns every part but the last.
-        self.min_block_size = (
-            -(-(min_block_size or self.min_block_size) // align) * align
-        )
+        self.min_block_size = min_block_size or self.min_block_size
         self.max_block_size = max(
-            (max_block_size or self.max_block_size) // align * align,
-            self.min_block_size,
+            max_block_size or self.max_block_size, self.min_block_size
         )
         self.min_multipart_size = min_multipart_size or self.min_multipart_size
         self.sequential = self.sequential if sequential is None else sequential
@@ -613,12 +599,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
                 await self._upload_all(bytes(buffer))
                 buffer.clear()
             return
-        block = _block_size(
-            len(buffer) if closing else self._pos,
-            self.min_block_size,
-            self.max_block_size,
-            self.spread,
-        )
+        block = self._block_size(len(buffer) if closing else self._pos)
         offset = self._pos - len(buffer)
         taken = 0
         while taken < len(buffer):
