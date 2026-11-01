@@ -7,8 +7,14 @@ Alternative, filesystem-independent strategies for [fsspec](https://github.com/f
 > - a concurrent tree walk, and these strategies built on it: find, du, a pruning glob, and a recursive delete, copy
 >   and move;
 > - storage profiles, where a developer declares what a storage does, such as whether writes need the parent folder;
-> - abstract file classes that adapt their buffering to how a file is read or written, and one for storages
->   transferring only whole files, which works on a local copy;
+> - abstract file classes that adapt their requests to how a file is read or written:
+>   - a reader that pins the version it reads, failing if the file changes meanwhile;
+>   - a writer that uploads in parts, including to storages taking parts only in order, such as Google Cloud Storage;
+> - an abstract file class for storages transferring only whole files, which works on a local copy and can create a
+>   file atomically;
+> - fsspec's transactions for any file object, including an SDK's own, through strategies such as a temporary path or
+>   a local buffer;
+> - an adapter giving these file objects the API of the files that fsspec's `open_async()` returns.
 >
 > The rest below is the plan.
 
