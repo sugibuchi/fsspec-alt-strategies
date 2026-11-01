@@ -88,6 +88,71 @@ async def test_a_pattern_places_as_fsspec(
     assert sorted(copied) == sorted((p, expected[p]) for p in files)
 
 
+@pytest.mark.parametrize(
+    ("paths", "path2"),
+    [
+        (["data/README.md", "data/2023/01/part-0.parquet"], "copied"),
+        (["data/*.md", "archive/old.txt"], "new/"),
+        (["missing", "data/README.md"], "copied"),  # A missing path is skipped.
+    ],
+)
+async def test_a_list_of_files_places_as_fsspec(
+    any_fs: SimulatedFileSystem, paths: list[str], path2: str
+) -> None:
+    _tree(any_fs)
+    files = await AsyncFileSystem._expand_path(any_fs, paths, recursive=True)
+    expected = dict(zip(files, other_paths(files, path2, flatten=True), strict=True))
+
+    copied, errors = await collect(tree_cp(any_fs, paths, path2))
+    assert errors == []
+    assert sorted(copied) == sorted(expected.items())
+
+
+async def test_a_list_keeps_the_trees_of_its_folders(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    copied, errors = await collect(
+        tree_cp(any_fs, ["data/2023", "data/2024/*", "data/README.md"], "copied")
+    )
+    assert errors == []
+    # As cp -r places them, where fsspec's copy puts every file in "copied".
+    assert sorted(copied) == [
+        ("data/2023/01/part-0.parquet", "copied/2023/01/part-0.parquet"),
+        ("data/2023/02/part-0.parquet", "copied/2023/02/part-0.parquet"),
+        ("data/2024/01/part-0.parquet", "copied/01/part-0.parquet"),
+        ("data/README.md", "copied/README.md"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("paths", "destination"),
+    [
+        (
+            ["data/2024/01/part-0.parquet", "data/2023/01/part-0.parquet"],
+            "copied/part-0.parquet",
+        ),
+        (["data/*/01"], "copied/01/part-0.parquet"),  # Folders.
+    ],
+)
+async def test_a_list_copies_only_the_first_of_a_name(
+    any_fs: SimulatedFileSystem, paths: list[str], destination: str
+) -> None:
+    _tree(any_fs)
+    copied, errors = await collect(tree_cp(any_fs, paths, "copied"))
+    # The first in path order is copied, as GNU's cp does, never overwritten.
+    assert copied == [("data/2023/01/part-0.parquet", destination)]
+    assert any_fs._file_data[copied[0][1]].data == b"data/2023/01/part-0.parquet"
+    assert [type(e) for e in errors] == [FileExistsError]
+    assert "data/2024/01" in errors[0].__notes__[0]
+
+
+async def test_a_list_matching_nothing_raises(any_fs: SimulatedFileSystem) -> None:
+    _tree(any_fs)
+    with pytest.raises(FileNotFoundError):
+        await collect(tree_cp(any_fs, ["missing", "data/*/13"], "copied"))
+
+
 async def test_a_pattern_onto_its_own_matches_is_refused(
     any_fs: SimulatedFileSystem,
 ) -> None:

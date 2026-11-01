@@ -25,7 +25,7 @@ from .cp import _Copy
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
 
     from fsspec.asyn import AsyncFileSystem
 
@@ -56,7 +56,7 @@ class MvState(State):
 
 def tree_mv(
     fs: AsyncFileSystem,
-    path1: str,
+    path1: str | Sequence[str],
     path2: str,
     *,
     profile: StorageProfile | None = None,
@@ -78,6 +78,11 @@ def tree_mv(
     ``path2``. The pattern is matched as `tree_glob` matches it, then the
     folders matched are walked at once.
 
+    A list of paths and patterns moves each path it names or matches into
+    ``path2``, under its name, with all in it, as `tree_cp` copies it. Unlike
+    fsspec's ``mv``, it keeps the folders' trees. A path whose name another
+    path takes first yields a FileExistsError, and stays where it is.
+
     The tree is walked as `tree_walk` walks it. Each folder's files are moved
     as soon as the folder is listed, each by a ``_cp_file`` then an
     ``_rm_file``. A source folder is deleted once everything in it is moved,
@@ -96,8 +101,8 @@ def tree_mv(
     Once cancelled, it starts no new listing or move, and yields the outcomes
     of the moves already sent. Closed, it waits for those moves without
     yielding them, as their outcome would otherwise be unknown. Iterating it
-    raises FileNotFoundError if ``path1`` does not exist, and ValueError if
-    ``path2`` is inside it.
+    raises FileNotFoundError if ``path1`` does not exist, or matches nothing,
+    and ValueError if ``path2`` is inside it.
 
     Requests: as `tree_cp`, with one ``_rm_file`` more per file, and one
     ``rm_folder`` per folder. Each request holds a permit of
@@ -110,8 +115,8 @@ def tree_mv(
     ----------
     fs : fsspec.asyn.AsyncFileSystem
         The filesystem.
-    path1 : str
-        The folder or file to move, or a glob pattern.
+    path1 : str or sequence of str
+        The folder or file to move, a glob pattern, or a list of them.
     path2 : str
         Where to move it, as above.
     profile : StorageProfile, optional
@@ -161,7 +166,7 @@ class _Move(_Copy):
     def __init__(
         self,
         fs: AsyncFileSystem,
-        path1: str,
+        path1: str | Sequence[str],
         path2: str,
         profile: StorageProfile,
         rm_folder: Callable[[str], Awaitable[Any]] | None,

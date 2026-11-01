@@ -83,6 +83,35 @@ async def test_a_pattern_moves_its_matches(any_fs: SimulatedFileSystem) -> None:
     assert ("data/2024/01/part-0.parquet", "moved/2024/01/part-0.parquet") in moved
 
 
+async def test_a_list_moves_each_under_its_name(any_fs: SimulatedFileSystem) -> None:
+    _tree(any_fs)
+    paths = ["data/2023", "data/2024/01", "other.txt", "data/2024/01/part-0.parquet"]
+    moved, errors = await collect(tree_mv(any_fs, paths, "moved"))
+    # A path inside another in the list moves with it.
+    assert errors == []
+    assert await any_fs._exists("moved/2023/02/part-0.parquet")
+    assert await any_fs._exists("moved/01/part-0.parquet")
+    assert any_fs._file_data["moved/other.txt"].data == b"other"
+    assert ("data/2023", "moved/2023") in moved  # The folder, once empty.
+    assert not await any_fs._exists("data/2023")
+    assert not await any_fs._exists("data/2024/01")
+    assert not await any_fs._exists("other.txt")
+    assert await any_fs._exists("data/README.md")
+
+
+async def test_a_list_leaves_a_path_whose_name_is_taken(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    _, errors = await collect(tree_mv(any_fs, ["data/*/01"], "moved"))
+    assert [type(e) for e in errors] == [FileExistsError]
+    assert any_fs._file_data["moved/01/part-0.parquet"].data == (
+        b"data/2023/01/part-0.parquet"
+    )
+    assert not await any_fs._exists("data/2023/01")
+    assert await any_fs._exists("data/2024/01/part-0.parquet")
+
+
 async def test_requests(hierarchical_fs: SimulatedFileSystem) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.add_dir("data/empty")

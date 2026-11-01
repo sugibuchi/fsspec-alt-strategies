@@ -23,7 +23,7 @@ from ._jobs import _expand, _Job, _Jobs, _Roots
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Sequence
 
     from fsspec.asyn import AsyncFileSystem
 
@@ -51,7 +51,7 @@ class CpState(State):
 
 def tree_cp(
     fs: AsyncFileSystem,
-    path1: str,
+    path1: str | Sequence[str],
     path2: str,
     *,
     profile: StorageProfile | None = None,
@@ -72,6 +72,16 @@ def tree_cp(
     ``path2``. The pattern is matched as `tree_glob` matches it, then the
     folders matched are walked at once.
 
+    A list of paths and patterns copies each path it names or matches into
+    ``path2``, under its name, with all in it. That is how ``cp -r`` places
+    them. fsspec's ``copy`` places the files named as this does. It also
+    flattens the folders' trees, though: each file in them goes straight into
+    ``path2``. Two paths of the same name would go to the same place. The
+    first, in path order, is copied, and each other yields a FileExistsError
+    instead, as GNU's ``cp`` reports it. fsspec's ``copy`` overwrites one
+    with the other. A path inside another one in the list is copied with that
+    one only.
+
     The tree is walked as `tree_walk` walks it. Each folder's files are copied
     as soon as the folder is listed, each by a ``_cp_file``. A folder is
     created at the destination before files are copied into it, and for each
@@ -88,9 +98,11 @@ def tree_cp(
     Once cancelled, it starts no new listing or copy, and yields the outcomes
     of the copies already sent. Closed, it waits for those copies without
     yielding them. Iterating it raises FileNotFoundError if ``path1`` does not
-    exist, and ValueError if ``path2`` is inside it.
+    exist, or matches nothing, and ValueError if ``path2`` is inside it.
 
-    Requests: one ``_info`` for ``path2``, unless it ends with "/". One ``_ls``
+    Requests: one ``_info`` for ``path2``, unless it ends with "/" or ``path1``
+    is a pattern or a list. Patterns, or a list, add the requests of their
+    `tree_glob`. One ``_ls``
     per folder, one ``_cp_file`` per file, and one ``_makedirs`` per
     destination folder with files or empty. A storage refusing to overwrite
     costs an ``_rm_file`` and a ``_cp_file`` more per file it refused. Each
@@ -103,8 +115,8 @@ def tree_cp(
     ----------
     fs : fsspec.asyn.AsyncFileSystem
         The filesystem.
-    path1 : str
-        The folder or file to copy, or a glob pattern.
+    path1 : str or sequence of str
+        The folder or file to copy, a glob pattern, or a list of them.
     path2 : str
         Where to copy it, as above.
     profile : StorageProfile, optional
@@ -153,7 +165,7 @@ class _Copy(_Jobs):
     def __init__(
         self,
         fs: AsyncFileSystem,
-        path1: str,
+        path1: str | Sequence[str],
         path2: str,
         profile: StorageProfile,
         concurrency_limit: asyncio.Semaphore | None,
@@ -165,6 +177,8 @@ class _Copy(_Jobs):
         self.parents_required = profile.parents_required is not False
         self.prefix = ""
         self.base = ""
+        # For a list: where each root goes, by the root.
+        self.places: dict[str, str] = {}
         self.files_found = 0
         self.files_done = 0
         # The copies waiting for their destination folder, by that folder.
@@ -182,10 +196,14 @@ class _Copy(_Jobs):
         """Set where the paths go, as fsspec's ``copy`` places them.
 
         A path under ``self.prefix`` goes to the same place under
-        ``self.base``.
+        ``self.base``. For a list, a path under a root of ``self.places`` goes
+        there instead.
         """
         destination = self.fs._strip_protocol(self.path2)
-        if has_magic(self.path1):
+        if not isinstance(self.path1, str):
+            roots = await self._place(destination)
+            sources = [*roots.folders, *roots.files]
+        elif has_magic(self.path1):
             roots = await _expand(self.fs, self.path1, self.concurrency_limit)
             sources = [*roots.folders, *roots.files]
             if not sources:
@@ -213,6 +231,36 @@ class _Copy(_Jobs):
                 )
         return roots
 
+    async def _place(self, destination: str) -> _Roots:
+        """Place each root of a list into ``destination``, under its name.
+
+        Two roots of the same name would go to the same place. As GNU's cp
+        does, the first, in path order, goes, and each other is an error. That
+        error is the root's own: what is in it is not copied either.
+        """
+        roots = await _expand(self.fs, self.path1, self.concurrency_limit)
+        folders = set(roots.folders)
+        placed: dict[str, str] = {}
+        errors = list(roots.errors)
+        for source in sorted([*roots.folders, *roots.files]):
+            name = source.rpartition("/")[2]
+            target = f"{destination}/{name}" if destination else name
+            if (other := placed.get(target)) is not None:
+                error = FileExistsError(target)
+                error.add_note(
+                    f"{self.doing} {source!r} to {target!r} skipped: {other!r} goes"
+                    " there too."
+                )
+                errors.append(error)
+                continue
+            placed[target] = source
+            self.places[source] = target
+        return _Roots(
+            [s for s in self.places if s in folders],
+            [s for s in self.places if s not in folders],
+            errors,
+        )
+
     async def _base(self, root: str, destination: str) -> str:
         """Where ``root``, a single path, goes: into ``destination``, or onto it."""
         if self.path2.endswith("/"):
@@ -229,6 +277,12 @@ class _Copy(_Jobs):
 
     def target(self, path: str) -> str:
         """Where a path goes."""
+        if self.places:
+            # The root it is under, found from the path up.
+            root = path
+            while root not in self.places and "/" in root:
+                root = root.rpartition("/")[0]
+            return self.places[root] + path[len(root) :]
         if self.prefix:
             return self.base + path[len(self.prefix) :]
         return f"{self.base}/{path}" if self.base else path
