@@ -12,6 +12,9 @@ A ``**`` matches any number of segments, so only those before the first ``**``
 can rule a folder out. Without a ``**``, nor can a folder as deep as the
 pattern, as nothing below it can match.
 
+Several patterns are matched in one walk per tree: a folder is listed once if
+any of them can match in it, and each path is matched with all of them.
+
 This module depends on `control` and `walk`.
 """
 
@@ -30,7 +33,7 @@ from .walk import _scan
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator, Sequence
 
     from fsspec.asyn import AsyncFileSystem
 
@@ -57,13 +60,13 @@ class GlobState(State):
 
 def tree_glob(
     fs: AsyncFileSystem,
-    path: str,
+    path: str | Sequence[str],
     *,
     maxdepth: int | None = None,
     withdirs: bool = True,
     concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[dict[str, Any], GlobState]:
-    """Find the paths matching a glob pattern, listing only folders it can match in.
+    """Find the paths matching glob patterns, listing only folders they can match in.
 
     It matches what fsspec's ``_glob`` matches, with ``*``, ``?``, ``[...]`` and
     ``**``. The paths found are filtered with fsspec's own regular expression,
@@ -74,26 +77,35 @@ def tree_glob(
     not in order. fsspec's ``_glob`` sorts them, by name. A storage listing a
     folder twice, e.g. as a prefix and as its marker object, yields it twice.
 
+    Several patterns match what fsspec's globs of each match together, each
+    path once. They are matched in one walk per tree, rather than one per
+    pattern: a folder that several can match in is listed once. Their trees
+    are walked one after another. A pattern under another's literal root is
+    walked from that root, which may list the folders between them.
+
     It wins on storages that list one folder per request, when the pattern
     leaves folders out after its first wildcard, e.g. ``data/*/2024/*.parquet``.
     fsspec's ``_glob`` then lists every folder under ``data`` as deep as the
-    pattern goes. It loses on object stores, which list a whole tree in one
-    paginated request, and gains nothing over `tree_find` with patterns such as
-    ``data/**/*.parquet``, which can match anywhere.
+    pattern goes. Several patterns win again where they share folders, e.g.
+    ``data/*/2024/*.csv`` and ``data/*/2024/*.json``. It loses on object
+    stores, which list a whole tree in one paginated request, and gains nothing
+    over `tree_find` with patterns such as ``data/**/*.parquet``, which can
+    match anywhere.
 
     Once cancelled, it lists no new folder, and yields the matches of the
     listings in flight.
 
-    Requests: one ``_ls`` per folder the pattern can match in, as
-    ``concurrency_limit`` allows. One ``_info`` for a pattern without wildcards, or
-    one matching its literal root folder itself, e.g. ``data/**``.
+    Requests: one ``_ls`` per folder a pattern can match in, as
+    ``concurrency_limit`` allows. One ``_info`` per pattern without wildcards,
+    and per literal root folder walked that a pattern matches, e.g. that of
+    ``data/**``.
 
     Parameters
     ----------
     fs : fsspec.asyn.AsyncFileSystem
         The filesystem.
-    path : str
-        The pattern. A trailing "/" matches only folders.
+    path : str or sequence of str
+        The pattern, or patterns. A trailing "/" matches only folders.
     maxdepth : int, optional
         How deep a ``**`` goes, as with fsspec's ``_glob``. No limit by default.
     withdirs : bool
@@ -129,41 +141,130 @@ def tree_glob(
     """
     if maxdepth is not None and maxdepth < 1:
         raise ValueError("maxdepth must be at least 1")
-    ends_with_sep = path.endswith("/")
-    path = fs._strip_protocol(path)
-    if not has_magic(path):
-        return Operation(_info_of(fs, path), GlobState())
-    search = _Search(fs, path, ends_with_sep, withdirs, maxdepth)
+    literals: list[str] = []
+    searches: list[_Search] = []
+    for pattern in [path] if isinstance(path, str) else path:
+        stripped = fs._strip_protocol(pattern)
+        if has_magic(stripped):
+            searches.append(
+                _Search(fs, stripped, pattern.endswith("/"), withdirs, maxdepth)
+            )
+        else:
+            literals.append(stripped)
 
     async def run(
         op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
-        root = search.root
-        # As fsspec's _glob: a pattern under a missing folder, or a file,
-        # matches nothing. Its find includes the root folder itself, which few
-        # patterns match.
-        steps = _scan(
-            fs,
-            root,
-            maxdepth=search.depth,
-            descend=search.descend,
-            concurrency_limit=concurrency_limit,
-            stopping=op.cancelling,
-            folder_root=bool(root)
-            and search.matched({"name": root, "type": "directory"}),
-        )
-        async with aclosing(steps):
-            async for step in steps:
-                if isinstance(step, dict):
-                    # The root's own entry, as it matches.
-                    state = op.state
-                    op.state = replace(state, matched=state.matched + 1)
-                    yield step
-                    continue
-                for match in search.matches_in(step, op):
-                    yield match
+        found: set[str] = set()
+        async for entry in _infos(fs, literals, op, found):
+            yield entry
+        for root, group in _walks(searches):
+            if op.cancelling():
+                return
+            async for match in _walk(fs, root, group, concurrency_limit, op, found):
+                yield match
 
     return Operation(run, GlobState())
+
+
+async def _infos(
+    fs: AsyncFileSystem,
+    paths: list[str],
+    op: Operation[dict[str, Any], GlobState],
+    found: set[str],
+) -> AsyncGenerator[dict[str, Any]]:
+    """The ``_info`` of each pattern without wildcards that exists, noted in ``found``."""
+    for path in dict.fromkeys(paths):
+        if op.cancelling():
+            return
+        try:
+            entry = await fs._info(path)
+        except FileNotFoundError:
+            continue
+        found.add(entry["name"].rstrip("/"))
+        op.state = replace(op.state, current=path, matched=op.state.matched + 1)
+        yield entry
+
+
+def _walks(searches: list[_Search]) -> list[tuple[str, list[_Search]]]:
+    """The roots to walk, each with the patterns it serves.
+
+    A pattern whose literal root is inside another's is walked from that root:
+    their trees are one.
+    """
+    roots = sorted({s.root for s in searches})
+    tops = [r for r in roots if not any(_inside(r, o) for o in roots if o != r)]
+    return [
+        (top, [s for s in searches if s.root == top or _inside(s.root, top)])
+        for top in tops
+    ]
+
+
+def _inside(path: str, folder: str) -> bool:
+    """Whether ``path`` is below ``folder``, "" being the top of the storage."""
+    return folder == "" or path.startswith(folder + "/")
+
+
+async def _walk(
+    fs: AsyncFileSystem,
+    root: str,
+    searches: list[_Search],
+    concurrency_limit: asyncio.Semaphore | None,
+    op: Operation[dict[str, Any], GlobState],
+    found: set[str],
+) -> AsyncGenerator[dict[str, Any] | Exception]:
+    """The matches of patterns in one tree, walked from ``root``."""
+    depths = [s.depth_from(root) for s in searches]
+    # As fsspec's _glob: a pattern under a missing folder, or a file, matches
+    # nothing. Its find includes the root folder itself, which few patterns
+    # match.
+    steps = _scan(
+        fs,
+        root,
+        maxdepth=None if None in depths else max(d for d in depths if d is not None),
+        descend=lambda e: any(s.descend(e) for s in searches),
+        concurrency_limit=concurrency_limit,
+        stopping=op.cancelling,
+        folder_root=bool(root)
+        and any(s.matched({"name": root, "type": "directory"}) for s in searches),
+    )
+    async with aclosing(steps):
+        async for step in steps:
+            if isinstance(step, dict):
+                # The root's own entry, as it matches.
+                if step["name"].rstrip("/") not in found:
+                    op.state = replace(op.state, matched=op.state.matched + 1)
+                    yield step
+                continue
+            for match in _matches_in(step, searches, op, found):
+                yield match
+
+
+def _matches_in(
+    listing: _Listing,
+    searches: list[_Search],
+    op: Operation[dict[str, Any], GlobState],
+    found: set[str],
+) -> list[dict[str, Any] | Exception]:
+    """A listing's matches, or its error, counted in the operation's state."""
+    state = op.state
+    if listing.error is not None:
+        matches: list[dict[str, Any] | Exception] = [listing.error]
+    else:
+        matches = [
+            e
+            for e in listing.entries
+            if any(s.matched(e) for s in searches)
+            # A match of a pattern without wildcards, found already.
+            and e["name"].rstrip("/") not in found
+        ]
+    op.state = GlobState(
+        errors=state.errors + (listing.error is not None),
+        current=listing.folder,
+        folders_listed=state.folders_listed + 1,
+        matched=state.matched + len(matches) - (listing.error is not None),
+    )
+    return matches
 
 
 class _Prefix:
@@ -184,28 +285,13 @@ class _Prefix:
         return all(s.match(n) for s, n in zip(self.segments, relative, strict=False))
 
 
-def _info_of(
-    fs: AsyncFileSystem, path: str
-) -> Callable[
-    [Operation[dict[str, Any], GlobState]], AsyncGenerator[dict[str, Any] | Exception]
-]:
-    """What a `tree_glob` runs for a pattern without wildcards: the path's ``_info``."""
-
-    async def run(
-        op: Operation[dict[str, Any], GlobState],
-    ) -> AsyncGenerator[dict[str, Any] | Exception]:
-        try:
-            entry = await fs._info(path)
-        except FileNotFoundError:
-            return
-        op.state = GlobState(current=path, matched=1)
-        yield entry
-
-    return run
-
-
 class _Search:
-    """One `tree_glob` call: the pattern, split and compiled."""
+    """One pattern of a `tree_glob`, split and compiled.
+
+    It answers as a walk from its own literal root would: it matches only
+    below that root, or the root itself, as deep as the pattern goes. So a walk
+    from a folder above serves it too.
+    """
 
     def __init__(
         self,
@@ -231,34 +317,46 @@ class _Search:
         self.matches = re.compile(regex).match
         self.slash_dirs = ends_with_sep or path.endswith("/**")
 
+    def depth_from(self, folder: str) -> int | None:
+        """How deep to walk from ``folder``, at or above the root, for this pattern."""
+        if self.depth is None:
+            return None
+        between = self.root.count("/") + 1 if self.root else 0
+        above = folder.count("/") + 1 if folder else 0
+        return self.depth + between - above
+
+    def _level(self, name: str) -> int | None:
+        """How far below the root a path is, 0 for the root, or None if not below."""
+        if name == self.root:
+            return 0
+        if not _inside(name, self.root):
+            return None
+        return name[self.start :].count("/") + 1
+
     def matched(self, entry: dict[str, Any]) -> bool:
         is_dir = entry["type"] == "directory"
         if is_dir and not self.withdirs:
             return False
         name = entry["name"].rstrip("/")
+        level = self._level(name)
+        if (
+            level is None
+            or (level == 0 and not is_dir)
+            or (self.depth is not None and level > self.depth)
+        ):
+            return False
         return (
             self.matches(name + "/" if is_dir and self.slash_dirs else name) is not None
         )
 
     def descend(self, entry: dict[str, Any]) -> bool:
-        return self.prefix.alive(entry["name"].rstrip("/")[self.start :].split("/"))
-
-    def matches_in(
-        self, listing: _Listing, op: Operation[dict[str, Any], GlobState]
-    ) -> list[dict[str, Any] | Exception]:
-        """A listing's matches, or its error, counted in the operation's state."""
-        state = op.state
-        if listing.error is not None:
-            found: list[dict[str, Any] | Exception] = [listing.error]
-        else:
-            found = [e for e in listing.entries if self.matched(e)]
-        op.state = GlobState(
-            errors=state.errors + (listing.error is not None),
-            current=listing.folder,
-            folders_listed=state.folders_listed + 1,
-            matched=state.matched + len(found) - (listing.error is not None),
-        )
-        return found
+        name = entry["name"].rstrip("/")
+        if self.root.startswith(name + "/"):
+            return True  # On the way down to the root.
+        level = self._level(name)
+        if level is None or (self.depth is not None and level >= self.depth):
+            return False
+        return level == 0 or self.prefix.alive(name[self.start :].split("/"))
 
 
 def _depth(path: str, relative: str, maxdepth: int | None) -> int | None:

@@ -92,6 +92,53 @@ async def test_double_star_prunes_after_it(
     assert hierarchical_fs.stats.calls["list"] == 1 + 2 + 4
 
 
+_PATTERN_LISTS = [
+    ["data/*/2024/*", "data/*/2023/*"],
+    ["data/*/2024/*/part-*", "data/sales/**"],  # One root inside the other.
+    ["data/sales/*", "data/**/README.md", "other/*"],
+    ["data/README.md", "data/*.md", "data/README.md"],
+    ["*", "data/*/"],
+    ["missing/*", "data/sa*/2023", "data/README.md/*"],
+    ["data/sales/2024/**", "data/*/2024/01/*", "**/*.md"],
+    ["data/stock", "data/stock/**"],
+    [],
+]
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"maxdepth": 2}, {"withdirs": False}])
+@pytest.mark.parametrize("paths", _PATTERN_LISTS)
+async def test_several_patterns_answer_as_fsspecs_globs_together(
+    any_fs: SimulatedFileSystem, paths: list[str], kwargs: dict[str, Any]
+) -> None:
+    _tree(any_fs)
+    entries, errors = await collect(tree_glob(any_fs, paths, **kwargs))
+    assert errors == []
+    expected: dict[str, Any] = {}
+    for path in paths:
+        expected |= await AsyncFileSystem._glob(any_fs, path, detail=True, **kwargs)
+    names = [e["name"].rstrip("/") for e in entries]
+    assert sorted(names) == sorted(expected)  # Each once.
+    assert sorted(entries, key=lambda e: e["name"]) == [
+        expected[n] for n in sorted(expected)
+    ]
+
+
+async def test_several_patterns_list_shared_folders_once(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    patterns = ["data/*/2024/*/*.parquet", "data/*/2024/*/*.csv"]
+    entries, _ = await collect(tree_glob(hierarchical_fs, patterns))
+    assert len(entries) == 6
+    # data, the 3 tables, their 2024s: as for one pattern.
+    assert hierarchical_fs.stats.calls == {"list": 1 + 3 + 3 + 6}
+
+    hierarchical_fs.reset_stats()
+    for pattern in patterns:
+        await collect(tree_glob(hierarchical_fs, pattern))
+    assert hierarchical_fs.stats.calls == {"list": 2 * (1 + 3 + 3 + 6)}
+
+
 async def test_lists_folders_concurrently_within_batch_size() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(5):

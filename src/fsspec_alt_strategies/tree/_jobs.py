@@ -57,9 +57,11 @@ class _Roots(NamedTuple):
 
 
 async def _expand(
-    fs: AsyncFileSystem, pattern: str, concurrency_limit: asyncio.Semaphore | None
+    fs: AsyncFileSystem,
+    pattern: str | Sequence[str],
+    concurrency_limit: asyncio.Semaphore | None,
 ) -> _Roots:
-    """The roots matching a glob pattern, as fsspec's ``_expand_path`` finds them.
+    """The roots matching glob patterns, as fsspec's ``_expand_path`` finds them.
 
     A match inside a folder that matches is left out: walking the folder finds
     it. Matching nothing raises FileNotFoundError, as fsspec does.

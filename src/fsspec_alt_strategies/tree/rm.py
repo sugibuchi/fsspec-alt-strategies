@@ -20,7 +20,7 @@ from ._jobs import _expand, _Job, _Jobs, _Roots
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
 
     from fsspec.asyn import AsyncFileSystem
 
@@ -50,7 +50,7 @@ class RmState(State):
 
 def tree_rm(
     fs: AsyncFileSystem,
-    path: str,
+    path: str | Sequence[str],
     *,
     rm_folder: Callable[[str], Awaitable[Any]] | None = None,
     concurrency_limit: asyncio.Semaphore | None = None,
@@ -76,8 +76,9 @@ def tree_rm(
     with everything in it in one request, that request wins.
 
     A glob pattern deletes each path it matches, and all in it, as fsspec's
-    ``_rm`` with ``recursive=True`` does. The pattern is matched as
-    `tree_glob` matches it, then the folders matched are walked at once.
+    ``_rm`` with ``recursive=True`` does. So does a list of paths and
+    patterns. They are matched as `tree_glob` matches them, in one search,
+    then the folders matched are walked at once.
 
     Once cancelled, it starts no new listing or deletion, and yields the
     outcomes of the deletions already sent. Closed, it waits for those
@@ -86,7 +87,8 @@ def tree_rm(
     or matches nothing.
 
     Requests: one ``_ls`` per folder, one ``_rm_file`` per file, and one
-    ``rm_folder`` per folder. A pattern adds the requests of its `tree_glob`.
+    ``rm_folder`` per folder. Patterns, or a list, add the requests of their
+    `tree_glob`.
     Each request holds a permit of ``concurrency_limit`` while it
     runs.
 
@@ -94,9 +96,10 @@ def tree_rm(
     ----------
     fs : fsspec.asyn.AsyncFileSystem
         The filesystem.
-    path : str
+    path : str or sequence of str
         The folder to delete. If it is a file, that file is deleted. If it is a
-        glob pattern, all it matches is deleted.
+        glob pattern, or a list of paths and patterns, all they match is
+        deleted.
     rm_folder : callable, optional
         An async function deleting an empty folder. By default, the
         filesystem's ``_rmdir`` if it has one, otherwise its ``_rm_file``, as
@@ -137,7 +140,7 @@ class _Deletion(_Jobs):
     def __init__(
         self,
         fs: AsyncFileSystem,
-        path: str,
+        path: str | Sequence[str],
         rm_folder: Callable[[str], Awaitable[Any]] | None,
         concurrency_limit: asyncio.Semaphore | None,
         op: Operation[str, RmState],
@@ -150,7 +153,7 @@ class _Deletion(_Jobs):
         self.folders_deleted = 0
 
     async def prepare(self) -> _Roots:
-        if has_magic(self.path):
+        if not isinstance(self.path, str) or has_magic(self.path):
             return await _expand(self.fs, self.path, self.concurrency_limit)
         return _Roots([self.path])
 

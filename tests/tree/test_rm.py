@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 
 import pytest
@@ -82,6 +83,41 @@ async def test_a_pattern_deletes_what_fsspec_expands(
     assert set(any_fs._file_data) == before - expanded
     for path in expanded:
         assert not await any_fs._exists(path)
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ["data/*/01", "data/2024/*"],
+        ["data/README.md", "data/2023/**/*.parquet", "other"],
+        ["data/2023", "data/2023/01"],  # One inside the other.
+        ["data/*/13", "data/README.md"],  # One matching nothing.
+    ],
+)
+async def test_a_list_deletes_what_fsspec_expands(
+    any_fs: SimulatedFileSystem, paths: list[str]
+) -> None:
+    _tree(any_fs)
+    expanded: set[str] = set()
+    for path in paths:
+        # Path by path: fsspec's expansion of a whole list raises if one pattern
+        # in it matches nothing, as its recursion expands that empty match alone.
+        with contextlib.suppress(FileNotFoundError):
+            expanded |= set(
+                await AsyncFileSystem._expand_path(any_fs, path, recursive=True)
+            )
+    before = set(any_fs._file_data)
+    _, errors = await collect(tree_rm(any_fs, paths))
+    assert errors == []
+    assert set(any_fs._file_data) == before - expanded
+    for path in expanded:
+        assert not await any_fs._exists(path)
+
+
+async def test_a_list_matching_nothing_raises(any_fs: SimulatedFileSystem) -> None:
+    _tree(any_fs)
+    with pytest.raises(FileNotFoundError):
+        await collect(tree_rm(any_fs, ["data/*/13", "missing"]))
 
 
 async def test_a_pattern_walks_its_matches_at_once() -> None:
