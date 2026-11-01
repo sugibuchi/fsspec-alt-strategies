@@ -64,9 +64,10 @@ _MiB = 1024 * 1024
 class FileTransaction(ABC):
     """How one file's writes stay invisible until commit.
 
-    A `TransactionFile` calls its steps, each once and in order: `stage` when
-    opened, `finish` when closed, then `commit`. Or `discard`, at any time
-    instead. Subclass it for a storage with a way of its own.
+    A `TransactionFile` calls its steps, each once and in order:
+    `start_staging` when opened, `end_staging` when closed, then `commit`. Or
+    `discard`, at any time instead. Subclass it for a storage with a way of its
+    own.
 
     Parameters
     ----------
@@ -82,11 +83,11 @@ class FileTransaction(ABC):
     ...         super().__init__(path)
     ...         self.fs = fs
     ...
-    ...     def stage(self):
+    ...     def start_staging(self):
     ...         self.upload = self.fs.start_upload(self.path)
     ...         return self.upload.file
     ...
-    ...     def finish(self):
+    ...     def end_staging(self):
     ...         self.upload.file.close()
     ...
     ...     def commit(self):
@@ -103,11 +104,11 @@ class FileTransaction(ABC):
         return f"<{type(self).__name__} {self.path!r}>"
 
     @abstractmethod
-    def stage(self) -> io.IOBase:
+    def start_staging(self) -> io.IOBase:
         """Open the file the reads and writes go to."""
 
     @abstractmethod
-    def finish(self) -> None:
+    def end_staging(self) -> None:
         """Finish the writing, making nothing visible, e.g. close the staged file."""
 
     @abstractmethod
@@ -130,8 +131,8 @@ class TransactionFile(io.RawIOBase):
     Parameters
     ----------
     transaction : FileTransaction
-        The strategy keeping the writes invisible. Its ``stage`` is called at
-        once.
+        The strategy keeping the writes invisible. Its ``start_staging`` is
+        called at once.
 
     Examples
     --------
@@ -142,7 +143,7 @@ class TransactionFile(io.RawIOBase):
         super().__init__()
         self.transaction = transaction
         self.path = transaction.path
-        self._file: Any = transaction.stage()
+        self._file: Any = transaction.start_staging()
         # None while undecided, then "committed" or "discarded".
         self._outcome: str | None = None
         # Whether closing finished the writing: a failed one is never committed.
@@ -196,7 +197,7 @@ class TransactionFile(io.RawIOBase):
         return self._file.truncate(size)
 
     def flush(self) -> None:
-        # io.IOBase.close flushes after finish or discard closed the staged file.
+        # io.IOBase.close flushes after end_staging or discard closed the file.
         if not self.closed and not self._file.closed:
             self._file.flush()
 
@@ -206,7 +207,7 @@ class TransactionFile(io.RawIOBase):
             return
         try:
             if self._outcome is None:
-                self.transaction.finish()
+                self.transaction.end_staging()
                 self._finished = True
         finally:
             super().close()
@@ -253,8 +254,9 @@ class TempPathTransaction(FileTransaction):
     """A file written to a temporary path, renamed to its own on commit.
 
     The temporary path is in the file's folder, hidden by a leading ".", so
-    that a rename stays within one folder, container or bucket. Staging opens
-    a file there, and finishing closes it, which writes it in full. Commit
+    that a rename stays within one folder, container or bucket. Starting the
+    staging opens a file there, and ending it closes it, which writes it in
+    full. Commit
     renames it, and discard deletes it.
 
     It suits any writable file, and any storage: best one renaming in one
@@ -311,11 +313,11 @@ class TempPathTransaction(FileTransaction):
         with contextlib.suppress(FileNotFoundError):
             await self.fs._rm_file(self.temp_path)
 
-    def stage(self) -> io.IOBase:
+    def start_staging(self) -> io.IOBase:
         self._file = self.open_file(self.temp_path)
         return self._file
 
-    def finish(self) -> None:
+    def end_staging(self) -> None:
         if self._file is not None:
             self._file.close()
 
@@ -324,7 +326,7 @@ class TempPathTransaction(FileTransaction):
 
     def discard(self) -> None:
         try:
-            self.finish()
+            self.end_staging()
         finally:
             sync(self.fs.loop, self._delete_temp)
 
@@ -333,7 +335,8 @@ class LocalBufferTransaction(FileTransaction):
     """A file written to a local buffer, written to its own on commit.
 
     The buffer is a `tempfile.SpooledTemporaryFile`: in memory up to
-    ``spool_size`` bytes, then on disk. Finishing keeps it as it is. Nothing is sent before commit, which opens the file and writes the buffer
+    ``spool_size`` bytes, then on disk. Ending the staging keeps it as it is.
+    Nothing is sent before commit, which opens the file and writes the buffer
     into it, from start to end. Discard drops the buffer.
 
     It suits any writable file, and any storage, and other clients see nothing
@@ -369,11 +372,11 @@ class LocalBufferTransaction(FileTransaction):
         self.spool_size = spool_size
         self._buffer: Any = None
 
-    def stage(self) -> io.IOBase:
+    def start_staging(self) -> io.IOBase:
         self._buffer = tempfile.SpooledTemporaryFile(max_size=self.spool_size)  # noqa: SIM115
         return self._buffer
 
-    def finish(self) -> None:
+    def end_staging(self) -> None:
         pass  # The buffer is kept for commit.
 
     def commit(self) -> None:

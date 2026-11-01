@@ -155,7 +155,7 @@ def test_an_exception_in_the_block_discards() -> None:
     with pytest.raises(RuntimeError), TransactionFile(t) as f:
         f.write(b"abc")
         raise RuntimeError("failed midway")
-    assert t.steps == ["stage", "discard"]
+    assert t.steps == ["start_staging", "discard"]
     with pytest.raises(ValueError, match="discarded"):
         f.commit()
 
@@ -166,7 +166,7 @@ def test_commit_and_discard_settle_once() -> None:
     f.write(b"abc")
     f.commit()
     f.commit()  # Already committed: nothing more.
-    assert t.steps == ["stage", "finish", "commit"]
+    assert t.steps == ["start_staging", "end_staging", "commit"]
     with pytest.raises(ValueError, match="committed"):
         f.discard()
     with pytest.raises(ValueError, match="closed"):
@@ -189,12 +189,12 @@ class _Recorded(FileTransaction):
         self.file = file
         self.steps: list[str] = []
 
-    def stage(self) -> io.IOBase:
-        self.steps.append("stage")
+    def start_staging(self) -> io.IOBase:
+        self.steps.append("start_staging")
         return self.file
 
-    def finish(self) -> None:
-        self.steps.append("finish")
+    def end_staging(self) -> None:
+        self.steps.append("end_staging")
         self.file.close()
 
     def commit(self) -> None:
@@ -207,15 +207,15 @@ class _Recorded(FileTransaction):
 def test_a_transaction_of_its_own() -> None:
     t = _Recorded("f.bin", io.BytesIO())
     f = TransactionFile(t)
-    assert t.steps == ["stage"]
+    assert t.steps == ["start_staging"]
     f.write(b"abc")
     f.commit()
-    assert t.steps == ["stage", "finish", "commit"]
+    assert t.steps == ["start_staging", "end_staging", "commit"]
     assert t.file.closed
 
     t = _Recorded("g.bin", io.BytesIO())
     TransactionFile(t).discard()
-    assert t.steps == ["stage", "discard"]
+    assert t.steps == ["start_staging", "discard"]
 
 
 def test_a_failed_close_is_never_committed() -> None:
@@ -226,7 +226,7 @@ def test_a_failed_close_is_never_committed() -> None:
     with pytest.raises(ValueError, match="failed"):
         f.commit()
     f.discard()
-    assert t.steps == ["stage", "finish", "discard"]
+    assert t.steps == ["start_staging", "end_staging", "discard"]
 
 
 class _TransactionalFS(SimulatedFileSystem):
