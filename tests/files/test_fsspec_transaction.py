@@ -1,4 +1,4 @@
-"""Tests of `files.transaction`, alone and in fsspec's own transactions."""
+"""Tests of `files.fsspec_transaction`, alone and in fsspec's own transactions."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 
 from fsspec_alt_strategies.files.adaptive import AdaptiveWritableFile
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
-from fsspec_alt_strategies.files.transaction import (
+from fsspec_alt_strategies.files.fsspec_transaction import (
     AdaptiveWritableTransaction,
     FileTransaction,
     LocalBufferTransaction,

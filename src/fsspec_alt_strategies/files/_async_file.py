@@ -29,7 +29,7 @@ class _AsyncFile(io.RawIOBase):
     Each sync method, such as ``read``, runs its async counterpart, such as
     ``_read``, on the loop and waits for it, as fsspec's filesystems do. So the
     sync methods cannot be called on the loop itself: code there awaits the
-    async ones instead, through `files.asynchronous.AsyncFileAdapter`.
+    async ones instead, through `files.fsspec_async.AsyncFileAdapter`.
 
     The async counterparts are ``_read``, ``_write``, ``_seek``, ``_tell``,
     ``_truncate``, ``_flush`` and ``aclose``. A file not supporting one keeps

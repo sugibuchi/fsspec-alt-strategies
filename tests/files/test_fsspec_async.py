@@ -1,4 +1,4 @@
-"""Tests of `files.asynchronous`: the file objects awaited on their loop."""
+"""Tests of `files.fsspec_async`: the file objects awaited on their loop."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from fsspec_alt_strategies.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
 )
-from fsspec_alt_strategies.files.asynchronous import AsyncFileAdapter
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
+from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
 from fsspec_alt_strategies.testing import SimulatedFileSystem
 
 _KiB = 1024
