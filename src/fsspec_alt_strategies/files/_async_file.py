@@ -113,7 +113,7 @@ class _Requests:
     """A file's requests, in the order sent, each holding the limit while it runs."""
 
     def __init__(self, concurrency_limit: asyncio.Semaphore) -> None:
-        self.slots = concurrency_limit
+        self.concurrency_limit = concurrency_limit
         self.queue: deque[_Range] = deque()
         # The first request that failed, so that writes stop at once.
         self.error: BaseException | None = None
@@ -122,17 +122,17 @@ class _Requests:
         self, start: int, end: int, func: Callable[..., Awaitable[Any]], *args: Any
     ) -> None:
         """Send a request once a slot is free: the caller waits for it."""
-        await self.slots.acquire()
+        await self.concurrency_limit.acquire()
         try:
             task = asyncio.ensure_future(func(*args))
         except BaseException:
-            self.slots.release()
+            self.concurrency_limit.release()
             raise
         task.add_done_callback(self._done)
         self.queue.append(_Range(start, end, task))
 
     def _done(self, task: asyncio.Task[Any]) -> None:
-        self.slots.release()
+        self.concurrency_limit.release()
         if not task.cancelled() and self.error is None:
             self.error = task.exception()
 

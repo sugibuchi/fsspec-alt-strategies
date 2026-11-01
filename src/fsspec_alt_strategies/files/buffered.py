@@ -172,12 +172,12 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         buffer = tempfile.SpooledTemporaryFile(max_size=self.spool_size)  # noqa: SIM115
         try:
             if self._kind == "x":
-                async with self._requests.slots:
+                async with self._requests.concurrency_limit:
                     if await self._exists():
                         raise FileExistsError(self.path)
             elif self._kind in "ra":
                 try:
-                    async with self._requests.slots:
+                    async with self._requests.concurrency_limit:
                         await self._download(_Capped(buffer, self.max_size, self.path))
                 except FileNotFoundError:
                     if self._kind == "r":
@@ -270,7 +270,7 @@ class LocallyBufferedFile(_AsyncFile, ABC):
             if self._changed and not self._discarded:
                 buffer = await self._load()
                 buffer.seek(0)
-                async with self._requests.slots:
+                async with self._requests.concurrency_limit:
                     await self._upload(buffer)
         finally:
             buffer, self._buffer = self._buffer, None
