@@ -93,7 +93,7 @@ async def test_reads_and_seeks_as_bytesio(fs: SimulatedFileSystem) -> None:
         assert await f.read(10) == reference.read(10)
         # Not awaited, as in fsspec's async files: seeking sends nothing.
         assert f.seek(-8, io.SEEK_END) == reference.seek(-8, io.SEEK_END)
-        assert f.tell() == reference.tell()
+        assert f.tell() == f.loc == reference.tell()
         assert await f.read() == reference.read()
         with pytest.raises(io.UnsupportedOperation):
             await f.write(b"x")
