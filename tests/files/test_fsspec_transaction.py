@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import io
+import time
 from typing import IO, Any
 
 import pytest
@@ -250,13 +252,64 @@ def test_locally_buffered_uploads_on_commit(fs: SimulatedFileSystem) -> None:
 def test_locally_buffered_left_undecided_uploads_nothing(
     fs: SimulatedFileSystem,
 ) -> None:
-    f = TransactionFile(LocallyBufferedTransaction(_Whole(fs, "f.bin", "wb")))
+    file = _Whole(fs, "f.bin", "wb")
+    f = TransactionFile(LocallyBufferedTransaction(file))
     f.write(b"abc")
     f.close()
-    with pytest.warns(ResourceWarning, match="Unclosed"):
+    with pytest.warns(ResourceWarning, match="Undecided"):
         del f
         gc.collect()
+    assert file.closed
     assert fs.stats.calls == {}
+
+
+@pytest.mark.parametrize("closed", [True, False])
+def test_undecided_files_are_discarded_when_collected(
+    fs: SimulatedFileSystem, closed: bool
+) -> None:
+    file = _Parts(fs, "f.bin")
+    f = TransactionFile(AdaptiveWritableTransaction(file))
+    f.write(_BIG)
+    if closed:
+        f.close()
+    with pytest.warns(ResourceWarning, match="Undecided"):
+        del f
+        gc.collect()
+    assert file.closed
+    assert file.aborted
+    assert not fs.exists("f.bin")
+
+    g = _temp(fs, "g.bin")
+    g.write(b"abc")
+    if closed:
+        g.close()
+    with pytest.warns(ResourceWarning, match="Undecided"):
+        del g
+        gc.collect()
+    assert fs.ls("", detail=False) == []  # Not even the temporary file.
+
+
+def test_undecided_file_collected_on_its_loop_aborts_later(
+    fs: SimulatedFileSystem,
+) -> None:
+    file = _Parts(fs, "f.bin")
+    files = [TransactionFile(AdaptiveWritableTransaction(file))]
+    files[0].write(_BIG)
+    files[0].close()
+
+    async def collect() -> None:
+        # Where discard cannot wait: the file aborts its upload later.
+        with pytest.warns(ResourceWarning, match="Undecided"):
+            files.clear()
+            gc.collect()
+
+    asyncio.run_coroutine_threadsafe(collect(), fs.loop).result()
+    for _ in range(100):
+        if file.aborted:
+            break
+        time.sleep(0.01)
+    assert file.aborted
+    assert not fs.exists("f.bin")
 
 
 class _SDKWriter:

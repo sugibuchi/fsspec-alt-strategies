@@ -6,7 +6,8 @@ import asyncio
 import errno
 import gc
 import io
-from typing import IO, Any
+from types import SimpleNamespace
+from typing import IO, Any, cast
 
 import pytest
 
@@ -66,6 +67,19 @@ def test_file_collected_unclosed_uploads_nothing(fs: SimulatedFileSystem) -> Non
         del f
         gc.collect()
     assert not fs.exists("new.bin")
+
+
+def test_waiting_on_a_loop_not_running_raises() -> None:
+    loop = asyncio.new_event_loop()
+    f = _Whole(cast("Any", SimpleNamespace(loop=loop)), "f.bin", "rb")
+    # It would wait forever, e.g. at exit once the loop's thread is gone.
+    with pytest.raises(RuntimeError, match="not running"):
+        f.load()
+    with pytest.warns(ResourceWarning, match="Unclosed"):
+        del f
+        gc.collect()
+    loop.run_until_complete(asyncio.sleep(0))  # The abandoned file's cleanup.
+    loop.close()
 
 
 def test_updates_in_place(fs: SimulatedFileSystem) -> None:

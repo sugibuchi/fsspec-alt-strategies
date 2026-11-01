@@ -94,6 +94,10 @@ class _AsyncFile(io.RawIOBase):
             raise RuntimeError(
                 f"Waiting on its own loop, which would never run: {self.path}"
             )
+        if not self.loop.is_running():
+            # E.g. at exit, once the loop's thread is gone: waiting would hang.
+            coro.close()
+            raise RuntimeError(f"Waiting on a loop that is not running: {self.path}")
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
         try:
             # In steps, so that Ctrl+C interrupts the wait, even on Windows.
@@ -159,24 +163,33 @@ class _AsyncFile(io.RawIOBase):
         # Unlike io.IOBase, never closes: see the class docstring.
         if self.closed:
             return
-        loop = getattr(self, "loop", None)
-        if loop is not None:
+        if getattr(self, "loop", None) is not None:
             warnings.warn(
                 f"Unclosed file {self.path!r}, abandoned: nothing written is kept",
                 ResourceWarning,
                 stacklevel=1,  # A finalizer has no caller to point at.
                 source=self,
             )
-            if not loop.is_closed():
-                coro = self._abandon()
-                try:
-                    # Scheduled, not waited for: it runs once the loop does.
-                    future = asyncio.run_coroutine_threadsafe(coro, loop)
-                except RuntimeError:
-                    coro.close()  # The loop closed meanwhile.
-                else:
-                    _abandoned.add(future)
-                    future.add_done_callback(_abandoned.discard)
+        self._abandon_later()
+
+    def _abandon_later(self) -> None:
+        """Close the file without waiting, scheduling `_abandon` on the loop.
+
+        It sends nothing more, and keeps nothing written, from any thread: the
+        loop's own too. A file closed already is abandoned as well, e.g. one
+        whose upload waits for a transaction's commit.
+        """
+        loop = getattr(self, "loop", None)
+        if loop is not None and not loop.is_closed():
+            coro = self._abandon()
+            try:
+                # Scheduled, not waited for: it runs once the loop does.
+                future = asyncio.run_coroutine_threadsafe(coro, loop)
+            except RuntimeError:
+                coro.close()  # The loop closed meanwhile.
+            else:
+                _abandoned.add(future)
+                future.add_done_callback(_abandoned.discard)
         io.RawIOBase.close(self)
 
     async def _abandon(self) -> None:

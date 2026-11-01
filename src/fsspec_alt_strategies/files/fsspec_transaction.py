@@ -48,11 +48,13 @@ classes only for type checking.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import io
 import shutil
 import tempfile
 import uuid
+import warnings
 from abc import ABC, abstractmethod
 from typing import IO, TYPE_CHECKING, Any
 
@@ -130,7 +132,11 @@ class FileTransaction(ABC):
 
     @abstractmethod
     def discard(self) -> None:
-        """Lose the writing, finished or not."""
+        """Lose the writing, finished or not.
+
+        The garbage collector calls it too, for a file left undecided: on any
+        thread, and at any point of the code running there.
+        """
 
 
 class TransactionFile(io.RawIOBase):
@@ -140,6 +146,10 @@ class TransactionFile(io.RawIOBase):
     the writing, as the transaction does, but makes nothing visible: `commit`
     does, closing first if needed. Leaving a ``with`` block by an exception
     discards.
+
+    The garbage collector discards a file neither committed nor discarded,
+    warning with a ResourceWarning. A discard failing there, e.g. on the loop
+    of the file staged, leaves what was staged, as if the process had died.
 
     Parameters
     ----------
@@ -219,8 +229,13 @@ class TransactionFile(io.RawIOBase):
         return self._method("truncate")(size)
 
     def flush(self) -> None:
-        # io.IOBase.close flushes after end_staging or discard closed the file.
-        if self.closed or getattr(self._file, "closed", False):
+        # io.IOBase.close flushes after end_staging or discard closed the file,
+        # or after a discard that failed: a decided file sends nothing.
+        if (
+            self.closed
+            or self._outcome is not None
+            or getattr(self._file, "closed", False)
+        ):
             return
         if (flush := getattr(self._file, "flush", None)) is not None:
             flush()
@@ -265,6 +280,20 @@ class TransactionFile(io.RawIOBase):
             self.discard()
         else:
             self.close()
+
+    def __del__(self) -> None:
+        # Unlike io.IOBase, never just closes: that would finish the writing of
+        # a file nobody commits.
+        if getattr(self, "_outcome", "unstaged") is not None:
+            return
+        warnings.warn(
+            f"Undecided file {self.path!r}, discarded",
+            ResourceWarning,
+            stacklevel=1,  # A finalizer has no caller to point at.
+            source=self,
+        )
+        with contextlib.suppress(Exception):
+            self.discard()
 
 
 def _temp_path(path: str) -> str:
@@ -427,7 +456,9 @@ class AdaptiveWritableTransaction(FileTransaction):
     It costs nothing more than writing the file without a transaction, and
     other clients see nothing until commit. A small file is held in memory
     until then. Uploaded parts take storage until commit: if the process dies
-    first, they stay until the storage expires them.
+    first, they stay until the storage expires them. Discarded on the file's
+    loop, e.g. when collected there, the file aborts its upload later, without
+    waiting.
 
     On some storages, the last part makes the file visible, e.g. Google Cloud
     Storage's resumable uploads. ``hold_last_part`` holds it back too, in
@@ -506,12 +537,17 @@ class AdaptiveWritableTransaction(FileTransaction):
 
     def discard(self) -> None:
         self._discarding = True
-        if not self.file.closed:
+        self._last = None
+        if _on_loop_of(self.file):
+            # Nothing can wait there, e.g. when collected there: the file
+            # aborts its upload later, closed or not.
+            self._multipart = False
+            self.file._abandon_later()
+        elif not self.file.closed:
             with contextlib.suppress(_Discarded):
                 self.file.close()
         else:
             self._abort()
-        self._last = None
 
     def _abort(self) -> None:
         if self._multipart:
@@ -527,9 +563,8 @@ class LocallyBufferedTransaction(FileTransaction):
 
     It costs nothing more than writing the file without a transaction, and
     other clients see nothing until commit. Exclusive creation, "x", is checked
-    on the first write, or on commit. If neither commit nor discard comes, the
-    file uploads nothing: the garbage collector abandons it, as any open file
-    of its class.
+    on the first write, or on commit. Discarded on the file's loop, e.g. when
+    collected there, the file drops its buffer without waiting.
 
     Parameters
     ----------
@@ -555,5 +590,17 @@ class LocallyBufferedTransaction(FileTransaction):
         self.file.close()
 
     def discard(self) -> None:
-        self.file.discard()
-        self.file.close()
+        if _on_loop_of(self.file):
+            # Nothing can wait there, e.g. when collected there.
+            self.file._abandon_later()
+        else:
+            self.file.discard()
+            self.file.close()
+
+
+def _on_loop_of(file: Any) -> bool:
+    """Whether this runs on the file's loop, where nothing can wait for it."""
+    try:
+        return asyncio.get_running_loop() is file.loop
+    except RuntimeError:
+        return False
