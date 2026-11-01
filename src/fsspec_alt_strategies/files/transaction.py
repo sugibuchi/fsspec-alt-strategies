@@ -31,7 +31,7 @@ than the filesystem's loop, as fsspec's sync API. fsspec commits a
 transaction's files one after another: a transaction is not atomic across
 files.
 
-This module depends on nothing else in the package.
+This module depends on nothing but the standard library.
 """
 
 from __future__ import annotations
@@ -44,12 +44,8 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from fsspec.asyn import sync
-
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
-    from fsspec.asyn import AsyncFileSystem
+    from collections.abc import Callable
 
 __all__ = [
     "FileTransaction",
@@ -256,62 +252,54 @@ class TempPathTransaction(FileTransaction):
     The temporary path is in the file's folder, hidden by a leading ".", so
     that a rename stays within one folder, container or bucket. Starting the
     staging opens a file there, and ending it closes it, which writes it in
-    full. Commit
-    renames it, and discard deletes it.
+    full. Commit renames it, and discard deletes it.
 
     It suits any writable file, and any storage: best one renaming in one
-    request, where commit is atomic. Without a rename, the default copies then
-    deletes, on the server. Other clients may see the temporary file, and it
-    stays if the process dies before commit or discard.
+    request, where commit is atomic. A rename copying then deleting works too,
+    at the cost of copying the file. Other clients may see the temporary file,
+    and it stays if the process dies before commit or discard.
 
     The file writes from its start: the temporary path is new. So appending, or
     exclusive creation, do not apply.
 
     Parameters
     ----------
-    fs : fsspec.asyn.AsyncFileSystem
-        The filesystem, whose ``loop`` runs the rename and the deletion.
     path : str
         The file's path.
     open_file : callable
         Opens a plain file for writing at the path given: the temporary one.
-    rename : callable, optional
-        An async function moving a file from its first path to its second,
-        overwriting it, e.g. the storage's own rename. By default, the
-        filesystem's ``_cp_file`` then ``_rm_file``.
+    rename : callable
+        Moves a file from its first path to its second, overwriting it, e.g.
+        the storage's own rename.
+    delete : callable
+        Deletes the file at the path given, raising FileNotFoundError if there
+        is none.
     temp_path : str, optional
         The temporary path. A hidden one beside ``path`` if None.
 
     Examples
     --------
-    >>> t = TempPathTransaction(fs, path, lambda p: MyFile(fs, p, "wb"))
+    >>> t = TempPathTransaction(
+    ...     path, lambda p: MyFile(fs, p, "wb"), fs.mv, fs.rm_file
+    ... )
     >>> f = TransactionFile(t)
     """
 
     def __init__(
         self,
-        fs: AsyncFileSystem,
         path: str,
         open_file: Callable[[str], io.IOBase],
+        rename: Callable[[str, str], object],
+        delete: Callable[[str], object],
         *,
-        rename: Callable[[str, str], Awaitable[Any]] | None = None,
         temp_path: str | None = None,
     ) -> None:
         super().__init__(path)
-        self.fs = fs
         self.open_file = open_file
+        self.rename = rename
+        self.delete = delete
         self.temp_path = temp_path or _temp_path(path)
-        self.rename = rename or self._copy_then_delete
         self._file: io.IOBase | None = None
-
-    async def _copy_then_delete(self, source: str, destination: str) -> None:
-        await self.fs._cp_file(source, destination)
-        await self.fs._rm_file(source)
-
-    async def _delete_temp(self) -> None:
-        # Never written, e.g. if discarded before the file uploaded.
-        with contextlib.suppress(FileNotFoundError):
-            await self.fs._rm_file(self.temp_path)
 
     def start_staging(self) -> io.IOBase:
         self._file = self.open_file(self.temp_path)
@@ -322,13 +310,15 @@ class TempPathTransaction(FileTransaction):
             self._file.close()
 
     def commit(self) -> None:
-        sync(self.fs.loop, self.rename, self.temp_path, self.path)
+        self.rename(self.temp_path, self.path)
 
     def discard(self) -> None:
         try:
             self.end_staging()
         finally:
-            sync(self.fs.loop, self._delete_temp)
+            # Never written, e.g. if discarded before the file uploaded.
+            with contextlib.suppress(FileNotFoundError):
+                self.delete(self.temp_path)
 
 
 class LocalBufferTransaction(FileTransaction):

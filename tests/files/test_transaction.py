@@ -80,10 +80,9 @@ def fs() -> SimulatedFileSystem:
 _BIG = b"x" * (20 * _KiB)  # Uploaded in parts.
 
 
-def _temp(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> TransactionFile:
-    return TransactionFile(
-        TempPathTransaction(fs, path, lambda p: _Parts(fs, p), **kwargs)
-    )
+def _temp(fs: SimulatedFileSystem, path: str) -> TransactionFile:
+    t = TempPathTransaction(path, lambda p: _Parts(fs, p), fs.mv, fs.rm_file)
+    return TransactionFile(t)
 
 
 def test_temp_path_is_renamed_on_commit(fs: SimulatedFileSystem) -> None:
@@ -112,12 +111,12 @@ def test_temp_path_is_deleted_on_discard(fs: SimulatedFileSystem) -> None:
 def test_temp_path_uses_the_rename_given(fs: SimulatedFileSystem) -> None:
     renamed = []
 
-    async def rename(source: str, destination: str) -> None:
+    def rename(source: str, destination: str) -> None:
         renamed.append((source, destination))
-        await fs._cp_file(source, destination)
-        await fs._rm_file(source)
+        fs.mv(source, destination)
 
-    f = _temp(fs, "f.bin", rename=rename)
+    t = TempPathTransaction("f.bin", lambda p: _Parts(fs, p), rename, fs.rm_file)
+    f = TransactionFile(t)
     f.write(b"abc")
     f.commit()  # Closes it first.
     assert renamed == [(f.transaction.temp_path, "f.bin")]
