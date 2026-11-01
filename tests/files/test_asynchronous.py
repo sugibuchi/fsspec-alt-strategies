@@ -107,6 +107,9 @@ async def test_writes_in_parts(fs: SimulatedFileSystem) -> None:
         for i in range(0, len(data), 3 * _KiB):
             await f.write(data[i : i + 3 * _KiB])
         await f.flush()
+        await f.flush(force=True)
+        # The class chose: nothing is shown before closing.
+        assert not fs.exists("f.bin")
         assert await f.tell() == len(data)
         with pytest.raises(io.UnsupportedOperation):
             await f.seek(0)

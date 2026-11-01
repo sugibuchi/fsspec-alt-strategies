@@ -195,6 +195,9 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         self._check_open()
         return self._pos
 
+    def flush(self, force: bool = False) -> None:
+        self._check_open()  # Nothing to send: the file is only read.
+
     def read(self, size: int | None = -1) -> bytes:
         self._check_open()
         return self._sync(self._read, -1 if size is None else size)
@@ -468,9 +471,10 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         self._check_open()
         return self._sync(self._write, data)
 
-    def flush(self) -> None:
+    def flush(self, force: bool = False) -> None:
         # A part smaller than min_block_size can only be the last: parts are
-        # uploaded as they fill, and the rest on closing.
+        # uploaded as they fill, and the rest on closing. Even forced, nothing
+        # is shown before closing completes the upload.
         self._check_open()
 
     async def _write(self, data: Any) -> int:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+from abc import abstractmethod
 from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -31,8 +32,12 @@ class _AsyncFile(io.RawIOBase):
     async ones instead, through `files.asynchronous.AsyncFileAdapter`.
 
     The async counterparts are ``_read``, ``_write``, ``_seek``, ``_tell``,
-    ``_truncate`` and ``aclose``. A file not supporting one keeps the default
-    here, which raises `io.UnsupportedOperation`.
+    ``_truncate``, ``_flush`` and ``aclose``. A file not supporting one keeps
+    the default here, which raises `io.UnsupportedOperation`.
+
+    ``flush`` is abstract, taking ``force`` as fsspec's files do: each class
+    decides what flushing sends, and whether the file shows what was written
+    before closing.
 
     A request holds the concurrency limit while it runs. Shared by files, the
     limit bounds their requests together, and so the memory these hold.
@@ -90,6 +95,19 @@ class _AsyncFile(io.RawIOBase):
     async def _truncate(self, size: int | None = None) -> int:
         """Truncate as ``truncate`` does."""
         raise self._unsupported("truncate")
+
+    @abstractmethod
+    def flush(self, force: bool = False) -> None:
+        """Send what the writes so far allow.
+
+        ``force`` marks the last flush, before closing, as in fsspec's files.
+        Whether the file then shows what was written, or only once closed, is
+        the class's choice.
+        """
+
+    async def _flush(self, force: bool = False) -> None:
+        """Flush as ``flush`` does: a class whose flush sends requests overrides it."""
+        self.flush(force)
 
     async def _close(self) -> None:
         """Finish the file's requests: what a subclass adds to closing."""

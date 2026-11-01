@@ -104,9 +104,8 @@ class AsyncFileAdapter:
     async def truncate(self, size: int | None = None) -> int:
         return await self._on_loop()._truncate(size)
 
-    async def flush(self) -> None:
-        # The files' flush sends no request: parts are uploaded as they fill.
-        self._on_loop().flush()
+    async def flush(self, force: bool = False) -> None:
+        await self._on_loop()._flush(force)
 
     async def close(self) -> None:
         await self._on_loop().aclose()

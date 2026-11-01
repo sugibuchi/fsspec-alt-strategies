@@ -273,6 +273,11 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         self._changed = True
         return buffer.truncate(size)
 
+    def flush(self, force: bool = False) -> None:
+        # The file is uploaded whole, on closing: even forced, nothing is
+        # shown before.
+        self._check_open()
+
     def discard(self) -> None:
         """Upload nothing on closing: the changes are lost."""
         self._discarded = True
