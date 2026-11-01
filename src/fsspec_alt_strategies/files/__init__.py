@@ -12,8 +12,9 @@ And a file is opened long before its reads show which kind it gets.
 - `buffered` is for storages transferring only whole files. Its file
   downloads the file once, works on a local copy, and uploads it once if it
   changed.
-- `transaction` wraps a file for fsspec's transactions, in one of several
-  strategies: a temporary path, a local buffer, or staging in the file.
+- `transaction` writes a file in fsspec's transactions, in one of several
+  strategies: a temporary path, a local buffer, staging in the file, or the
+  storage's own.
 
 All run their requests on an asyncio event loop, such as a filesystem's
 ``loop``, as their ``concurrency_limit``, an `asyncio.Semaphore`, allows.

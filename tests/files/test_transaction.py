@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from typing import IO, Any
 
 import pytest
@@ -9,9 +10,11 @@ import pytest
 from fsspec_alt_strategies.files.adaptive import AdaptiveWritableFile
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.transaction import (
+    FileTransaction,
     LocalBufferTransaction,
     StagedTransaction,
     TempPathTransaction,
+    TransactionFile,
 )
 from fsspec_alt_strategies.testing import SimulatedFileSystem
 
@@ -78,26 +81,33 @@ def fs() -> SimulatedFileSystem:
 _BIG = b"x" * (20 * _KiB)  # Uploaded in parts.
 
 
+def _temp(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> TransactionFile:
+    return TransactionFile(
+        TempPathTransaction(fs, path, lambda p: _Parts(fs, p), **kwargs)
+    )
+
+
 def test_temp_path_is_renamed_on_commit(fs: SimulatedFileSystem) -> None:
-    f = TempPathTransaction(fs, "data/f.bin", lambda p: _Parts(fs, p))
+    f = _temp(fs, "data/f.bin")
+    temp_path = f.transaction.temp_path
     f.write(_BIG)
     f.close()
     # Written in full, but at a hidden path beside it.
     assert not fs.exists("data/f.bin")
-    assert fs.cat_file(f.temp_path) == _BIG
-    assert f.temp_path.startswith("data/.f.bin.")
+    assert fs.cat_file(temp_path) == _BIG
+    assert temp_path.startswith("data/.f.bin.")
     f.commit()
     assert fs.cat_file("data/f.bin") == _BIG
-    assert not fs.exists(f.temp_path)
+    assert not fs.exists(temp_path)
 
 
 def test_temp_path_is_deleted_on_discard(fs: SimulatedFileSystem) -> None:
-    f = TempPathTransaction(fs, "f.bin", lambda p: _Parts(fs, p))
+    f = _temp(fs, "f.bin")
     f.write(b"abc")
     f.discard()
     assert fs.ls("", detail=False) == []
     # Discarded before a write, the temporary file never existed.
-    TempPathTransaction(fs, "g.bin", lambda p: _Parts(fs, p)).discard()
+    _temp(fs, "g.bin").discard()
 
 
 def test_temp_path_uses_the_rename_given(fs: SimulatedFileSystem) -> None:
@@ -108,15 +118,15 @@ def test_temp_path_uses_the_rename_given(fs: SimulatedFileSystem) -> None:
         await fs._cp_file(source, destination)
         await fs._rm_file(source)
 
-    f = TempPathTransaction(fs, "f.bin", lambda p: _Parts(fs, p), rename=rename)
+    f = _temp(fs, "f.bin", rename=rename)
     f.write(b"abc")
     f.commit()  # Closes it first.
-    assert renamed == [(f.temp_path, "f.bin")]
+    assert renamed == [(f.transaction.temp_path, "f.bin")]
     assert fs.cat_file("f.bin") == b"abc"
 
 
 def test_local_buffer_sends_nothing_before_commit(fs: SimulatedFileSystem) -> None:
-    f = LocalBufferTransaction("f.bin", lambda p: _Parts(fs, p))
+    f = TransactionFile(LocalBufferTransaction("f.bin", lambda p: _Parts(fs, p)))
     f.write(_BIG)
     f.seek(0)
     assert f.read(3) == b"xxx"  # The buffer's, not the file's.
@@ -126,7 +136,7 @@ def test_local_buffer_sends_nothing_before_commit(fs: SimulatedFileSystem) -> No
     assert fs.cat_file("f.bin") == _BIG
 
     fs.reset_stats()
-    g = LocalBufferTransaction("g.bin", lambda p: _Parts(fs, p))
+    g = TransactionFile(LocalBufferTransaction("g.bin", lambda p: _Parts(fs, p)))
     g.write(b"abc")
     g.discard()
     assert fs.stats.calls == {}
@@ -134,7 +144,8 @@ def test_local_buffer_sends_nothing_before_commit(fs: SimulatedFileSystem) -> No
 
 def test_local_buffer_appends_in_the_mode_given(fs: SimulatedFileSystem) -> None:
     fs.pipe_file("f.bin", b"old,")
-    f = LocalBufferTransaction("f.bin", lambda p: _Whole(fs, p, "ab"))
+    t = LocalBufferTransaction("f.bin", lambda p: _Whole(fs, p, "ab"))
+    f = TransactionFile(t)
     f.write(b"new")
     f.commit()
     assert fs.cat_file("f.bin") == b"old,new"
@@ -142,7 +153,7 @@ def test_local_buffer_appends_in_the_mode_given(fs: SimulatedFileSystem) -> None
 
 def test_staged_multipart_is_completed_on_commit(fs: SimulatedFileSystem) -> None:
     file = _Parts(fs, "f.bin")
-    f = StagedTransaction(file)
+    f = TransactionFile(StagedTransaction(file))
     f.write(_BIG)
     f.close()
     # The parts are uploaded, but the upload is not completed.
@@ -155,7 +166,7 @@ def test_staged_multipart_is_completed_on_commit(fs: SimulatedFileSystem) -> Non
 
 def test_staged_multipart_is_aborted_on_discard(fs: SimulatedFileSystem) -> None:
     file = _Parts(fs, "f.bin")
-    f = StagedTransaction(file)
+    f = TransactionFile(StagedTransaction(file))
     f.write(_BIG)
     f.close()
     f.discard()
@@ -165,7 +176,7 @@ def test_staged_multipart_is_aborted_on_discard(fs: SimulatedFileSystem) -> None
 
 def test_staged_small_files_wait_for_commit(fs: SimulatedFileSystem) -> None:
     for file in (_Parts(fs, "a.bin"), _Whole(fs, "b.bin", "wb")):
-        f = StagedTransaction(file)
+        f = TransactionFile(StagedTransaction(file))
         f.write(b"abc")
         f.close()
         assert not fs.exists(file.path)
@@ -175,7 +186,7 @@ def test_staged_small_files_wait_for_commit(fs: SimulatedFileSystem) -> None:
 
 def test_staged_exclusive_creation_fails_on_first_use(fs: SimulatedFileSystem) -> None:
     fs.pipe_file("f.bin", b"old")
-    f = StagedTransaction(_Whole(fs, "f.bin", "xb"))
+    f = TransactionFile(StagedTransaction(_Whole(fs, "f.bin", "xb")))
     with pytest.raises(FileExistsError):
         f.write(b"new")
     f.discard()
@@ -184,7 +195,7 @@ def test_staged_exclusive_creation_fails_on_first_use(fs: SimulatedFileSystem) -
 
 def test_an_exception_in_the_block_discards(fs: SimulatedFileSystem) -> None:
     file = _Parts(fs, "f.bin")
-    with pytest.raises(RuntimeError), StagedTransaction(file) as f:
+    with pytest.raises(RuntimeError), TransactionFile(StagedTransaction(file)) as f:
         f.write(_BIG)
         raise RuntimeError("failed midway")
     assert file.aborted
@@ -193,7 +204,7 @@ def test_an_exception_in_the_block_discards(fs: SimulatedFileSystem) -> None:
 
 
 def test_commit_and_discard_settle_once(fs: SimulatedFileSystem) -> None:
-    f = StagedTransaction(_Parts(fs, "f.bin"))
+    f = TransactionFile(StagedTransaction(_Parts(fs, "f.bin")))
     f.write(b"abc")
     f.commit()
     f.commit()  # Already committed: nothing more.
@@ -201,6 +212,58 @@ def test_commit_and_discard_settle_once(fs: SimulatedFileSystem) -> None:
         f.discard()
     with pytest.raises(ValueError, match="closed"):
         f.write(b"more")
+
+
+class _Failing(io.BytesIO):
+    """A staged file whose closing fails."""
+
+    def close(self) -> None:
+        super().close()
+        raise OSError("the upload failed")
+
+
+class _Recorded(FileTransaction):
+    """A storage's own transaction, recording its steps."""
+
+    def __init__(self, path: str, file: io.IOBase) -> None:
+        super().__init__(path)
+        self.file = file
+        self.steps: list[str] = []
+
+    def stage(self) -> io.IOBase:
+        self.steps.append("stage")
+        return self.file
+
+    def commit(self) -> None:
+        self.steps.append("commit")
+
+    def discard(self) -> None:
+        self.steps.append("discard")
+
+
+def test_a_transaction_of_its_own() -> None:
+    t = _Recorded("f.bin", io.BytesIO())
+    f = TransactionFile(t)
+    assert t.steps == ["stage"]
+    f.write(b"abc")
+    f.commit()
+    assert t.steps == ["stage", "commit"]
+    assert t.file.closed
+
+    t = _Recorded("g.bin", io.BytesIO())
+    TransactionFile(t).discard()
+    assert t.steps == ["stage", "discard"]
+
+
+def test_a_failed_close_is_never_committed() -> None:
+    t = _Recorded("f.bin", _Failing())
+    f = TransactionFile(t)
+    with pytest.raises(OSError, match="upload failed"):
+        f.close()
+    with pytest.raises(ValueError, match="failed"):
+        f.commit()
+    f.discard()
+    assert t.steps == ["stage", "discard"]
 
 
 class _TransactionalFS(SimulatedFileSystem):
@@ -215,10 +278,11 @@ class _TransactionalFS(SimulatedFileSystem):
         if autocommit:
             return _Parts(self, path)
         if self.strategy == "temp":
-            return TempPathTransaction(self, path, lambda p: _Parts(self, p))
+            return _temp(self, path)
         if self.strategy == "buffer":
-            return LocalBufferTransaction(path, lambda p: _Parts(self, p))
-        return StagedTransaction(_Parts(self, path))
+            t = LocalBufferTransaction(path, lambda p: _Parts(self, p))
+            return TransactionFile(t)
+        return TransactionFile(StagedTransaction(_Parts(self, path)))
 
 
 @pytest.mark.parametrize("strategy", ["temp", "buffer", "staged"])

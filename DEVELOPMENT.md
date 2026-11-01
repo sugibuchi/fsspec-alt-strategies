@@ -19,7 +19,7 @@
 | `.../files/`                    | Base classes for a filesystem's file objects, by what its storage allows. |
 | `.../files/adaptive.py`         | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts. |
 | `.../files/buffered.py`         | `LocallyBufferedFile`, for storages transferring only whole files. |
-| `.../files/transaction.py`      | Wrappers writing a file in a transaction, by strategy: a temporary path, a local buffer, or staging. |
+| `.../files/transaction.py`      | Files written in a transaction, by strategy: a temporary path, a local buffer, staging, or the storage's own. |
 | `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
 | `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
 | `tests/`                        | The tests, in the package's layout, with the shared fixtures in `tests/conftest.py`. |
@@ -271,12 +271,14 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
   read or write is split into, and `max_readahead` caps the bytes read ahead.
 - They follow Python's file API, not the strategy API: errors are raised.
 - They know nothing of fsspec's transactions. How a file stays invisible until commit depends on the storage, so
-  `files/transaction.py` wraps a file in a strategy for it. A filesystem's `_open` returns the wrapper when
-  `autocommit` is False:
-  - `TempPathTransaction` writes to a hidden temporary path, renamed on commit;
-  - `LocalBufferTransaction` writes to a local buffer, written to the file on commit;
-  - `StagedTransaction` has the file upload all but what makes it visible. A file supports it with three private
-    steps, `_stage`, `_publish` and `_unstage`, which closing runs as stage then publish.
+  `files/transaction.py` holds it in a `FileTransaction`, an ABC with three steps: `stage()` opens the file written
+  to, then `commit()` or `discard()`. One `TransactionFile` takes any of them. A filesystem's `_open` returns it when
+  `autocommit` is False. The strategies provided are:
+  - `TempPathTransaction`, writing to a hidden temporary path, renamed on commit;
+  - `LocalBufferTransaction`, writing to a local buffer, written to the file on commit;
+  - `StagedTransaction`, having the file upload all but what makes it visible. The package's files support it with
+    three private steps, `_stage`, `_publish` and `_unstage`, which closing runs as stage then publish.
+- A storage with a way of its own, such as a native transaction, gets a subclass of `FileTransaction`.
 
 ### Observable and cancellable
 

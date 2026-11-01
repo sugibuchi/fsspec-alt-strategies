@@ -5,8 +5,8 @@
 fsspec opens a file with ``autocommit=False`` inside ``with fs.transaction:``.
 When the block ends, it calls the file's ``commit()``, or its ``discard()`` if
 the block raised. How a file stays invisible until then depends on the
-storage. So the file objects stay plain files, and each class here wraps one
-in a strategy for it:
+storage. So the file objects stay plain files, and a `FileTransaction` holds
+the strategy, for one file:
 
 - `TempPathTransaction` writes to a temporary path beside the file, renamed
   on commit. It suits any storage, best one renaming in one request. Other
@@ -18,18 +18,21 @@ in a strategy for it:
   nothing more, but needs a file that stages, as the file objects of
   `files.adaptive` and `files.buffered` do.
 
-A filesystem's ``_open`` returns the wrapper when ``autocommit`` is False:
+A storage with a way of its own, e.g. a native transaction, gets a subclass of
+`FileTransaction`. `TransactionFile` is the file fsspec gets, for any of them.
+A filesystem's ``_open`` returns it when ``autocommit`` is False:
 
 >>> def _open(self, path, mode="rb", autocommit=True, **kwargs):
 ...     f = MyFile(self, path, mode)
-...     return f if autocommit else StagedTransaction(f)
+...     return f if autocommit else TransactionFile(StagedTransaction(f))
 
-Each wrapper is a file: text and compression wrappers work on it. Its methods
-are sync, as fsspec's transactions are: call them from a thread other than the
-filesystem's loop, as fsspec's sync API. fsspec commits a transaction's files
-one after another: a transaction is not atomic across files.
+A `TransactionFile` is a file: text and compression wrappers work on it. Its
+methods are sync, as fsspec's transactions are: call them from a thread other
+than the filesystem's loop, as fsspec's sync API. fsspec commits a
+transaction's files one after another: a transaction is not atomic across
+files.
 
-This module depends on nothing else in the package.
+This module imports the rest of the package only for type checking.
 """
 
 from __future__ import annotations
@@ -40,58 +43,93 @@ import shutil
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
-from typing import IO, TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import sync
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import Awaitable, Callable
 
     from fsspec.asyn import AsyncFileSystem
 
+    from .adaptive import AdaptiveWritableFile
+    from .buffered import LocallyBufferedFile
+
 __all__ = [
+    "FileTransaction",
     "LocalBufferTransaction",
-    "StagedFile",
     "StagedTransaction",
     "TempPathTransaction",
+    "TransactionFile",
 ]
 
 _MiB = 1024 * 1024
 
 
-class _TransactionFile(io.RawIOBase, ABC):
-    """A file whose writes become visible on `commit`, or are lost on `discard`.
+class FileTransaction(ABC):
+    """How one file's writes stay invisible until commit.
 
-    Reads and writes go to the file `_target` returns. Closing finishes the
-    writing, but makes nothing visible: `commit` does, closing first if
-    needed. Leaving a ``with`` block by an exception discards.
+    A `TransactionFile` calls its steps, each once and in order: `stage` when
+    opened, then `commit` once the staged file is closed, or `discard` at any
+    time instead. Subclass it for a storage with a way of its own.
+
+    Parameters
+    ----------
+    path : str
+        The file's path.
+
+    Examples
+    --------
+    A storage whose uploads stay invisible until a commit request:
+
+    >>> class NativeTransaction(FileTransaction):
+    ...     def __init__(self, fs, path):
+    ...         super().__init__(path)
+    ...         self.fs = fs
+    ...
+    ...     def stage(self):
+    ...         self.upload = self.fs.start_upload(self.path)
+    ...         return self.upload.file
+    ...
+    ...     def commit(self):
+    ...         self.upload.commit()
+    ...
+    ...     def discard(self):
+    ...         self.upload.abort()
     """
 
     def __init__(self, path: str) -> None:
-        super().__init__()
         self.path = path
-        # None while undecided, then "committed" or "discarded".
-        self._outcome: str | None = None
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.path!r}>"
 
     @abstractmethod
-    def _target(self) -> IO[bytes]:
-        """The file the reads and writes go to."""
+    def stage(self) -> io.IOBase:
+        """Open the file the reads and writes go to.
+
+        Closing it finishes the writing, but must make nothing visible.
+        """
 
     @abstractmethod
-    def _finish(self) -> None:
-        """Finish the writing, making nothing visible."""
+    def commit(self) -> None:
+        """Make the writing visible, once the staged file is closed."""
 
     @abstractmethod
-    def _publish(self) -> None:
-        """Make the finished writing visible."""
+    def discard(self) -> None:
+        """Lose the writing, whether the staged file is closed or not."""
 
-    @abstractmethod
-    def _drop(self) -> None:
-        """Lose the writing, finished or not."""
+
+class _Proxy(io.RawIOBase):
+    """A file passing reads and writes on to another, which closing keeps open."""
+
+    def __init__(self, file: io.IOBase, path: str) -> None:
+        super().__init__()
+        self._file: Any = file
+        self.path = path
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} {self.path!r}>"
 
     def _check_open(self) -> None:
         if self.closed:
@@ -99,19 +137,19 @@ class _TransactionFile(io.RawIOBase, ABC):
 
     def readable(self) -> bool:
         self._check_open()
-        return self._target().readable()
+        return self._file.readable()
 
     def writable(self) -> bool:
         self._check_open()
-        return self._target().writable()
+        return self._file.writable()
 
     def seekable(self) -> bool:
         self._check_open()
-        return self._target().seekable()
+        return self._file.seekable()
 
     def read(self, size: int | None = -1) -> bytes:
         self._check_open()
-        return self._target().read(-1 if size is None else size)
+        return self._file.read(-1 if size is None else size)
 
     def readall(self) -> bytes:
         return self.read(-1)
@@ -123,24 +161,52 @@ class _TransactionFile(io.RawIOBase, ABC):
 
     def write(self, data: Any) -> int:
         self._check_open()
-        return self._target().write(data)
+        return self._file.write(data)
 
     def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
         self._check_open()
-        return self._target().seek(offset, whence)
+        return self._file.seek(offset, whence)
 
     def tell(self) -> int:
         self._check_open()
-        return self._target().tell()
+        return self._file.tell()
 
     def truncate(self, size: int | None = None) -> int:
         self._check_open()
-        return self._target().truncate(size)
+        return self._file.truncate(size)
 
     def flush(self) -> None:
-        # io.IOBase.close flushes after _finish or _drop closed the target.
-        if not self.closed and not (target := self._target()).closed:
-            target.flush()
+        # io.IOBase.close flushes after a subclass's close closed the file.
+        if not self.closed and not self._file.closed:
+            self._file.flush()
+
+
+class TransactionFile(_Proxy):
+    """A file whose writes become visible on `commit`, or are lost on `discard`.
+
+    Reads and writes go to the file its transaction staged. Closing closes
+    that, which finishes the writing but makes nothing visible: `commit` does,
+    closing first if needed. Leaving a ``with`` block by an exception
+    discards.
+
+    Parameters
+    ----------
+    transaction : FileTransaction
+        The strategy keeping the writes invisible. Its ``stage`` is called at
+        once.
+
+    Examples
+    --------
+    >>> f = TransactionFile(StagedTransaction(MyFile(fs, path, "wb")))
+    """
+
+    def __init__(self, transaction: FileTransaction) -> None:
+        self.transaction = transaction
+        super().__init__(transaction.stage(), transaction.path)
+        # None while undecided, then "committed" or "discarded".
+        self._outcome: str | None = None
+        # Whether closing finished the writing: a failed one is never committed.
+        self._finished = False
 
     def close(self) -> None:
         """Finish the writing. It stays invisible until `commit`."""
@@ -148,7 +214,8 @@ class _TransactionFile(io.RawIOBase, ABC):
             return
         try:
             if self._outcome is None:
-                self._finish()
+                self._file.close()
+                self._finished = True
         finally:
             super().close()
 
@@ -159,8 +226,10 @@ class _TransactionFile(io.RawIOBase, ABC):
         if self._outcome == "discarded":
             raise ValueError(f"Committing a discarded file: {self.path}")
         self.close()
+        if not self._finished:
+            raise ValueError(f"Committing a file whose writing failed: {self.path}")
         self._outcome = "committed"
-        self._publish()
+        self.transaction.commit()
 
     def discard(self) -> None:
         """Lose the writing, whether the file is closed or not."""
@@ -170,7 +239,7 @@ class _TransactionFile(io.RawIOBase, ABC):
             raise ValueError(f"Discarding a committed file: {self.path}")
         self._outcome = "discarded"
         try:
-            self._drop()
+            self.transaction.discard()
         finally:
             super().close()
 
@@ -188,12 +257,12 @@ def _temp_path(path: str) -> str:
     return f"{parent}/{temp}" if parent else temp
 
 
-class TempPathTransaction(_TransactionFile):
+class TempPathTransaction(FileTransaction):
     """A file written to a temporary path, renamed to its own on commit.
 
     The temporary path is in the file's folder, hidden by a leading ".", so
-    that a rename stays within one folder, container or bucket. Closing closes
-    the file opened there, which writes it in full. Commit renames it, and
+    that a rename stays within one folder, container or bucket. Staging opens
+    a file there, and closing it writes it in full. Commit renames it, and
     discard deletes it.
 
     It suits any writable file, and any storage: best one renaming in one
@@ -221,56 +290,57 @@ class TempPathTransaction(_TransactionFile):
 
     Examples
     --------
-    >>> f = TempPathTransaction(fs, path, lambda p: MyFile(fs, p, "wb"))
+    >>> t = TempPathTransaction(fs, path, lambda p: MyFile(fs, p, "wb"))
+    >>> f = TransactionFile(t)
     """
 
     def __init__(
         self,
         fs: AsyncFileSystem,
         path: str,
-        open_file: Callable[[str], IO[bytes]],
+        open_file: Callable[[str], io.IOBase],
         *,
         rename: Callable[[str, str], Awaitable[Any]] | None = None,
         temp_path: str | None = None,
     ) -> None:
         super().__init__(path)
         self.fs = fs
+        self.open_file = open_file
         self.temp_path = temp_path or _temp_path(path)
         self.rename = rename or self._copy_then_delete
-        self._file = open_file(self.temp_path)
+        self._file: io.IOBase | None = None
 
     async def _copy_then_delete(self, source: str, destination: str) -> None:
         await self.fs._cp_file(source, destination)
         await self.fs._rm_file(source)
 
     async def _delete_temp(self) -> None:
-        # Never written, e.g. if discarded before the inner file uploaded.
+        # Never written, e.g. if discarded before the file uploaded.
         with contextlib.suppress(FileNotFoundError):
             await self.fs._rm_file(self.temp_path)
 
-    def _target(self) -> IO[bytes]:
+    def stage(self) -> io.IOBase:
+        self._file = self.open_file(self.temp_path)
         return self._file
 
-    def _finish(self) -> None:
-        self._file.close()
-
-    def _publish(self) -> None:
+    def commit(self) -> None:
         sync(self.fs.loop, self.rename, self.temp_path, self.path)
 
-    def _drop(self) -> None:
+    def discard(self) -> None:
         try:
-            self._file.close()
+            if self._file is not None:
+                self._file.close()
         finally:
             sync(self.fs.loop, self._delete_temp)
 
 
-class LocalBufferTransaction(_TransactionFile):
+class LocalBufferTransaction(FileTransaction):
     """A file written to a local buffer, written to its own on commit.
 
     The buffer is a `tempfile.SpooledTemporaryFile`: in memory up to
-    ``spool_size`` bytes, then on disk. Nothing is sent before commit, which
-    opens the file and writes the buffer into it, from start to end. Discard
-    drops the buffer.
+    ``spool_size`` bytes, then on disk. Closing the staged file keeps it.
+    Nothing is sent before commit, which opens the file and writes the buffer
+    into it, from start to end. Discard drops the buffer.
 
     It suits any writable file, and any storage, and other clients see nothing
     until commit. But the file's bytes are held locally until then, and commit
@@ -289,29 +359,28 @@ class LocalBufferTransaction(_TransactionFile):
 
     Examples
     --------
-    >>> f = LocalBufferTransaction(path, lambda p: MyFile(fs, p, "wb"))
+    >>> t = LocalBufferTransaction(path, lambda p: MyFile(fs, p, "wb"))
+    >>> f = TransactionFile(t)
     """
 
     def __init__(
         self,
         path: str,
-        open_file: Callable[[str], IO[bytes]],
+        open_file: Callable[[str], io.IOBase],
         *,
         spool_size: int = 8 * _MiB,
     ) -> None:
         super().__init__(path)
         self.open_file = open_file
-        self._buffer: IO[bytes] = tempfile.SpooledTemporaryFile(  # noqa: SIM115
-            max_size=spool_size
-        )
+        self.spool_size = spool_size
+        self._buffer: Any = None
 
-    def _target(self) -> IO[bytes]:
-        return self._buffer
+    def stage(self) -> io.IOBase:
+        self._buffer = tempfile.SpooledTemporaryFile(max_size=self.spool_size)  # noqa: SIM115
+        # Closing the proxy keeps the buffer for commit.
+        return _Proxy(self._buffer, self.path)
 
-    def _finish(self) -> None:
-        pass  # The buffer is kept for commit.
-
-    def _publish(self) -> None:
+    def commit(self) -> None:
         try:
             self._buffer.seek(0)
             with self.open_file(self.path) as f:
@@ -319,33 +388,26 @@ class LocalBufferTransaction(_TransactionFile):
         finally:
             self._buffer.close()
 
-    def _drop(self) -> None:
-        self._buffer.close()
+    def discard(self) -> None:
+        if self._buffer is not None:
+            self._buffer.close()
 
 
-class StagedFile(Protocol):
-    """A file that can upload all but what makes it visible, for a transaction.
-
-    The file objects of `files.adaptive` and `files.buffered` are such files.
-    Each step is a coroutine on the file's ``loop``.
-    """
-
-    loop: asyncio.AbstractEventLoop
-
-    async def _stage(self) -> None:
-        """Upload all but what makes the file visible, e.g. a multipart upload's parts."""
-
-    async def _publish(self) -> None:
-        """Make the staged file visible, e.g. complete the multipart upload."""
-
-    async def _unstage(self) -> None:
-        """Drop all written, e.g. abort the multipart upload."""
+class _Staging(_Proxy):
+    """A file of this package's that closing stages, without publishing it."""
 
     def close(self) -> None:
-        """Close the file, which has been published or dropped."""
+        if self.closed:
+            return
+        try:
+            # Once dropped, e.g. by a discard before closing, nothing is staged.
+            if self._file._state == "open":
+                sync(self._file.loop, self._file._stage)
+        finally:
+            super().close()
 
 
-class StagedTransaction(_TransactionFile):
+class StagedTransaction(FileTransaction):
     """A file staged on closing, and published on commit.
 
     The file uploads all but what makes it visible when closed: e.g. the parts
@@ -356,31 +418,30 @@ class StagedTransaction(_TransactionFile):
     other clients see nothing until commit. Staged uploads take storage until
     then: if the process dies first, they stay until the storage expires them.
 
+    It needs a file of this package's, which stages. For another file, write a
+    `FileTransaction` with the storage's own steps.
+
     Parameters
     ----------
-    file : StagedFile
-        The file, open for writing, e.g. an
-        `~fsspec_alt_strategies.files.adaptive.AdaptiveWritableFile`.
+    file : AdaptiveWritableFile or LocallyBufferedFile
+        The file, open for writing.
 
     Examples
     --------
-    >>> f = StagedTransaction(MyFile(fs, path, "wb"))
+    >>> f = TransactionFile(StagedTransaction(MyFile(fs, path, "wb")))
     """
 
-    def __init__(self, file: StagedFile) -> None:
-        super().__init__(getattr(file, "path", repr(file)))
-        self._file = file
+    def __init__(self, file: AdaptiveWritableFile | LocallyBufferedFile) -> None:
+        super().__init__(file.path)
+        self.file = file
 
-    def _target(self) -> IO[bytes]:
-        return self._file  # type: ignore[return-value]
+    def stage(self) -> io.IOBase:
+        return _Staging(self.file, self.path)
 
-    def _finish(self) -> None:
-        sync(self._file.loop, self._file._stage)
+    def commit(self) -> None:
+        sync(self.file.loop, self.file._publish)
+        self.file.close()
 
-    def _publish(self) -> None:
-        sync(self._file.loop, self._file._publish)
-        self._file.close()
-
-    def _drop(self) -> None:
-        sync(self._file.loop, self._file._unstage)
-        self._file.close()
+    def discard(self) -> None:
+        sync(self.file.loop, self.file._unstage)
+        self.file.close()
