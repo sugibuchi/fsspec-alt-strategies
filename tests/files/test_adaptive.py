@@ -625,6 +625,18 @@ async def test_readahead_is_capped(flat_fs: SimulatedFileSystem) -> None:
     assert max(ahead) <= 16 * _KiB
 
 
+@pytest.mark.parametrize(("kwargs", "limit"), [({}, 8), ({"spread": 3}, 3)])
+async def test_a_file_given_no_limit_runs_spread_requests_at_a_time(
+    flat_fs: SimulatedFileSystem, kwargs: dict[str, Any], limit: int
+) -> None:
+    flat_fs.latency = 0.001
+    data = os.urandom(512 * _KiB)
+    async with await _reader(flat_fs, data, **kwargs) as f:
+        assert await f._read() == data
+    assert len(f.fetched) == 16  # 512 KiB in parts of 32 KiB.
+    assert flat_fs.stats.max_concurrency == limit
+
+
 async def test_spread_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="spread"):
         await _reader(flat_fs, b"abc", spread=0)

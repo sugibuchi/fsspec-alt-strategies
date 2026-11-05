@@ -33,7 +33,8 @@ class _AdaptiveFile(_AsyncFile):
 
     A large read or write is split into ``spread`` requests, which run at once
     as far as the concurrency limit allows. So the limit also bounds the memory
-    of the parts in flight.
+    of the parts in flight. A file given no limit runs ``spread`` requests at a
+    time, the number it plans for.
 
     Its parameters are the subclasses' first ones: those of `_AsyncFile`, and
     ``spread``.
@@ -55,8 +56,13 @@ class _AdaptiveFile(_AsyncFile):
     ) -> None:
         if spread is not None and spread < 1:
             raise ValueError(f"spread must be at least 1: {spread}")
-        super().__init__(path, loop, concurrency_limit=concurrency_limit)
         self.spread = spread or self.spread
+        super().__init__(path, loop, concurrency_limit=concurrency_limit)
+
+    @property
+    def default_concurrency_limit(self) -> int:  # type: ignore[override]
+        """The requests at a time of a file given no concurrency limit: ``spread``."""
+        return self.spread
 
     def _block_size(self, target: int) -> int:
         """The block size for ``target`` bytes, in ``spread`` requests at most.
@@ -125,7 +131,7 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
     concurrency_limit : asyncio.Semaphore, optional
         Held by each fetch while it runs. Share one between files to limit
         their fetches together, e.g. per filesystem. The file's own, of
-        ``default_concurrency_limit``, if None.
+        ``spread``, if None.
     spread : int, optional
         How many blocks a large read or a readahead is split into, to fetch at
         once. The class attribute if None.
@@ -455,7 +461,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     concurrency_limit : asyncio.Semaphore, optional
         Held by each upload while it runs. Share one between files to limit
         their uploads, and so their memory, together. The file's own, of
-        ``default_concurrency_limit``, if None.
+        ``spread``, if None.
     spread : int, optional
         How many parts the bytes written so far are split into, sizing the next
         parts. The class attribute if None.
