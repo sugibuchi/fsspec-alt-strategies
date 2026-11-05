@@ -7,16 +7,14 @@ This module depends on `_async_file`.
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import io
 import tempfile
 from abc import ABC, abstractmethod
-from typing import IO, TYPE_CHECKING, Any
+from typing import IO, Any
 
 from ._async_file import _AsyncFile, _MiB
-
-if TYPE_CHECKING:
-    import asyncio
 
 __all__ = ["LocallyBufferedFile"]
 
@@ -63,8 +61,8 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         The mode, as above.
     concurrency_limit : asyncio.Semaphore, optional
         Held by the download and the upload. Share one between files to limit
-        their requests together. The file's own, of
-        ``default_concurrency_limit``, if None.
+        their requests together. The file's own, of 1, if None: it sends one
+        request at a time.
     spool_size : int, optional
         The most bytes buffered in memory, beyond which the buffer moves to
         disk. The class attribute if None.
@@ -114,6 +112,8 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         spool_size: int | None = None,
         max_size: int | None = None,
     ) -> None:
+        if concurrency_limit is None:
+            concurrency_limit = asyncio.Semaphore(1)
         super().__init__(path, loop, concurrency_limit=concurrency_limit)
         self._buffer: tempfile.SpooledTemporaryFile[bytes] | None = None
         kinds = [c for c in mode if c in _MODES]

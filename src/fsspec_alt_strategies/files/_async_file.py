@@ -60,11 +60,9 @@ class _AsyncFile(io.RawIOBase):
     loop before exit is its owner's concern, e.g. fsspec's.
 
     Its parameters are the subclasses' first ones: ``path``, ``loop`` and
-    ``concurrency_limit``.
+    ``concurrency_limit``. A subclass decides what a file given no limit gets,
+    as only it knows how many requests a file sends at a time.
     """
-
-    default_concurrency_limit: int = 10
-    """The requests at a time of a file given no concurrency limit."""
 
     mode: str
     """The mode, e.g. "rb", as fsspec's files have it."""
@@ -74,13 +72,11 @@ class _AsyncFile(io.RawIOBase):
         path: str,
         loop: asyncio.AbstractEventLoop,
         *,
-        concurrency_limit: asyncio.Semaphore | None = None,
+        concurrency_limit: asyncio.Semaphore,
     ) -> None:
         super().__init__()
         self.path = path
         self.loop = loop
-        if concurrency_limit is None:
-            concurrency_limit = asyncio.Semaphore(self.default_concurrency_limit)
         self._requests = _Requests(concurrency_limit)
 
     def __repr__(self) -> str:

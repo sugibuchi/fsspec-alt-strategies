@@ -57,12 +57,9 @@ class _AdaptiveFile(_AsyncFile):
         if spread is not None and spread < 1:
             raise ValueError(f"spread must be at least 1: {spread}")
         self.spread = spread or self.spread
+        if concurrency_limit is None:
+            concurrency_limit = asyncio.Semaphore(self.spread)
         super().__init__(path, loop, concurrency_limit=concurrency_limit)
-
-    @property
-    def default_concurrency_limit(self) -> int:  # type: ignore[override]
-        """The requests at a time of a file given no concurrency limit: ``spread``."""
-        return self.spread
 
     def _block_size(self, target: int) -> int:
         """The block size for ``target`` bytes, in ``spread`` requests at most.
