@@ -165,6 +165,8 @@ print(op.state.files_deleted)
 - They are required: a strategy guesses nothing, e.g. which request deletes a folder. Only a native operation that
   saves requests is optional, e.g. `tree_rm`'s `rm_tree`: without it, the strategy does the work itself.
 - Paths come without a protocol, as the operations take them. The method wrapping a strategy strips it first.
+- An operation deleting files, such as `rm_file` or `rm_files`, is given only paths the strategy found to be files,
+  by a listing or an `info`. So its implementation need not check the path again, e.g. to refuse a folder.
 
 - `concurrency_limit` is an `asyncio.Semaphore`, of which each request holds a permit while it runs. Shared, it limits
   several operations, and the file objects, together: the caller chooses its scope.

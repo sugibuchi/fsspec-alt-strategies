@@ -158,7 +158,9 @@ class FlatFileSystem(_StrategyFileSystem):
     async def _rm_files(self, paths: list[str]) -> None:
         """Delete several files in one request, e.g. with S3's DeleteObjects.
 
-        A key missing is no error. It raises if any is not deleted.
+        A key missing is no error. It raises if any is not deleted. The
+        strategies give it only keys they listed, or found by an ``info``: it
+        need not check them again.
         """
 
     @abstractmethod
@@ -171,7 +173,11 @@ class FlatFileSystem(_StrategyFileSystem):
 
     @abstractmethod
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
-        """Delete a file, as fsspec's ``_rm`` does when not recursive."""
+        """Delete a file, as fsspec's ``_rm`` does when not recursive.
+
+        The flat strategies never call it: they delete with ``_rm_files``.
+        fsspec's own methods do, e.g. ``rm`` when not recursive, on any path.
+        """
 
     @abstractmethod
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:

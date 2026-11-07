@@ -217,8 +217,29 @@ async def test_a_storage_refusing_to_overwrite() -> None:
     fs.add_file("target.md", b"old")
     await _collect(_cp(fs, "data/README.md", "target.md"))
     assert fs._file_data["target.md"].data == b"data/README.md"
-    # The refused copy, the old file's deletion, the copy again.
-    assert fs.stats.calls == {"info": 1, "list": 1, "copy": 2, "delete": 1}
+    # The refused copy, the old file found a file, its deletion, the copy again.
+    assert fs.stats.calls == {"info": 2, "list": 1, "copy": 2, "delete": 1}
+
+
+async def test_a_folder_refusing_a_copy_is_not_deleted() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, overwrite=False, asynchronous=True)
+    fs.add_file("data/README.md")
+    fs.add_dir("target/README.md")  # A folder where the file would go.
+    deleted: list[str] = []
+
+    async def cp_file(path1: str, path2: str) -> None:
+        raise FileExistsError(path2)  # As a storage refusing a folder's path.
+
+    async def rm_file(path: str) -> None:
+        deleted.append(path)
+
+    copied, errors = await _collect(
+        _cp(fs, "data/README.md", "target/", cp_file=cp_file, rm_file=rm_file)
+    )
+    assert copied == []
+    assert [type(e) for e in errors] == [FileExistsError]
+    # rm_file is given files only: the folder at the destination is kept.
+    assert deleted == []
 
 
 class _Locked(SimulatedFileSystem):

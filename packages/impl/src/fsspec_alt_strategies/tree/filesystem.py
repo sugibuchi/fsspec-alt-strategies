@@ -161,7 +161,12 @@ class TreeFileSystem(_StrategyFileSystem):
 
     @abstractmethod
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
-        """Delete a file."""
+        """Delete a file.
+
+        The strategies call it only on paths they found to be files, by a
+        listing or an ``info``: it need not check that the path is no folder.
+        fsspec's own methods, e.g. ``rm`` when not recursive, may not.
+        """
 
     @abstractmethod
     async def _rmdir(self, path: str) -> None:
