@@ -8,7 +8,7 @@ prefix first. `flat_mv` moves each key as soon as the listing gives it: by one
 ``mv_file``, or by a copy, deleting the copied keys in batches while the
 listing goes on.
 
-This module depends on `_jobs`, `cp`, `operation`, and `jobs` of `common`.
+This module depends on `_jobs`, `cp`, and `jobs` and `monitors` of `common`.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_common.states import MvState
 
 from ..common.jobs import _Job
-from ..operation import Operation
+from ..common.monitors import Operation
 from ._jobs import _keys_of
 from .cp import _Copy
 

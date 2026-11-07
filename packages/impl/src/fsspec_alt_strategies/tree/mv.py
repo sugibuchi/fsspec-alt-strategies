@@ -11,7 +11,7 @@ Where ``mv_file`` moves a folder too, in one request, as a storage's rename
 does, the profile says so. `tree_mv` then moves each folder whole with it
 where it can, and walks only what it cannot move so.
 
-This module depends on `cp`, `operation`, and `jobs` of `common`.
+This module depends on `cp`, and `jobs` and `monitors` of `common`.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_common.states import MvState
 
 from ..common.jobs import _Job, _Roots
-from ..operation import Operation
+from ..common.monitors import Operation
 from .cp import _Transfer
 
 if TYPE_CHECKING:

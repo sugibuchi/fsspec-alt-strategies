@@ -1,4 +1,4 @@
-"""Tests of `operation`: `Operation`, and its stopping as `OperationHandler` declares it."""
+"""Tests of `common.monitors`: `Operation`, and its stopping as `OperationHandler` declares it."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from fsspec_alt_strategies.operation import Operation
+from fsspec_alt_strategies.common.monitors import Operation
 from fsspec_alt_strategies_common.control import State
 
 if TYPE_CHECKING:

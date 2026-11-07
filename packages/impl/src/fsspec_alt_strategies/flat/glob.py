@@ -11,7 +11,7 @@ first wildcard, e.g. ``data/2024-`` for ``data/2024-*.parquet``.
 The paths are matched as `tree_glob` matches them, with the same compiled
 patterns: the two never answer differently.
 
-This module depends on `_keys`, `operation`, and `paths` and `patterns` of
+This module depends on `_keys`, and `monitors`, `paths` and `patterns` of
 `common`.
 """
 
@@ -22,9 +22,9 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies_common.states import GlobState
 
+from ..common.monitors import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _Search
-from ..operation import Operation
 from ._keys import _close, _folder, _folders
 
 if TYPE_CHECKING:

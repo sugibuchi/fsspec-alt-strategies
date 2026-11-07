@@ -6,7 +6,7 @@
 fsspec's lists every key first, then copies them. `flat_cp` copies each key as
 soon as the listing gives it.
 
-This module depends on `_jobs`, `operation`, and `jobs` and `placement` of
+This module depends on `_jobs`, and `jobs`, `monitors` and `placement` of
 `common`.
 """
 
@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING, Any
 from fsspec_alt_strategies_common.states import CpState
 
 from ..common.jobs import _Job
+from ..common.monitors import Operation
 from ..common.placement import _Placing
-from ..operation import Operation
 from ._jobs import _expand, _FlatJobs
 
 if TYPE_CHECKING:

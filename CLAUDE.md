@@ -39,7 +39,7 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
 
 - Never use names suggesting ownership of fsspec's fundamentals, such as "base" or "core" packages of fsspec.
 - Each strategy is a stateless function taking the storage's operations as functions, never a filesystem: e.g.
-  `ls=fs._ls`. Filesystem classes only wrap those functions. File objects, in `files/`, and `operation.Operation` are the
+  `ls=fs._ls`. Filesystem classes only wrap those functions. File objects, in `files/`, and `common.monitors.Operation` are the
   exceptions: see DEVELOPMENT.md's "File objects".
 - A strategy takes only primitive operations, such as `ls`, `info` and `rm_file`, called as fsspec calls its own,
   e.g. `ls(path, detail=True)`. It never takes a high-level one, such as `_find` or `_glob`: another strategy may have

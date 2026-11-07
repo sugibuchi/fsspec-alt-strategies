@@ -6,7 +6,7 @@
 whole tree first, then deletes each path. `tree_rm` deletes each folder's files
 as soon as the folder is listed, and each folder once it is empty.
 
-This module depends on `_jobs`, `operation`, and `jobs` of `common`.
+This module depends on `_jobs`, and `jobs` and `monitors` of `common`.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_common.states import RmState
 
 from ..common.jobs import _Job, _Roots
-from ..operation import Operation
+from ..common.monitors import Operation
 from ._jobs import _expand, _TreeJobs
 
 if TYPE_CHECKING:

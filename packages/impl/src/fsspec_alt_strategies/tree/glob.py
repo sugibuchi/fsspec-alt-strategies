@@ -15,7 +15,7 @@ pattern, as nothing below it can match.
 Several patterns are matched in one walk per tree: a folder is listed once if
 any of them can match in it, and each path is matched with all of them.
 
-This module depends on `find`, `operation`, and `paths` and `patterns` of
+This module depends on `find`, and `monitors`, `paths` and `patterns` of
 `common`.
 """
 
@@ -27,9 +27,9 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies_common.states import GlobState
 
+from ..common.monitors import Operation
 from ..common.paths import _trim
 from ..common.patterns import _infos, _inside, _Search
-from ..operation import Operation
 from .find import _find_listings
 
 if TYPE_CHECKING:

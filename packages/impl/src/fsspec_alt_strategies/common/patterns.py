@@ -30,7 +30,7 @@ from .paths import _trim
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    from ..operation import Operation
+    from .monitors import Operation
     from .operations import _Info
 
 

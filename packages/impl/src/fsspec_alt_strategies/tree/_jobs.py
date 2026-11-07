@@ -28,8 +28,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.jobs import _Roots
+    from ..common.monitors import Operation
     from ..common.operations import _Info, _Ls
-    from ..operation import Operation
     from .walk import _Listing
 
 
