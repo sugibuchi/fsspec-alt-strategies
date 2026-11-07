@@ -46,16 +46,6 @@ def _folders(name: str) -> list[str]:
     return ["/".join(parts[:i]) for i in range(1, len(parts) + name.endswith("/"))]
 
 
-def _limited(info: _Info, limit: asyncio.Semaphore) -> _Info:
-    """``info``, holding a permit of ``limit`` while it runs."""
-
-    async def limited(path: str) -> dict[str, Any]:
-        async with limit:
-            return await info(path)
-
-    return limited
-
-
 async def _close(entries: AsyncIterator[dict[str, Any]]) -> None:
     """Close a listing left early, if it can be: an async generator can."""
     if (aclose := getattr(entries, "aclose", None)) is not None:
@@ -88,7 +78,6 @@ async def _scan(
     """
     root = _trim(path)
     prefix = f"{root}/" if root else ""
-    info = _limited(info, concurrency_limit)
     under = False
     seen: set[str] = set()
     entries = ils(prefix)
@@ -111,7 +100,8 @@ async def _scan(
     if not root or (under and not withdirs):
         return
     try:
-        entry = await info(root)
+        async with concurrency_limit:
+            entry = await info(root)
     except FileNotFoundError:
         return
     # A folder is found itself only with withdirs. A file is found itself only

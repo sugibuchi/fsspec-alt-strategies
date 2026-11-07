@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from ..control import Operation, State
 from ..tree.glob import _infos, _Search
 from ..tree.walk import _check_maxdepth, _trim
-from ._keys import _close, _folder, _folders, _limited
+from ._keys import _close, _folder, _folders
 
 if TYPE_CHECKING:
     import asyncio
@@ -142,13 +142,12 @@ def flat_glob(
             searches.append((trimmed[:first_magic], search))
         else:
             literals.append(trimmed)
-    limited = _limited(info, concurrency_limit)
 
     async def run(
         op: Operation[dict[str, Any], FlatGlobState],
     ) -> AsyncGenerator[dict[str, Any]]:
         found: set[str] = set()
-        async for entry in _infos(limited, literals, op, found):
+        async for entry in _infos(info, literals, concurrency_limit, op, found):
             yield entry
         for prefix, group in _listings(searches):
             if op.cancelling():

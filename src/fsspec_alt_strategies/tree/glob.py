@@ -162,7 +162,7 @@ def tree_glob(
         op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         found: set[str] = set()
-        async for entry in _infos(info, literals, op, found):
+        async for entry in _infos(info, literals, concurrency_limit, op, found):
             yield entry
         for root, group in _walks(searches):
             if op.cancelling():
@@ -177,15 +177,20 @@ def tree_glob(
 async def _infos(
     info: _Info,
     paths: list[str],
+    concurrency_limit: asyncio.Semaphore,
     op: Operation[dict[str, Any], GlobState],
     found: set[str],
 ) -> AsyncGenerator[dict[str, Any]]:
-    """The ``info`` of each pattern without wildcards that exists, noted in ``found``."""
+    """The ``info`` of each pattern without wildcards that exists, noted in ``found``.
+
+    Each ``info`` holds a permit of ``concurrency_limit`` while it runs.
+    """
     for path in dict.fromkeys(paths):
         if op.cancelling():
             return
         try:
-            entry = await info(path)
+            async with concurrency_limit:
+                entry = await info(path)
         except FileNotFoundError:
             continue
         found.add(entry["name"].rstrip("/"))
