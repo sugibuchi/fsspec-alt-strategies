@@ -615,6 +615,23 @@ def test_one_transaction_across_storages(router: _Router, commit: bool) -> None:
     assert ("t.txt" in router.flat._file_data) is commit
 
 
+async def test_pipe_and_put_join_the_transaction(
+    router: _Router, tmp_path: Path
+) -> None:
+    local = tmp_path / "put.txt"
+    local.write_bytes(b"put")
+    router.start_transaction()
+    await router._pipe_file("lake/tree/piped.txt", b"piped")
+    await router._put_file(str(local), "lake/flat/put.txt")
+    # Written through open, on commit: no request yet.
+    assert "piped.txt" not in router.tree._file_data
+    assert "put.txt" not in router.flat._file_data
+    assert len(router.transaction.files) == 2
+    router.end_transaction()
+    assert router.tree._file_data["piped.txt"].data == b"piped"
+    assert router.flat._file_data["put.txt"].data == b"put"
+
+
 async def test_open_async_takes_no_part_in_the_transaction(router: _Router) -> None:
     # As in fsspec, whose open_async knows no transaction: written on closing.
     router.start_transaction()

@@ -15,12 +15,15 @@ This module depends on `streams`, and on `common`: `filesystem`, `operation`,
 from __future__ import annotations
 
 import asyncio
+import os
 from abc import abstractmethod
 from contextlib import aclosing, suppress
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import AsyncFileSystem, sync
+from fsspec.callbacks import DEFAULT_CALLBACK
+from fsspec.spec import AbstractFileSystem
 
 from fsspec_alt_strategies_common.monitor import Call, Monitored, routing
 from fsspec_alt_strategies_common.profile import StorageProfile
@@ -43,6 +46,8 @@ if TYPE_CHECKING:
         Hashable,
         Sequence,
     )
+
+    from fsspec.callbacks import Callback
 
     from .common.types import _Request
 
@@ -99,10 +104,12 @@ class AsyncRoutingFileSystem(
 
     One transaction is the router's: ``open`` passes ``autocommit`` on, and
     fsspec adds each file written to the router's transaction. Its commit, or
-    discard, is file by file: it is not atomic across storages. ``open_async``
-    takes no part in it, as in fsspec, whose ``open_async`` knows no
-    transaction: its files are the inner filesystem's own, written as they
-    close.
+    discard, is file by file: it is not atomic across storages. In it,
+    ``pipe_file`` and ``put_file`` write through ``open``, so that their files
+    join it. ``open_async`` takes no part in it, as in fsspec, whose
+    ``open_async`` knows no transaction: its files are the inner filesystem's
+    own, written as they close. Neither does a copy between two storages,
+    which streams through ``open_async``.
 
     The router has no ``storage_profile``: each storage has its own,
     `storage_profile_of` tells it. Its only limit is ``transfer_limit``, the
@@ -446,14 +453,34 @@ class AsyncRoutingFileSystem(
         return await self._forward(path, "_cat_file", start=start, end=end, **kwargs)
 
     async def _pipe_file(self, path: str, value: bytes, **kwargs: Any) -> None:
+        if self._intrans:
+            pipe_file = AbstractFileSystem.pipe_file
+            await self._in_transaction(path, pipe_file, path, value, **kwargs)
+            return
         await self._forward(path, "_pipe_file", value, **kwargs)
 
     async def _get_file(self, rpath: str, lpath: str, **kwargs: Any) -> None:
         await self._forward(rpath, "_get_file", lpath, **kwargs)
 
     async def _put_file(self, lpath: str, rpath: str, **kwargs: Any) -> None:
+        if self._intrans:
+            await self._in_transaction(rpath, _put_file, lpath, rpath, **kwargs)
+            return
         fs, inner = self._required(rpath)
         await self._on(fs, inner, rpath, fs._put_file(lpath, inner, **kwargs))
+
+    async def _in_transaction(
+        self, path: str, write: Callable[..., None], *args: Any, **kwargs: Any
+    ) -> None:
+        """Write ``path`` by fsspec's sync ``write``, through ``open``, so that it joins the transaction.
+
+        An inner filesystem's own write goes through ``open_async``, whose
+        files know no transaction. ``write`` takes the router first, as
+        fsspec's sync methods do. The sync file runs in a thread, as its
+        methods may wait on this loop.
+        """
+        fs, inner = self._required(path)
+        await self._on(fs, inner, path, asyncio.to_thread(write, self, *args, **kwargs))
 
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         await self._forward(path, "_rm_file", **kwargs)
@@ -906,3 +933,26 @@ class AsyncRoutingFileSystem(
 
     def rmdir(self, path: str) -> None:
         return sync(self.loop, self._rmdir, path)
+
+
+def _put_file(
+    fs: AbstractFileSystem,
+    lpath: str,
+    rpath: str,
+    mode: str = "overwrite",
+    callback: Callback = DEFAULT_CALLBACK,
+    **kwargs: Any,
+) -> None:
+    """fsspec's ``put_file`` through ``open``, without its ``makedirs``.
+
+    A storage needs no folder for the files put in it, and fsspec's sync
+    ``makedirs`` cannot run from a thread of an async router.
+    """
+    if os.path.isdir(lpath):
+        return
+    with open(lpath, "rb") as local:
+        callback.set_size(os.fstat(local.fileno()).st_size)
+        with fs.open(rpath, "xb" if mode == "create" else "wb", **kwargs) as f:
+            while chunk := local.read(fs.blocksize):
+                f.write(chunk)
+                callback.relative_update(len(chunk))
