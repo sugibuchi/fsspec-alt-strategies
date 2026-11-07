@@ -117,16 +117,16 @@ class _AsyncFile(io.RawIOBase):
         if self._forced:
             raise ValueError(f"Force-flushed, can only close: {self.path}")
 
-    def _unsupported(self, operation: str) -> io.UnsupportedOperation:
-        return io.UnsupportedOperation(f"{operation} on {self.path}")
+    # io.RawIOBase's read and write raise a bare NotImplementedError: these
+    # raise what its other unsupported operations do, naming the file too.
 
     async def _read(self, size: int = -1) -> bytes:
         """Read as ``read`` does."""
-        raise self._unsupported("read")
+        raise io.UnsupportedOperation(f"read on {self.path}")
 
     async def _write(self, data: Any) -> int:
         """Write as ``write`` does."""
-        raise self._unsupported("write")
+        raise io.UnsupportedOperation(f"write on {self.path}")
 
     def flush(self, force: bool = False) -> None:
         """Send nothing, or, if ``force``, finish the file as closing does.
