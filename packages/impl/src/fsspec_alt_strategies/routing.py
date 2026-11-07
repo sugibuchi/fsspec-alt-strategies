@@ -84,7 +84,8 @@ class AsyncRoutingFileSystem(
     sent at once. A failure raised by an inner filesystem gets a note naming
     the router's path, and its inner one.
 
-    Above the storages, ``ls`` and ``info`` answer from ``_roots``. ``find``,
+    Above the storages, ``ls`` answers from ``_roots``, and ``info`` from
+    ``_root_info``, which a subclass may override. ``find``,
     ``du`` and ``walk`` are fsspec's own walk, a folder after another, handing
     each storage's folder to its filesystem. A glob whose literal prefix
     routes goes whole to that filesystem. Another lists the prefix's roots, as
@@ -212,6 +213,22 @@ class AsyncRoutingFileSystem(
         it: ``_route`` then routes with what it has, or makes the request
         itself.
         """
+
+    async def _root_info(self, path: str) -> dict[str, Any]:
+        """Describe a path above the storages, as ``_info`` does.
+
+        ``path`` is the router's, without the protocol. Here, the root is a
+        bare folder entry, and any other path the entry of its name in
+        ``_roots`` of its parent. A subclass knowing more of them, e.g. the
+        root's own entry, or one request describing a path, overrides it.
+        It raises FileNotFoundError for a path that does not exist.
+        """
+        if path in ("", self.root_marker):
+            return {"name": path, "size": 0, "type": "directory"}
+        for entry in await self._roots(self._parent(path)):
+            if entry["name"].rstrip("/") == path:
+                return entry
+        raise FileNotFoundError(path)
 
     def _same_storage(
         self,
@@ -472,13 +489,7 @@ class AsyncRoutingFileSystem(
         if target is not None:
             fs, inner = target
             return self._entry(fs, await self._on(fs, inner, path, fs._info(inner)))
-        name = self._strip_protocol(path)
-        if name in ("", self.root_marker):
-            return {"name": name, "size": 0, "type": "directory"}
-        for entry in await self._roots(self._parent(name)):
-            if entry["name"].rstrip("/") == name:
-                return entry
-        raise FileNotFoundError(name)
+        return await self._root_info(self._strip_protocol(path))
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         target = await self._atarget(path)

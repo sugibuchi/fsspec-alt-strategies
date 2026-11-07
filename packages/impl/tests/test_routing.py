@@ -231,6 +231,20 @@ async def test_above_the_storages_lists_the_roots(router: _Router) -> None:
     assert await router._exists("lake/tree")
 
 
+class _RootDescribing(_Router):
+    async def _root_info(self, path: str) -> dict[str, Any]:
+        return {"name": path, "size": 0, "type": "directory", "owner": "me"}
+
+
+async def test_info_above_the_storages_is_the_root_info() -> None:
+    router = _RootDescribing()
+    assert (await router._info("routed://"))["owner"] == "me"
+    assert (await router._info("lake"))["owner"] == "me"
+    assert await router._isdir("lake")
+    router.tree.add_file("a.txt", b"a")
+    assert "owner" not in await router._info("lake/tree/a.txt")
+
+
 async def test_an_errors_note_names_the_routers_path(router: _Router) -> None:
     with pytest.raises(FileNotFoundError) as info:
         await router._cat_file("lake/tree/missing")

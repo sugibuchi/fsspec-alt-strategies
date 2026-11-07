@@ -339,6 +339,8 @@ It may override these hooks:
   - A sync method of a sync router awaits it on the loop. One of an asynchronous router cannot, e.g. `open`: `_route`
     then routes with what it has.
 
+- `_root_info(path)`, a coroutine, describes a path above the storages for `_info`. By default, the root is a bare
+  folder entry, and any other path its entry in `_roots` of its parent.
 - `_same_storage(fs1, path1, fs2, path2)` names the one filesystem copying or moving between two storages' paths
   itself. It returns that filesystem and both paths as its own, or None for a transfer. By default, it returns
   `(fs1, path1, path2)` only when `fs1 is fs2`.
@@ -354,7 +356,7 @@ How it passes calls on:
 - The recursive methods, such as `_find`, `_glob`, `_rm` and `_copy`, call the inner one's own too, so that its
   strategies run.
 - The paths of one call, e.g. a list given to `rm`, are grouped by storage, and the groups run at once.
-- Above the storages, `_ls` and `_info` answer from `_roots`. `find`, `du` and `walk` are fsspec's own walk, a folder at
+- Above the storages, `_ls` answers from `_roots`, and `_info` from `_root_info`. `find`, `du` and `walk` are fsspec's own walk, a folder at
   a time, handing each storage's folder to its filesystem.
 - A glob whose literal prefix routes goes whole to that storage. Any other is fsspec's own, over `_roots`.
 - A change above the storages raises PermissionError.
