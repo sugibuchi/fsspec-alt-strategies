@@ -115,6 +115,43 @@ async def test_each_family_to_each(source: str, destination: str) -> None:
     assert dst.stats.calls == {"info": 1, **mkdirs, "write": 3}
 
 
+@pytest.mark.parametrize("source", ["tree", "flat"])
+@pytest.mark.parametrize("destination", ["tree", "flat"])
+@pytest.mark.parametrize(
+    "path", ["simulated://data/a/1.txt", "data/a/1.*", ["data/a/1.txt"]]
+)
+async def test_a_file_goes_into_a_missing_folder_ending_in_a_slash(
+    source: str, destination: str, path: str | list[str]
+) -> None:
+    # As fsspec's copy: "new/" is a folder, though missing, never a file's name.
+    src = SimulatedFileSystem(hierarchical=source == "tree", asynchronous=True)
+    dst = SimulatedFileSystem(hierarchical=destination == "tree", asynchronous=True)
+    src.add_file("data/a/1.txt", b"1")
+    wrap = {"tree": _tree, "flat": _flat}
+    fs1 = wrap[source](src, StorageProfile())
+    fs2 = wrap[destination](dst, StorageProfile())
+
+    copied, errors = await _collect(fs1._transfer(path, fs2, "simulated://new/"))
+    assert errors == []
+    assert copied == [("data/a/1.txt", "new/1.txt")]
+
+
+@pytest.mark.parametrize("family", ["tree", "flat"])
+@pytest.mark.parametrize("method", ["_copy", "_mv"])
+@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("path", ["data/a/1.txt", "data/a/1.*", ["data/a/1.txt"]])
+async def test_a_file_copied_or_moved_into_a_missing_folder(
+    family: str, method: str, recursive: bool, path: str | list[str]
+) -> None:
+    sim = SimulatedFileSystem(hierarchical=family == "tree", asynchronous=True)
+    sim.add_file("data/a/1.txt", b"1")
+    fs = {"tree": _tree, "flat": _flat}[family](sim, StorageProfile())
+
+    await getattr(fs, method)(path, "new/", recursive=recursive)
+    assert sim._file_data["new/1.txt"].data == b"1"
+    assert "new" not in sim._file_data
+
+
 async def test_a_plain_destination_is_unknown() -> None:
     src = SimulatedFileSystem(asynchronous=True)
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)

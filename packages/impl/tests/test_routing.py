@@ -259,6 +259,28 @@ async def test_a_call_passed_on_keeps_the_slash() -> None:
     assert given == ["a/", "dest/"]
 
 
+@pytest.mark.parametrize("method", ["_copy", "_mv"])
+@pytest.mark.parametrize("source", ["tree", "flat", "plain"])
+@pytest.mark.parametrize("destination", ["tree", "flat", "plain"])
+@pytest.mark.parametrize("form", ["path", "glob", "list"])
+async def test_a_file_goes_into_a_missing_folder_ending_in_a_slash(
+    method: str, source: str, destination: str, form: str
+) -> None:
+    # Within a storage and across two, as fsspec's copy: never a file "new".
+    router = _Stripping()
+    for sim in (router.tree, router.flat, router.plain):
+        sim.add_file("data/a/1.txt", b"1")
+    path = {
+        "path": f"lake/{source}/data/a/1.txt",
+        "glob": f"lake/{source}/data/a/1.*",
+        "list": [f"lake/{source}/data/a/1.txt"],
+    }[form]
+    await getattr(router, method)(path, f"lake/{destination}/new/")
+    sim = getattr(router, destination)
+    assert sim._file_data["new/1.txt"].data == b"1"
+    assert "new" not in sim._file_data
+
+
 class _RootDescribing(_Router):
     async def _root_info(self, path: str) -> dict[str, Any]:
         return {"name": path, "size": 0, "type": "directory", "owner": "me"}
