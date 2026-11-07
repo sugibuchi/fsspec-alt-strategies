@@ -130,11 +130,10 @@ print(op.state.files_deleted)
 - Paths come without a protocol, as the operations take them. The method wrapping a strategy strips it first.
 
 - `concurrency_limit` is an `asyncio.Semaphore`, of which each request holds a permit while it runs. Shared, it limits
-  several operations, and the file objects, together: the caller chooses its scope. Without one, an operation has its
-  own, of 32.
-- That default is not fsspec's `batch_size`, which is how many coroutines fsspec gathers at once, sized from the limit
-  of open files. Requests to one storage need a limit of their own: high enough to hide each request's latency, and
-  low enough not to be throttled.
+  several operations, and the file objects, together: the caller chooses its scope.
+- It is required, with no default. The right limit depends on the storage, high enough to hide each request's latency
+  and low enough not to be throttled, so the caller sets it. fsspec's `batch_size` does not fit: it is how many
+  coroutines fsspec gathers at once, sized from the limit of open files.
 - Errors in the arguments, such as a bad `maxdepth`, are raised by the call.
 - Errors ending the whole operation are raised by the iteration, as fsspec raises them. An example is a missing root,
   which raises `FileNotFoundError`.

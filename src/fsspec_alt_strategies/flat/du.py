@@ -52,7 +52,7 @@ def flat_du(
     ils: _Ils,
     info: _Info,
     maxdepth: int | None = None,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
 ) -> Operation[dict[str, Any], FlatDuState]:
     """Measure the files under a prefix, from one listing streamed as it comes.
 
@@ -87,9 +87,8 @@ def flat_du(
     maxdepth : int, optional
         The deepest level to measure: 1 counts only the files in ``path``. No
         limit by default. The listing still lists every key under it.
-    concurrency_limit : asyncio.Semaphore, optional
-        Held by the ``info`` while it runs. The listing holds none. The
-        operation's own, of 32, if None.
+    concurrency_limit : asyncio.Semaphore
+        Held by the ``info`` while it runs. The listing holds none.
 
     Returns
     -------
@@ -107,7 +106,8 @@ def flat_du(
 
     Examples
     --------
-    >>> op = flat_du("data", ils=my_ils, info=fs._info)
+    >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
+    >>> op = flat_du("data", ils=my_ils, info=fs._info, concurrency_limit=limit)
     >>> await collect(op)
     >>> op.state.size, op.state.files
     (73400320, 70)

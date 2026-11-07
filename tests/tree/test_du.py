@@ -17,7 +17,11 @@ if TYPE_CHECKING:
 
 def _du(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`tree_du` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {"ls": fs._ls, "info": fs._info}
+    operations = {
+        "concurrency_limit": asyncio.Semaphore(32),
+        "ls": fs._ls,
+        "info": fs._info,
+    }
     return tree_du(path, **{**operations, **kwargs})
 
 

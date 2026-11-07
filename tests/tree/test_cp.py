@@ -18,6 +18,7 @@ from fsspec_alt_strategies_testing import SimulatedFileSystem
 def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
     """`tree_cp` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
+        "concurrency_limit": asyncio.Semaphore(32),
         "ls": fs._ls,
         "info": fs._info,
         "cp_file": fs._cp_file,

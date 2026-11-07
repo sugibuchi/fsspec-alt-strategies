@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..control import Operation, State
 from ..tree.glob import _infos, _Search
-from ..tree.walk import _check_maxdepth, _limit, _trim
+from ..tree.walk import _check_maxdepth, _trim
 from ._keys import _close, _folder, _folders, _limited
 
 if TYPE_CHECKING:
@@ -55,7 +55,7 @@ def flat_glob(
     info: _Info,
     maxdepth: int | None = None,
     withdirs: bool = True,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
 ) -> Operation[dict[str, Any], FlatGlobState]:
     """Find the paths matching glob patterns, listing only the keys they can match.
 
@@ -102,9 +102,8 @@ def flat_glob(
         default. The listing still lists every key under the prefix.
     withdirs : bool
         Whether folders can match, as with fsspec's ``_glob``.
-    concurrency_limit : asyncio.Semaphore, optional
-        Held by each ``info`` while it runs. The listings hold none. The
-        operation's own, of 32, if None.
+    concurrency_limit : asyncio.Semaphore
+        Held by each ``info`` while it runs. The listings hold none.
 
     Returns
     -------
@@ -123,7 +122,10 @@ def flat_glob(
 
     Examples
     --------
-    >>> glob = flat_glob("data/2024-*.parquet", ils=my_ils, info=fs._info)
+    >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
+    >>> glob = flat_glob(
+    ...     "data/2024-*.parquet", ils=my_ils, info=fs._info, concurrency_limit=limit
+    ... )
     >>> async with glob as matches:
     ...     async for match in matches:
     ...         print(match["name"])
@@ -140,7 +142,7 @@ def flat_glob(
             searches.append((trimmed[:first_magic], search))
         else:
             literals.append(trimmed)
-    limited = _limited(info, _limit(concurrency_limit))
+    limited = _limited(info, concurrency_limit)
 
     async def run(
         op: Operation[dict[str, Any], FlatGlobState],

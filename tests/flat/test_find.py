@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -17,7 +18,11 @@ if TYPE_CHECKING:
 
 def _find(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
     """`flat_find` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {"ils": fs._ils, "info": fs._info}
+    operations = {
+        "concurrency_limit": asyncio.Semaphore(32),
+        "ils": fs._ils,
+        "info": fs._info,
+    }
     return flat_find(path, **{**operations, **kwargs})
 
 
@@ -98,14 +103,24 @@ async def _info(path: str) -> dict[str, Any]:
 
 async def test_markers_are_folders() -> None:
     ils = _listing("data/", "data/empty/", "data/a/b.txt")
-    entries, _ = await collect(flat_find("data", ils=ils, info=_info, withdirs=True))
+    entries, _ = await collect(
+        flat_find(
+            "data",
+            ils=ils,
+            info=_info,
+            withdirs=True,
+            concurrency_limit=asyncio.Semaphore(32),
+        )
+    )
     assert _sorted(entries) == [
         {"name": "data", "size": 0, "type": "directory"},
         {"name": "data/a", "size": 0, "type": "directory"},
         {"name": "data/a/b.txt", "size": 1, "type": "file"},
         {"name": "data/empty", "size": 0, "type": "directory"},
     ]
-    files, _ = await collect(flat_find("data", ils=ils, info=_info))
+    files, _ = await collect(
+        flat_find("data", ils=ils, info=_info, concurrency_limit=asyncio.Semaphore(32))
+    )
     assert [e["name"] for e in files] == ["data/a/b.txt"]
 
 
@@ -114,7 +129,7 @@ async def test_an_error_of_the_listing_ends_it() -> None:
         yield {"name": "data/a", "size": 1, "type": "file"}
         raise PermissionError(prefix)
 
-    op = flat_find("data", ils=ils, info=_info)
+    op = flat_find("data", ils=ils, info=_info, concurrency_limit=asyncio.Semaphore(32))
     with pytest.raises(PermissionError):
         await collect(op)
 

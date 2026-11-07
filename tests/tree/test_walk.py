@@ -14,7 +14,7 @@ from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 def _walk(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`tree_walk` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {"ls": fs._ls}
+    operations = {"concurrency_limit": asyncio.Semaphore(32), "ls": fs._ls}
     return tree_walk(path, **{**operations, **kwargs})
 
 
@@ -256,10 +256,17 @@ async def test_failed_listing_notes_its_folder() -> None:
 async def test_listings_carry_folder_and_depth(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     # A trailing "/" is trimmed, as fsspec's _strip_protocol does.
-    async with aclosing(_listings(any_fs._ls, "data/")) as listings:
+    async with aclosing(
+        _listings(any_fs._ls, "data/", concurrency_limit=asyncio.Semaphore(32))
+    ) as listings:
         first = await anext(listings)
     assert (first.folder, first.depth) == ("data", 1)
-    listings = {lst.folder: lst async for lst in _listings(any_fs._ls, "data")}
+    listings = {
+        lst.folder: lst
+        async for lst in _listings(
+            any_fs._ls, "data", concurrency_limit=asyncio.Semaphore(32)
+        )
+    }
     assert [lst.depth for lst in listings.values()].count(3) == 4
 
 

@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..control import collect
 from .glob import tree_glob
-from .walk import _limit, _listings, _Permits
+from .walk import _listings, _Permits
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
@@ -63,7 +63,7 @@ async def _expand(
     ls: _Ls,
     info: _Info,
     pattern: str | Sequence[str],
-    concurrency_limit: asyncio.Semaphore | None,
+    concurrency_limit: asyncio.Semaphore,
 ) -> _Roots:
     """The roots matching glob patterns, as fsspec's ``_expand_path`` finds them.
 
@@ -97,13 +97,13 @@ class _Jobs(ABC):
         self,
         ls: _Ls,
         info: _Info,
-        concurrency_limit: asyncio.Semaphore | None,
+        concurrency_limit: asyncio.Semaphore,
         op: Operation[Any, Any],
     ) -> None:
         self.ls = ls
         self.info = info
         # The listings, the jobs, and a pattern's glob share it.
-        self.concurrency_limit = _limit(concurrency_limit)
+        self.concurrency_limit = concurrency_limit
         self.permits = _Permits(self.concurrency_limit)
         self.op = op
         self.errors = 0

@@ -78,7 +78,15 @@ class Operation(Generic[T, S]):
 
     Examples
     --------
-    >>> async with tree_rm(fs, "data/2024") as op:
+    >>> rm = tree_rm(
+    ...     "data/2024",
+    ...     ls=fs._ls,
+    ...     info=fs._info,
+    ...     rm_file=fs._rm_file,
+    ...     rm_folder=fs._rmdir,
+    ...     concurrency_limit=asyncio.Semaphore(32),
+    ... )
+    >>> async with rm as op:
     ...     async for path in op:
     ...         if isinstance(path, Exception):
     ...             op.cancel()  # Stop, but see what was in flight.
@@ -198,7 +206,9 @@ async def collect(operation: Operation[T, State]) -> tuple[list[T], list[Excepti
 
     Examples
     --------
-    >>> entries, errors = await collect(tree_find(fs, "data"))
+    >>> limit = asyncio.Semaphore(32)
+    >>> find = tree_find("data", ls=fs._ls, info=fs._info, concurrency_limit=limit)
+    >>> entries, errors = await collect(find)
     >>> if errors:
     ...     raise ExceptionGroup("find failed", errors)
     """

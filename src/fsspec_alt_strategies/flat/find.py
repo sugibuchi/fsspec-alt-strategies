@@ -49,7 +49,7 @@ def flat_find(
     info: _Info,
     maxdepth: int | None = None,
     withdirs: bool = False,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
 ) -> Operation[dict[str, Any], FlatFindState]:
     """Find the files under a prefix, from one listing streamed as it comes.
 
@@ -91,9 +91,8 @@ def flat_find(
         limit by default. The listing still lists every key under it.
     withdirs : bool
         Whether to find folders too, ``path`` included.
-    concurrency_limit : asyncio.Semaphore, optional
-        Held by each ``info`` while it runs. The listing holds none. The
-        operation's own, of 32, if None.
+    concurrency_limit : asyncio.Semaphore
+        Held by each ``info`` while it runs. The listing holds none.
 
     Returns
     -------
@@ -111,7 +110,9 @@ def flat_find(
 
     Examples
     --------
-    >>> async with flat_find("data", ils=my_ils, info=fs._info) as op:
+    >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
+    >>> find = flat_find("data", ils=my_ils, info=fs._info, concurrency_limit=limit)
+    >>> async with find as op:
     ...     async for entry in op:
     ...         print(entry["name"])
     """

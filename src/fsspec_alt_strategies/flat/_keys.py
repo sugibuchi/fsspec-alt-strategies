@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..tree.walk import _limit, _trim
+from ..tree.walk import _trim
 
 if TYPE_CHECKING:
     import asyncio
@@ -69,7 +69,7 @@ async def _scan(
     *,
     maxdepth: int | None = None,
     withdirs: bool = False,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
     stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[dict[str, Any]]:
     """The entries under ``path``, as fsspec's ``_find`` finds them.
@@ -88,7 +88,7 @@ async def _scan(
     """
     root = _trim(path)
     prefix = f"{root}/" if root else ""
-    info = _limited(info, _limit(concurrency_limit))
+    info = _limited(info, concurrency_limit)
     under = False
     seen: set[str] = set()
     entries = ils(prefix)

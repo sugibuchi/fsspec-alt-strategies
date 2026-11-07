@@ -63,7 +63,7 @@ def tree_glob(
     info: _Info,
     maxdepth: int | None = None,
     withdirs: bool = True,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
 ) -> Operation[dict[str, Any], GlobState]:
     """Find the paths matching glob patterns, listing only folders they can match in.
 
@@ -114,9 +114,9 @@ def tree_glob(
         How deep a ``**`` goes, as with fsspec's ``_glob``. No limit by default.
     withdirs : bool
         Whether folders can match, as with fsspec's ``_glob``.
-    concurrency_limit : asyncio.Semaphore, optional
+    concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several
-        operations, or files, together. The operation's own, of 32, if None.
+        operations, or files, together.
 
     Returns
     -------
@@ -136,7 +136,10 @@ def tree_glob(
 
     Examples
     --------
-    >>> glob = tree_glob("data/*/2024/*.parquet", ls=fs._ls, info=fs._info)
+    >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
+    >>> glob = tree_glob(
+    ...     "data/*/2024/*.parquet", ls=fs._ls, info=fs._info, concurrency_limit=limit
+    ... )
     >>> async with glob as matches:
     ...     async for match in matches:
     ...         if isinstance(match, Exception):
@@ -214,7 +217,7 @@ async def _walk(
     info: _Info,
     root: str,
     searches: list[_Search],
-    concurrency_limit: asyncio.Semaphore | None,
+    concurrency_limit: asyncio.Semaphore,
     op: Operation[dict[str, Any], GlobState],
     found: set[str],
 ) -> AsyncGenerator[dict[str, Any] | Exception]:

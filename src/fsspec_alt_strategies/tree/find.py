@@ -50,7 +50,7 @@ def tree_find(
     info: _Info,
     maxdepth: int | None = None,
     withdirs: bool = False,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
 ) -> Operation[dict[str, Any], FindState]:
     """Find the files in a tree, listing several folders at a time.
 
@@ -88,9 +88,9 @@ def tree_find(
         limit by default.
     withdirs : bool
         Whether to find folders too, ``path`` included.
-    concurrency_limit : asyncio.Semaphore, optional
+    concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several
-        operations, or files, together. The operation's own, of 32, if None.
+        operations, or files, together.
 
     Returns
     -------
@@ -110,7 +110,9 @@ def tree_find(
 
     Examples
     --------
-    >>> entries, errors = await collect(tree_find("data", ls=fs._ls, info=fs._info))
+    >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
+    >>> find = tree_find("data", ls=fs._ls, info=fs._info, concurrency_limit=limit)
+    >>> entries, errors = await collect(find)
     >>> sorted(e["name"] for e in entries), errors
     (['data/2024/01/part-0.parquet', 'data/2024/02/part-0.parquet'], [])
     """

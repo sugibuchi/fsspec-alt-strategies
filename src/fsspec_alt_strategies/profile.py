@@ -54,6 +54,7 @@ class StorageProfile:
     ...     makedirs=fs._makedirs,
     ...     rm_file=fs._rm_file,
     ...     profile=profile,
+    ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
     """
 

@@ -63,7 +63,7 @@ def tree_mv(
     rm_file: _Request,
     rm_folder: _Request,
     profile: StorageProfile | None = None,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, str], MvState]:
     """Move a folder and everything in it, moving while the tree is walked.
 
@@ -129,9 +129,9 @@ def tree_mv(
         Deletes an empty folder, as with `tree_rm`.
     profile : StorageProfile, optional
         What the storage does. Unknown if None.
-    concurrency_limit : asyncio.Semaphore, optional
+    concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several
-        operations, or files, together. The operation's own, of 32, if None.
+        operations, or files, together.
 
     Returns
     -------
@@ -155,6 +155,7 @@ def tree_mv(
     ...     makedirs=fs._makedirs,
     ...     rm_file=fs._rm_file,
     ...     rm_folder=fs._rmdir,
+    ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
     >>> async with mv as op:
     ...     async for moved in op:

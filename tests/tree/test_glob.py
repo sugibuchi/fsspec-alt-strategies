@@ -15,7 +15,11 @@ from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 def _glob(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`tree_glob` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {"ls": fs._ls, "info": fs._info}
+    operations = {
+        "concurrency_limit": asyncio.Semaphore(32),
+        "ls": fs._ls,
+        "info": fs._info,
+    }
     return tree_glob(path, **{**operations, **kwargs})
 
 

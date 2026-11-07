@@ -66,7 +66,7 @@ def tree_walk(
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
 ) -> Operation[dict[str, Any], WalkState]:
     """Walk a folder tree, listing several folders at a time.
 
@@ -109,9 +109,9 @@ def tree_walk(
     raise_on_error : bool
         Whether a folder that fails to list raises its error, ending the walk,
         rather than yielding it.
-    concurrency_limit : asyncio.Semaphore, optional
+    concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several
-        operations, or files, together. The operation's own, of 32, if None.
+        operations, or files, together.
 
     Returns
     -------
@@ -181,24 +181,6 @@ def _trim(path: str) -> str:
     A storage's root stays as it is, e.g. "/" on a local filesystem.
     """
     return path.rstrip("/") or path
-
-
-_DEFAULT_CONCURRENCY_LIMIT = 32
-"""The requests at a time of a tree strategy given no concurrency limit.
-
-fsspec's ``batch_size`` does not fit here. It is how many coroutines fsspec
-gathers at once, sized from the limit of open files, e.g. 1280. The requests
-of a tree strategy all go to one storage, so they need a limit of their own:
-high enough to hide each request's latency, and low enough not to be
-throttled.
-"""
-
-
-def _limit(concurrency_limit: asyncio.Semaphore | None) -> asyncio.Semaphore:
-    """The concurrency limit given, or an operation's own."""
-    if concurrency_limit is None:
-        return asyncio.Semaphore(_DEFAULT_CONCURRENCY_LIMIT)
-    return concurrency_limit
 
 
 class _Permits:
@@ -272,7 +254,7 @@ async def _listings(
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
     stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[_Listing]:
     """Walk a folder tree as `tree_walk` does, yielding each folder's listing.
@@ -295,7 +277,7 @@ async def _listings(
     """
     _check_maxdepth(maxdepth)
     roots = {_trim(p) for p in ([path] if isinstance(path, str) else path)}
-    permits = _Permits(_limit(concurrency_limit))
+    permits = _Permits(concurrency_limit)
     waiting: deque[tuple[str, int]] = deque()
     running: dict[asyncio.Task[list[dict[str, Any]]], tuple[str, int]] = {}
     bottom_up = None if topdown else _BottomUp()
@@ -343,7 +325,7 @@ async def _scan(
     *,
     maxdepth: int | None = None,
     descend: Callable[[dict[str, Any]], bool] | None = None,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
     stopping: Callable[[], object] | None = None,
     file_root: bool = False,
     folder_root: bool = False,

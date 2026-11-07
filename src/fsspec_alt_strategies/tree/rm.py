@@ -54,7 +54,7 @@ def tree_rm(
     info: _Info,
     rm_file: _Request,
     rm_folder: _Request,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
 ) -> Operation[str, RmState]:
     """Delete a folder and everything in it, deleting while the tree is walked.
 
@@ -112,9 +112,9 @@ def tree_rm(
         filesystem's ``_rmdir``, or its ``_rm_file`` as fsspec's ``_rm`` does
         without one. A FileNotFoundError from it counts as deleted, as object
         stores have no folders to delete.
-    concurrency_limit : asyncio.Semaphore, optional
+    concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several
-        operations, or files, together. The operation's own, of 32, if None.
+        operations, or files, together.
 
     Returns
     -------
@@ -133,6 +133,7 @@ def tree_rm(
     ...     info=fs._info,
     ...     rm_file=fs._rm_file,
     ...     rm_folder=fs._rmdir,
+    ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
     >>> async with rm as op:
     ...     async for path in op:
@@ -160,7 +161,7 @@ class _Deletion(_Jobs):
         rm_file: _Request,
         rm_folder: _Request,
         path: str | Sequence[str],
-        concurrency_limit: asyncio.Semaphore | None,
+        concurrency_limit: asyncio.Semaphore,
         op: Operation[str, RmState],
     ) -> None:
         super().__init__(ls, info, concurrency_limit, op)

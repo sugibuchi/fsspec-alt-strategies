@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -14,7 +15,11 @@ from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 def _du(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
     """`flat_du` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {"ils": fs._ils, "info": fs._info}
+    operations = {
+        "concurrency_limit": asyncio.Semaphore(32),
+        "ils": fs._ils,
+        "info": fs._info,
+    }
     return flat_du(path, **{**operations, **kwargs})
 
 

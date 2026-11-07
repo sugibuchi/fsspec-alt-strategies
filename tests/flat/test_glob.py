@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -17,7 +18,11 @@ if TYPE_CHECKING:
 
 def _glob(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`flat_glob` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {"ils": fs._ils, "info": fs._info}
+    operations = {
+        "concurrency_limit": asyncio.Semaphore(32),
+        "ils": fs._ils,
+        "info": fs._info,
+    }
     return flat_glob(path, **{**operations, **kwargs})
 
 

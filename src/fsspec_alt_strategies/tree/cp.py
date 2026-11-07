@@ -58,7 +58,7 @@ def tree_cp(
     makedirs: _Request,
     rm_file: _Request,
     profile: StorageProfile | None = None,
-    concurrency_limit: asyncio.Semaphore | None = None,
+    concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, str], CpState]:
     """Copy a folder and everything in it, copying while the tree is walked.
 
@@ -138,9 +138,9 @@ def tree_cp(
         ``_rm_file``. Only a storage refusing to overwrite needs it.
     profile : StorageProfile, optional
         What the storage does. Unknown if None.
-    concurrency_limit : asyncio.Semaphore, optional
+    concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several
-        operations, or files, together. The operation's own, of 32, if None.
+        operations, or files, together.
 
     Returns
     -------
@@ -163,6 +163,7 @@ def tree_cp(
     ...     cp_file=fs._cp_file,
     ...     makedirs=fs._makedirs,
     ...     rm_file=fs._rm_file,
+    ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
     >>> async with cp as op:
     ...     async for copied in op:
@@ -208,7 +209,7 @@ class _Copy(_Jobs):
         makedirs: _Request,
         rm_file: _Request,
         profile: StorageProfile,
-        concurrency_limit: asyncio.Semaphore | None,
+        concurrency_limit: asyncio.Semaphore,
         op: Operation[Any, Any],
     ) -> None:
         super().__init__(ls, info, concurrency_limit, op)
