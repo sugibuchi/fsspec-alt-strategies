@@ -173,6 +173,52 @@ async def test_a_sync_file_leaves_the_loop_free() -> None:
     assert file.flushes == [False, True]
 
 
+class _Handle:
+    """An SDK's handle: a sync file telling neither its mode nor its size."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = io.BytesIO(data)
+        self.read = self._data.read
+        self.close = self._data.close
+        self.opened_in = threading.get_ident()
+
+    @property
+    def closed(self) -> bool:
+        return self._data.closed
+
+
+async def test_a_handle_is_given_its_mode_and_size() -> None:
+    def opener() -> Any:
+        return _Handle(b"0123456789")
+
+    f = await SyncFileAdapter.open(opener, mode="rb", size=10)
+    assert f.file.opened_in != threading.get_ident()  # Opened in a thread.
+    assert (f.mode, f.size) == ("rb", 10)
+    assert await f.read() == b"0123456789"
+    await f.close()
+    assert f.closed
+
+
+async def test_a_file_tells_its_own_mode_and_size() -> None:
+    f = SyncFileAdapter(_Blocking(b"0123"))
+    assert (f.mode, f.size) == ("rb", None)
+
+
+async def test_seeking_while_a_thread_runs_is_refused() -> None:
+    file = _Blocking(b"0123456789")
+    f = SyncFileAdapter(file)
+    reading = asyncio.create_task(f.read(4))
+    await asyncio.to_thread(file.started.wait, 5)
+    # The file's own would wait for the read, blocking the loop.
+    with pytest.raises(RuntimeError, match="runs in a thread"):
+        f.seek(0)
+    with pytest.raises(RuntimeError, match="runs in a thread"):
+        f.tell()
+    file.go.set()
+    assert await reading == b"0123"
+    assert f.tell() == 4
+
+
 async def test_a_cancelled_call_frees_the_file_only_when_its_thread_ends() -> None:
     file = _Blocking(b"0123456789")
     f = SyncFileAdapter(file)
