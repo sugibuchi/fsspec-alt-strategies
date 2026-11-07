@@ -77,12 +77,10 @@ def test_a_forced_flush_uploads_as_closing_does(fs: SimulatedFileSystem) -> None
     assert fs.cat_file("data/f.bin") == b"0123456789"  # Unforced: nothing sent.
     f.flush(force=True)
     assert fs.cat_file("data/f.bin") == b"0123ab6789"
-    # As fsspec's files: it may still be read, but not written, nor forced again.
-    assert f.read(2) == b"67"
-    with pytest.raises(ValueError, match="only close"):
-        f.write(b"x")
-    with pytest.raises(ValueError, match="only close"):
-        f.truncate(0)
+    # Its buffer is gone: it can only close, and is forced once, as fsspec's.
+    for operation in (lambda: f.read(2), lambda: f.write(b"x"), f.tell, f.load):
+        with pytest.raises(ValueError, match="only close"):
+            operation()
     with pytest.raises(ValueError, match="more than once"):
         f.flush(force=True)
     fs.reset_stats()

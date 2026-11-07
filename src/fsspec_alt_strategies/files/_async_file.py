@@ -44,8 +44,9 @@ class _AsyncFile(io.RawIOBase):
 
     ``flush(force=True)`` finishes the file as closing does, as fsspec's files
     do: what was written is then shown, e.g. the upload completed. The file
-    then allows no more writes, only reads if its mode has them, and closing,
-    which sends nothing more. A class says how it finishes in ``_finish``.
+    then allows no more writes, and closing sends nothing more. A class says
+    how it finishes in ``_finish``, which frees what the file holds: one whose
+    buffer goes then allows no reads either.
 
     A request holds the concurrency limit while it runs. Shared by files, the
     limit bounds their requests together, and so the memory these hold.
@@ -98,24 +99,17 @@ class _AsyncFile(io.RawIOBase):
     async def _finish(self) -> None:
         """Send what shows the file as written, e.g. complete its upload.
 
-        Closing, or a forced flush, calls it once. A file only read sends
-        nothing.
+        Closing, or a forced flush, calls it once, even for a file only read.
+        It frees what the file holds, e.g. a buffer, even if it fails.
         """
 
-    async def _close(self) -> None:
-        """Finish the file, unless a forced flush did, and end its requests."""
-        try:
-            if not self._forced:
-                await self._finish()
-        finally:
-            await self._requests.cancel_all()
-
     async def _abort(self) -> None:
-        """Undo the file's requests, keeping nothing: a subclass adds to it."""
-        await self._requests.cancel_all()
+        """Undo the file's requests, keeping nothing: a subclass adds to it.
 
-    def _release(self) -> None:
-        """Free what the file holds locally, e.g. a buffer, sending nothing."""
+        The garbage collector calls it for a file left open. It frees what the
+        file holds, as `_finish` does.
+        """
+        await self._requests.cancel_all()
 
     # The rest.
 
@@ -152,13 +146,17 @@ class _AsyncFile(io.RawIOBase):
         await self._finish()
 
     async def aclose(self) -> None:
-        """Close the file, finishing or cancelling its requests."""
+        """Close the file: finish it, unless a forced flush did, and end its requests."""
         if self.closed:
             return
         try:
-            await self._close()
+            if not self._forced:
+                await self._finish()
         finally:
-            super().close()
+            try:
+                await self._requests.cancel_all()
+            finally:
+                super().close()
 
     def close(self) -> None:
         if self.closed:
@@ -178,12 +176,8 @@ class _AsyncFile(io.RawIOBase):
             io.RawIOBase.close(self)
             return
         if self._forced:
-            # A forced flush finished the file: nothing is left to undo, only
-            # what it holds locally to free.
-            try:
-                self._release()
-            finally:
-                io.RawIOBase.close(self)
+            # A forced flush finished the file: nothing is left to undo.
+            io.RawIOBase.close(self)
             return
         warnings.warn(
             f"Unclosed file {self.path!r}, aborted: nothing written is kept",
