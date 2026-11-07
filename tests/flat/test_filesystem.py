@@ -7,10 +7,12 @@ from typing import IO, TYPE_CHECKING, Any
 
 import pytest
 from fsspec.asyn import AsyncFileSystem
+from fsspec.callbacks import Callback
 
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
 from fsspec_alt_strategies.flat.filesystem import FlatFileSystem
+from fsspec_alt_strategies.monitoring import Call, Monitor, monitoring
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -190,6 +192,29 @@ def test_rm_batch_size_must_be_set(inner: SimulatedFileSystem) -> None:
 
     with pytest.raises(ValueError, match="rm_batch_size"):
         Unset(inner)
+
+
+async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
+    class Counting(Monitor):
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.items = 0
+
+        async def started(self, call: Call, op: Any) -> None:
+            self.calls.append(call.method)
+
+        async def yielded(self, call: Call, op: Any, item: Any) -> None:
+            self.items += 1
+
+    monitor = Counting()
+    callback = Callback()
+    async with monitoring(monitor):
+        assert len([t async for t in fs._walk("data")]) == 7
+        await fs._rm("data", recursive=True, callback=callback)
+    assert monitor.calls == ["walk", "rm"]
+    assert callback.value == len(_FILES)
+    # The walk's entries, then the files deleted.
+    assert monitor.items == len(_FILES) + 6 + len(_FILES)
 
 
 def test_a_subclass_missing_a_primitive_is_refused() -> None:

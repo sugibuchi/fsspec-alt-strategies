@@ -7,7 +7,7 @@ key under a prefix in one paginated request. A subclass implements the
 storage's primitives, that listing among them, and gets fsspec's recursive
 methods from the flat strategies.
 
-This module depends on `control`, `walk`, `find`, `du`, `glob`, `rm`, `cp`,
+This module depends on `monitoring`, `walk`, `find`, `du`, `glob`, `rm`, `cp`,
 `mv`, and `filesystem` of `common`.
 """
 
@@ -20,7 +20,7 @@ from fsspec.asyn import sync_wrapper
 
 from ..common.filesystem import _failed_folder, _FileSystem, _raise
 from ..common.paths import _triples
-from ..control import collect
+from ..monitoring import Call, _collected
 from .cp import flat_cp
 from .du import flat_du
 from .find import flat_find
@@ -166,14 +166,15 @@ class FlatFileSystem(_FileSystem):
         detail = kwargs.pop("detail", False)
         root = self._strip_protocol(path)
         try:
-            entries, _ = await collect(
+            entries, _ = await _collected(
                 flat_walk(
                     root,
                     ils=self._ils,
                     info=self._info,
                     maxdepth=maxdepth,
                     concurrency_limit=self.operation_limit,
-                )
+                ),
+                Call("walk", path),
             )
         except NotADirectoryError:
             # fsspec's walk of a file yields the file, under no name.
@@ -207,7 +208,7 @@ class FlatFileSystem(_FileSystem):
         **kwargs: Any,
     ) -> Any:
         detail = kwargs.pop("detail", False)
-        entries, _ = await collect(
+        entries, _ = await _collected(
             flat_find(
                 self._strip_protocol(path),
                 ils=self._ils,
@@ -215,7 +216,8 @@ class FlatFileSystem(_FileSystem):
                 maxdepth=maxdepth,
                 withdirs=withdirs,
                 concurrency_limit=self.operation_limit,
-            )
+            ),
+            Call("find", path),
         )
         found = {e["name"].rstrip("/"): e for e in entries}
         names = sorted(found)
@@ -233,14 +235,14 @@ class FlatFileSystem(_FileSystem):
             maxdepth=maxdepth,
             concurrency_limit=self.operation_limit,
         )
-        entries, _ = await collect(op)
+        entries, _ = await _collected(op, Call("du", path))
         if total:
             return op.state.size
         return {e["name"]: e.get("size") or 0 for e in entries}
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
         detail = kwargs.pop("detail", False)
-        entries, _ = await collect(
+        entries, _ = await _collected(
             flat_glob(
                 self._plain(path),
                 ils=self._ils,
@@ -248,7 +250,8 @@ class FlatFileSystem(_FileSystem):
                 maxdepth=maxdepth,
                 withdirs=kwargs.pop("withdirs", True),
                 concurrency_limit=self.operation_limit,
-            )
+            ),
+            Call("glob", path),
         )
         found = {e["name"].rstrip("/"): e for e in entries}
         names = sorted(found)
@@ -265,7 +268,7 @@ class FlatFileSystem(_FileSystem):
         if not recursive or maxdepth is not None:
             await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
             return
-        _, errors = await collect(
+        _, errors = await _collected(
             flat_rm(
                 self._plain(path),
                 ils=self._ils,
@@ -273,7 +276,9 @@ class FlatFileSystem(_FileSystem):
                 rm_files=self._rm_files,
                 batch_size=self.rm_batch_size,
                 concurrency_limit=self.operation_limit,
-            )
+            ),
+            Call("rm", path),
+            kwargs.get("callback"),
         )
         _raise(errors, "Deleting")
 
@@ -292,7 +297,7 @@ class FlatFileSystem(_FileSystem):
                 path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
             )
             return
-        _, errors = await collect(
+        _, errors = await _collected(
             flat_cp(
                 self._plain(path1),
                 self._plain(path2),
@@ -300,7 +305,9 @@ class FlatFileSystem(_FileSystem):
                 info=self._info,
                 cp_file=self._cp_file,
                 concurrency_limit=self.operation_limit,
-            )
+            ),
+            Call("copy", path1, path2),
+            kwargs.get("callback"),
         )
         if on_error != "raise":
             # As fsspec's recursive copy: a source gone meanwhile is no error.
@@ -323,7 +330,7 @@ class FlatFileSystem(_FileSystem):
             await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
             await self._rm(path1, recursive=recursive)
             return
-        _, errors = await collect(
+        _, errors = await _collected(
             flat_mv(
                 self._plain(path1),
                 self._plain(path2),
@@ -333,7 +340,9 @@ class FlatFileSystem(_FileSystem):
                 rm_files=self._rm_files,
                 batch_size=self.rm_batch_size,
                 concurrency_limit=self.operation_limit,
-            )
+            ),
+            Call("mv", path1, path2),
+            kwargs.get("callback"),
         )
         _raise(errors, "Moving")
 

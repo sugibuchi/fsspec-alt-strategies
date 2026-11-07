@@ -6,19 +6,20 @@
 folder per request. A subclass implements the storage's primitives, and gets
 fsspec's recursive methods from the tree strategies.
 
-This module depends on `control`, `profile`, `walk`, `find`, `du`, `glob`,
+This module depends on `monitoring`, `profile`, `walk`,`find`, `du`, `glob`,
 `rm`, `cp`, `mv`, and `filesystem` of `common`.
 """
 
 from __future__ import annotations
 
 from abc import abstractmethod
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import sync_wrapper
 
 from ..common.filesystem import _failed_folder, _FileSystem, _raise, _with
-from ..control import collect
+from ..monitoring import Call, _collected, _watched
 from .cp import tree_cp
 from .du import tree_du
 from .find import tree_find
@@ -164,9 +165,9 @@ class TreeFileSystem(_FileSystem):
             on_error="raise" if on_error == "raise" else None,
             concurrency_limit=self.operation_limit,
         )
-        async with walk:
+        async with aclosing(_watched(walk, Call("walk", path))) as items:
             try:
-                first = await anext(walk)
+                first = await anext(items)
             except StopAsyncIteration:
                 return
             except NotADirectoryError:
@@ -187,7 +188,7 @@ class TreeFileSystem(_FileSystem):
                         dirs, files = list(dirs), list(files)
                     yield folder, dirs, files
                 try:
-                    item = await anext(walk)
+                    item = await anext(items)
                 except StopAsyncIteration:
                     return
 
@@ -199,7 +200,7 @@ class TreeFileSystem(_FileSystem):
         **kwargs: Any,
     ) -> Any:
         detail = kwargs.pop("detail", False)
-        entries, _ = await collect(
+        entries, _ = await _collected(
             tree_find(
                 self._strip_protocol(path),
                 ls=_with(self._ls, kwargs),
@@ -207,7 +208,8 @@ class TreeFileSystem(_FileSystem):
                 maxdepth=maxdepth,
                 withdirs=withdirs,
                 concurrency_limit=self.operation_limit,
-            )
+            ),
+            Call("find", path),
         )
         found = {e["name"].rstrip("/"): e for e in entries}
         names = sorted(found)
@@ -227,7 +229,7 @@ class TreeFileSystem(_FileSystem):
             maxdepth=maxdepth,
             concurrency_limit=self.operation_limit,
         )
-        entries, _ = await collect(op)
+        entries, _ = await _collected(op, Call("du", path))
         if total:
             return op.state.size
         return {e["name"]: e.get("size") or 0 for e in entries}
@@ -235,7 +237,7 @@ class TreeFileSystem(_FileSystem):
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
         detail = kwargs.pop("detail", False)
         withdirs = kwargs.pop("withdirs", True)
-        entries, _ = await collect(
+        entries, _ = await _collected(
             tree_glob(
                 self._plain(path),
                 ls=_with(self._ls, kwargs),
@@ -243,7 +245,8 @@ class TreeFileSystem(_FileSystem):
                 maxdepth=maxdepth,
                 withdirs=withdirs,
                 concurrency_limit=self.operation_limit,
-            )
+            ),
+            Call("glob", path),
         )
         found = {e["name"].rstrip("/"): e for e in entries}
         names = sorted(found)
@@ -260,7 +263,7 @@ class TreeFileSystem(_FileSystem):
         if not recursive or maxdepth is not None:
             await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
             return
-        _, errors = await collect(
+        _, errors = await _collected(
             tree_rm(
                 self._plain(path),
                 ls=self._ls,
@@ -268,7 +271,9 @@ class TreeFileSystem(_FileSystem):
                 rm_file=self._rm_file,
                 rm_folder=self._rmdir,
                 concurrency_limit=self.operation_limit,
-            )
+            ),
+            Call("rm", path),
+            kwargs.get("callback"),
         )
         _raise(errors, "Deleting")
 
@@ -287,7 +292,7 @@ class TreeFileSystem(_FileSystem):
                 path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
             )
             return
-        _, errors = await collect(
+        _, errors = await _collected(
             tree_cp(
                 self._plain(path1),
                 self._plain(path2),
@@ -298,7 +303,9 @@ class TreeFileSystem(_FileSystem):
                 rm_file=self._rm_file,
                 profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
-            )
+            ),
+            Call("copy", path1, path2),
+            kwargs.get("callback"),
         )
         if on_error != "raise":
             # As fsspec's recursive copy: a source gone meanwhile is no error.
@@ -321,7 +328,7 @@ class TreeFileSystem(_FileSystem):
             await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
             await self._rm(path1, recursive=recursive)
             return
-        _, errors = await collect(
+        _, errors = await _collected(
             tree_mv(
                 self._plain(path1),
                 self._plain(path2),
@@ -333,7 +340,9 @@ class TreeFileSystem(_FileSystem):
                 rm_folder=self._rmdir,
                 profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
-            )
+            ),
+            Call("mv", path1, path2),
+            kwargs.get("callback"),
         )
         _raise(errors, "Moving")
 

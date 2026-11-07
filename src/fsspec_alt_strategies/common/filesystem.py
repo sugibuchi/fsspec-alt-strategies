@@ -18,9 +18,12 @@ from abc import ABCMeta
 from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import AsyncFileSystem
+from fsspec.callbacks import DEFAULT_CALLBACK
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    from fsspec.callbacks import Callback
 
 _MiB = 1024 * 1024
 
@@ -99,27 +102,43 @@ class _FileSystem(AsyncFileSystem, metaclass=_AbstractFileSystemMeta):
         async with f:
             await f.write(value)
 
-    async def _get_file(self, rpath: str, lpath: str, **kwargs: Any) -> None:
+    async def _get_file(
+        self,
+        rpath: str,
+        lpath: str,
+        callback: Callback = DEFAULT_CALLBACK,
+        **kwargs: Any,
+    ) -> None:
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
             return  # A folder, which fsspec's get makes itself.
         f = await self.open_async(rpath, "rb", **kwargs)
         async with f:
+            # The bytes, as fsspec's own filesystems tell them to the callback.
+            callback.set_size(f.size)
             # Local writes are short next to a storage's requests, as in fsspec's
             # own filesystems.
             with open(lpath, "wb") as local:  # noqa: ASYNC230
                 while chunk := await f.read(self.transfer_size):
                     local.write(chunk)
+                    callback.relative_update(len(chunk))
 
     async def _put_file(
-        self, lpath: str, rpath: str, mode: str = "overwrite", **kwargs: Any
+        self,
+        lpath: str,
+        rpath: str,
+        mode: str = "overwrite",
+        callback: Callback = DEFAULT_CALLBACK,
+        **kwargs: Any,
     ) -> None:
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
             return  # A folder: a storage needs none for the files put in it.
         f = await self.open_async(rpath, "xb" if mode == "create" else "wb", **kwargs)
         async with f:
             with open(lpath, "rb") as local:  # noqa: ASYNC230
+                callback.set_size(os.fstat(local.fileno()).st_size)
                 while chunk := local.read(self.transfer_size):
                     await f.write(chunk)
+                    callback.relative_update(len(chunk))
 
 
 def _with(func: Callable[..., Any], kwargs: dict[str, Any]) -> Callable[..., Any]:

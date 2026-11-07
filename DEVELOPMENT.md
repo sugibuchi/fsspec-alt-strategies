@@ -6,6 +6,7 @@
 |---------------------------------|----------------------------------------------------------------|
 | `src/fsspec_alt_strategies/`    | The package.                                                   |
 | `.../control.py`                | `Operation`, `State` and `collect`: the strategy API.          |
+| `.../monitoring.py`             | `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
 | `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
 | `.../tree/walk.py`              | `tree_walk`, the concurrent folder walk under the tree strategies.  |
 | `.../tree/find.py`              | `tree_find`, a find listing several folders at a time.              |
@@ -228,6 +229,22 @@ Or they subclass a family's abstract filesystem, `TreeFileSystem` in `tree/files
   yielded empty by a walk, as fsspec's `walk` yields it, and `on_error` handles every folder's failure, not only the
   root's as fsspec's does.
 - fsspec has no async `mv`, nor builds a sync one from `_mv`: each class wraps its `_mv` itself.
+
+Their callers see only fsspec's answers, not the `Operation` behind them. `monitoring.py` shows it without changing
+fsspec's API:
+
+- A `Monitor` subclass overrides `started`, `yielded` and `ended`, each awaited where the operation runs.
+- `with monitoring(monitor):`, or `async with`, sets a context variable. Every call within the block is watched,
+  whoever makes it, and blocks nest.
+- fsspec's sync methods see the block too: `sync()` runs the call in a copy of the caller's context.
+- A monitor stops a call with `op.cancel()`. The call then raises `CallCancelled`, an Exception, since fsspec's callers
+  expect a call to finish or raise, and an `asyncio.CancelledError` would end fsspec's `sync()` with no answer.
+- fsspec's own `callback=` is a monitor too. `copy`, `mv` and `rm` add one per path done. `_get_file` and `_put_file`
+  set the size in bytes and add each chunk, as fsspec's own filesystems do.
+- Only the calls run by a strategy are watched. A call fsspec answers itself, e.g. a copy that is not recursive, is not.
+
+The strategies themselves take no callbacks: their callers iterate the `Operation`. Monitors exist for the callers of
+fsspec's methods, who cannot.
 
 Choosing the class chooses the family: a developer wanting one strategy of another overrides that method, as above.
 

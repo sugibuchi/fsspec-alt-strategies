@@ -7,9 +7,11 @@ from typing import IO, TYPE_CHECKING, Any
 
 import pytest
 from fsspec.asyn import AsyncFileSystem
+from fsspec.callbacks import Callback
 
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
+from fsspec_alt_strategies.monitoring import Call, CallCancelled, Monitor, monitoring
 from fsspec_alt_strategies.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
@@ -288,6 +290,109 @@ def test_the_sync_api_works() -> None:
 def test_concurrencies_must_be_positive(inner: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="io_concurrency"):
         _Tree(inner, io_concurrency=0)
+
+
+class _Recording(Monitor):
+    """Records what it is told, as (event, method, detail)."""
+
+    def __init__(self, name: str = "", cancel_after: int | None = None) -> None:
+        self.name = name
+        self.cancel_after = cancel_after
+        self.events: list[tuple[str, str, Any]] = []
+
+    async def started(self, call: Call, op: Any) -> None:
+        self.events.append(("started", call.method, self.name))
+
+    async def yielded(self, call: Call, op: Any, item: Any) -> None:
+        self.events.append(("yielded", call.method, item))
+        if self.cancel_after is not None and len(self.events) > self.cancel_after:
+            op.cancel()
+
+    async def ended(self, call: Call, op: Any, error: BaseException | None) -> None:
+        self.events.append(("ended", call.method, type(error)))
+
+
+async def test_a_monitor_watches_the_calls_within_its_block(
+    fs: _Tree, inner: SimulatedFileSystem
+) -> None:
+    await fs._rm("data/2023", recursive=True)  # Before the block: not watched.
+    monitor = _Recording()
+    async with monitoring(monitor):
+        await fs._rm("data/2024", recursive=True)
+    await fs._rm("data/README.md", recursive=True)  # After it: not watched.
+    assert monitor.events[0] == ("started", "rm", "")
+    assert monitor.events[-1] == ("ended", "rm", type(None))
+    deleted = {item for event, _, item in monitor.events if event == "yielded"}
+    assert {"data/2024/01/part-0.parquet", "data/2024"} <= deleted
+
+
+async def test_monitors_nest_the_outer_first(fs: _Tree) -> None:
+    outer, inner_monitor = _Recording("outer"), _Recording("inner")
+    with monitoring(outer):
+        await fs._find("data")
+        with monitoring(inner_monitor):
+            await fs._du("data")
+    assert [e for e in outer.events if e[0] == "started"] == [
+        ("started", "find", "outer"),
+        ("started", "du", "outer"),
+    ]
+    assert [e for e in inner_monitor.events if e[0] == "started"] == [
+        ("started", "du", "inner")
+    ]
+
+
+async def test_a_monitor_cancelling_ends_the_call(
+    fs: _Tree, inner: SimulatedFileSystem
+) -> None:
+    monitor = _Recording(cancel_after=1)
+    with monitoring(monitor), pytest.raises(CallCancelled) as raised:
+        await fs._copy("data", "copied", recursive=True)
+    assert raised.value.call == Call("copy", "data", "copied")
+    assert monitor.events[-1] == ("ended", "copy", CallCancelled)
+    # Only what was in flight was copied, not all five files.
+    assert 0 < raised.value.state.files_copied < 5
+
+
+async def test_a_monitor_sees_a_walk_stopped_early(fs: _Tree) -> None:
+    monitor = _Recording()
+    with monitoring(monitor):
+        walk = fs._walk("data")
+        await anext(walk)
+        await walk.aclose()
+    assert monitor.events[-1] == ("ended", "walk", type(None))
+
+
+def test_a_monitor_watches_the_sync_api() -> None:
+    inner = SimulatedFileSystem(hierarchical=True)  # Sync, on fsspec's loop.
+    _tree(inner)
+    fs = _Tree(inner)
+    monitor = _Recording()
+    # fsspec runs the call on its own loop, in a copy of this context.
+    with monitoring(monitor):
+        fs.mv("data", "moved", recursive=True)
+    assert monitor.events[0] == ("started", "mv", "")
+    assert monitor.events[-1] == ("ended", "mv", type(None))
+
+
+async def test_fsspec_callback_counts_what_was_done(fs: _Tree) -> None:
+    callback = Callback()
+    await fs._copy("data", "copied", recursive=True, callback=callback)
+    assert callback.value == 5  # The files copied.
+    callback = Callback()
+    await fs._rm("copied", recursive=True, callback=callback)
+    assert callback.value == 5 + 7  # The files and the folders deleted.
+
+
+async def test_fsspec_callback_counts_the_bytes_of_a_file(
+    fs: _Tree, tmp_path: Path
+) -> None:
+    local = tmp_path / "local.txt"
+    callback = Callback()
+    await fs._get_file("data/README.md", str(local), callback=callback)
+    assert (callback.size, callback.value) == (6, 6)
+    callback = Callback()
+    await fs._put_file(str(local), "put.txt", callback=callback)
+    assert (callback.size, callback.value) == (6, 6)
 
 
 def test_a_subclass_missing_a_primitive_is_refused() -> None:
