@@ -152,3 +152,18 @@ def test_errors_in_the_pattern_are_raised_at_once(
         _glob(flat_fs, "data/**", maxdepth=0)
     with pytest.raises(ValueError):
         _glob(flat_fs, "data/a**/b")
+
+
+async def test_cancel_lists_nothing_more() -> None:
+    fs = SimulatedFileSystem(page_size=1, asynchronous=True)
+    _tree(fs)
+    prefixes: list[str] = []
+    op = _glob(fs, ["data/s*/README.md", "other/*"], ils=_recorded(fs, prefixes))
+    names = []
+    async for entry in op:
+        names.append(entry["name"])
+        op.cancel()
+    assert op.cancelled()
+    assert names == ["data/sales/README.md"]
+    # The first listing stopped at its match, and the second never started.
+    assert prefixes == ["data/s"]

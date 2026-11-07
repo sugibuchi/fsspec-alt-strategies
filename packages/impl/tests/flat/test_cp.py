@@ -132,3 +132,31 @@ async def test_paths_it_refuses(flat_fs: SimulatedFileSystem) -> None:
         await _collect(_cp(flat_fs, "data", "data/inner"))
     with pytest.raises(FileNotFoundError):
         await _collect(_cp(flat_fs, "missing", "copied"))
+
+
+async def test_markers_are_not_copied() -> None:
+    keys = ["data/", "data/empty/", "data/a.txt"]
+    copied: list[tuple[str, str]] = []
+
+    async def ils(prefix: str) -> Any:
+        for name in keys:
+            if name.startswith(prefix):
+                yield {"name": name, "size": 0, "type": "file"}
+
+    async def info(path: str) -> dict[str, Any]:
+        raise FileNotFoundError(path)
+
+    async def cp_file(source: str, destination: str) -> None:
+        copied.append((source, destination))
+
+    op = flat_cp(
+        "data",
+        "copied",
+        ils=ils,
+        info=info,
+        cp_file=cp_file,
+        concurrency_limit=asyncio.Semaphore(4),
+    )
+    assert await _collect(op) == ([("data/a.txt", "copied/a.txt")], [])
+    assert copied == [("data/a.txt", "copied/a.txt")]
+    assert op.state.files_found == 1

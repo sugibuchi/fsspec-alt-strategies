@@ -78,3 +78,25 @@ def test_a_sync_filesystem_answers_as_fsspec(tmp_path: Path) -> None:
         f"{root}/data/2024/c.txt",
         f"{root}/data/d.txt",
     ]
+
+
+async def test_a_key_gone_from_a_batch_deletes_the_rest(
+    inner: SimulatedFileSystem, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def refused(paths: list[str], **kwargs: Any) -> None:
+        raise FileNotFoundError(paths[0])
+
+    monkeypatch.setattr(inner, "_rm", refused)
+    flat = AsyncFlatWrapper(inner, **_OPTIONS)
+    await flat._rm_files(["data/d.txt", "missing.txt"])
+    assert not await inner._exists("data/d.txt")
+
+
+async def test_a_sync_key_gone_from_a_batch_deletes_the_rest(tmp_path: Path) -> None:
+    local = LocalFileSystem()
+    root = local._strip_protocol(str(tmp_path))
+    local.pipe_file(f"{root}/a.txt", b"a")
+    flat = SyncFlatWrapper(local, asynchronous=True, **_OPTIONS)
+    # The local rm raises for the missing key: the rest goes one by one.
+    await flat._rm_files([f"{root}/a.txt", f"{root}/missing.txt"])
+    assert not local.exists(f"{root}/a.txt")

@@ -124,3 +124,19 @@ async def test_cancel_takes_no_more_from_the_listing(topdown: bool) -> None:
 def test_maxdepth_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="at least 1"):
         _walk(flat_fs, "data", maxdepth=0)
+
+
+async def test_the_roots_own_marker_is_not_yielded(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    without, _ = await _collect(_walk(flat_fs, "data"))
+
+    async def ils(prefix: str) -> Any:
+        yield {"name": "data/", "size": 0, "type": "file"}
+        async for entry in flat_fs._ils(prefix):
+            yield entry
+
+    entries, errors = await _collect(_walk(flat_fs, "data", ils=ils))
+    assert errors == []
+    assert entries == without

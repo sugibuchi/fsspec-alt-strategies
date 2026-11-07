@@ -228,3 +228,23 @@ def test_a_subclass_missing_a_primitive_is_refused() -> None:
 
     with pytest.raises(TypeError, match="_ils"):
         Incomplete(SimulatedFileSystem(), asynchronous=True)
+
+
+async def test_what_the_strategies_leave_to_fsspec(
+    fs: _Flat, inner: SimulatedFileSystem
+) -> None:
+    expected = await AsyncFileSystem._du(inner, "data", withdirs=True)
+    assert await fs._du("data", withdirs=True) == expected
+    await fs._copy("data/README.md", "copied.md")
+    await fs._copy(["data/README.md", "database.csv"], ["a.md", "b.csv"], True)
+    await fs._mv("copied.md", "copied.md")  # Onto itself: nothing to do.
+    await fs._mv("copied.md", "moved.md")
+    await fs._rm(["moved.md", "a.md", "b.csv"])
+    assert sorted(inner._file_data) == [
+        "data/2023/01/part-0.parquet",
+        "data/2023/02/part-0.parquet",
+        "data/2024/01/part-0.parquet",
+        "data/2024/02/part-0.parquet",
+        "data/README.md",
+        "database.csv",
+    ]

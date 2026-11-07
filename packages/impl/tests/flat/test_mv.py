@@ -225,3 +225,49 @@ async def test_the_profile_chooses_between_both_ways(
     # Unknown, a move copies, and deletes in batches: right on any storage.
     assert bool(renamed) == by_mv_file
     assert flat_fs.stats.calls["delete"] == (len(_FILES) if by_mv_file else 1)
+
+
+def test_a_way_to_move_is_needed(flat_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="Give mv_file"):
+        _mv(flat_fs, "data", "moved", mv_file=None, **_BY_MV_FILE)
+
+
+async def test_batches_delete_markers_without_copying_them() -> None:
+    keys = {"data/": b"", "data/empty/": b"", "data/a.txt": b"a"}
+    copied: list[str] = []
+    deleted: list[list[str]] = []
+
+    async def ils(prefix: str) -> AsyncIterator[dict[str, Any]]:
+        for name in sorted(keys):
+            if name.startswith(prefix):
+                yield {"name": name, "size": len(keys[name]), "type": "file"}
+
+    async def info(path: str) -> dict[str, Any]:
+        raise FileNotFoundError(path)
+
+    async def cp_file(source: str, destination: str) -> None:
+        copied.append(source)
+        keys[destination] = keys[source]
+
+    async def rm_files(paths: list[str]) -> None:
+        deleted.append(sorted(paths))
+        for path in paths:
+            del keys[path]
+
+    op = flat_mv(
+        "data",
+        "moved",
+        ils=ils,
+        info=info,
+        cp_file=cp_file,
+        rm_files=rm_files,
+        batch_size=10,
+        profile=StorageProfile(),
+        concurrency_limit=asyncio.Semaphore(4),
+    )
+    assert await _collect(op) == ([("data/a.txt", "moved/a.txt")], [])
+    # The markers go in the same batch as the key copied, and are not counted.
+    assert copied == ["data/a.txt"]
+    assert deleted == [["data/", "data/a.txt", "data/empty/"]]
+    assert sorted(keys) == ["moved/a.txt"]
+    assert op.state == MvState(current=op.state.current, files_found=1, files_moved=1)
