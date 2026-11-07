@@ -25,8 +25,7 @@
 | `.../flat/_keys.py`             | The private listing under them: a prefix's keys, and the folders they imply. |
 | `.../flat/_jobs.py`             | The private engine's flat side: it feeds `common`'s with the keys of each root. |
 | `.../common/`                   | Private machinery the families share, so that none imports another. |
-| `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found. |
-| `.../common/permits.py`         | An operation's share of a concurrency limit, taken as its requests start. |
+| `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the permits of a concurrency limit. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
 | `.../common/operations.py`      | The types of the storage's operations, such as `ls` and `info`. |
 | `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
