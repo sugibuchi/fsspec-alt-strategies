@@ -11,7 +11,7 @@ This module depends on `control`, `walk` and `_jobs`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
@@ -179,7 +179,8 @@ class _Deletion(_Jobs):
         return _Roots([self.path])
 
     def state(self) -> RmState:
-        return RmState(
+        return replace(
+            self.op.state,
             errors=self.errors,
             current=self.current,
             files_found=self.files_found,

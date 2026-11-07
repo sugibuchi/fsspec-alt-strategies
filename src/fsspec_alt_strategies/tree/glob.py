@@ -229,7 +229,8 @@ def _matches_in(
             # A match of a pattern without wildcards, found already.
             and e["name"].rstrip("/") not in found
         ]
-    op.state = GlobState(
+    op.state = replace(
+        state,
         errors=state.errors + (listing.error is not None),
         current=listing.folder,
         folders_listed=state.folders_listed + 1,

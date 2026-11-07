@@ -129,7 +129,8 @@ def tree_du(
                     yield step
                     continue
                 files = [e for e in step.entries if e["type"] != "directory"]
-                op.state = state = DuState(
+                op.state = state = replace(
+                    state,
                     errors=state.errors + (step.error is not None),
                     current=step.folder,
                     folders_listed=state.folders_listed + 1,

@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _check_maxdepth, _trim
@@ -150,7 +150,8 @@ def tree_walk(
         state = op.state
         async with aclosing(listings):
             async for listing in listings:
-                op.state = state = WalkState(
+                op.state = state = replace(
+                    state,
                     errors=state.errors + (listing.error is not None),
                     current=listing.folder,
                     folders_listed=state.folders_listed + 1,

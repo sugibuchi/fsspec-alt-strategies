@@ -129,7 +129,8 @@ def tree_find(
                 found = [
                     e for e in step.entries if withdirs or e["type"] != "directory"
                 ]
-                op.state = state = FindState(
+                op.state = state = replace(
+                    state,
                     errors=state.errors + (step.error is not None),
                     current=step.folder,
                     folders_listed=state.folders_listed + 1,
