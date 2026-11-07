@@ -20,12 +20,11 @@ This module depends on `control`, and `jobs`, `paths` and `states` of `common`.
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ..common.jobs import _Permits
+from ..common.jobs import _Queue
 from ..common.paths import _check_maxdepth, _trim
 from ..common.states import WalkState
 from ..control import Operation
@@ -196,31 +195,27 @@ async def _listings(
     """
     _check_maxdepth(maxdepth)
     roots = {_trim(p) for p in ([path] if isinstance(path, str) else path)}
-    permits = _Permits(concurrency_limit)
-    waiting: deque[tuple[str, int]] = deque()
-    running: dict[asyncio.Task[list[dict[str, Any]]], tuple[str, int]] = {}
+    # The folders to list, each with its depth.
+    folders: _Queue[tuple[str, int]] = _Queue(concurrency_limit)
     bottom_up = None if topdown else _BottomUp()
 
     async def start() -> None:
         if stopping is not None and stopping():
-            waiting.clear()
-        while waiting and await permits.take():
-            folder, depth = waiting.popleft()
-            running[permits.start(ls(folder, detail=True))] = folder, depth
+            folders.waiting.clear()
+        await folders.start(lambda item: ls(item[0], detail=True))
 
-    waiting.extend((root, 1) for root in sorted(roots))
+    folders.waiting.extend((root, 1) for root in sorted(roots))
     await start()
     try:
-        while running or waiting:
-            pending = [*running, *([permits.waiter()] if waiting else [])]
+        while pending := folders.pending():
             done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
-                if task not in running:
-                    continue  # The waiter's permit, which start takes.
-                folder, depth = running.pop(task)
+                if (item := folders.pop(task)) is None:
+                    continue
+                folder, depth = item
                 listing = _listing(task, folder, depth, roots, raise_on_error)
                 subfolders = _subfolders(listing, maxdepth, descend)
-                waiting.extend((s, depth + 1) for s in subfolders)
+                folders.waiting.extend((s, depth + 1) for s in subfolders)
                 # Start the next listings before yielding, so that they run
                 # while the caller handles this one.
                 await start()
@@ -231,10 +226,7 @@ async def _listings(
                         yield ready
             await start()
     finally:
-        for task in running:
-            task.cancel()
-        await asyncio.gather(*running, return_exceptions=True)
-        await permits.close()
+        await folders.close()
 
 
 async def _scan(

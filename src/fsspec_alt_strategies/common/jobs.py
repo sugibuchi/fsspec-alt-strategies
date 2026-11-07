@@ -18,12 +18,14 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections import deque
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 
     from ..control import Operation
+
+_T = TypeVar("_T")
 
 
 class _Job(NamedTuple):
@@ -126,6 +128,43 @@ class _Permits:
             self.limit.release()
 
 
+class _Queue(Generic[_T]):
+    """Items waiting for a permit of a concurrency limit, and the requests running.
+
+    Each item's request starts once a permit is free, and holds it until done.
+    The owner waits for `pending` along with what else it waits for, and takes
+    each finished request's item back with `pop`.
+    """
+
+    def __init__(self, limit: asyncio.Semaphore) -> None:
+        self.permits = _Permits(limit)
+        self.waiting: deque[_T] = deque()
+        self.running: dict[asyncio.Task[Any], _T] = {}
+
+    async def start(self, run: Callable[[_T], Awaitable[Any]]) -> None:
+        """Start the request of each item waiting, while permits are free."""
+        while self.waiting and await self.permits.take():
+            item = self.waiting.popleft()
+            self.running[self.permits.start(run(item))] = item
+
+    def pending(self) -> list[asyncio.Task[Any]]:
+        """The requests running, and the waiter for a permit if items wait."""
+        return [*self.running, *([self.permits.waiter()] if self.waiting else [])]
+
+    def pop(self, task: asyncio.Task[Any]) -> _T | None:
+        """The item of a request done, or None for the waiter, whose permit `start` takes."""
+        return self.running.pop(task, None)
+
+    async def close(self) -> None:
+        """Cancel the requests running, and give back the permits."""
+        tasks = list(self.running)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self.running.clear()
+        await self.permits.close()
+
+
 class _Jobs(ABC):
     """The jobs of one operation, run while what it changes is found."""
 
@@ -136,12 +175,13 @@ class _Jobs(ABC):
     ) -> None:
         # The source's requests, the jobs, and a pattern's glob share it.
         self.concurrency_limit = concurrency_limit
-        self.permits = _Permits(self.concurrency_limit)
+        self.jobs: _Queue[_Job] = _Queue(concurrency_limit)
+        # The queue's own, which the subclasses queue their jobs in.
+        self.waiting = self.jobs.waiting
+        self.running = self.jobs.running
         self.op = op
         self.errors = 0
         self.current: str | None = None
-        self.waiting: deque[_Job] = deque()
-        self.running: dict[asyncio.Task[Any], _Job] = {}
         # The source's next item, awaited along with the jobs.
         self.next: asyncio.Task[Any] | None = None
 
@@ -230,20 +270,16 @@ class _Jobs(ABC):
         finally:
             # The source only reads, so cancelling it loses nothing. The jobs
             # are cancelled only when this task itself is.
-            tasks = [*self.running, *([self.next] if self.next else [])]
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            await self.permits.close()
+            if self.next is not None:
+                self.next.cancel()
+                await asyncio.gather(self.next, return_exceptions=True)
+            await self.jobs.close()
             if source is not None:
                 await source.aclose()
 
     def pending(self) -> list[asyncio.Task[Any]]:
         """What to wait for: the jobs, the next item, and a permit if needed."""
-        pending = [*self.running, *([self.next] if self.next else [])]
-        if self.waiting:
-            pending.append(self.permits.waiter())
-        return pending
+        return [*self.jobs.pending(), *([self.next] if self.next else [])]
 
     async def begin(
         self, roots: _Roots, source: AsyncGenerator[Any] | None
@@ -290,9 +326,7 @@ class _Jobs(ABC):
     async def start(self) -> None:
         if self.op.cancelling():
             self.stopping()
-        while self.waiting and await self.permits.take():
-            job = self.waiting.popleft()
-            self.running[self.permits.start(self.run(job))] = job
+        await self.jobs.start(self.run)
 
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
         job = self.running.pop(task)

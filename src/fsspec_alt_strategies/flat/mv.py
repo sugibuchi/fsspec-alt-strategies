@@ -189,7 +189,9 @@ class _Move(_Copy):
     def stopping(self) -> None:
         # The copies not started are dropped, but the keys copied are deleted,
         # so that none is in both places.
-        self.waiting = type(self.waiting)(j for j in self.waiting if j.kind == "delete")
+        deletions = [j for j in self.waiting if j.kind == "delete"]
+        self.waiting.clear()
+        self.waiting.extend(deletions)
         self.copying = sum(j.kind == "copy" for j in self.running.values())
         self.send_if_ready()
 
