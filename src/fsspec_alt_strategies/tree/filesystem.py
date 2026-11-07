@@ -66,6 +66,10 @@ class TreeFileSystem(_FileSystem):
     ``storage_profile``, a `StorageProfile`, tells the strategies what the
     storage does. A subclass sets it for its storage.
 
+    A recursive ``mv`` moves each file with ``_mv_file``, which is fsspec's
+    copy then delete. A subclass whose storage renames a file in one request
+    overrides it.
+
     ``_rename`` is optional. A subclass whose storage moves a folder, with all
     in it, in one request implements it: a recursive ``mv`` then moves each
     root whole where it can, as `tree_mv` does with ``rename``.
@@ -347,9 +351,8 @@ class TreeFileSystem(_FileSystem):
                 self._plain(path2),
                 ls=self._ls,
                 info=self._info,
-                cp_file=self._cp_file,
+                mv_file=self._mv_file,
                 makedirs=self._makedirs,
-                rm_file=self._rm_file,
                 rm_folder=self._rmdir,
                 rename=self._rename,
                 profile=self.storage_profile,

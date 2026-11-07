@@ -12,6 +12,7 @@ and `states` of `common`.
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _Job
@@ -174,10 +175,11 @@ def tree_cp(
     )
 
 
-class _Copy(_Placing, _TreeJobs):
-    """The jobs of one `tree_cp`: a folder made where needed, and a copy per file.
+class _Transfer(_Placing, _TreeJobs):
+    """The jobs of a copy or a move: a folder made where needed, and one per file.
 
-    A file's copy waits for its destination folder, when the storage needs it.
+    A file's job waits for its destination folder, when the storage needs it.
+    A subclass says how a file goes, in `transfer_file`.
     """
 
     verb = "copy"
@@ -190,9 +192,7 @@ class _Copy(_Placing, _TreeJobs):
         *,
         ls: _Ls,
         info: _Info,
-        cp_file: _Request,
         makedirs: _Request,
-        rm_file: _Request,
         profile: StorageProfile,
         concurrency_limit: asyncio.Semaphore,
         op: Operation[Any, Any],
@@ -200,9 +200,7 @@ class _Copy(_Placing, _TreeJobs):
         super().__init__(ls, info, concurrency_limit, op)
         self.path1 = path1
         self.path2 = path2
-        self.cp_file = cp_file
         self.makedirs = makedirs
-        self.rm_file = rm_file
         # Unknown, folders are made first. Implicit folders need none.
         self.parents_required = (
             profile.parents_required is not False and not profile.implicit_folders
@@ -258,9 +256,43 @@ class _Copy(_Placing, _TreeJobs):
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
             return self.makedirs(job.destination, exist_ok=True)
-        return self.copy_file(job.source, job.destination)
+        return self.transfer_file(job.source, job.destination)
 
-    async def copy_file(self, source: str, destination: str) -> None:
+    @abstractmethod
+    async def transfer_file(self, source: str, destination: str) -> None:
+        """Copy or move a file. An error raised notes its paths, as it is yielded."""
+
+    def done(self, job: _Job) -> list[Any]:
+        if job.kind == "mkdir":
+            self.waiting.extend(self.after_mkdir.pop(job.destination))
+            return []
+        self.files_done += 1
+        return [(job.source, job.destination)]
+
+    def failed(self, job: _Job, error: Exception) -> list[Any]:
+        # A file's error is noted where it happened, in transfer_file.
+        if job.kind == "mkdir":
+            error.add_note(f"Creating the folder {job.destination!r} failed.")
+        return [error]
+
+
+class _Copy(_Transfer):
+    """The jobs of one `tree_cp`: a ``cp_file`` per file."""
+
+    def __init__(
+        self,
+        path1: str | Sequence[str],
+        path2: str,
+        *,
+        cp_file: _Request,
+        rm_file: _Request,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(path1, path2, **kwargs)
+        self.cp_file = cp_file
+        self.rm_file = rm_file
+
+    async def transfer_file(self, source: str, destination: str) -> None:
         try:
             try:
                 await self.cp_file(source, destination)
@@ -272,16 +304,3 @@ class _Copy(_Placing, _TreeJobs):
             # Yielded among paths, the error must tell its paths itself.
             e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")
             raise
-
-    def done(self, job: _Job) -> list[Any]:
-        if job.kind == "mkdir":
-            self.waiting.extend(self.after_mkdir.pop(job.destination))
-            return []
-        self.files_done += 1
-        return [(job.source, job.destination)]
-
-    def failed(self, job: _Job, error: Exception) -> list[Any]:
-        # A file's error is noted where it happened, in copy_file.
-        if job.kind == "mkdir":
-            error.add_note(f"Creating the folder {job.destination!r} failed.")
-        return [error]

@@ -20,9 +20,8 @@ def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
         "concurrency_limit": asyncio.Semaphore(32),
         "ls": fs._ls,
         "info": fs._info,
-        "cp_file": fs._cp_file,
+        "mv_file": fs._mv_file,
         "makedirs": fs._makedirs,
-        "rm_file": fs._rm_file,
         "rm_folder": fs._rmdir,
     }
     return tree_mv(path1, path2, **{**operations, **kwargs})
@@ -144,10 +143,25 @@ async def test_requests(hierarchical_fs: SimulatedFileSystem) -> None:
         # The folders with files, and the empty one: 2023 and 2024 hold only
         # folders, which create them.
         "mkdir": 5,
+        # fsspec's _mv_file: a copy, then a deletion.
         "copy": 4,
         "delete": 4 + 7,
     }
     assert await hierarchical_fs._exists("moved/empty")
+
+
+async def test_a_storage_moving_a_file_in_one_request(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    op = _mv(hierarchical_fs, "data", "moved", mv_file=hierarchical_fs._rename)
+    _, errors = await _collect(op)
+    assert errors == []
+    # One request per file, where a copy and a deletion took two.
+    assert hierarchical_fs.stats.calls["rename"] == 4
+    assert "copy" not in hierarchical_fs.stats.calls
+    assert hierarchical_fs.stats.calls["delete"] == 6  # The folders only.
+    assert await hierarchical_fs._exists("moved/2023/01/part-0.parquet")
 
 
 async def test_profile_saves_the_mkdirs(hierarchical_fs: SimulatedFileSystem) -> None:
@@ -305,16 +319,14 @@ async def test_a_storage_requiring_parents() -> None:
 async def test_a_storage_refusing_to_overwrite() -> None:
     fs = SimulatedFileSystem(hierarchical=True, overwrite=False, asynchronous=True)
     _tree(fs)
-    fs.add_file("moved/README.md", b"old")
-    _, errors = await _collect(_mv(fs, "data", "moved/"))
-    assert errors == []
-    assert fs._file_data["moved/data/README.md"].data == b"data/README.md"
-    fs.reset_stats()
-    fs.add_file("target.txt", b"old")
-    await _collect(_mv(fs, "other.txt", "target.txt"))
-    assert fs._file_data["target.txt"].data == b"other"
-    # The refused copy, the old file's deletion, the copy again, the deletion.
-    assert fs.stats.calls == {"info": 1, "list": 1, "copy": 2, "delete": 2}
+    fs.add_file("moved/data/README.md", b"old")
+    moved, errors = await _collect(_mv(fs, "data", "moved"))
+    # The file in the way stays, and so does the one refused, as fsspec's mv
+    # raises: the others move.
+    assert [type(e) for e in errors] == [FileExistsError]
+    assert fs._file_data["moved/data/README.md"].data == b"old"
+    assert await fs._exists("data/README.md")
+    assert sum(source in _FILES for source, _ in moved) == len(_FILES) - 1
 
 
 class _Locked(SimulatedFileSystem):
@@ -350,12 +362,15 @@ class _Undeletable(SimulatedFileSystem):
         await super()._rm_file(path, **kwargs)
 
 
-async def test_a_file_copied_but_not_deleted_is_in_both_places() -> None:
+async def test_a_move_failing_midway_is_reported() -> None:
     fs = _Undeletable(hierarchical=True, asynchronous=True)
     _tree(fs)
     _, errors = await _collect(_mv(fs, "data", "moved"))
     assert [type(e) for e in errors] == [PermissionError]
-    assert "the file is in both places" in errors[0].__notes__[0]
+    assert errors[0].__notes__ == [
+        "Moving 'data/README.md' to 'moved/README.md' failed."
+    ]
+    # fsspec's _mv_file copied it before failing to delete it.
     assert await fs._exists("data/README.md")
     assert await fs._exists("moved/README.md")
 

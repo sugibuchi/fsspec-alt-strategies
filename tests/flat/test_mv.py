@@ -1,15 +1,18 @@
-"""Tests of `flat_mv`, copying each key, then deleting them in batches."""
+"""Tests of `flat_mv`, moving each key, or copying it and deleting in batches."""
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from fsspec_alt_strategies.common.monitors import _collect
 from fsspec_alt_strategies.flat.mv import MvState, flat_mv
 from fsspec_alt_strategies_testing import SimulatedFileSystem
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 
 def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
@@ -133,3 +136,67 @@ async def test_cancel_still_deletes_the_keys_copied() -> None:
 def test_batch_size_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="batch_size"):
         _mv(flat_fs, "data", "moved", batch_size=0)
+
+
+_BY_MV_FILE = {"cp_file": None, "rm_files": None, "batch_size": None}
+
+
+async def test_mv_file_moves_each_key(flat_fs: SimulatedFileSystem) -> None:
+    _tree(flat_fs)
+    sent: list[tuple[str, str]] = []
+
+    async def mv_file(source: str, destination: str) -> None:
+        sent.append((source, destination))  # One request on a renaming storage.
+        await flat_fs._mv_file(source, destination)
+
+    op = _mv(flat_fs, "data", "moved", mv_file=mv_file, **_BY_MV_FILE)
+    moved, errors = await _collect(op)
+    assert errors == []
+    expected = [(p, "moved" + p[len("data") :]) for p in _FILES]
+    assert sorted(moved) == sorted(sent) == expected
+    assert op.state == MvState(current=op.state.current, files_found=4, files_moved=4)
+    assert flat_fs._file_data["moved/README.md"].data == b"data/README.md"
+    assert not await flat_fs._exists("data")
+
+
+async def test_mv_file_moves_markers_without_yielding_them() -> None:
+    keys = {"data/": b"", "data/empty/": b"", "data/a.txt": b"a"}
+
+    async def ils(prefix: str) -> AsyncIterator[dict[str, Any]]:
+        for name in sorted(keys):
+            if name.startswith(prefix):
+                yield {"name": name, "size": len(keys[name]), "type": "file"}
+
+    async def info(path: str) -> dict[str, Any]:
+        raise FileNotFoundError(path)
+
+    async def mv_file(source: str, destination: str) -> None:
+        keys[destination] = keys.pop(source)
+
+    op = flat_mv(
+        "data",
+        "moved",
+        ils=ils,
+        info=info,
+        mv_file=mv_file,
+        concurrency_limit=asyncio.Semaphore(4),
+    )
+    assert await _collect(op) == ([("data/a.txt", "moved/a.txt")], [])
+    assert sorted(keys) == ["moved/", "moved/a.txt", "moved/empty/"]
+
+
+@pytest.mark.parametrize(
+    "operations",
+    [
+        {"mv_file": None, "cp_file": None},  # Neither way.
+        {"mv_file": None, "batch_size": None},  # Batches, of no size.
+        {"mv_file": "given"},  # Both ways.
+    ],
+)
+def test_one_way_to_move(
+    flat_fs: SimulatedFileSystem, operations: dict[str, Any]
+) -> None:
+    if operations.get("mv_file") == "given":
+        operations = {"mv_file": flat_fs._mv_file}
+    with pytest.raises(ValueError, match="mv_file"):
+        _mv(flat_fs, "data", "moved", **operations)

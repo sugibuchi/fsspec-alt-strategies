@@ -13,7 +13,7 @@
 | `.../tree/glob.py`              | `tree_glob`, a glob listing only the folders it can match in.       |
 | `.../tree/rm.py`                | `tree_rm`, a recursive delete that deletes while it walks.          |
 | `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks.        |
-| `.../tree/mv.py`                | `tree_mv`, a recursive move: a copy deleting as it goes.       |
+| `.../tree/mv.py`                | `tree_mv`, a recursive move: a `mv_file` per file, or a rename per root. |
 | `.../tree/filesystem.py`        | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies. |
 | `.../tree/_jobs.py`             | The private engine's tree side: it feeds `common`'s with the walk's listings. |
 | `.../flat/`                     | The strategies listing a flat namespace by key prefix, as object stores do. |
@@ -23,7 +23,7 @@
 | `.../flat/glob.py`              | `flat_glob`, a glob listing only the keys starting as its pattern does. |
 | `.../flat/rm.py`                | `flat_rm`, a recursive delete in batches, sent as the listing goes on. |
 | `.../flat/cp.py`                | `flat_cp`, a recursive copy that copies each key as it is listed. |
-| `.../flat/mv.py`                | `flat_mv`, a recursive move: a copy per key, then its deletion in a batch. |
+| `.../flat/mv.py`                | `flat_mv`, a recursive move: a `mv_file` per key, or a copy per key and a deletion per batch. |
 | `.../flat/filesystem.py`        | `FlatFileSystem`, an abstract async filesystem whose recursive methods are the flat strategies. |
 | `.../flat/_keys.py`             | The private listing under them: a prefix's keys, and the folders they imply. |
 | `.../flat/_jobs.py`             | The private engine's flat side: it feeds `common`'s with the keys of each root. |
@@ -320,8 +320,9 @@ per request even on object stores. Its order differs, as a listing is in no orde
   batch as soon as the listing has given its keys. A batch that fails yields one error, noting its keys.
 - `flat_cp` copies each key as it is listed, placed as `tree_cp` places it. A folder's marker is not copied: flat
   storages need no folder for the files in it.
-- `flat_mv` deletes the keys copied in batches. Cancelled, it still deletes those, so that no file is left in both
-  places: its `stopping` keeps their batches, which the engine would otherwise drop.
+- `flat_mv` moves each key by `mv_file`, or copies it and deletes the keys copied in batches. Which is given decides.
+  Object stores rename nothing, so batches win there. Cancelled, it still deletes the keys copied, so that no file is
+  left in both places: its `stopping` keeps their batches, which the engine would otherwise drop.
 
 `SimulatedFileSystem` has `_rm_files` too, a batch deletion counting one request, as S3's DeleteObjects does.
 
@@ -347,7 +348,7 @@ The fields, and the requests each saves:
 A field may imply another: implicit folders need no parents made. A profile contradicting itself raises `ValueError`.
 
 A fact gets a field only once a strategy saves requests with it. Facts that cost nothing to handle as they come have
-none. An example is a copy refused because the file exists: `tree_mv` then deletes the old file and copies again.
+none. An example is a copy refused because the file exists: `tree_cp` then deletes the old file and copies again.
 
 A storage with a native operation, such as a rename of a whole folder, has no field either. A strategy takes it as an
 operation instead, and falls back on its own way where it fails:

@@ -4,8 +4,8 @@
 
 `tree_mv` is an alternative to fsspec's recursive ``mv``. fsspec's copies the
 whole tree, then deletes it, each stage listing the tree first. `tree_mv` moves
-each folder's files as soon as the folder is listed, each by a copy and a
-delete, and deletes each source folder once it is empty.
+each folder's files as soon as the folder is listed, each by one ``mv_file``,
+and deletes each source folder once it is empty.
 
 Where a storage renames a file or a folder in one request, `tree_mv` takes
 that rename, and moves each root whole with it where it can. It walks only
@@ -24,7 +24,7 @@ from ..common.jobs import _Job, _Roots
 from ..common.states import MvState
 from ..control import Operation
 from ..profile import StorageProfile
-from .cp import _Copy
+from .cp import _Transfer
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
@@ -41,9 +41,8 @@ def tree_mv(
     *,
     ls: _Ls,
     info: _Info,
-    cp_file: _Request,
+    mv_file: _Request,
     makedirs: _Request,
-    rm_file: _Request,
     rm_folder: _Request,
     rename: _Request | None = None,
     profile: StorageProfile | None = None,
@@ -70,15 +69,14 @@ def tree_mv(
     path takes first yields a FileExistsError, and stays where it is.
 
     The tree is walked as `tree_walk` walks it. Each folder's files are moved
-    as soon as the folder is listed, each by a ``cp_file`` then an
-    ``rm_file``. A source folder is deleted once everything in it is moved,
+    as soon as the folder is listed, each by one ``mv_file``. A source folder is deleted once everything in it is moved,
     so the deepest go first. A folder is created at the destination before
-    files are copied into it, and for each empty folder.
+    files are moved into it, and for each empty folder.
 
     Unlike fsspec's ``mv``, it keeps going past a failure, and reports each. A
-    file that failed to copy stays where it was, and so do the folders above
-    it. A file copied but not deleted is then in both places, as its error
-    notes.
+    file that failed to move stays where it was, and so do the folders above
+    it. A storage refusing to overwrite yields a FileExistsError for each
+    file already at its destination, as fsspec's ``mv`` raises one.
 
     It wins over fsspec's ``mv`` on storages that list one folder per request
     and rename nothing in one request. The moves then start after the first
@@ -101,15 +99,15 @@ def tree_mv(
     raises FileNotFoundError if ``path1`` does not exist, or matches nothing,
     and ValueError if ``path2`` is inside it.
 
-    Requests: as `tree_cp`, with one ``rm_file`` more per file, and one
-    ``rm_folder`` per folder. Given ``rename``, each root first costs an
+    Requests: as `tree_cp`, with one ``mv_file`` per file instead of its
+    ``cp_file``, and one ``rm_folder`` per folder. Given ``rename``, each root first costs an
     ``info`` of its target, unless ``path2`` was found missing already, a
     ``makedirs`` of its parent, and the ``rename``: a root moved whole costs
     nothing more. Each request holds a permit of ``concurrency_limit`` while
     it runs.
 
     The profile's ``parents_required=False`` saves the ``makedirs`` of each
-    folder with files, as their copies create it. Its ``implicit_folders=True``
+    folder with files, as their moves create it. Its ``implicit_folders=True``
     saves those, and the ``rm_folder`` of each source folder too, as a folder
     goes with its last file. Either saves the ``makedirs`` before a
     ``rename``.
@@ -121,18 +119,18 @@ def tree_mv(
         ``ls`` takes paths.
     path2 : str
         Where to move it, as above.
-    ls, info, cp_file, makedirs : callable
+    ls, info, makedirs : callable
         The storage's operations, as with `tree_cp`.
-    rm_file : callable
-        Deletes a file, called as ``rm_file(path)``: e.g. the filesystem's
-        ``_rm_file``.
+    mv_file : callable
+        Moves a file, called as ``mv_file(source, destination)``: e.g. the
+        filesystem's ``_mv_file``. fsspec's own copies, then deletes. A storage
+        renaming a file in one request overrides it so.
     rm_folder : callable
         Deletes an empty folder, as with `tree_rm`.
     rename : callable, optional
         Moves a folder, with all in it, or a file, in one request, called as
         ``rename(path1, path2)``. It raises if it cannot, moving nothing. It is
-        no fsspec method: a storage's own, e.g. its rename of a path. fsspec's
-        ``_mv_file`` is one only where it is overridden so.
+        no fsspec method: a storage's own, e.g. its rename of a path.
     profile : StorageProfile, optional
         What the storage does. Unknown if None.
     concurrency_limit : asyncio.Semaphore
@@ -157,9 +155,8 @@ def tree_mv(
     ...     "archive/",
     ...     ls=fs._ls,
     ...     info=fs._info,
-    ...     cp_file=fs._cp_file,
+    ...     mv_file=fs._mv_file,
     ...     makedirs=fs._makedirs,
-    ...     rm_file=fs._rm_file,
     ...     rm_folder=fs._rmdir,
     ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
@@ -176,9 +173,8 @@ def tree_mv(
             path2,
             ls=ls,
             info=info,
-            cp_file=cp_file,
+            mv_file=mv_file,
             makedirs=makedirs,
-            rm_file=rm_file,
             rm_folder=rm_folder,
             rename=rename,
             profile=profile or StorageProfile(),
@@ -189,8 +185,8 @@ def tree_mv(
     )
 
 
-class _Move(_Copy):
-    """The jobs of one `tree_mv`: a copy's, deleting each source as it goes."""
+class _Move(_Transfer):
+    """The jobs of one `tree_mv`: a ``mv_file`` per file, deleting each folder emptied."""
 
     verb = "move"
     doing = "Moving"
@@ -200,11 +196,13 @@ class _Move(_Copy):
         path1: str | Sequence[str],
         path2: str,
         *,
+        mv_file: _Request,
         rm_folder: _Request,
         rename: _Request | None,
         **kwargs: Any,
     ) -> None:
         super().__init__(path1, path2, **kwargs)
+        self.mv_file = mv_file
         self.rm_folder = rm_folder
         self.rename = rename
         self.folders_moved = 0
@@ -284,17 +282,12 @@ class _Move(_Copy):
             return self.rm_folder(job.source)
         return super().run(job)
 
-    async def copy_file(self, source: str, destination: str) -> None:
-        await super().copy_file(source, destination)
+    async def transfer_file(self, source: str, destination: str) -> None:
         try:
-            await self.rm_file(source)
-        except FileNotFoundError:
-            pass  # Deleted by another: the file is moved all the same.
+            await self.mv_file(source, destination)
         except Exception as e:
-            e.add_note(
-                f"Copied {source!r} to {destination!r}, but deleting {source!r}"
-                " failed: the file is in both places."
-            )
+            # Yielded among paths, the error must tell its paths itself.
+            e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")
             raise
 
     def done(self, job: _Job) -> list[Any]:

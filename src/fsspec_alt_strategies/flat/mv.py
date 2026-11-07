@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""A recursive move that copies the keys of a prefix, and deletes them in batches.
+"""A recursive move of the keys of a prefix, each moved as soon as it is listed.
 
 `flat_mv` is an alternative to fsspec's recursive ``mv`` for flat storages.
 fsspec's copies every key, then deletes them all, each stage listing the
-prefix first. `flat_mv` copies each key as soon as the listing gives it, and
-deletes the copied keys in batches while the listing goes on.
-
-It is for storages without a rename of their own, such as object stores.
+prefix first. `flat_mv` moves each key as soon as the listing gives it: by one
+``mv_file``, or by a copy, deleting the copied keys in batches while the
+listing goes on.
 
 This module depends on `control`, `_jobs`, `cp`, and `jobs` and `states` of
 `common`.
@@ -38,41 +37,50 @@ def flat_mv(
     *,
     ils: _Ils,
     info: _Info,
-    cp_file: _Request,
-    rm_files: _Requests,
-    batch_size: int,
+    mv_file: _Request | None = None,
+    cp_file: _Request | None = None,
+    rm_files: _Requests | None = None,
+    batch_size: int | None = None,
     concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, str], MvState]:
-    """Move the keys under a prefix: copy each as listed, delete them in batches.
+    """Move the keys under a prefix, each as soon as it is listed.
 
     It places the paths as fsspec's ``mv`` with ``recursive=True`` does, as
     `flat_cp` places them. Existing files are overwritten.
 
-    Each key is copied by one ``cp_file`` as soon as the listing gives it. The
-    keys copied are deleted in batches of ``batch_size``, each by one
-    ``rm_files``, and the last, smaller batch once all is copied. A key is
-    moved, and yielded, once its batch is deleted. A folder's marker, a key
-    ending with "/", is deleted without being copied, as `flat_cp` copies
-    none.
+    It moves each key in one of two ways, by the operations given:
+
+    - ``mv_file`` alone: each key is moved by one ``mv_file`` as soon as the
+      listing gives it, and yielded once moved. It wins on storages renaming a
+      key in one request.
+    - ``cp_file``, ``rm_files`` and ``batch_size``: each key is copied by one
+      ``cp_file`` as soon as the listing gives it. The keys copied are deleted
+      in batches of ``batch_size``, each by one ``rm_files``, and the last,
+      smaller batch once all is copied. A key is moved, and yielded, once its
+      batch is deleted. It wins on object stores, which rename nothing, but
+      delete many keys in one request.
+
+    A folder's marker, a key ending with "/", is moved too, but not yielded. In
+    batches, it is deleted without being copied, as `flat_cp` copies none.
 
     Unlike fsspec's ``mv``, it keeps going past a failure, and reports each. A
-    key that failed to copy stays where it was. If a batch fails to be
-    deleted, its keys are then in both places, as its error notes.
+    key that failed to move, or to copy, stays where it was. If a batch fails
+    to be deleted, its keys are then in both places, as its error notes.
 
     It wins over fsspec's ``mv`` on large prefixes of flat storages: the moves
     start after the first page of the listing, and the prefix is listed once,
-    not twice. It loses on storages that rename a file or a folder in one
-    request: that request wins.
+    not twice.
 
     Once cancelled, it takes nothing more from the listing, and starts no new
-    copy. It still deletes the keys already copied, so that none is in both
-    places, and yields the outcomes of what was sent. Closed, it waits for the
-    requests in flight without yielding them: keys copied but not yet deleted
-    are then in both places. Iterating it raises FileNotFoundError if
-    ``path1`` does not exist, or matches nothing, and ValueError if ``path2``
-    is inside it.
+    move or copy. In batches, it still deletes the keys already copied, so
+    that none is in both places. It yields the outcomes of what was sent.
+    Closed, it waits for the requests in flight without yielding them: keys
+    copied but not yet deleted are then in both places. Iterating it raises
+    FileNotFoundError if ``path1`` does not exist, or matches nothing, and
+    ValueError if ``path2`` is inside it.
 
-    Requests: as `flat_cp`, with one ``rm_files`` per batch.
+    Requests: as `flat_cp`, with one ``mv_file`` per key instead of its
+    ``cp_file``, or with one ``rm_files`` more per batch.
 
     Parameters
     ----------
@@ -81,11 +89,16 @@ def flat_mv(
         ``ils`` takes paths.
     path2 : str
         Where to move it, as with `flat_cp`.
-    ils, info, cp_file : callable
+    ils, info : callable
         The storage's operations, as with `flat_cp`.
-    rm_files : callable
+    mv_file : callable, optional
+        Moves a file, called as ``mv_file(source, destination)``: e.g. the
+        filesystem's ``_mv_file``. Given, the three below are not.
+    cp_file : callable, optional
+        Copies a file, as with `flat_cp`.
+    rm_files : callable, optional
         Deletes several files in one request, as with `flat_rm`.
-    batch_size : int
+    batch_size : int, optional
         The most keys of one ``rm_files``, e.g. 1000 on S3.
     concurrency_limit : asyncio.Semaphore
         Held by each request but the listing while it runs. Share one to
@@ -100,7 +113,8 @@ def flat_mv(
     Raises
     ------
     ValueError
-        If ``batch_size`` is less than 1.
+        If neither ``mv_file`` nor all of ``cp_file``, ``rm_files`` and
+        ``batch_size`` are given, or both, or ``batch_size`` is less than 1.
 
     See Also
     --------
@@ -123,7 +137,16 @@ def flat_mv(
     ...     if isinstance(moved, Exception):
     ...         print("failed:", moved)
     """
-    if batch_size < 1:
+    batched = (cp_file, rm_files, batch_size)
+    if mv_file is not None:
+        if any(o is not None for o in batched):
+            raise ValueError(
+                "mv_file moves each key: cp_file, rm_files and batch_size are not"
+                " taken with it"
+            )
+    elif any(o is None for o in batched):
+        raise ValueError("Give mv_file, or all of cp_file, rm_files and batch_size")
+    elif batch_size is not None and batch_size < 1:
         raise ValueError(f"batch_size must be at least 1: {batch_size}")
     return Operation(
         lambda op: _Move(
@@ -131,6 +154,7 @@ def flat_mv(
             path2,
             ils=ils,
             info=info,
+            mv_file=mv_file,
             cp_file=cp_file,
             rm_files=rm_files,
             batch_size=batch_size,
@@ -142,7 +166,11 @@ def flat_mv(
 
 
 class _Move(_Copy):
-    """The jobs of one `flat_mv`: a copy per key, then a deletion per batch."""
+    """The jobs of one `flat_mv`: a move per key, or a copy per key and a deletion per batch.
+
+    Moving by ``mv_file``, it holds it as its ``cp_file``: a "copy" job then
+    moves the key.
+    """
 
     verb = "move"
     doing = "Moving"
@@ -152,13 +180,16 @@ class _Move(_Copy):
         path1: str | Sequence[str],
         path2: str,
         *,
-        rm_files: _Requests,
-        batch_size: int,
+        mv_file: _Request | None,
+        cp_file: _Request | None,
+        rm_files: _Requests | None,
+        batch_size: int | None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(path1, path2, **kwargs)
+        super().__init__(path1, path2, cp_file=mv_file or cp_file, **kwargs)
+        # None when each key is moved alone, by mv_file.
         self.rm_files = rm_files
-        self.batch_size = batch_size
+        self.batch_size = batch_size or 0
         # The keys to delete, each with where it was copied, None for a marker.
         self.batch: list[str] = []
         self.copied: dict[str, str | None] = {}
@@ -178,9 +209,14 @@ class _Move(_Copy):
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
         if name.endswith("/"):
-            self.delete_later(name, None)  # A folder's marker: deleted only.
+            # A folder's marker: moved, or deleted only, and not yielded.
+            if self.rm_files is None:
+                self.waiting.append(_Job("marker", name, self.target(name)))
+            else:
+                self.delete_later(name, None)
             return
-        self.copying += 1
+        if self.rm_files is not None:
+            self.copying += 1
         super().add(entry)
 
     def exhausted(self) -> None:
@@ -188,6 +224,9 @@ class _Move(_Copy):
         self.send_if_ready()
 
     def stopping(self) -> None:
+        if self.rm_files is None:
+            super().stopping()
+            return
         # The copies not started are dropped, but the keys copied are deleted,
         # so that none is in both places.
         deletions = [j for j in self.waiting if j.kind == "delete"]
@@ -204,18 +243,24 @@ class _Move(_Copy):
 
     def send_if_ready(self) -> None:
         """Send the batch if full, or if nothing more can join it."""
+        if not self.batch:
+            return
         done = (self.listed or self.op.cancelling()) and self.copying == 0
-        if len(self.batch) >= self.batch_size or (self.batch and done):
+        if len(self.batch) >= self.batch_size or done:
             paths, self.batch = tuple(self.batch), []
             self.waiting.append(_Job("delete", paths[-1], paths=paths))
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "delete":
-            return self.rm_files(list(job.paths))
+            return self.rm_files(list(job.paths))  # type: ignore[misc]
         return super().run(job)
 
     def done(self, job: _Job) -> list[Any]:
+        if job.kind == "marker":
+            return []
         if job.kind == "copy":
+            if self.rm_files is None:
+                return super().done(job)  # Moved, by mv_file.
             self.copying -= 1
             self.delete_later(job.source, job.destination)
             return []
@@ -227,6 +272,8 @@ class _Move(_Copy):
         return moved
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
+        if job.kind == "marker" or (job.kind == "copy" and self.rm_files is None):
+            return super().failed(job, error)  # Noted in copy_file.
         if job.kind == "copy":
             self.copying -= 1
             self.send_if_ready()
