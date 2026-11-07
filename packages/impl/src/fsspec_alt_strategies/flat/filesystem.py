@@ -16,7 +16,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from fsspec.asyn import sync_wrapper
+from fsspec.asyn import sync
 
 from fsspec_alt_strategies_common.monitor import Call
 
@@ -377,5 +377,8 @@ class FlatFileSystem(_StrategyFileSystem):
         )
         _raise(errors, "Moving")
 
-    # fsspec makes sync methods only from the async ones it knows: _mv is not.
-    mv = sync_wrapper(_mv)
+    # fsspec makes sync methods only from the async ones it knows: _mv is not. It awaits
+    # the instance's own, so that a subclass's override is the one run.
+
+    def mv(self, path1: str | list[str], path2: str, **kwargs: Any) -> None:
+        return sync(self.loop, self._mv, path1, path2, **kwargs)

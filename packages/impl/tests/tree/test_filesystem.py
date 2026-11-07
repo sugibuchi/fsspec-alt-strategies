@@ -508,3 +508,12 @@ async def test_walk_of_an_empty_folder(fs: _Tree, inner: SimulatedFileSystem) ->
     inner.add_dir("empty")
     walked = [t async for t in fs._walk("empty")]
     assert walked == [t async for t in AsyncFileSystem._walk(inner, "empty")]
+
+
+def test_the_sync_rmdir_deletes() -> None:
+    # fsspec makes no sync rmdir of _rmdir: the class must, or rmdir does nothing.
+    inner = SimulatedFileSystem(hierarchical=True)
+    inner.add_dir("empty")
+    fs = _Tree(inner)
+    fs.rmdir("empty")
+    assert not inner.exists("empty")
