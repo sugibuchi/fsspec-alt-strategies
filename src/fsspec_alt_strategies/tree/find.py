@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from ..common.paths import _check_maxdepth, _trim
 from ..common.states import FindState
 from ..control import Operation
-from .walk import _scan
+from .walk import _find_listings
 
 if TYPE_CHECKING:
     import asyncio
@@ -107,7 +107,7 @@ def tree_find(
         op: Operation[dict[str, Any], FindState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         root = _trim(path)
-        steps = _scan(
+        steps = _find_listings(
             ls,
             info,
             root,

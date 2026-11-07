@@ -52,7 +52,7 @@ async def _close(entries: AsyncIterator[dict[str, Any]]) -> None:
         await aclose()
 
 
-async def _scan(
+async def _find_entries(
     ils: _Ils,
     info: _Info,
     path: str,

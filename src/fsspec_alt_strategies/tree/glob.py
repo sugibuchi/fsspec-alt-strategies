@@ -29,7 +29,7 @@ from ..common.paths import _trim
 from ..common.patterns import _infos, _inside, _Search
 from ..common.states import GlobState
 from ..control import Operation
-from .walk import _scan
+from .walk import _find_listings
 
 if TYPE_CHECKING:
     import asyncio
@@ -187,7 +187,7 @@ async def _walk(
     # As fsspec's _glob: a pattern under a missing folder, or a file, matches
     # nothing. Its find includes the root folder itself, which few patterns
     # match.
-    steps = _scan(
+    steps = _find_listings(
         ls,
         info,
         root,

@@ -157,7 +157,7 @@ class _Listing:
     and so on. ``entries`` are as ``ls`` gives them, without
     the folder itself, and empty if the listing failed with ``error``.
 
-    ``depth`` 0 is no listing, but the walk's root itself, as `_scan` yields
+    ``depth`` 0 is no listing, but the walk's root itself, as `_find_listings` yields
     it: ``entries`` hold only the root's ``info`` entry, under ``folder``.
     """
 
@@ -232,7 +232,7 @@ async def _listings(
         await folders.close()
 
 
-async def _scan(
+async def _find_listings(
     ls: _Ls,
     info: _Info,
     path: str,

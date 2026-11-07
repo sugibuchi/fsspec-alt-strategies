@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from ..common.paths import _check_maxdepth
 from ..common.states import DuState
 from ..control import Operation
-from ._keys import _scan
+from ._keys import _find_entries
 
 if TYPE_CHECKING:
     import asyncio
@@ -100,7 +100,7 @@ def flat_du(
     async def run(
         op: Operation[dict[str, Any], DuState],
     ) -> AsyncGenerator[dict[str, Any]]:
-        steps = _scan(
+        steps = _find_entries(
             ils,
             info,
             path,

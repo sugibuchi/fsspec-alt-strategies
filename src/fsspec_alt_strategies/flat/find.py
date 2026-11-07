@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from ..common.paths import _check_maxdepth
 from ..common.states import FindState
 from ..control import Operation
-from ._keys import _scan
+from ._keys import _find_entries
 
 if TYPE_CHECKING:
     import asyncio
@@ -108,7 +108,7 @@ def flat_find(
     async def run(
         op: Operation[dict[str, Any], FindState],
     ) -> AsyncGenerator[dict[str, Any]]:
-        steps = _scan(
+        steps = _find_entries(
             ils,
             info,
             path,

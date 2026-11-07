@@ -219,12 +219,12 @@ come in two layers, by what they send:
 
 | Strategies | They send | They build on |
 |---|---|---|
-| `tree_find`, `tree_du`, `tree_glob` | Listings, and at most one `info` for the root | `_scan` |
+| `tree_find`, `tree_du`, `tree_glob` | Listings, and at most one `info` for the root | `_find_listings` |
 | `tree_rm`, `tree_cp`, `tree_mv` | Requests changing the storage, besides the listings | `_TreeJobs` |
 
 `tree_walk` is `_listings` itself, made public. It raises for a missing or file root, as fsspec's `walk` does.
 
-`_scan`, in `tree/walk.py`, treats the root as fsspec's `_find` and `_glob` do. A missing root finds nothing, and a
+`_find_listings`, in `tree/walk.py`, treats the root as fsspec's `_find` and `_glob` do. A missing root finds nothing, and a
 file root yields its own `info` entry when asked. A folder root yields its own entry when asked, e.g. for `withdirs`.
 The strategies that only read never handle the root themselves.
 

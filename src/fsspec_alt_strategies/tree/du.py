@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from ..common.paths import _check_maxdepth
 from ..common.states import DuState
 from ..control import Operation
-from .walk import _scan
+from .walk import _find_listings
 
 if TYPE_CHECKING:
     import asyncio
@@ -105,7 +105,7 @@ def tree_du(
     async def run(
         op: Operation[dict[str, Any], DuState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
-        steps = _scan(
+        steps = _find_listings(
             ls,
             info,
             path,
