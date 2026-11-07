@@ -24,13 +24,12 @@ from __future__ import annotations
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-# _monitors is the interface's monitor module's, beside the blocks setting it.
 from fsspec_alt_strategies_common.monitor import (
     CallCancelled,
     Monitor,
     OperationHandler,
     State,
-    _monitors,
+    current_monitors,
 )
 
 if TYPE_CHECKING:
@@ -221,7 +220,7 @@ async def _watched(
     The monitors are those of the `monitoring` blocks around the call, and
     ``callback``, fsspec's, if given.
     """
-    monitors = _monitors.get()
+    monitors = current_monitors()
     if callback is not None:
         monitors = (*monitors, _Counting(callback))
     error: BaseException | None = None

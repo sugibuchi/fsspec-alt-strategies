@@ -25,6 +25,7 @@ from .monitor import (
     Monitored,
     OperationHandler,
     State,
+    current_monitors,
     monitoring,
 )
 from .profile import StorageProfile
@@ -52,6 +53,7 @@ __all__ = [
     "State",
     "StorageProfile",
     "WalkState",
+    "current_monitors",
     "known_implementations",
     "monitoring",
 ]

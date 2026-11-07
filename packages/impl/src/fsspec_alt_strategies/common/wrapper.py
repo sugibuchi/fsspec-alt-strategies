@@ -92,7 +92,7 @@ class _AsyncFileSystemWrapper(_FileSystemWrapper):
         await self.fs._cp_file(path1, path2, **kwargs)
 
     async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        await self.fs._mv_file(path1, path2)
+        await self.fs._mv_file(path1, path2, **kwargs)
 
     async def _rmdir(self, path: str) -> None:
         await self.fs._rmdir(path)
@@ -149,7 +149,7 @@ class _SyncFileSystemWrapper(_FileSystemWrapper):
 
     async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         # A sync filesystem's own move, e.g. a local rename, is its mv.
-        await asyncio.to_thread(self.fs.mv, path1, path2)
+        await asyncio.to_thread(self.fs.mv, path1, path2, **kwargs)
 
     async def _rmdir(self, path: str) -> None:
         await asyncio.to_thread(self.fs.rmdir, path)

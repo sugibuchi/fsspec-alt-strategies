@@ -51,6 +51,7 @@ __all__ = [
     "Monitored",
     "OperationHandler",
     "State",
+    "current_monitors",
     "monitoring",
 ]
 
@@ -222,6 +223,21 @@ class Monitor:
 _monitors: contextvars.ContextVar[tuple[Monitor, ...]] = contextvars.ContextVar(
     "fsspec_alt_strategies_monitors", default=()
 )
+
+
+def current_monitors() -> tuple[Monitor, ...]:
+    """The monitors of the `monitoring` blocks around the caller, the outer first.
+
+    The strategies' filesystems tell them of each operation they run. It is
+    how a copy of the strategies, of any version, reads them: the context
+    variable holding them stays this module's own.
+
+    Returns
+    -------
+    tuple of Monitor
+        The monitors, none outside any block.
+    """
+    return _monitors.get()
 
 
 class monitoring:

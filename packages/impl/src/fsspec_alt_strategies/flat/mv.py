@@ -164,16 +164,28 @@ def flat_mv(
         mv_file = None
     elif mv_file is not None:
         cp_file = rm_files = batch_size = None
+    if mv_file is not None:
+        return Operation(
+            lambda op: _Rename(
+                path1,
+                path2,
+                ils=ils,
+                info=info,
+                mv_file=mv_file,
+                concurrency_limit=concurrency_limit,
+                op=op,
+            ).outcomes(),
+            MvState(),
+        )
     return Operation(
         lambda op: _Move(
             path1,
             path2,
             ils=ils,
             info=info,
-            mv_file=mv_file,
-            cp_file=cp_file,
-            rm_files=rm_files,
-            batch_size=batch_size,
+            cp_file=cp_file,  # type: ignore[arg-type]
+            rm_files=rm_files,  # type: ignore[arg-type]
+            batch_size=batch_size,  # type: ignore[arg-type]
             concurrency_limit=concurrency_limit,
             op=op,
         ).outcomes(),
@@ -181,11 +193,12 @@ def flat_mv(
     )
 
 
-class _Move(_Copy):
-    """The jobs of one `flat_mv`: a move per key, or a copy per key and a deletion per batch.
+class _Rename(_Copy):
+    """The jobs of one `flat_mv` by ``mv_file``: one move per key.
 
-    Moving by ``mv_file``, it holds it as its ``cp_file``: a "copy" job then
-    moves the key.
+    They are a copy's jobs, `flat_cp`'s, with ``mv_file`` as the request per
+    key: it moves the key where the copy would put it. A folder's marker is
+    moved too, but not yielded.
     """
 
     verb = "move"
@@ -196,16 +209,50 @@ class _Move(_Copy):
         path1: str | Sequence[str],
         path2: str,
         *,
-        mv_file: _Request | None,
-        cp_file: _Request | None,
-        rm_files: _Requests | None,
-        batch_size: int | None,
+        mv_file: _Request,
         **kwargs: Any,
     ) -> None:
-        super().__init__(path1, path2, cp_file=mv_file or cp_file, **kwargs)
-        # None when each key is moved alone, by mv_file.
+        super().__init__(path1, path2, cp_file=mv_file, **kwargs)
+
+    def state(self) -> MvState:
+        return MvState(
+            errors=self.errors,
+            current=self.current,
+            files_found=self.files_found,
+            files_moved=self.files_done,
+        )
+
+    def add(self, entry: dict[str, Any]) -> None:
+        name = entry["name"]
+        if name.endswith("/"):
+            self.waiting.append(_Job("marker", name, self.target(name)))
+            return
+        super().add(entry)
+
+    def done(self, job: _Job) -> list[Any]:
+        if job.kind == "marker":
+            return []
+        return super().done(job)
+
+
+class _Move(_Copy):
+    """The jobs of one `flat_mv` by copies: a copy per key, then a deletion per batch."""
+
+    verb = "move"
+    doing = "Moving"
+
+    def __init__(
+        self,
+        path1: str | Sequence[str],
+        path2: str,
+        *,
+        rm_files: _Requests,
+        batch_size: int,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(path1, path2, **kwargs)
         self.rm_files = rm_files
-        self.batch_size = batch_size or 0
+        self.batch_size = batch_size
         # The keys to delete, each with where it was copied, None for a marker.
         self.batch: list[str] = []
         self.copied: dict[str, str | None] = {}
@@ -225,14 +272,9 @@ class _Move(_Copy):
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
         if name.endswith("/"):
-            # A folder's marker: moved, or deleted only, and not yielded.
-            if self.rm_files is None:
-                self.waiting.append(_Job("marker", name, self.target(name)))
-            else:
-                self.delete_later(name, None)
+            self.delete_later(name, None)  # A folder's marker: deleted only.
             return
-        if self.rm_files is not None:
-            self.copying += 1
+        self.copying += 1
         super().add(entry)
 
     def exhausted(self) -> None:
@@ -240,9 +282,6 @@ class _Move(_Copy):
         self.send_if_ready()
 
     def stopping(self) -> None:
-        if self.rm_files is None:
-            super().stopping()
-            return
         # The copies not started are dropped, but the keys copied are deleted,
         # so that none is in both places.
         deletions = [j for j in self.waiting if j.kind == "delete"]
@@ -268,15 +307,11 @@ class _Move(_Copy):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "delete":
-            return self.rm_files(list(job.paths))  # type: ignore[misc]
+            return self.rm_files(list(job.paths))
         return super().run(job)
 
     def done(self, job: _Job) -> list[Any]:
-        if job.kind == "marker":
-            return []
         if job.kind == "copy":
-            if self.rm_files is None:
-                return super().done(job)  # Moved, by mv_file.
             self.copying -= 1
             self.delete_later(job.source, job.destination)
             return []
@@ -288,8 +323,6 @@ class _Move(_Copy):
         return moved
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
-        if job.kind == "marker" or (job.kind == "copy" and self.rm_files is None):
-            return super().failed(job, error)  # Noted in copy_file.
         if job.kind == "copy":
             self.copying -= 1
             self.send_if_ready()

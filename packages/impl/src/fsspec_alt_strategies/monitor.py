@@ -7,7 +7,8 @@ block of its operations. One inheriting the interface's `Monitored`, such as a
 `TreeFileSystem` or a wrapper, already does. Any other is wrapped as its entry
 in the known implementations says: none is chosen for a filesystem not there.
 
-This module depends on `wrapper` of `tree` and `flat`.
+This module depends on `wrapper` of `tree` or of `flat`, imported as an entry
+needs it: a copy may keep one family only.
 """
 
 from __future__ import annotations
@@ -20,9 +21,6 @@ from fsspec_alt_strategies_common.monitor import Monitored
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_common.wrapper import known_implementations
 
-from .flat.wrapper import AsyncFlatWrapper, SyncFlatWrapper
-from .tree.wrapper import AsyncTreeWrapper, SyncTreeWrapper
-
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -32,12 +30,20 @@ if TYPE_CHECKING:
 
 __all__ = ["monitored"]
 
-_WRAPPERS: dict[tuple[str, bool], Any] = {
-    ("tree", True): AsyncTreeWrapper,
-    ("tree", False): SyncTreeWrapper,
-    ("flat", True): AsyncFlatWrapper,
-    ("flat", False): SyncFlatWrapper,
-}
+
+def _wrapper(kind: str, asynchronous: bool) -> Any:
+    """The wrapper class of a family, imported only when needed.
+
+    So a copy keeping only one family, tree or flat, still has `monitored`
+    for the filesystems of that family.
+    """
+    if kind == "tree":
+        from .tree.wrapper import AsyncTreeWrapper, SyncTreeWrapper  # noqa: PLC0415
+
+        return AsyncTreeWrapper if asynchronous else SyncTreeWrapper
+    from .flat.wrapper import AsyncFlatWrapper, SyncFlatWrapper  # noqa: PLC0415
+
+    return AsyncFlatWrapper if asynchronous else SyncFlatWrapper
 
 
 def monitored(
@@ -104,7 +110,7 @@ def monitored(
             "io_concurrency": 1,
             "storage_profile": StorageProfile(),
         }
-    wrapper = _WRAPPERS[(entry["type"], entry["async"])]
+    wrapper = _wrapper(entry["type"], entry["async"])
     options: dict[str, Any] = {
         "operation_concurrency": entry["operation_concurrency"],
         "io_concurrency": entry["io_concurrency"],
