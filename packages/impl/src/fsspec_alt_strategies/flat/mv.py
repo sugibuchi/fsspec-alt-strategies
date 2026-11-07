@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_common.states import MvState
 
 from ..common.jobs import _Job
@@ -26,6 +25,8 @@ from .cp import _Copy
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Sequence
+
+    from fsspec_alt_strategies_common.profile import StorageProfile
 
     from ..common.types import _Ils, _Info, _Request, _Requests
 
@@ -42,7 +43,7 @@ def flat_mv(
     cp_file: _Request | None = None,
     rm_files: _Requests | None = None,
     batch_size: int | None = None,
-    profile: StorageProfile | None = None,
+    profile: StorageProfile,
     concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, str], MvState]:
     """Move the keys under a prefix, each as soon as it is listed.
@@ -110,7 +111,7 @@ def flat_mv(
         The most keys of one ``rm_files``, e.g. 1000 on S3. ``cp_file``,
         ``rm_files`` and ``batch_size`` are given together, or not at all.
     profile : StorageProfile, optional
-        What the storage does. Unknown if None.
+        What the storage does: ``StorageProfile()`` if it is unknown.
     concurrency_limit : asyncio.Semaphore
         Held by each request but the listing while it runs. Share one to
         limit several operations, or files, together.
@@ -143,6 +144,7 @@ def flat_mv(
     ...     cp_file=fs._cp_file,
     ...     rm_files=my_rm_files,
     ...     batch_size=1000,
+    ...     profile=StorageProfile(),
     ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
     >>> async for moved in mv:
@@ -157,7 +159,7 @@ def flat_mv(
     if batch_size is not None and batch_size < 1:
         raise ValueError(f"batch_size must be at least 1: {batch_size}")
     # Both given, a rename wins only where the storage is known to rename.
-    if all(batched) and (profile or StorageProfile()).renames_files is not True:
+    if all(batched) and profile.renames_files is not True:
         mv_file = None
     elif mv_file is not None:
         cp_file = rm_files = batch_size = None

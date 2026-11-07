@@ -15,7 +15,6 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_common.states import CpState
 
 from ..common.jobs import _Job
@@ -26,6 +25,8 @@ from ._jobs import _expand, _TreeJobs
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Sequence
+
+    from fsspec_alt_strategies_common.profile import StorageProfile
 
     from ..common.jobs import _Roots
     from ..common.types import _Info, _Ls, _Request
@@ -43,7 +44,7 @@ def tree_cp(
     cp_file: _Request,
     makedirs: _Request,
     rm_file: _Request,
-    profile: StorageProfile | None = None,
+    profile: StorageProfile,
     concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, str], CpState]:
     """Copy a folder and everything in it, copying while the tree is walked.
@@ -124,7 +125,7 @@ def tree_cp(
         Deletes a file, called as ``rm_file(path)``: e.g. the filesystem's
         ``_rm_file``. Only a storage refusing to overwrite needs it.
     profile : StorageProfile, optional
-        What the storage does. Unknown if None.
+        What the storage does: ``StorageProfile()`` if it is unknown.
     concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several
         operations, or files, together.
@@ -150,6 +151,7 @@ def tree_cp(
     ...     cp_file=fs._cp_file,
     ...     makedirs=fs._makedirs,
     ...     rm_file=fs._rm_file,
+    ...     profile=StorageProfile(),
     ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
     >>> async with cp as op:
@@ -168,7 +170,7 @@ def tree_cp(
             cp_file=cp_file,
             makedirs=makedirs,
             rm_file=rm_file,
-            profile=profile or StorageProfile(),
+            profile=profile,
             concurrency_limit=concurrency_limit,
             op=op,
         ).outcomes(),

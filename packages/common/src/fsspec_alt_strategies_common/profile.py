@@ -7,8 +7,8 @@ parent folders, others raise FileNotFoundError. A strategy works on any of
 them, but sends fewer requests, or copies less data, when it knows.
 `StorageProfile` tells it.
 
-A strategy taking a ``profile`` uses `StorageProfile()`, which knows nothing,
-if given None. A filesystem wrapping strategies may hold one for all its calls.
+A strategy taking a ``profile`` requires one: `StorageProfile()` knows nothing.
+A filesystem wrapping strategies holds one for all its calls.
 
 The library never detects a storage's behaviour: the developer declares it. A
 field left None is unknown, and a strategy then takes the way that is right on

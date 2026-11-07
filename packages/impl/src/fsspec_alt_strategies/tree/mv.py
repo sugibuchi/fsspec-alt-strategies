@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_common.states import MvState
 
 from ..common.jobs import _Job, _Roots
@@ -28,6 +27,8 @@ from .cp import _Transfer
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
+
+    from fsspec_alt_strategies_common.profile import StorageProfile
 
     from ..common.types import _Info, _Ls, _Request
     from .walk import _Listing
@@ -44,7 +45,7 @@ def tree_mv(
     mv_file: _Request,
     makedirs: _Request,
     rm_folder: _Request,
-    profile: StorageProfile | None = None,
+    profile: StorageProfile,
     concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, str], MvState]:
     """Move a folder and everything in it, moving while the tree is walked.
@@ -129,7 +130,7 @@ def tree_mv(
     rm_folder : callable
         Deletes an empty folder, as with `tree_rm`.
     profile : StorageProfile, optional
-        What the storage does. Unknown if None.
+        What the storage does: ``StorageProfile()`` if it is unknown.
     concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several
         operations, or files, together.
@@ -155,6 +156,7 @@ def tree_mv(
     ...     mv_file=fs._mv_file,
     ...     makedirs=fs._makedirs,
     ...     rm_folder=fs._rmdir,
+    ...     profile=StorageProfile(),
     ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
     >>> async with mv as op:
@@ -173,13 +175,13 @@ def tree_mv(
             mv_file=mv_file,
             makedirs=makedirs,
             rm_folder=rm_folder,
-            profile=profile or StorageProfile(),
+            profile=profile,
             concurrency_limit=concurrency_limit,
             op=op,
         ).outcomes(),
         MvState(
             folders_moved=0,
-            roots_renamed=0 if profile and profile.renames_folders else None,
+            roots_renamed=0 if profile.renames_folders else None,
         ),
     )
 

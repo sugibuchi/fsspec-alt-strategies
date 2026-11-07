@@ -363,8 +363,8 @@ Storages answer the same request differently. Writing a file into a missing fold
 raises `FileNotFoundError` on others. A strategy works on all of them, and a `StorageProfile` lets it send fewer
 requests.
 
-- A strategy takes `profile=` as an argument, so it works with any storage. A filesystem wrapping it may hold one for
-  all its calls.
+- A strategy takes `profile=` as a required argument, so it works with any storage. `StorageProfile()` knows
+  nothing. A filesystem holds one for all its calls, as its `storage_profile` class field.
 - A field left None is unknown. The strategy then takes the way that is right on any storage, at the cost of requests.
 - So a profile only saves requests. It changes the outcome only if it is wrong, and each docstring says how.
 - The library never detects a storage's behaviour: the developer declares it.

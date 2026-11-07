@@ -19,6 +19,7 @@ def _rm(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`tree_rm` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
+        "profile": StorageProfile(),
         "ls": fs._ls,
         "info": fs._info,
         "rm_file": fs._rm_file,

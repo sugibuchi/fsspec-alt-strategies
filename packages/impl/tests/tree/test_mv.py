@@ -18,6 +18,7 @@ def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
     """`tree_mv` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
+        "profile": StorageProfile(),
         "ls": fs._ls,
         "info": fs._info,
         "mv_file": fs._mv_file,

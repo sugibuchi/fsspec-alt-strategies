@@ -20,6 +20,7 @@ def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
     """`flat_mv` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
+        "profile": StorageProfile(),
         "ils": fs._ils,
         "info": fs._info,
         "cp_file": fs._cp_file,
@@ -180,6 +181,7 @@ async def test_mv_file_moves_markers_without_yielding_them() -> None:
         ils=ils,
         info=info,
         mv_file=mv_file,
+        profile=StorageProfile(),
         concurrency_limit=asyncio.Semaphore(4),
     )
     assert await _collect(op) == ([("data/a.txt", "moved/a.txt")], [])

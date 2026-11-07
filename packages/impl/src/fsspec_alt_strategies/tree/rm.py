@@ -14,7 +14,6 @@ from __future__ import annotations
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
-from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_common.states import RmState
 
 from ..common.jobs import _Job, _Roots
@@ -24,6 +23,8 @@ from ._jobs import _expand, _TreeJobs
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Sequence
+
+    from fsspec_alt_strategies_common.profile import StorageProfile
 
     from ..common.types import _Info, _Ls, _Request
     from .walk import _Listing
@@ -38,7 +39,7 @@ def tree_rm(
     info: _Info,
     rm_file: _Request,
     rm_folder: _Request,
-    profile: StorageProfile | None = None,
+    profile: StorageProfile,
     concurrency_limit: asyncio.Semaphore,
 ) -> Operation[str, RmState]:
     """Delete a folder and everything in it, deleting while the tree is walked.
@@ -102,7 +103,7 @@ def tree_rm(
         without one. A FileNotFoundError from it counts as deleted, as object
         stores have no folders to delete.
     profile : StorageProfile, optional
-        What the storage does. Unknown if None.
+        What the storage does: ``StorageProfile()`` if it is unknown.
     concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several
         operations, or files, together.
@@ -124,6 +125,7 @@ def tree_rm(
     ...     info=fs._info,
     ...     rm_file=fs._rm_file,
     ...     rm_folder=fs._rmdir,
+    ...     profile=StorageProfile(),
     ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
     >>> async with rm as op:
@@ -141,7 +143,7 @@ def tree_rm(
             rm_file,
             rm_folder,
             path,
-            profile or StorageProfile(),
+            profile,
             concurrency_limit,
             op,
         ).outcomes(),
