@@ -139,13 +139,6 @@ class _AsyncFile(io.RawIOBase):
             coro.close()
             raise
 
-    def _on_its_loop(self) -> bool:
-        """Whether this runs on the file's loop, where nothing can wait for it."""
-        try:
-            return asyncio.get_running_loop() is self.loop
-        except RuntimeError:
-            return False
-
     def _do_abort_soon(self) -> concurrent.futures.Future[None] | None:
         """Close the file without waiting, scheduling `_abort` on the loop.
 
@@ -249,7 +242,12 @@ class _AsyncFile(io.RawIOBase):
             source=self,
         )
         try:
-            if self._on_its_loop():
+            # On the file's loop, nothing can wait for the abort.
+            try:
+                on_its_loop = asyncio.get_running_loop() is self.loop
+            except RuntimeError:
+                on_its_loop = False  # No loop runs on this thread.
+            if on_its_loop:
                 self._do_abort_soon()
             elif self.loop.is_running() and not sys.is_finalizing():
                 self._sync(self._abort())
