@@ -168,6 +168,30 @@ def _with(func: Callable[..., Any], kwargs: dict[str, Any]) -> Callable[..., Any
     return functools.partial(func, **kwargs) if kwargs else func
 
 
+def _answer(entries: list[dict[str, Any]], detail: bool) -> Any:
+    """What fsspec's ``_find`` and ``_glob`` answer: the paths sorted, or their entries."""
+    found = {e["name"].rstrip("/"): e for e in entries}
+    names = sorted(found)
+    return {n: found[n] for n in names} if detail else names
+
+
+def _du_answer(size: int, entries: list[dict[str, Any]], total: bool) -> Any:
+    """What fsspec's ``_du`` answers: the total size, or each path's."""
+    if total:
+        return size
+    return {e["name"]: e.get("size") or 0 for e in entries}
+
+
+def _copy_errors(errors: list[Exception], on_error: str | None) -> list[Exception]:
+    """The errors of a recursive copy, as fsspec's raises them.
+
+    A source gone meanwhile is no error, unless ``on_error`` is "raise".
+    """
+    if on_error == "raise":
+        return errors
+    return [e for e in errors if not isinstance(e, FileNotFoundError)]
+
+
 def _raise(errors: list[Exception], doing: str) -> None:
     """Raise the errors an operation yielded: one alone, several in a group."""
     if len(errors) == 1:

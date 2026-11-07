@@ -20,7 +20,14 @@ from fsspec.asyn import sync_wrapper
 
 from fsspec_alt_strategies_common.monitor import Call
 
-from ..common.filesystem import _failed_folder, _raise, _StrategyFileSystem
+from ..common.filesystem import (
+    _answer,
+    _copy_errors,
+    _du_answer,
+    _failed_folder,
+    _raise,
+    _StrategyFileSystem,
+)
 from ..common.operation import _collected
 from ..common.paths import _triples
 from .cp import flat_cp
@@ -244,15 +251,15 @@ class FlatFileSystem(_StrategyFileSystem):
             ),
             Call(self._unwrapped(), "find", path),
         )
-        found = {e["name"].rstrip("/"): e for e in entries}
-        names = sorted(found)
-        return {n: found[n] for n in names} if detail else names
+        return _answer(entries, detail)
 
     async def _du(
         self, path: str, total: bool = True, maxdepth: int | None = None, **kwargs: Any
     ) -> Any:
-        if kwargs.get("withdirs"):
-            return await super()._du(path, total=total, maxdepth=maxdepth, **kwargs)
+        if kwargs.pop("withdirs", False):
+            return await super()._du(
+                path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
+            )
         op = flat_du(
             self._strip_protocol(path),
             ils=self._ils,
@@ -261,9 +268,7 @@ class FlatFileSystem(_StrategyFileSystem):
             concurrency_limit=self.operation_limit,
         )
         entries, _ = await _collected(op, Call(self._unwrapped(), "du", path))
-        if total:
-            return op.state.size
-        return {e["name"]: e.get("size") or 0 for e in entries}
+        return _du_answer(op.state.size, entries, total)
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
         detail = kwargs.pop("detail", False)
@@ -278,9 +283,7 @@ class FlatFileSystem(_StrategyFileSystem):
             ),
             Call(self._unwrapped(), "glob", path),
         )
-        found = {e["name"].rstrip("/"): e for e in entries}
-        names = sorted(found)
-        return {n: found[n] for n in names} if detail else names
+        return _answer(entries, detail)
 
     async def _rm(
         self,
@@ -334,10 +337,7 @@ class FlatFileSystem(_StrategyFileSystem):
             Call(self._unwrapped(), "copy", path1, path2),
             kwargs.get("callback"),
         )
-        if on_error != "raise":
-            # As fsspec's recursive copy: a source gone meanwhile is no error.
-            errors = [e for e in errors if not isinstance(e, FileNotFoundError)]
-        _raise(errors, "Copying")
+        _raise(_copy_errors(errors, on_error), "Copying")
 
     async def _mv(
         self,
