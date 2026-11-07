@@ -88,6 +88,17 @@ async def test_lists_folders_concurrently() -> None:
     assert fs.stats.max_concurrency == 5
 
 
+@pytest.mark.parametrize("path", ["data", "data/README.md"])
+async def test_the_roots_info_holds_a_permit_too(path: str) -> None:
+    fs = SimulatedFileSystem(hierarchical=True, latency=0.002, asynchronous=True)
+    _tree(fs)
+    # One permit, held in turn by the listings and the root's info, never both.
+    op = _find(fs, path, withdirs=True, concurrency_limit=asyncio.Semaphore(1))
+    entries, _ = await asyncio.wait_for(collect(op), timeout=5)
+    assert path in {e["name"] for e in entries}
+    assert fs.stats.max_concurrency == 1
+
+
 def test_maxdepth_is_checked_at_once(any_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="at least 1"):
         _find(any_fs, "data", maxdepth=0)

@@ -292,11 +292,15 @@ async def _scan(
         except (FileNotFoundError, NotADirectoryError) as e:
             # Only the root's own listing raises them: any later one is yielded.
             if file_root and isinstance(e, NotADirectoryError):
-                yield await info(root)
+                async with concurrency_limit:
+                    entry = await info(root)
+                yield entry
             return
         yield root_listing
         if folder_root and not (stopping and stopping()):
-            yield await info(root)
+            async with concurrency_limit:
+                entry = await info(root)
+            yield entry
         async for listing in listings:
             yield listing
 
