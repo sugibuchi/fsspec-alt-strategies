@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from typing import Self
 
-    from fsspec.asyn import AsyncFileSystem
+    from fsspec.spec import AbstractFileSystem
 
 __all__ = [
     "Call",
@@ -116,7 +116,7 @@ class Call:
 
     Attributes
     ----------
-    fs : AsyncFileSystem
+    fs : AbstractFileSystem
         The filesystem called, e.g. to tell the storage of a call.
     method : str
         Its name, without the underscore of its async version, e.g. "copy".
@@ -126,7 +126,7 @@ class Call:
         The second path, for ``copy`` and ``mv``.
     """
 
-    fs: AsyncFileSystem
+    fs: AbstractFileSystem
     method: str
     path: str | list[str]
     path2: str | list[str] | None = None
