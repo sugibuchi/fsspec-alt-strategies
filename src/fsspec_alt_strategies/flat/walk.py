@@ -24,8 +24,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, Callable
 
-    from ..common.operations import _Info
-    from ._keys import _Ils
+    from ..common.operations import _Ils, _Info
 
 __all__ = ["WalkState", "flat_walk"]
 

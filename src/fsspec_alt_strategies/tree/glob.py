@@ -15,7 +15,7 @@ pattern, as nothing below it can match.
 Several patterns are matched in one walk per tree: a folder is listed once if
 any of them can match in it, and each path is matched with all of them.
 
-This module depends on `control`, `walk`, and `paths`, `patterns` and `states` of
+This module depends on `control`, `find`, and `paths`, `patterns` and `states` of
 `common`.
 """
 
@@ -29,7 +29,7 @@ from ..common.paths import _trim
 from ..common.patterns import _infos, _inside, _Search
 from ..common.states import GlobState
 from ..control import Operation
-from .walk import _find_listings
+from .find import _find_listings
 
 if TYPE_CHECKING:
     import asyncio

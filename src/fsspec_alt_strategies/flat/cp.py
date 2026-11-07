@@ -25,8 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
     from ..common.jobs import _Roots
-    from ..common.operations import _Info, _Request
-    from ._keys import _Ils
+    from ..common.operations import _Ils, _Info, _Request
 
 __all__ = ["CpState", "flat_cp"]
 

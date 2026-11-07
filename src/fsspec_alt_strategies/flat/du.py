@@ -6,7 +6,7 @@
 finds the files, then asks each file's size with a request of its own. `flat_du`
 adds up the sizes the listing already gives, page by page.
 
-This module depends on `control`, `_keys`, and `paths` and `states` of `common`.
+This module depends on `control`, `find`, and `paths` and `states` of `common`.
 """
 
 from __future__ import annotations
@@ -17,14 +17,13 @@ from typing import TYPE_CHECKING, Any
 from ..common.paths import _check_maxdepth
 from ..common.states import DuState
 from ..control import Operation
-from ._keys import _find_entries
+from .find import _find_entries
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator
 
-    from ..common.operations import _Info
-    from ._keys import _Ils
+    from ..common.operations import _Ils, _Info
 
 __all__ = ["DuState", "flat_du"]
 

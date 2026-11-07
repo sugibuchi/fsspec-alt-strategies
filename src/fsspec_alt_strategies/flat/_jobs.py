@@ -29,9 +29,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.jobs import _Roots
-    from ..common.operations import _Info
+    from ..common.operations import _Ils, _Info
     from ..control import Operation
-    from ._keys import _Ils
 
 
 async def _expand(

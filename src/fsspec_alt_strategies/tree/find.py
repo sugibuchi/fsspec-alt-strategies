@@ -17,11 +17,11 @@ from typing import TYPE_CHECKING, Any
 from ..common.paths import _check_maxdepth, _trim
 from ..common.states import FindState
 from ..control import Operation
-from .walk import _find_listings
+from .walk import _Listing, _listings
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable
 
     from ..common.operations import _Info, _Ls
 
@@ -136,3 +136,60 @@ def tree_find(
                     yield entry
 
     return Operation(run, FindState(folders_listed=0))
+
+
+async def _find_listings(
+    ls: _Ls,
+    info: _Info,
+    path: str,
+    *,
+    maxdepth: int | None = None,
+    descend: Callable[[dict[str, Any]], bool] | None = None,
+    concurrency_limit: asyncio.Semaphore,
+    stopping: Callable[[], object] | None = None,
+    file_root: bool = False,
+    folder_root: bool = False,
+) -> AsyncGenerator[_Listing]:
+    """Walk as the strategies that only read do, such as find, du and glob.
+
+    It yields each folder's listing, as ``_listings`` does, but treats ``path``
+    itself as fsspec's ``_find`` and ``_glob`` do:
+
+    - missing, it yields nothing;
+    - a file, it yields the file's ``info`` entry if ``file_root``, else
+      nothing;
+    - a folder, it yields the folder's own ``info`` entry after its listing,
+      if ``folder_root`` and the walk is not stopping.
+
+    The root's own entry comes as a `_Listing` of depth 0, which is no listing.
+    So the strategies filter and count it as any entry, but count no folder
+    listed for it.
+    """
+    root = _trim(path)
+    listings = _listings(
+        ls,
+        root,
+        maxdepth=maxdepth,
+        descend=descend,
+        concurrency_limit=concurrency_limit,
+        stopping=stopping,
+    )
+    async with aclosing(listings):
+        try:
+            root_listing = await anext(listings)
+        except StopAsyncIteration:
+            return  # Stopping before the root was listed.
+        except (FileNotFoundError, NotADirectoryError) as e:
+            # Only the root's own listing raises them: any later one is yielded.
+            if file_root and isinstance(e, NotADirectoryError):
+                async with concurrency_limit:
+                    entry = await info(root)
+                yield _Listing(root, 0, [entry])
+            return
+        yield root_listing
+        if folder_root and not (stopping and stopping()):
+            async with concurrency_limit:
+                entry = await info(root)
+            yield _Listing(root, 0, [entry])
+        async for listing in listings:
+            yield listing

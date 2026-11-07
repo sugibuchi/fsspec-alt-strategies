@@ -14,17 +14,16 @@ from __future__ import annotations
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
-from ..common.paths import _check_maxdepth
+from ..common.paths import _check_maxdepth, _trim
 from ..common.states import FindState
 from ..control import Operation
-from ._keys import _find_entries
+from ._keys import _close, _folder, _folders
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable
 
-    from ..common.operations import _Info
-    from ._keys import _Ils
+    from ..common.operations import _Ils, _Info
 
 __all__ = ["FindState", "flat_find"]
 
@@ -123,3 +122,67 @@ def flat_find(
                 yield entry
 
     return Operation(run, FindState())
+
+
+async def _find_entries(
+    ils: _Ils,
+    info: _Info,
+    path: str,
+    *,
+    maxdepth: int | None = None,
+    withdirs: bool = False,
+    concurrency_limit: asyncio.Semaphore,
+    stopping: Callable[[], object] | None = None,
+) -> AsyncGenerator[dict[str, Any]]:
+    """The entries under ``path``, as fsspec's ``_find`` finds them.
+
+    It yields each file under ``path`` as the listing gives it, and with
+    ``withdirs`` each folder once, derived from the keys. ``path`` itself is
+    treated as fsspec's ``_find`` treats it:
+
+    - missing, it yields nothing;
+    - a file, it yields the file's ``info`` entry;
+    - a folder, it yields the folder's own ``info`` entry with ``withdirs``,
+      unless stopping.
+
+    Once ``stopping`` returns true, it takes no more from the listing. An error
+    of the listing ends it, as it ends the only listing there is.
+    """
+    root = _trim(path)
+    prefix = f"{root}/" if root else ""
+    under = False
+    seen: set[str] = set()
+    entries = ils(prefix)
+    try:
+        async for entry in entries:
+            under = True
+            name = entry["name"]
+            if withdirs:
+                for folder in _folders(name[len(prefix) :]):
+                    full = prefix + folder
+                    if full not in seen and _within(folder, maxdepth):
+                        seen.add(full)
+                        yield _folder(full)
+            if not name.endswith("/") and _within(name[len(prefix) :], maxdepth):
+                yield entry
+            if stopping is not None and stopping():
+                return
+    finally:
+        await _close(entries)
+    if not root or (under and not withdirs):
+        return
+    try:
+        async with concurrency_limit:
+            entry = await info(root)
+    except FileNotFoundError:
+        return
+    # A folder is found itself only with withdirs. A file is found itself only
+    # when nothing is under it, as fsspec's _find tells them apart.
+    is_folder = entry["type"] == "directory"
+    if (is_folder and withdirs) or (not is_folder and not under):
+        yield entry
+
+
+def _within(relative: str, maxdepth: int | None) -> bool:
+    """Whether a path, relative to the root, is at most ``maxdepth`` deep."""
+    return maxdepth is None or relative.count("/") + 1 <= maxdepth

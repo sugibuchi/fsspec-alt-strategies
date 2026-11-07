@@ -26,8 +26,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Sequence
 
-    from ..common.operations import _Info, _Requests
-    from ._keys import _Ils
+    from ..common.operations import _Ils, _Info, _Requests
 
 __all__ = ["RmState", "flat_rm"]
 
