@@ -55,7 +55,6 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../common/patterns.py`        | Glob patterns, matched as fsspec's `_glob` matches them, by both globs. |
 | `.../files/`                    | Base classes for a filesystem's file objects, by what its storage allows. |
 | `.../files/adaptive.py`         | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts. |
-| `.../files/buffered.py`         | `LocallyBufferedFile`, for storages transferring only whole files. |
 | `.../files/fsspec_transaction.py` | Files written in a transaction, by strategy: a temporary path, a local buffer, or the storage's own. |
 | `.../files/fsspec_async.py`     | `AsyncFileAdapter` and `SyncFileAdapter`, giving file objects the API of those `open_async` returns. |
 | `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
@@ -464,8 +463,6 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
   - `AdaptiveReadableFile` and `AdaptiveWritableFile` are for storages reading byte ranges and writing in parts.
     The writer aborts its upload on any failure, and after an exception in its `with` block. A failed part raises
     OSError, whether it fails while writing or closing.
-  - `LocallyBufferedFile` is for storages transferring only whole files: one download, local reads and writes, and
-    one upload if it changed. It never uploads after an exception in its `with` block.
 - Their requests are the storage's own. They never call fsspec's `_cat_file` or `_put_file`: many filesystems
   implement these with their file objects.
 - Their requests run on an asyncio event loop, such as the filesystem's `loop`. Their sync methods wait on it through
@@ -495,8 +492,7 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 - The strategies provided are:
   - `TempPathTransaction`, writing to a hidden temporary path, renamed on commit, for any file;
   - `LocalBufferTransaction`, writing to a local buffer, written to the file on commit, for any file;
-  - `AdaptiveWritableTransaction`, holding an adaptive file's last request, which makes it visible, until commit;
-  - `LocallyBufferedTransaction`, closing a locally buffered file, which uploads it, only on commit.
+  - `AdaptiveWritableTransaction`, holding an adaptive file's last request, which makes it visible, until commit.
 - The file objects know nothing of transactions. `AdaptiveWritableTransaction` stands in for the file's two last
   requests, on that file only. A storage with a way of its own gets a subclass of `FileTransaction`.
 

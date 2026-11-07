@@ -6,7 +6,7 @@ import asyncio
 import io
 import os
 import threading
-from typing import IO, TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -14,7 +14,6 @@ from fsspec_alt_strategies.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
 )
-from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter, SyncFileAdapter
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
@@ -36,10 +35,10 @@ class _Reader(AdaptiveReadableFile):
 
 
 class _Writer(AdaptiveWritableFile):
-    def __init__(self, fs: SimulatedFileSystem, path: str) -> None:
+    def __init__(self, fs: SimulatedFileSystem, path: str, loop: Any = None) -> None:
         super().__init__(
             path,
-            asyncio.get_running_loop(),
+            loop or asyncio.get_running_loop(),
             min_block_size=4 * _KiB,
             max_block_size=8 * _KiB,
             min_multipart_size=4 * _KiB,
@@ -64,23 +63,6 @@ class _Writer(AdaptiveWritableFile):
 
     async def _abort_multipart_upload(self) -> None:
         pass
-
-
-class _Whole(LocallyBufferedFile):
-    def __init__(
-        self, fs: SimulatedFileSystem, path: str, mode: str, loop: Any = None
-    ) -> None:
-        super().__init__(path, loop or asyncio.get_running_loop(), mode)
-        self.fs = fs
-
-    async def _download(self, target: IO[bytes]) -> None:
-        target.write(await self.fs._cat_file(self.path))
-
-    async def _upload(self, source: IO[bytes]) -> None:
-        await self.fs._pipe_file(self.path, source.read())
-
-    async def _exists(self) -> bool:
-        return await self.fs._exists(self.path)
 
 
 @pytest.fixture
@@ -125,45 +107,9 @@ async def test_writes_in_parts(fs: SimulatedFileSystem) -> None:
     assert fs.cat_file("f.bin") == data
 
 
-async def test_a_locally_buffered_file(fs: SimulatedFileSystem) -> None:
-    fs.pipe_file("f.bin", b"0123456789")
-    fs.reset_stats()
-    file = _Whole(fs, "f.bin", "r+b")
-    await file.aload()
-    async with AsyncFileAdapter(file) as f:
-        # Loaded first: seek and tell are local.
-        assert fs.stats.calls == {"read": 1}
-        assert (f.size, f.tell()) == (10, 0)
-        f.seek(4)
-        assert await f.write(b"ab") == 2
-        assert await f.read() == b"6789"
-    assert fs.cat_file("f.bin") == b"0123ab6789"
-
-    # An exception in the block discards the changes, as in a with block.
-    with pytest.raises(RuntimeError):
-        async with AsyncFileAdapter(_Whole(fs, "f.bin", "wb")) as f:
-            await f.write(b"lost")
-            raise RuntimeError("failed midway")
-    assert fs.cat_file("f.bin") == b"0123ab6789"
-
-
-async def test_an_unloaded_buffered_file_cannot_seek_on_its_loop(
-    fs: SimulatedFileSystem,
-) -> None:
-    fs.pipe_file("f.bin", b"0123456789")
-    file = _Whole(fs, "f.bin", "rb")
-    with pytest.raises(RuntimeError, match="within a running loop"):
-        file.tell()
-    # An awaited read loads it: then seek and tell are local.
-    f = AsyncFileAdapter(file)
-    assert await f.read(2) == b"01"
-    assert f.seek(-1, io.SEEK_END) == 9
-    await f.close()
-
-
 async def test_refuses_another_loop(fs: SimulatedFileSystem) -> None:
     # The file's loop is the filesystem's, not the running one.
-    file = _Whole(fs, "f.bin", "wb", loop=fs.loop)
+    file = _Writer(fs, "f.bin", loop=fs.loop)
     with pytest.raises(RuntimeError, match="outside the loop"):
         await AsyncFileAdapter(file).write(b"x")
     file.close()

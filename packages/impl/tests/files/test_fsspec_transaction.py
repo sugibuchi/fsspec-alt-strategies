@@ -7,17 +7,15 @@ import contextlib
 import gc
 import io
 import time
-from typing import IO, Any
+from typing import Any
 
 import pytest
 
 from fsspec_alt_strategies.files.adaptive import AdaptiveWritableFile
-from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.fsspec_transaction import (
     AdaptiveWritableTransaction,
     FileTransaction,
     LocalBufferTransaction,
-    LocallyBufferedTransaction,
     TempPathTransaction,
     TransactionFile,
 )
@@ -60,21 +58,18 @@ class _Parts(AdaptiveWritableFile):
         self.aborted = True
 
 
-class _Whole(LocallyBufferedFile):
-    """A file of a `SimulatedFileSystem` read and written whole."""
+class _Appending(io.BytesIO):
+    """A file of a `SimulatedFileSystem` open in "ab": closing appends what it got."""
 
-    def __init__(self, fs: SimulatedFileSystem, path: str, mode: str) -> None:
-        super().__init__(path, fs.loop, mode)
+    def __init__(self, fs: SimulatedFileSystem, path: str) -> None:
+        super().__init__()
         self.fs = fs
+        self.path = path
 
-    async def _download(self, target: IO[bytes]) -> None:
-        target.write(await self.fs._cat_file(self.path))
-
-    async def _upload(self, source: IO[bytes]) -> None:
-        await self.fs._pipe_file(self.path, source.read())
-
-    async def _exists(self) -> bool:
-        return await self.fs._exists(self.path)
+    def close(self) -> None:
+        if not self.closed:
+            self.fs.pipe_file(self.path, self.fs.cat_file(self.path) + self.getvalue())
+        super().close()
 
 
 @pytest.fixture
@@ -148,7 +143,7 @@ def test_local_buffer_sends_nothing_before_commit(fs: SimulatedFileSystem) -> No
 
 def test_local_buffer_appends_in_the_mode_given(fs: SimulatedFileSystem) -> None:
     fs.pipe_file("f.bin", b"old,")
-    t = LocalBufferTransaction("f.bin", lambda p: _Whole(fs, p, "ab"))
+    t = LocalBufferTransaction("f.bin", lambda p: _Appending(fs, p))
     f = TransactionFile(t)
     f.write(b"new")
     f.commit()
@@ -304,38 +299,6 @@ def test_adaptive_discard_leaves_no_file(
     assert file.closed
     assert file.aborted == (len(data) > 4 * _KiB)
     assert not fs.exists("f.bin")
-
-
-def test_locally_buffered_uploads_on_commit(fs: SimulatedFileSystem) -> None:
-    f = TransactionFile(LocallyBufferedTransaction(_Whole(fs, "f.bin", "wb")))
-    f.write(b"abc")
-    f.close()
-    assert fs.stats.calls == {}
-    f.commit()
-    assert fs.cat_file("f.bin") == b"abc"
-
-    fs.reset_stats()
-    file = _Whole(fs, "g.bin", "wb")
-    g = TransactionFile(LocallyBufferedTransaction(file))
-    g.write(b"abc")
-    g.close()
-    g.discard()
-    assert file.closed
-    assert fs.stats.calls == {}
-
-
-def test_locally_buffered_left_undecided_uploads_nothing(
-    fs: SimulatedFileSystem,
-) -> None:
-    file = _Whole(fs, "f.bin", "wb")
-    f = TransactionFile(LocallyBufferedTransaction(file))
-    f.write(b"abc")
-    f.close()
-    with pytest.warns(ResourceWarning, match="Undecided"):
-        del f
-        gc.collect()
-    assert file.closed
-    assert fs.stats.calls == {}
 
 
 @pytest.mark.parametrize("closed", [True, False])
@@ -570,14 +533,11 @@ class _TransactionalFS(SimulatedFileSystem):
             return _temp(self, path)
         if self.strategy == "adaptive":
             return TransactionFile(AdaptiveWritableTransaction(_Parts(self, path)))
-        if self.strategy == "buffered":
-            t = LocallyBufferedTransaction(_Whole(self, path, "wb"))
-            return TransactionFile(t)
         t = LocalBufferTransaction(path, lambda p: _Parts(self, p))
         return TransactionFile(t)
 
 
-@pytest.mark.parametrize("strategy", ["temp", "buffer", "adaptive", "buffered"])
+@pytest.mark.parametrize("strategy", ["temp", "buffer", "adaptive"])
 def test_in_fsspec_transactions(strategy: str) -> None:
     fs = _TransactionalFS(hierarchical=True)
     fs.strategy = strategy
@@ -601,7 +561,7 @@ def test_in_fsspec_transactions(strategy: str) -> None:
 
 
 @pytest.mark.parametrize("commit", [True, False])
-@pytest.mark.parametrize("strategy", ["temp", "buffer", "adaptive", "buffered"])
+@pytest.mark.parametrize("strategy", ["temp", "buffer", "adaptive"])
 def test_a_forced_flush_in_fsspec_transactions(strategy: str, commit: bool) -> None:
     fs = _TransactionalFS(hierarchical=True)
     fs.strategy = strategy

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from typing import IO, TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from fsspec.asyn import AsyncFileSystem
+from fsspec.asyn import AsyncFileSystem, sync
 from fsspec.callbacks import Callback
 
-from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
+from fsspec_alt_strategies.files.adaptive import (
+    AdaptiveReadableFile,
+    AdaptiveWritableFile,
+)
 from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
 from fsspec_alt_strategies.flat.filesystem import FlatFileSystem
 from fsspec_alt_strategies_common.monitor import Call, Monitor, monitoring
@@ -20,24 +23,54 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
-class _Whole(LocallyBufferedFile):
-    """A file of the simulated storage, downloaded and uploaded whole."""
+class _Reader(AdaptiveReadableFile):
+    """A file of the simulated storage, read by byte ranges."""
 
-    def __init__(
-        self, inner: SimulatedFileSystem, path: str, mode: str, **kwargs: Any
-    ) -> None:
+    def __init__(self, inner: SimulatedFileSystem, path: str, size: int, **kwargs: Any):
         loop = kwargs.pop("loop", None) or asyncio.get_running_loop()
-        super().__init__(path, loop, mode, **kwargs)
+        super().__init__(path, loop, size, **kwargs)
         self.inner = inner
 
-    async def _download(self, target: IO[bytes]) -> None:
-        target.write(await self.inner._cat_file(self.path))
+    async def _fetch_range(self, start: int, end: int) -> bytes:
+        return await self.inner._cat_file(self.path, start=start, end=end)
 
-    async def _upload(self, source: IO[bytes]) -> None:
-        await self.inner._pipe_file(self.path, source.read())
 
-    async def _exists(self) -> bool:
-        return await self.inner._exists(self.path)
+class _Writer(AdaptiveWritableFile):
+    """A file of the simulated storage, uploaded whole: its files are small."""
+
+    def __init__(self, inner: SimulatedFileSystem, path: str, **kwargs: Any):
+        loop = kwargs.pop("loop", None) or asyncio.get_running_loop()
+        super().__init__(path, loop, **kwargs)
+        self.inner = inner
+
+    async def _upload_all(self, data: bytes) -> None:
+        await self.inner._pipe_file(self.path, data)
+
+    async def _start_multipart_upload(self) -> None:
+        raise NotImplementedError
+
+    async def _upload_part(
+        self, data: bytes, start: int, end: int, index: int, last: bool
+    ) -> Any:
+        raise NotImplementedError
+
+    async def _complete_multipart_upload(self, parts: list[Any]) -> None:
+        raise NotImplementedError
+
+    async def _abort_multipart_upload(self) -> None:
+        raise NotImplementedError
+
+
+async def _open_file(
+    inner: SimulatedFileSystem, path: str, mode: str, **kwargs: Any
+) -> Any:
+    """Open a file, raising here if it is missing, or exists in mode "xb"."""
+    if "r" in mode:
+        size = (await inner._info(path))["size"]
+        return _Reader(inner, path, size, **kwargs)
+    if "x" in mode and await inner._exists(path):
+        raise FileExistsError(path)
+    return _Writer(inner, path, **kwargs)
 
 
 class _Flat(FlatFileSystem):
@@ -76,22 +109,20 @@ class _Flat(FlatFileSystem):
 
     def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         # The same file, for the sync API, on the filesystem's loop.
-        return _Whole(
+        path = self._strip_protocol(path)
+        return sync(
+            self.loop,
+            _open_file,
             self.inner,
-            self._strip_protocol(path),
+            path,
             mode,
             loop=self.loop,
             concurrency_limit=self.io_limit,
         )
 
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        file = _Whole(
-            self.inner,
-            self._strip_protocol(path),
-            mode,
-            concurrency_limit=self.io_limit,
-        )
-        await file.aload()  # So that a missing file raises here.
+        path = self._strip_protocol(path)
+        file = await _open_file(self.inner, path, mode, concurrency_limit=self.io_limit)
         return AsyncFileAdapter(file)
 
 
