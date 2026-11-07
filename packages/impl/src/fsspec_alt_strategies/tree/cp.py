@@ -204,17 +204,20 @@ class _Transfer(_Placing, _TreeJobs):
         profile: StorageProfile,
         concurrency_limit: asyncio.Semaphore,
         op: Operation[Any, Any],
+        destination_info: _Info | None = None,
     ) -> None:
         super().__init__(ls, info, concurrency_limit, op)
         self.path1 = path1
         self.path2 = path2
+        # makedirs and the profile are the destination's: ls and info, unless
+        # destination_info is given, describe both storages.
         self.makedirs = makedirs
         # Unknown, folders are made first. Implicit folders need none.
         self.parents_required = (
             profile.parents_required is not False and not profile.implicit_folders
         )
         self.implicit_folders = bool(profile.implicit_folders)
-        self._placing()
+        self._placing(destination_info, same_storage=destination_info is None)
         self.files_found = 0
         self.files_done = 0
         # The copies waiting for their destination folder, by that folder.

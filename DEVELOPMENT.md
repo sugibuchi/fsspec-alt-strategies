@@ -28,6 +28,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../tree/glob.py`              | `tree_glob`, a glob listing only the folders it can match in.       |
 | `.../tree/rm.py`                | `tree_rm`, a recursive delete that deletes while it walks.          |
 | `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks.        |
+| `.../tree/transfer.py`          | `tree_transfer`, `tree_cp` between two storages, each file by a `copy_file` the caller gives. |
 | `.../tree/mv.py`                | `tree_mv`, a recursive move: a `mv_file` per file, or per folder where it moves folders. |
 | `.../tree/filesystem.py`        | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies. |
 | `.../tree/wrapper.py`           | `AsyncTreeWrapper` and `SyncTreeWrapper`: an existing filesystem, as a `TreeFileSystem`. |
@@ -50,6 +51,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../common/operation.py`       | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
+| `.../common/streams.py`         | `_streaming`, a `copy_file` between two storages, a block at a time through their files. |
 | `.../common/types.py`           | The types of the storage's operations, such as `ls` and `info`. |
 | `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
 | `.../common/patterns.py`        | Glob patterns, matched as fsspec's `_glob` matches them, by both globs. |
@@ -313,7 +315,11 @@ come in two layers, by what they send:
 | Strategies | They send | They build on |
 |---|---|---|
 | `tree_find`, `tree_du`, `tree_glob` | Listings, and at most one `info` for the root | `_find_listings` |
-| `tree_rm`, `tree_cp`, `tree_mv` | Requests changing the storage, besides the listings | `_TreeJobs` |
+| `tree_rm`, `tree_cp`, `tree_mv`, `tree_transfer` | Requests changing the storage, besides the listings | `_TreeJobs` |
+
+`tree_transfer` copies between two storages. It takes the source's `ls` and `info`, the destination's operations
+with a `dst_` prefix, and a `copy_file` moving one file across. Its profile is the destination's. It shares `tree_cp`'s
+jobs: `_Placing` asks the destination's `info`, and refuses no path into itself, as the storages are apart.
 
 `tree_walk` is `_listings` itself, made public. It raises for a missing or file root, as fsspec's `walk` does.
 
