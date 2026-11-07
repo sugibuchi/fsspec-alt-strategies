@@ -633,6 +633,9 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 - They follow Python's file API, not the strategy API: errors are raised.
 - A file read in many requests reads one version: `AdaptiveReadableFile` keeps to `version`, or the first response's.
   `_check_version` checks every response's, e.g. its ETag, and raises OSError with `errno.ESTALE` on another.
+- A storage whose responses name no version overrides `_current_version`, e.g. to return the modification time and
+  size from `_info`. Each fetch checks it once its bytes arrive. This detects a file replaced while read, but cannot
+  prevent it, and costs a request per fetch.
 - fsspec's `open_async` returns a file whose methods are awaited. `files/fsspec_async.py` has `AsyncFileAdapter`,
   giving our files that API, so that `open` and `open_async` share a filesystem's requests. Its methods await the
   files' async counterparts, such as `_read`, which `_AsyncFile` declares. The files keep only the sync API themselves.

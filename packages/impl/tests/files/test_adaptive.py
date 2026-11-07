@@ -351,6 +351,49 @@ async def test_reads_the_version_given() -> None:
             await f._read()
 
 
+class _Unversioned(AdaptiveReadableFile):
+    """Reads a `_Store` whose responses name no version, checking its status."""
+
+    def __init__(self, store: _Store, **kwargs: Any) -> None:
+        super().__init__(
+            "f.bin", asyncio.get_running_loop(), len(store.data), **_BLOCKS, **kwargs
+        )
+        self.store = store
+        self.status_requests = 0
+        self.fetches = 0
+
+    async def _fetch_range(self, start: int, end: int) -> bytes:
+        self.fetches += 1
+        await asyncio.sleep(0)
+        return self.store.data[start:end]
+
+    async def _current_version(self) -> str | None:
+        self.status_requests += 1
+        return f"{self.store.version}:{len(self.store.data)}"
+
+
+async def test_a_storage_naming_no_version_detects_a_file_replaced() -> None:
+    old, new = os.urandom(256 * _KiB), os.urandom(256 * _KiB)
+    store = _Store(old)
+    async with _Unversioned(store, version="v1:262144") as f:
+        assert await f._read(8 * _KiB) == old[: 8 * _KiB]
+        assert f.status_requests == f.fetches  # One check per fetch.
+        store.replace(new)
+        f.seek(200 * _KiB)
+        with pytest.raises(OSError, match="from version v1:262144 to v2") as raised:
+            await f._read(4 * _KiB)
+        assert raised.value.errno == errno.ESTALE
+
+
+async def test_no_current_version_sends_no_request(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    f = await _reader(flat_fs, os.urandom(64 * _KiB))
+    async with f:
+        await f._read()
+    assert f.version is None
+
+
 class _Writer(AdaptiveWritableFile):
     """Uploads to a `SimulatedFileSystem`, recording each request."""
 

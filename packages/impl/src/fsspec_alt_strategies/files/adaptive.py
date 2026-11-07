@@ -128,6 +128,19 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
     client replaces the file. A version id names a version the storage keeps,
     e.g. in a versioned S3 bucket: the read goes on with it.
 
+    A storage whose responses name no version may still tell one apart, e.g.
+    by the modification time and size its status gives:
+
+    - ``version`` is then that token, from the info the file was opened with.
+    - `_current_version` returns the token as the storage has it now. Each
+      fetch awaits it once its bytes arrive, and passes it to
+      `_check_version`. It returns None by default, which checks nothing.
+    - Checked after the bytes arrive, a token unchanged shows they came from
+      that version. This detects a file replaced while read, without
+      preventing it: the storage cannot refuse another version's bytes. It
+      costs a request per fetch, and is only as fine as the token, e.g. two
+      writes within a modification time's resolution look alike.
+
     Parameters
     ----------
     path : str
@@ -233,6 +246,23 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         It asks for ``version`` if the storage can, and passes the version the
         response came from to `_check_version` if the storage tells it.
         """
+
+    async def _current_version(self) -> str | None:
+        """The file's version now, for a storage whose responses name none.
+
+        Each fetch awaits it after `_fetch_range`, and passes what it returns to
+        `_check_version`. A subclass returns a token, e.g. the modification time
+        and size from the filesystem's ``_info``, as ``version`` was given. None,
+        the default, checks nothing and sends no request.
+        """
+        return None
+
+    async def _fetch_checked(self, start: int, end: int) -> bytes:
+        """Fetch [start, end), then check the version the file has after it."""
+        data = await self._fetch_range(start, end)
+        if (version := await self._current_version()) is not None:
+            self._check_version(version)
+        return data
 
     def _check_version(self, version: str) -> None:
         """Check the version a response came from, e.g. its ETag.
@@ -387,7 +417,7 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         part = math.ceil((stop - start) / parts)
         for s in range(start, stop, part):
             e = min(s + part, stop)
-            await self._requests.send(s, e, self._fetch_range, s, e)
+            await self._requests.send(s, e, self._fetch_checked, s, e)
 
     async def _collect(self, pos: int, end: int) -> bytes:
         """The bytes [pos, end) from the blocks fetched, which must cover them."""
