@@ -76,15 +76,14 @@ class FlatFileSystem(_StrategyFileSystem):
         The requests of the strategies at a time.
     io_concurrency : int
         The reads and writes of data at a time.
-    storage_profile : StorageProfile
-        What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
     Raises
     ------
     ValueError
-        If a concurrency is less than 1, or ``rm_batch_size`` is not set.
+        If a concurrency is less than 1, or ``storage_profile`` or
+        ``rm_batch_size`` is not set.
 
     See Also
     --------
@@ -94,6 +93,7 @@ class FlatFileSystem(_StrategyFileSystem):
     --------
     >>> class MyFileSystem(FlatFileSystem):
     ...     protocol = "my"
+    ...     storage_profile = StorageProfile()  # Unknown.
     ...     rm_batch_size = 1000  # As S3's DeleteObjects takes.
     ...
     ...     async def _ils(self, prefix): ...
@@ -109,30 +109,26 @@ class FlatFileSystem(_StrategyFileSystem):
     ...
     ...     def _open(self, path, mode="rb", **kwargs):
     ...         return MyFile(self, path, mode, concurrency_limit=self.io_limit)
-    >>> fs = MyFileSystem(
-    ...     operation_concurrency=32, io_concurrency=8, storage_profile=StorageProfile()
-    ... )
+    >>> fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
     """
 
     rm_batch_size: int
     """The most keys ``_rm_files`` deletes in one request, e.g. 1000 on S3."""
 
     storage_profile: StorageProfile
-    """What the storage does, for the strategies, as given when made."""
+    """What the storage does, for the strategies: a subclass must set it."""
 
     def __init__(
         self,
         *args: Any,
         operation_concurrency: int,
         io_concurrency: int,
-        storage_profile: StorageProfile,
         **kwargs: Any,
     ) -> None:
         super().__init__(
             *args,
             operation_concurrency=operation_concurrency,
             io_concurrency=io_concurrency,
-            storage_profile=storage_profile,
             **kwargs,
         )
         size = getattr(self, "rm_batch_size", None)

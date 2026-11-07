@@ -45,13 +45,13 @@ class _Flat(FlatFileSystem):
 
     protocol = "flattest"
     cachable = False
+    storage_profile = StorageProfile()
     rm_batch_size = 2
 
     def __init__(self, inner: SimulatedFileSystem, **kwargs: Any) -> None:
         options = {
             "operation_concurrency": 4,
             "io_concurrency": 2,
-            "storage_profile": StorageProfile(),
         }
         super().__init__(**{**options, **kwargs})
         self.inner = inner

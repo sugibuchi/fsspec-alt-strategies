@@ -43,7 +43,9 @@ class _FileSystemWrapper:
         **kwargs: Any,
     ) -> None:
         self.fs = fs
-        super().__init__(storage_profile=storage_profile, **kwargs)
+        # A wrapper's storage is the one it wraps: its profile comes with it.
+        self.storage_profile = storage_profile
+        super().__init__(**kwargs)
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} of {self.fs!r}>"

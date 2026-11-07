@@ -48,12 +48,12 @@ class _Tree(TreeFileSystem):
 
     protocol = "treetest"
     cachable = False
+    storage_profile = StorageProfile()
 
     def __init__(self, inner: SimulatedFileSystem, **kwargs: Any) -> None:
         options = {
             "operation_concurrency": 4,
             "io_concurrency": 2,
-            "storage_profile": StorageProfile(),
         }
         super().__init__(**{**options, **kwargs})
         self.inner = inner
@@ -244,11 +244,12 @@ async def test_recursive_rm_copy_and_mv(fs: _Tree, inner: SimulatedFileSystem) -
 
 async def test_a_rename_moves_a_folder_whole(inner: SimulatedFileSystem) -> None:
     class Renaming(_Tree):
+        storage_profile = StorageProfile(renames_folders=True)
+
         async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
             await self.inner._rename(path1, path2)
 
-    profile = StorageProfile(renames_folders=True)
-    renaming = Renaming(inner, storage_profile=profile, asynchronous=True)
+    renaming = Renaming(inner, asynchronous=True)
     inner.reset_stats()
     await renaming._mv("data", "moved", recursive=True)
     assert inner.stats.calls == {"info": 1, "rename": 1}
@@ -427,3 +428,11 @@ def test_a_subclass_missing_a_primitive_is_refused() -> None:
 
     with pytest.raises(TypeError, match="_rmdir"):
         Incomplete(SimulatedFileSystem(), asynchronous=True)
+
+
+def test_storage_profile_must_be_set(inner: SimulatedFileSystem) -> None:
+    class Unset(_Tree):
+        storage_profile = None  # type: ignore[assignment]
+
+    with pytest.raises(ValueError, match="storage_profile"):
+        Unset(inner)

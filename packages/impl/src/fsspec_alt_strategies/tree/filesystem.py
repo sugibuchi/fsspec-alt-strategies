@@ -80,15 +80,13 @@ class TreeFileSystem(_StrategyFileSystem):
         The requests of the strategies at a time.
     io_concurrency : int
         The reads and writes of data at a time.
-    storage_profile : StorageProfile
-        What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
     Raises
     ------
     ValueError
-        If a concurrency is less than 1.
+        If a concurrency is less than 1, or ``storage_profile`` is not set.
 
     See Also
     --------
@@ -98,6 +96,7 @@ class TreeFileSystem(_StrategyFileSystem):
     --------
     >>> class MyFileSystem(TreeFileSystem):
     ...     protocol = "my"
+    ...     storage_profile = StorageProfile()  # Unknown.
     ...
     ...     async def _ls(self, path, detail=True, **kwargs): ...
     ...     async def _info(self, path, **kwargs): ...
@@ -112,27 +111,23 @@ class TreeFileSystem(_StrategyFileSystem):
     ...
     ...     def _open(self, path, mode="rb", **kwargs):
     ...         return MyFile(self, path, mode, concurrency_limit=self.io_limit)
-    >>> fs = MyFileSystem(
-    ...     operation_concurrency=32, io_concurrency=8, storage_profile=StorageProfile()
-    ... )
+    >>> fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
     """
 
     storage_profile: StorageProfile
-    """What the storage does, for the strategies, as given when made."""
+    """What the storage does, for the strategies: a subclass must set it."""
 
     def __init__(
         self,
         *args: Any,
         operation_concurrency: int,
         io_concurrency: int,
-        storage_profile: StorageProfile,
         **kwargs: Any,
     ) -> None:
         super().__init__(
             *args,
             operation_concurrency=operation_concurrency,
             io_concurrency=io_concurrency,
-            storage_profile=storage_profile,
             **kwargs,
         )
 

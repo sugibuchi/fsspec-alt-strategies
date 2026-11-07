@@ -21,13 +21,12 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.callbacks import DEFAULT_CALLBACK
 
 from fsspec_alt_strategies_common.monitor import Monitored
+from fsspec_alt_strategies_common.profile import StorageProfile
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from fsspec.callbacks import Callback
-
-    from fsspec_alt_strategies_common.profile import StorageProfile
 
 _MiB = 1024 * 1024
 
@@ -51,8 +50,8 @@ class _StrategyFileSystem(
     ``concurrency_limit``. Each is an `asyncio.Semaphore`, its own per
     instance.
 
-    ``storage_profile`` tells the strategies what the storage does. It is
-    required: a filesystem whose storage is unknown says so, with
+    ``storage_profile``, a class field, tells the strategies what the storage
+    does. A subclass must set it: one whose storage is unknown says so, with
     ``StorageProfile()``.
 
     Each family's class declares the abstract methods its subclasses implement,
@@ -67,7 +66,6 @@ class _StrategyFileSystem(
         *args: Any,
         operation_concurrency: int,
         io_concurrency: int,
-        storage_profile: StorageProfile,
         **kwargs: Any,
     ) -> None:
         for name, value in (
@@ -79,7 +77,11 @@ class _StrategyFileSystem(
         super().__init__(*args, **kwargs)
         self.operation_concurrency = operation_concurrency
         self.io_concurrency = io_concurrency
-        self.storage_profile = storage_profile
+        profile = getattr(self, "storage_profile", None)
+        if not isinstance(profile, StorageProfile):
+            raise ValueError(
+                f"storage_profile must be set, to a StorageProfile: {profile!r}"
+            )
         self.operation_limit = asyncio.Semaphore(operation_concurrency)
         self.io_limit = asyncio.Semaphore(io_concurrency)
 
