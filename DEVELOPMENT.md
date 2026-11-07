@@ -269,7 +269,7 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
   choose the limit's scope: a file, a filesystem, or the process. A write waits for it, so a shared limit also bounds
   the memory of the parts in flight across files.
 - How they split work is planned apart from the concurrency limit, which may be shared. `spread` is how many requests a large
-  read or write is split into, and `max_readahead` caps the bytes read ahead. An adaptive file given no limit gets its
+  read or write is split into, and caps the bytes read ahead at `spread` blocks of `max_block_size`. An adaptive file given no limit gets its
   own, of `spread`.
 - They follow Python's file API, not the strategy API: errors are raised.
 - A file read in many requests reads one version: `AdaptiveReadableFile` pins it, by `version` or the first response,

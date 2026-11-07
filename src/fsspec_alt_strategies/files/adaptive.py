@@ -93,9 +93,10 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
       it, e.g. a Parquet file's footer and its metadata.
     - A read that starts where the last one ended continues a run. A run that
       has read n bytes is assumed to read n more: they are fetched ahead,
-      topped up once half of them are read, up to ``max_readahead`` bytes.
-      They are split into ``spread`` blocks, fetched at once as the
-      concurrency limit allows. Their blocks double in size up to ``max_block_size``.
+      topped up once half of them are read. They are split into ``spread``
+      blocks, fetched at once as the concurrency limit allows. Their blocks
+      double in size up to ``max_block_size``, so at most ``spread`` times
+      ``max_block_size`` bytes are fetched ahead.
     - A seek within the blocks fetched keeps them and the run. A seek elsewhere
       cancels the blocks in flight and ends the run, so that scattered reads,
       such as a Parquet file's column chunks, fetch nothing ahead.
@@ -134,8 +135,6 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         once. The class attribute if None.
     min_block_size, max_block_size : int, optional
         The smallest and largest request. The class attributes if None.
-    max_readahead : int, optional
-        The most bytes fetched ahead of the reads. The class attribute if None.
     kept_size : int, optional
         The most bytes of fetched blocks kept. The class attribute if None.
     version : str, optional
@@ -178,9 +177,6 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
     max_block_size: int = 8 * _MiB
     """The largest request. Larger reads are split, to fetch the parts together."""
 
-    max_readahead: int = 64 * _MiB
-    """The most bytes fetched ahead of the reads, in a run of sequential reads."""
-
     kept_size: int = 8 * _MiB
     """The most bytes of fetched blocks kept for reads that come back to them."""
 
@@ -197,7 +193,6 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         spread: int | None = None,
         min_block_size: int | None = None,
         max_block_size: int | None = None,
-        max_readahead: int | None = None,
         kept_size: int | None = None,
         version: str | None = None,
     ) -> None:
@@ -208,7 +203,6 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         self.max_block_size = max(
             max_block_size or self.max_block_size, self.min_block_size
         )
-        self.max_readahead = max_readahead or self.max_readahead
         self.kept_size = self.kept_size if kept_size is None else kept_size
         self._pos = 0
         # Where the blocks fetched were last settled: seeks only move _pos.
@@ -350,7 +344,9 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
             return
         # A run that has read n bytes is assumed to read n more. Topping them up
         # only once half are read keeps the requests few and large.
-        ahead = min(self._run + end - pos, self.max_readahead)
+        # At most a batch of the largest blocks, which keeps the memory of the
+        # blocks fetched but not yet read bounded.
+        ahead = min(self._run + end - pos, self.spread * self.max_block_size)
         start = queue[-1].end
         if start - end < ahead // 2:
             await self._send(start, end + ahead, self._block_size(ahead))

@@ -665,14 +665,17 @@ async def test_a_shared_concurrency_limit_bounds_the_parts_in_flight(
         assert await flat_fs._cat_file(f"{i}.bin") == b"x" * 100_000
 
 
-async def test_readahead_is_capped(flat_fs: SimulatedFileSystem) -> None:
+async def test_readahead_is_capped_at_spread_largest_blocks(
+    flat_fs: SimulatedFileSystem,
+) -> None:
     data = os.urandom(512 * _KiB)
     ahead = []
-    async with await _reader(flat_fs, data, max_readahead=16 * _KiB) as f:
+    async with await _reader(flat_fs, data, spread=2, max_block_size=8 * _KiB) as f:
         while await f._read(4 * _KiB):
             if f._requests.queue:
                 ahead.append(f._requests.queue[-1].end - f._pos)
-    assert max(ahead) <= 16 * _KiB
+    # 2 blocks of 8 KiB: reached, never passed, however long the run.
+    assert max(ahead) == 2 * 8 * _KiB
 
 
 @pytest.mark.parametrize(("kwargs", "limit"), [({}, 8), ({"spread": 3}, 3)])
