@@ -56,7 +56,12 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
 
     Examples
     --------
-    >>> tree = AsyncTreeWrapper(fs, operation_concurrency=32, io_concurrency=8)
+    >>> tree = AsyncTreeWrapper(
+    ...     fs,
+    ...     operation_concurrency=32,
+    ...     io_concurrency=8,
+    ...     storage_profile=StorageProfile(),
+    ... )
     >>> with monitoring(Progress()):
     ...     tree.rm("data/2024", recursive=True)
     """

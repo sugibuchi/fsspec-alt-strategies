@@ -395,6 +395,26 @@ async def test_a_move_failing_midway_is_reported() -> None:
     assert await fs._exists("moved/README.md")
 
 
+async def test_a_source_folder_failing_to_go_is_reported() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _tree(fs)
+
+    async def rm_folder(path: str) -> None:
+        if path == "data/2023/01":
+            raise PermissionError(path)
+        await fs._rmdir(path)
+
+    op = _mv(fs, "data", "moved", rm_folder=rm_folder)
+    moved, errors = await _collect(op)
+    assert [type(e) for e in errors] == [PermissionError]
+    assert errors[0].__notes__ == ["Deleting the folder 'data/2023/01' failed."]
+    # Its files moved; it and the folders above it stay.
+    assert await fs._exists("moved/2023/01/part-0.parquet")
+    assert await fs._exists("data/2023/01")
+    assert ("data", "moved") not in moved
+    assert not await fs._exists("data/2024")
+
+
 async def test_closing_waits_for_the_moves_sent() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
     for i in range(10):

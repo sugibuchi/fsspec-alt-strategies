@@ -70,8 +70,9 @@ def tree_mv(
 
     The tree is walked as `tree_walk` walks it. Each folder's files are moved
     as soon as the folder is listed, each by one ``mv_file``. A source folder
-    is deleted once everything in it is moved, so the deepest go first. A folder is created at the destination before
-    files are moved into it, and for each empty folder.
+    is deleted once everything in it is moved, so the deepest go first. A
+    folder is created at the destination before files are moved into it, and
+    for each empty folder.
 
     Unlike fsspec's ``mv``, it keeps going past a failure, and reports each. A
     file that failed to move stays where it was, and so do the folders above

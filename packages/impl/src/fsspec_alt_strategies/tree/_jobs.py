@@ -103,14 +103,21 @@ class _TreeJobs(_Jobs):
         return []
 
     def track(self, listing: _Listing) -> None:
-        """Count the paths in a listed folder, for `child_done`."""
-        self.remaining[listing.folder] = len(listing.entries)
-        for entry in listing.entries:
-            self.parents[entry["name"].rstrip("/")] = listing.folder
+        """Count the paths in a listed folder, for `child_done`.
+
+        A storage may list a path twice, e.g. a folder as a prefix and as its
+        marker object. Each path counts once, as the walk lists a folder once.
+        """
+        names = {entry["name"].rstrip("/") for entry in listing.entries}
+        self.remaining[listing.folder] = len(names)
+        self.parents.update(dict.fromkeys(names, listing.folder))
 
     def child_done(self, path: str) -> str | None:
-        """Count a path done, and return its folder if all in it is now done."""
-        parent = self.parents.get(path)
+        """Count a path done, and return its folder if all in it is now done.
+
+        A path done twice, as one listed twice is, counts once.
+        """
+        parent = self.parents.pop(path, None)
         if parent is None:
             return None
         self.remaining[parent] -= 1

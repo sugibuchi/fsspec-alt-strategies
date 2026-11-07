@@ -201,6 +201,51 @@ async def test_a_failure_keeps_its_folders_and_the_rest_goes() -> None:
     assert not await fs._exists("data/2024")
 
 
+class _Forbidding(SimulatedFileSystem):
+    """Refuses to list one folder, as a storage without permission would."""
+
+    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+        if self._strip_protocol(path) == "data/2023":
+            raise PermissionError(path)
+        return await super()._ls(path, detail=detail, **kwargs)
+
+
+async def test_a_failed_listing_keeps_its_folders_and_the_rest_goes() -> None:
+    fs = _Forbidding(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    op = _rm(fs, "data")
+    deleted, errors = await _collect(op)
+    assert [type(e) for e in errors] == [PermissionError]
+    assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
+    assert op.state.errors == 1
+    # data, 2024 and its 01 and 02 listed: the refusal sends nothing. Then
+    # README.md, 2024's 2 files, and 01, 02 and 2024 deleted.
+    assert fs.stats.calls == {"list": 4, "delete": 1 + 2 + 3}
+    # Nothing under data/2023 is touched, and data stays above it.
+    assert not any(p.startswith("data/2023") for p in deleted)
+    assert await fs._exists("data/2023/01/part-0.parquet")
+    assert not await fs._exists("data/2024")
+
+
+class _Doubling(SimulatedFileSystem):
+    """Lists each folder twice, as a prefix and as its marker object."""
+
+    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+        entries = await super()._ls(path, detail=detail, **kwargs)
+        return entries + [
+            {**e, "name": e["name"] + "/"} for e in entries if e["type"] == "directory"
+        ]
+
+
+async def test_a_folder_listed_twice_is_deleted() -> None:
+    fs = _Doubling(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    deleted, errors = await _collect(_rm(fs, "data"))
+    assert errors == []
+    assert deleted[-1] == "data"
+    assert not await fs._exists("data")
+
+
 async def test_rm_folder_is_used_for_folders(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:

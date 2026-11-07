@@ -4,8 +4,7 @@
 
 `tree_walk` lists folders breadth first, several at a time, and yields each
 folder's ``(path, dirs, files)`` as its listing arrives, as fsspec's ``walk``
-gives them. A ``descend`` predicate prunes the folders it
-lists, as glob needs. Its engine, ``_listings``, is also the engine under the
+gives them. A ``descend`` predicate prunes the folders it lists, as glob needs. Its engine, ``_listings``, is also the engine under the
 other tree strategies, such as find, rm and du.
 
 It suits storages that list one folder per request, and those whose folders
@@ -111,6 +110,7 @@ def tree_walk(
 
     See Also
     --------
+    tree_find : The paths in a tree, from the same walk.
 
     Examples
     --------
@@ -165,11 +165,11 @@ class _Listing:
     """A folder's listing, as ``_listings`` yields it.
 
     ``depth`` is 1 for the folder the walk started from, 2 for its subfolders,
-    and so on. ``entries`` are as ``ls`` gives them, without
-    the folder itself, and empty if the listing failed with ``error``.
+    and so on. ``entries`` are as ``ls`` gives them, without the folder itself,
+    and empty if the listing failed with ``error``.
 
-    ``depth`` 0 is no listing, but the walk's root itself, as `_find_listings` yields
-    it: ``entries`` hold only the root's ``info`` entry, under ``folder``.
+    ``depth`` 0 is no listing, but the walk's root itself, as `_find_listings`
+    yields it: ``entries`` hold only the root's ``info`` entry, under ``folder``.
     """
 
     folder: str
@@ -192,8 +192,8 @@ async def _listings(
     """Walk a folder tree as `tree_walk` does, yielding each folder's listing.
 
     The tree strategies need a listing's depth and error, which `tree_walk`'s
-    folders do not carry. A failed listing is yielded with its error, and its subfolders
-    are not walked. ``path``'s own listing fails by raising, as fsspec's walk
+    folders do not carry. A failed listing is yielded with its error, and its
+    subfolders are not walked. ``path``'s own listing fails by raising, as fsspec's walk
     does, since nothing has been done yet.
 
     ``path`` may be several folders, e.g. a glob's matches, walked at once, each
