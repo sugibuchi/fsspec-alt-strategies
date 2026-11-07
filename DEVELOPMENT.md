@@ -349,8 +349,12 @@ A field may imply another: implicit folders need no parents made. A profile cont
 A fact gets a field only once a strategy saves requests with it. Facts that cost nothing to handle as they come have
 none. An example is a copy refused because the file exists: `tree_mv` then deletes the old file and copies again.
 
-A storage with a native operation, such as a rename of a whole folder, has no field either. The developer uses that
-operation instead of the strategy.
+A storage with a native operation, such as a rename of a whole folder, has no field either. A strategy takes it as an
+operation instead, and falls back on its own way where it fails:
+
+- `tree_mv` takes `rename=`, and moves each root whole with it, onto a path that does not exist.
+- A root merging into an existing folder, or whose rename fails, is walked and moved file by file, as without it.
+- `TreeFileSystem` passes its `_rename`, which a subclass implements only if its storage has one.
 
 ### Copied, not only installed
 

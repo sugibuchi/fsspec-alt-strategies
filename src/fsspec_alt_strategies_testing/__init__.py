@@ -406,6 +406,41 @@ class SimulatedFileSystem(AsyncFileSystem):
         del self._folders[path]
         self._detach(path)
 
+    async def _rename(self, path1: str, path2: str) -> None:
+        """Move a file, or a folder with all in it, in one request.
+
+        It is no fsspec method: it is a hierarchical storage's own, as Azure Data
+        Lake Storage Gen2 renames a path. `tree_mv` takes it as its ``rename``.
+        It refuses a ``path2`` that exists, and an object store has none.
+        """
+        path1, path2 = self._strip_protocol(path1), self._strip_protocol(path2)
+        if not self.hierarchical:
+            raise NotImplementedError("An object store renames nothing at once.")
+        await self._request("rename")
+        if path1 not in self._file_data and path1 not in self._folders:
+            raise FileNotFoundError(path1)
+        if path2 in self._file_data or path2 in self._folders:
+            raise FileExistsError(path2)
+        if not path1 or path2 == path1 or path2.startswith(path1 + "/"):
+            raise OSError(errno.EINVAL, "Cannot move a folder into itself", path2)
+        if self.parents_required and _parent_of(path2) not in self._folders:
+            raise FileNotFoundError(_parent_of(path2))
+        if path1 in self._file_data:
+            file = self._file_data[path1]
+            self._unlink(path1)
+            self._write(path2, file.data, file.mtime)
+            return
+        # Parents first, so that each folder is made before what is in it.
+        paths = [path1, *self._descendants(path1)]
+        files = {p: self._file_data[p] for p in paths if p in self._file_data}
+        folders = [p for p in paths if p in self._folders]
+        self._drop(path1)
+        self._detach(path1)
+        for folder in folders:
+            self._make_dirs(path2 + folder[len(path1) :])
+        for path, file in files.items():
+            self._write(path2 + path[len(path1) :], file.data, file.mtime)
+
     async def _mkdir(
         self, path: str, create_parents: bool = True, **kwargs: Any
     ) -> None:

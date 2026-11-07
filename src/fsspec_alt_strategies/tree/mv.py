@@ -7,8 +7,9 @@ whole tree, then deletes it, each stage listing the tree first. `tree_mv` moves
 each folder's files as soon as the folder is listed, each by a copy and a
 delete, and deletes each source folder once it is empty.
 
-It is for storages without a rename of their own. Where a storage renames a
-file or a folder in one request, that request wins.
+Where a storage renames a file or a folder in one request, `tree_mv` takes
+that rename, and moves each root whole with it where it can. It walks only
+what it cannot move so.
 
 This module depends on `control`, `profile`, `cp`, and `jobs` and `states` of
 `common`.
@@ -16,17 +17,17 @@ This module depends on `control`, `profile`, `cp`, and `jobs` and `states` of
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
-from ..common.jobs import _Job
+from ..common.jobs import _Job, _Roots
 from ..common.states import MvState
 from ..control import Operation
 from ..profile import StorageProfile
 from .cp import _Copy
 
 if TYPE_CHECKING:
-    import asyncio
-    from collections.abc import Awaitable, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Sequence
 
     from ..common.operations import _Info, _Ls, _Request
     from .walk import _Listing
@@ -44,6 +45,7 @@ def tree_mv(
     makedirs: _Request,
     rm_file: _Request,
     rm_folder: _Request,
+    rename: _Request | None = None,
     profile: StorageProfile | None = None,
     concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, str], MvState]:
@@ -82,6 +84,17 @@ def tree_mv(
     and rename nothing in one request. The moves then start after the first
     listing, not after the whole tree is listed twice.
 
+    Given ``rename``, a storage's own move of a whole folder or file, each root
+    is first moved whole, in one request, where it can be. That wins by far on
+    storages renaming a folder at once, such as Azure Data Lake Storage Gen2,
+    HDFS or a local disk. A root goes whole only to a destination that does not
+    exist, as a rename onto an existing path differs among storages. Into an
+    existing folder, its contents merge, and its paths are moved one by one, as
+    without ``rename``. So are those of a root whose ``rename`` fails, e.g.
+    across containers, and those of ``path1`` ending with "/", whose contents go
+    onto ``path2``. A root moved whole is yielded once, as ``(root, target)``:
+    what is in it is neither listed nor yielded.
+
     Once cancelled, it starts no new listing or move, and yields the outcomes
     of the moves already sent. Closed, it waits for those moves without
     yielding them, as their outcome would otherwise be unknown. Iterating it
@@ -89,13 +102,17 @@ def tree_mv(
     and ValueError if ``path2`` is inside it.
 
     Requests: as `tree_cp`, with one ``rm_file`` more per file, and one
-    ``rm_folder`` per folder. Each request holds a permit of
-    ``concurrency_limit`` while it runs.
+    ``rm_folder`` per folder. Given ``rename``, each root first costs an
+    ``info`` of its target, unless ``path2`` was found missing already, a
+    ``makedirs`` of its parent, and the ``rename``: a root moved whole costs
+    nothing more. Each request holds a permit of ``concurrency_limit`` while
+    it runs.
 
     The profile's ``parents_required=False`` saves the ``makedirs`` of each
     folder with files, as their copies create it. Its ``implicit_folders=True``
     saves those, and the ``rm_folder`` of each source folder too, as a folder
-    goes with its last file.
+    goes with its last file. Either saves the ``makedirs`` before a
+    ``rename``.
 
     Parameters
     ----------
@@ -111,6 +128,11 @@ def tree_mv(
         ``_rm_file``.
     rm_folder : callable
         Deletes an empty folder, as with `tree_rm`.
+    rename : callable, optional
+        Moves a folder, with all in it, or a file, in one request, called as
+        ``rename(path1, path2)``. It raises if it cannot, moving nothing. It is
+        no fsspec method: a storage's own, e.g. its rename of a path. fsspec's
+        ``_mv_file`` is one only where it is overridden so.
     profile : StorageProfile, optional
         What the storage does. Unknown if None.
     concurrency_limit : asyncio.Semaphore
@@ -158,11 +180,12 @@ def tree_mv(
             makedirs=makedirs,
             rm_file=rm_file,
             rm_folder=rm_folder,
+            rename=rename,
             profile=profile or StorageProfile(),
             concurrency_limit=concurrency_limit,
             op=op,
         ).outcomes(),
-        MvState(folders_moved=0),
+        MvState(folders_moved=0, roots_renamed=None if rename is None else 0),
     )
 
 
@@ -178,11 +201,16 @@ class _Move(_Copy):
         path2: str,
         *,
         rm_folder: _Request,
+        rename: _Request | None,
         **kwargs: Any,
     ) -> None:
         super().__init__(path1, path2, **kwargs)
         self.rm_folder = rm_folder
+        self.rename = rename
         self.folders_moved = 0
+        # The roots moved whole, yielded with the first step.
+        self.renamed: list[tuple[str, str]] = []
+        self.roots_renamed = None if rename is None else 0
 
     def state(self) -> MvState:
         return MvState(
@@ -191,7 +219,61 @@ class _Move(_Copy):
             files_found=self.files_found,
             files_moved=self.files_done,
             folders_moved=self.folders_moved,
+            roots_renamed=self.roots_renamed,
         )
+
+    async def prepare(self) -> _Roots | None:
+        """Place the roots, then move whole those that can be: the rest are walked."""
+        roots = await super().prepare()
+        if roots is None or self.rename is None:
+            return roots
+        if isinstance(self.path1, str) and self.path1.endswith("/"):
+            return roots  # Its contents go onto path2, among what is there.
+        sources = [*roots.folders, *roots.files]
+        moved = await asyncio.gather(*(self.move_whole(s) for s in sources))
+        whole = {s for s, ok in zip(sources, moved, strict=True) if ok}
+        self.renamed = [(s, self.target(s)) for s in sources if s in whole]
+        self.roots_renamed = len(self.renamed)
+        return _Roots(
+            [f for f in roots.folders if f not in whole],
+            [f for f in roots.files if f not in whole],
+            roots.errors,
+        )
+
+    async def move_whole(self, source: str) -> bool:
+        """Move a root with one ``rename``, and tell whether it went.
+
+        A root whose target exists merges into it, and a failed rename moved
+        nothing: both are walked instead, and a real failure then shows on its
+        paths, as without ``rename``.
+        """
+        target = self.target(source)
+        parent = target.rpartition("/")[0]
+        if target not in self.missing:
+            try:
+                async with self.concurrency_limit:
+                    await self.info(target)
+            except FileNotFoundError:
+                pass  # Free: the root can go there whole.
+            except Exception:
+                return False
+            else:
+                return False  # Taken: the root merges into it.
+        try:
+            if parent and self.parents_required:
+                async with self.concurrency_limit:
+                    await self.makedirs(parent, exist_ok=True)
+            async with self.concurrency_limit:
+                await self.rename(source, target)  # type: ignore[misc]
+        except Exception:
+            return False
+        return True
+
+    async def begin(
+        self, roots: _Roots, source: AsyncGenerator[_Listing] | None
+    ) -> list[Any]:
+        renamed, self.renamed = self.renamed, []
+        return [*renamed, *await super().begin(roots, source)]
 
     def add(self, listing: _Listing) -> None:
         self.track(listing)

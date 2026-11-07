@@ -149,8 +149,12 @@ class MvState(State):
     folders_moved : int or None
         The source folders deleted so far, once all in them was moved. None
         for a strategy deleting no folders, such as `flat_mv`.
+    roots_renamed : int or None
+        The roots moved whole, each by one ``rename``, what is in them neither
+        found nor counted. None unless ``rename`` is given.
     """
 
     files_found: int = 0
     files_moved: int = 0
     folders_moved: int | None = None
+    roots_renamed: int | None = None

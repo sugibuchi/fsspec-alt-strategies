@@ -45,6 +45,9 @@ class _Placing:
         self.base = ""
         # For a list: where each root goes, by the root.
         self.places: dict[str, str] = {}
+        # The destinations found missing, which need no asking again, e.g.
+        # by a move renaming a root onto one.
+        self.missing: set[str] = set()
 
     @abstractmethod
     async def expand(self, pattern: str | Sequence[str]) -> _Roots:
@@ -122,6 +125,7 @@ class _Placing:
             try:
                 into = (await self.info(destination))["type"] == "directory"
             except FileNotFoundError:
+                self.missing.add(destination)
                 into = False
         if not into or self.path1.endswith("/"):
             return destination

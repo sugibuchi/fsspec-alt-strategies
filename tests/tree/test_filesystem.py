@@ -232,6 +232,19 @@ async def test_recursive_rm_copy_and_mv(fs: _Tree, inner: SimulatedFileSystem) -
     assert not await inner._exists("moved")
 
 
+async def test_a_rename_moves_a_root_whole(inner: SimulatedFileSystem) -> None:
+    class Renaming(_Tree):
+        async def _rename(self, path1: str, path2: str) -> None:
+            await self.inner._rename(path1, path2)
+
+    renaming = Renaming(inner, asynchronous=True)
+    inner.reset_stats()
+    await renaming._mv("data", "moved", recursive=True)
+    assert inner.stats.calls == {"info": 1, "rename": 1}
+    assert not await inner._exists("data")
+    assert await inner._exists("moved/2024/01/part-0.parquet")
+
+
 async def test_failures_are_raised(fs: _Tree, inner: SimulatedFileSystem) -> None:
     async def refused(path: str, **kwargs: Any) -> None:
         if path == "data/README.md":
