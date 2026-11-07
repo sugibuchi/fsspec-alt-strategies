@@ -14,10 +14,10 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | Path                            | Contents                                                       |
 |---------------------------------|----------------------------------------------------------------|
 | `packages/common/src/fsspec_alt_strategies_common/` | The interface, installed: one for all the copies in a project. |
-| `.../monitor.py`                | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
+| `.../monitor.py`                | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitored`, `Call`, `CallCancelled`, `Monitor`, `monitoring` and `current_monitors`: watching the operations behind the filesystems' fsspec methods. |
 | `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
 | `.../states.py`                 | The states the strategies report, e.g. `FindState` of `tree_find` and `flat_find`. |
-| `.../wrapper.py`                | `known_implementations`: how each known filesystem class is wrapped, to be monitored. |
+| `.../wrapper.py`                | `KnownImplementation` and `known_implementations`: how each known filesystem class is wrapped, to be monitored. |
 | `packages/common/tests/`        | The interface's tests, which never import the strategies.      |
 | `packages/impl/src/fsspec_alt_strategies/` | The strategies, copied.                              |
 | `.../monitor.py`                | `monitored(fs)`: the filesystem if `Monitored`, else wrapped as its known implementation says. |
@@ -113,13 +113,14 @@ The library is not part of fsspec. It offers alternatives, and never patches fss
 
 ### Strategies are functions
 
-Each algorithm is a stateless function. It takes a filesystem and the operation's arguments, and keeps no state between
-calls.
+Each algorithm is a stateless function. It takes the storage's operations as functions, e.g. `ls=fs._ls`, and the
+operation's arguments. It keeps no state between calls.
 
-- Users can call a function on any fsspec filesystem, without subclassing.
-- A base filesystem class wraps the functions as its methods, for implementations that want them by default.
-- A function only uses fsspec's public and documented private API, e.g. `_ls` and `_info` on async filesystems. So it
+- Users can call a function with any fsspec filesystem's operations, without subclassing.
+- Each family's abstract filesystem wraps the functions as its methods, for implementations that want them by default.
+- A function only uses fsspec's API that every implementation has, e.g. `_ls` and `_info` on async filesystems. So it
   works on any implementation.
+- File objects and `Operation` are the exceptions, as they keep state between calls.
 
 ### Developers choose
 
@@ -257,8 +258,12 @@ Their callers see only fsspec's answers, not the `Operation` behind them. The mo
 changing fsspec's API. The filesystems run their operations with `common/operation.py`, which tells the monitors.
 
 - A `Monitor` subclass overrides `started`, `yielded` and `ended`, each awaited where the operation runs.
+- Each method takes the `Call`, then the item yielded or the error ending the call, then the `state`, then the
+  `OperationHandler`. `started` takes no item.
+- A `Call` names the method, its paths, and the filesystem called. A call to a wrapper names the filesystem wrapped.
 - `with monitoring(monitor):`, or `async with`, sets a context variable. Every call within the block is watched,
   whoever makes it, and blocks nest.
+- The filesystems read the monitors with `current_monitors()`, so that the context variable stays the interface's own.
 - fsspec's sync methods see the block too: `sync()` runs the call in a copy of the caller's context.
 - A monitor stops a call with `op.cancel()`. The call then raises `CallCancelled`, an Exception, since fsspec's callers
   expect a call to finish or raise, and an `asyncio.CancelledError` would end fsspec's `sync()` with no answer.
@@ -277,7 +282,18 @@ Or they wrap an existing filesystem as one, to use the strategies and monitors w
 - A wrapper is light and not cached: it is made on demand, e.g. to watch one call, and dropped after.
 - Its data methods, such as `_cat_file`, are the wrapped filesystem's own, under `io_limit`.
 - A flat wrapper lists a prefix with the wrapped `find` of its folder, and deletes a batch with its `rm`.
-- Nothing chooses a wrapper for a filesystem: the developer does.
+- A wrapper takes its limits and its `storage_profile` as arguments.
+- Nothing in the strategies chooses a wrapper for a filesystem: the developer does.
+
+`monitored(fs)`, in `monitor.py`, wraps a filesystem as the developers listed in `known_implementations` chose:
+
+- A filesystem inheriting `Monitored`, such as a `TreeFileSystem`, is returned as it is.
+- Any other is wrapped as the entry of its class, or of the nearest class it inherits, says. An entry gives the
+  family, whether it is async, the two limits, the profile, and a flat wrapper's `rm_batch_size`.
+- `implementations=` replaces the interface's table with the caller's own.
+- A class no entry names raises `ValueError`. With `wrap_unknown_fs=True`, it is wrapped the way right on any storage
+  instead: as a tree, one request at a time, with an unknown profile.
+- It imports a family's wrappers only when it wraps a filesystem with them, so a copy may leave out the other family.
 
 Choosing the class chooses the family: a developer wanting one strategy of another overrides that method, as above.
 
@@ -426,7 +442,9 @@ installed package keeps the version it was copied at. A copy of the source tree 
 
 ### Async first
 
-Strategies target `AsyncFileSystem` first. Sync filesystems may get some features, such as observability, later.
+Strategies are async functions, and the filesystem classes are `AsyncFileSystem`s. A sync filesystem gets them through
+`SyncTreeWrapper` or `SyncFlatWrapper`, which run its calls in threads. Sync versions of the strategies are written only
+when asked for.
 
 ### File objects
 
@@ -461,7 +479,8 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 - They know nothing of fsspec's transactions. How a file stays invisible until commit depends on the storage, so
   `files/fsspec_transaction.py` holds it in a `FileTransaction`, an ABC with four steps: `start_staging()` opens
   the file written to, `end_staging()` ends the writing on closing, then `commit()`, or `discard()` instead. One
-  `TransactionFile` takes any of them. A filesystem's `_open` returns it when `autocommit` is False.
+  `TransactionFile` takes any of them. A filesystem's `_open` returns it when `autocommit` is False. A commit that
+  fails can still be discarded.
 - The strategies provided are:
   - `TempPathTransaction`, writing to a hidden temporary path, renamed on commit, for any file;
   - `LocalBufferTransaction`, writing to a local buffer, written to the file on commit, for any file;
