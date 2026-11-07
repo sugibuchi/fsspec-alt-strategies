@@ -8,7 +8,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
-from fsspec_alt_strategies.flat.wrappers import AsyncFlatWrapper, SyncFlatWrapper
+from fsspec_alt_strategies.flat.wrapper import AsyncFlatWrapper, SyncFlatWrapper
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:

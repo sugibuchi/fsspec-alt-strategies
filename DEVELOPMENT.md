@@ -15,7 +15,7 @@
 | `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks.        |
 | `.../tree/mv.py`                | `tree_mv`, a recursive move: a `mv_file` per file, or per folder where it moves folders. |
 | `.../tree/filesystem.py`        | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies. |
-| `.../tree/wrappers.py`          | `AsyncTreeWrapper` and `SyncTreeWrapper`: an existing filesystem, as a `TreeFileSystem`. |
+| `.../tree/wrapper.py`           | `AsyncTreeWrapper` and `SyncTreeWrapper`: an existing filesystem, as a `TreeFileSystem`. |
 | `.../tree/_jobs.py`             | The private engine's tree side: it feeds `common`'s with the walk's listings. |
 | `.../flat/`                     | The strategies listing a flat namespace by key prefix, as object stores do. |
 | `.../flat/walk.py`              | `flat_walk`, a walk of one listing of a prefix, its folders derived from the keys. |
@@ -26,7 +26,7 @@
 | `.../flat/cp.py`                | `flat_cp`, a recursive copy that copies each key as it is listed. |
 | `.../flat/mv.py`                | `flat_mv`, a recursive move: a `mv_file` per key, or a copy per key and a deletion per batch. |
 | `.../flat/filesystem.py`        | `FlatFileSystem`, an abstract async filesystem whose recursive methods are the flat strategies. |
-| `.../flat/wrappers.py`          | `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `FlatFileSystem`. |
+| `.../flat/wrapper.py`           | `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `FlatFileSystem`. |
 | `.../flat/_keys.py`             | The private listing under them: a prefix's keys, and the folders they imply. |
 | `.../flat/_jobs.py`             | The private engine's flat side: it feeds `common`'s with the keys of each root. |
 | `.../common/`                   | Private machinery the families share, so that none imports another. |
