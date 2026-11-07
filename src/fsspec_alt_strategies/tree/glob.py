@@ -29,15 +29,13 @@ from typing import TYPE_CHECKING, Any
 from fsspec.utils import glob_translate
 
 from ..control import Operation, State
-from .walk import _scan
+from .walk import _scan, _trim
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, Sequence
 
-    from fsspec.asyn import AsyncFileSystem
-
-    from .walk import _Listing
+    from .walk import _Info, _Listing, _Ls
 
 __all__ = ["GlobState", "tree_glob"]
 
@@ -59,9 +57,10 @@ class GlobState(State):
 
 
 def tree_glob(
-    fs: AsyncFileSystem,
     path: str | Sequence[str],
     *,
+    ls: _Ls,
+    info: _Info,
     maxdepth: int | None = None,
     withdirs: bool = True,
     concurrency_limit: asyncio.Semaphore | None = None,
@@ -95,17 +94,22 @@ def tree_glob(
     Once cancelled, it lists no new folder, and yields the matches of the
     listings in flight.
 
-    Requests: one ``_ls`` per folder a pattern can match in, as
-    ``concurrency_limit`` allows. One ``_info`` per pattern without wildcards,
+    Requests: one ``ls`` per folder a pattern can match in, as
+    ``concurrency_limit`` allows. One ``info`` per pattern without wildcards,
     and per literal root folder walked that a pattern matches, e.g. that of
     ``data/**``.
 
     Parameters
     ----------
-    fs : fsspec.asyn.AsyncFileSystem
-        The filesystem.
     path : str or sequence of str
-        The pattern, or patterns. A trailing "/" matches only folders.
+        The pattern, or patterns, of paths as ``ls`` takes them. A trailing
+        "/" matches only folders.
+    ls : callable
+        Lists a folder, called as ``ls(path, detail=True)``: e.g. the
+        filesystem's ``_ls``.
+    info : callable
+        Describes a path, called as ``info(path)``: e.g. the filesystem's
+        ``_info``.
     maxdepth : int, optional
         How deep a ``**`` goes, as with fsspec's ``_glob``. No limit by default.
     withdirs : bool
@@ -117,7 +121,7 @@ def tree_glob(
     Returns
     -------
     Operation
-        Yielding the ``_ls`` entry of each path matched, or the error of a
+        Yielding the ``ls`` entry of each path matched, or the error of a
         folder that failed to list. Its state is a `GlobState`.
 
     Raises
@@ -132,7 +136,8 @@ def tree_glob(
 
     Examples
     --------
-    >>> async with tree_glob(fs, "data/*/2024/*.parquet") as matches:
+    >>> glob = tree_glob("data/*/2024/*.parquet", ls=fs._ls, info=fs._info)
+    >>> async with glob as matches:
     ...     async for match in matches:
     ...         if isinstance(match, Exception):
     ...             raise match
@@ -144,41 +149,40 @@ def tree_glob(
     literals: list[str] = []
     searches: list[_Search] = []
     for pattern in [path] if isinstance(path, str) else path:
-        stripped = fs._strip_protocol(pattern)
-        if has_magic(stripped):
-            searches.append(
-                _Search(fs, stripped, pattern.endswith("/"), withdirs, maxdepth)
-            )
+        trimmed = _trim(pattern)
+        if has_magic(trimmed):
+            searches.append(_Search(trimmed, pattern.endswith("/"), withdirs, maxdepth))
         else:
-            literals.append(stripped)
+            literals.append(trimmed)
 
     async def run(
         op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         found: set[str] = set()
-        async for entry in _infos(fs, literals, op, found):
+        async for entry in _infos(info, literals, op, found):
             yield entry
         for root, group in _walks(searches):
             if op.cancelling():
                 return
-            async for match in _walk(fs, root, group, concurrency_limit, op, found):
+            walk = _walk(ls, info, root, group, concurrency_limit, op, found)
+            async for match in walk:
                 yield match
 
     return Operation(run, GlobState())
 
 
 async def _infos(
-    fs: AsyncFileSystem,
+    info: _Info,
     paths: list[str],
     op: Operation[dict[str, Any], GlobState],
     found: set[str],
 ) -> AsyncGenerator[dict[str, Any]]:
-    """The ``_info`` of each pattern without wildcards that exists, noted in ``found``."""
+    """The ``info`` of each pattern without wildcards that exists, noted in ``found``."""
     for path in dict.fromkeys(paths):
         if op.cancelling():
             return
         try:
-            entry = await fs._info(path)
+            entry = await info(path)
         except FileNotFoundError:
             continue
         found.add(entry["name"].rstrip("/"))
@@ -206,7 +210,8 @@ def _inside(path: str, folder: str) -> bool:
 
 
 async def _walk(
-    fs: AsyncFileSystem,
+    ls: _Ls,
+    info: _Info,
     root: str,
     searches: list[_Search],
     concurrency_limit: asyncio.Semaphore | None,
@@ -219,7 +224,8 @@ async def _walk(
     # nothing. Its find includes the root folder itself, which few patterns
     # match.
     steps = _scan(
-        fs,
+        ls,
+        info,
         root,
         maxdepth=None if None in depths else max(d for d in depths if d is not None),
         descend=lambda e: any(s.descend(e) for s in searches),
@@ -295,7 +301,6 @@ class _Search:
 
     def __init__(
         self,
-        fs: AsyncFileSystem,
         path: str,
         ends_with_sep: bool,
         withdirs: bool,
@@ -307,7 +312,7 @@ class _Search:
         first_magic = min(i for i in (path.find(c) for c in "*?[") if i >= 0)
         slash = path.rfind("/", 0, first_magic)
         relative = path[slash + 1 :]
-        self.root = fs._strip_protocol(path[: slash + 1])
+        self.root = _trim(path[: slash + 1])
         self.start = len(self.root) + 1 if self.root else 0
         self.depth = _depth(path, relative, maxdepth)
         self.prefix = _Prefix(relative.split("/"))

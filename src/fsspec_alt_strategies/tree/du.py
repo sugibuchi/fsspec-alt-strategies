@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator
 
-    from fsspec.asyn import AsyncFileSystem
+    from .walk import _Info, _Ls
 
 __all__ = ["DuState", "tree_du"]
 
@@ -48,15 +48,16 @@ class DuState(State):
 
 
 def tree_du(
-    fs: AsyncFileSystem,
     path: str,
     *,
+    ls: _Ls,
+    info: _Info,
     maxdepth: int | None = None,
     concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[dict[str, Any], DuState]:
     """Measure a tree's size from its listings, listing several folders at a time.
 
-    It assumes that ``_ls`` gives each file's size, as fsspec's filesystems do.
+    It assumes that ``ls`` gives each file's size, as fsspec's filesystems do.
     It yields the entry of each file counted, with its ``size``, as fsspec's
     ``_du`` gives with ``total=False``. Its state's ``size`` is their total, as
     fsspec's ``_du`` gives by default.
@@ -65,22 +66,26 @@ def tree_du(
     measures itself. A folder that fails to list yields its error, and the rest
     of the tree is still measured.
 
-    It wins over fsspec's ``_du`` on any storage, as it sends no ``_info`` per
+    It wins over fsspec's ``_du`` on any storage, as it sends no ``info`` per
     file. On object stores, which list a whole tree in one paginated request,
     summing the sizes from fsspec's ``_find`` with ``detail=True`` makes fewer
     requests still.
 
     Once cancelled, it lists no new folder, and counts the listings in flight.
 
-    Requests: one ``_ls`` per folder, as ``concurrency_limit`` allows. One
-    ``_info`` for ``path``, if a file.
+    Requests: one ``ls`` per folder, as ``concurrency_limit`` allows. One
+    ``info`` for ``path``, if a file.
 
     Parameters
     ----------
-    fs : fsspec.asyn.AsyncFileSystem
-        The filesystem.
     path : str
-        The folder to measure.
+        The folder to measure, as ``ls`` takes it.
+    ls : callable
+        Lists a folder, called as ``ls(path, detail=True)``: e.g. the
+        filesystem's ``_ls``.
+    info : callable
+        Describes a path, called as ``info(path)``: e.g. the filesystem's
+        ``_info``.
     maxdepth : int, optional
         The deepest level to measure: 1 counts only the files in ``path``. No
         limit by default.
@@ -91,7 +96,7 @@ def tree_du(
     Returns
     -------
     Operation
-        Yielding the ``_ls`` entry of each file counted, or the error of a
+        Yielding the ``ls`` entry of each file counted, or the error of a
         folder that failed to list. Its state is a `DuState`.
 
     Raises
@@ -105,7 +110,7 @@ def tree_du(
 
     Examples
     --------
-    >>> async with tree_du(fs, "data") as op:
+    >>> async with tree_du("data", ls=fs._ls, info=fs._info) as op:
     ...     async for entry in op:
     ...         if isinstance(entry, Exception):
     ...             raise entry
@@ -118,7 +123,8 @@ def tree_du(
         op: Operation[dict[str, Any], DuState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         steps = _scan(
-            fs,
+            ls,
+            info,
             path,
             maxdepth=maxdepth,
             concurrency_limit=concurrency_limit,

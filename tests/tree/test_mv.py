@@ -13,6 +13,20 @@ from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.tree.mv import MvState, tree_mv
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
+
+def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
+    """`tree_mv` on a filesystem's own operations, which ``kwargs`` may replace."""
+    operations = {
+        "ls": fs._ls,
+        "info": fs._info,
+        "cp_file": fs._cp_file,
+        "makedirs": fs._makedirs,
+        "rm_file": fs._rm_file,
+        "rm_folder": fs._rmdir,
+    }
+    return tree_mv(path1, path2, **{**operations, **kwargs})
+
+
 _FILES = [
     "data/2023/01/part-0.parquet",
     "data/2023/02/part-0.parquet",
@@ -62,7 +76,7 @@ async def test_places_as_fsspec(
     path1, path2 = f"bucket/{path1}", f"bucket/{path2}"
     expected = _expected(any_fs, path1, path2)
     data = {p: any_fs._file_data[p].data for p in expected if p in any_fs._file_data}
-    moved, errors = await collect(tree_mv(any_fs, path1, path2))
+    moved, errors = await collect(_mv(any_fs, path1, path2))
     assert errors == []
     for source, destination in expected.items():
         if source in data:
@@ -73,7 +87,7 @@ async def test_places_as_fsspec(
 
 async def test_a_pattern_moves_its_matches(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    moved, errors = await collect(tree_mv(any_fs, "data/202*", "moved"))
+    moved, errors = await collect(_mv(any_fs, "data/202*", "moved"))
     assert errors == []
     # Relative to the matches' common prefix, "data", as fsspec places them.
     assert await any_fs._exists("moved/2023/01/part-0.parquet")
@@ -86,7 +100,7 @@ async def test_a_pattern_moves_its_matches(any_fs: SimulatedFileSystem) -> None:
 async def test_a_list_moves_each_under_its_name(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     paths = ["data/2023", "data/2024/01", "other.txt", "data/2024/01/part-0.parquet"]
-    moved, errors = await collect(tree_mv(any_fs, paths, "moved"))
+    moved, errors = await collect(_mv(any_fs, paths, "moved"))
     # A path inside another in the list moves with it.
     assert errors == []
     assert await any_fs._exists("moved/2023/02/part-0.parquet")
@@ -103,7 +117,7 @@ async def test_a_list_leaves_a_path_whose_name_is_taken(
     any_fs: SimulatedFileSystem,
 ) -> None:
     _tree(any_fs)
-    _, errors = await collect(tree_mv(any_fs, ["data/*/01"], "moved"))
+    _, errors = await collect(_mv(any_fs, ["data/*/01"], "moved"))
     assert [type(e) for e in errors] == [FileExistsError]
     assert any_fs._file_data["moved/01/part-0.parquet"].data == (
         b"data/2023/01/part-0.parquet"
@@ -115,7 +129,7 @@ async def test_a_list_leaves_a_path_whose_name_is_taken(
 async def test_requests(hierarchical_fs: SimulatedFileSystem) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.add_dir("data/empty")
-    op = tree_mv(hierarchical_fs, "data", "moved")
+    op = _mv(hierarchical_fs, "data", "moved")
     moved, _ = await collect(op)
     # 4 files, and 7 folders: data, 2023, its 01 and 02, 2024 and its 01, empty.
     assert op.state == MvState(
@@ -139,25 +153,10 @@ async def test_profile_saves_the_mkdirs(hierarchical_fs: SimulatedFileSystem) ->
     _tree(hierarchical_fs)
     hierarchical_fs.add_dir("data/empty")
     profile = StorageProfile(parents_required=False)
-    await collect(tree_mv(hierarchical_fs, "data", "moved", profile=profile))
+    await collect(_mv(hierarchical_fs, "data", "moved", profile=profile))
     # Only the empty folder needs one: the copies create the others.
     assert hierarchical_fs.stats.calls["mkdir"] == 1
     assert await hierarchical_fs._exists("moved/empty")
-
-
-async def test_the_filesystem_may_declare_its_profile() -> None:
-    class Declared(SimulatedFileSystem):
-        storage_profile = StorageProfile(parents_required=False)
-
-    fs = Declared(hierarchical=True, asynchronous=True)
-    _tree(fs)
-    await collect(tree_mv(fs, "data", "moved"))
-    assert "mkdir" not in fs.stats.calls
-    # The argument comes first.
-    fs.reset_stats()
-    await collect(tree_mv(fs, "moved", "data", profile=StorageProfile()))
-    # The folders with files: moved, 2023/01, 2023/02 and 2024/01.
-    assert fs.stats.calls["mkdir"] == 4
 
 
 async def test_a_storage_requiring_parents() -> None:
@@ -165,12 +164,12 @@ async def test_a_storage_requiring_parents() -> None:
         hierarchical=True, parents_required=True, asynchronous=True
     )
     _tree(fs)
-    _, errors = await collect(tree_mv(fs, "data", "new/deep/moved"))
+    _, errors = await collect(_mv(fs, "data", "new/deep/moved"))
     assert errors == []
     assert await fs._exists("new/deep/moved/2023/01/part-0.parquet")
     # Wrongly declared, the profile makes each copy fail, and keeps the source.
     wrong = StorageProfile(parents_required=False)
-    _, errors = await collect(tree_mv(fs, "new/deep/moved", "elsewhere", profile=wrong))
+    _, errors = await collect(_mv(fs, "new/deep/moved", "elsewhere", profile=wrong))
     assert {type(e) for e in errors} == {FileNotFoundError}
     assert await fs._exists("new/deep/moved/README.md")
 
@@ -179,12 +178,12 @@ async def test_a_storage_refusing_to_overwrite() -> None:
     fs = SimulatedFileSystem(hierarchical=True, overwrite=False, asynchronous=True)
     _tree(fs)
     fs.add_file("moved/README.md", b"old")
-    _, errors = await collect(tree_mv(fs, "data", "moved/"))
+    _, errors = await collect(_mv(fs, "data", "moved/"))
     assert errors == []
     assert fs._file_data["moved/data/README.md"].data == b"data/README.md"
     fs.reset_stats()
     fs.add_file("target.txt", b"old")
-    await collect(tree_mv(fs, "other.txt", "target.txt"))
+    await collect(_mv(fs, "other.txt", "target.txt"))
     assert fs._file_data["target.txt"].data == b"other"
     # The refused copy, the old file's deletion, the copy again, the deletion.
     assert fs.stats.calls == {"info": 1, "list": 1, "copy": 2, "delete": 2}
@@ -202,7 +201,7 @@ class _Locked(SimulatedFileSystem):
 async def test_a_failure_keeps_its_source_and_the_rest_moves() -> None:
     fs = _Locked(hierarchical=True, asynchronous=True)
     _tree(fs)
-    moved, errors = await collect(tree_mv(fs, "data", "moved"))
+    moved, errors = await collect(_mv(fs, "data", "moved"))
     assert [type(e) for e in errors] == [PermissionError]
     assert errors[0].__notes__ == [
         "Moving 'data/2023/01/part-0.parquet' to 'moved/2023/01/part-0.parquet' failed."
@@ -226,7 +225,7 @@ class _Undeletable(SimulatedFileSystem):
 async def test_a_file_copied_but_not_deleted_is_in_both_places() -> None:
     fs = _Undeletable(hierarchical=True, asynchronous=True)
     _tree(fs)
-    _, errors = await collect(tree_mv(fs, "data", "moved"))
+    _, errors = await collect(_mv(fs, "data", "moved"))
     assert [type(e) for e in errors] == [PermissionError]
     assert "the file is in both places" in errors[0].__notes__[0]
     assert await fs._exists("data/README.md")
@@ -238,7 +237,7 @@ async def test_closing_waits_for_the_moves_sent() -> None:
     for i in range(10):
         fs.add_file(f"root/file-{i}")
     profile = StorageProfile(parents_required=False)
-    async with tree_mv(
+    async with _mv(
         fs, "root", "moved", profile=profile, concurrency_limit=asyncio.Semaphore(10)
     ) as op:
         async for _ in op:
@@ -252,11 +251,11 @@ async def test_closing_waits_for_the_moves_sent() -> None:
 async def test_paths_it_refuses(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     with pytest.raises(ValueError, match="into itself"):
-        await collect(tree_mv(any_fs, "data", "data/inner"))
+        await collect(_mv(any_fs, "data", "data/inner"))
     with pytest.raises(FileNotFoundError):
-        await collect(tree_mv(any_fs, "missing", "moved"))
+        await collect(_mv(any_fs, "missing", "moved"))
     any_fs.reset_stats()
-    assert await collect(tree_mv(any_fs, "data", "data")) == ([], [])
+    assert await collect(_mv(any_fs, "data", "data")) == ([], [])
     assert any_fs.stats.calls == {}
 
 
@@ -265,7 +264,7 @@ async def test_cancel_yields_the_moves_sent() -> None:
     for i in range(10):
         fs.add_file(f"root/file-{i}")
     profile = StorageProfile(parents_required=False)
-    op = tree_mv(
+    op = _mv(
         fs, "root", "moved", profile=profile, concurrency_limit=asyncio.Semaphore(10)
     )
     moved = []

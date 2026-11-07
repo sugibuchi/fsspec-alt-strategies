@@ -6,12 +6,8 @@ Storages answer the same request differently. Some create a file's missing
 parent folders, others raise FileNotFoundError. A strategy works on any of
 them, but sends fewer requests when it knows. `StorageProfile` tells it.
 
-A strategy taking a ``profile`` uses, in this order:
-
-1. the ``profile`` it is given;
-2. the filesystem's ``storage_profile`` attribute, which a filesystem class
-   may set for all its callers;
-3. `StorageProfile()`, which knows nothing.
+A strategy taking a ``profile`` uses `StorageProfile()`, which knows nothing,
+if given None. A filesystem wrapping strategies may hold one for all its calls.
 
 The library never detects a storage's behaviour: the developer declares it. A
 field left None is unknown, and a strategy then takes the way that is right on
@@ -28,10 +24,6 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from fsspec.asyn import AsyncFileSystem
 
 __all__ = ["StorageProfile"]
 
@@ -52,23 +44,17 @@ class StorageProfile:
 
     Examples
     --------
-    Per call, with any filesystem:
-
     >>> profile = StorageProfile(parents_required=False)
-    >>> op = tree_mv(fs, "data/2024", "archive/2024", profile=profile)
-
-    Or once, for all the callers of a filesystem class:
-
-    >>> class MyFileSystem(AsyncFileSystem):
-    ...     storage_profile = StorageProfile(parents_required=False)
+    >>> op = tree_cp(
+    ...     "data/2024",
+    ...     "archive/2024",
+    ...     ls=fs._ls,
+    ...     info=fs._info,
+    ...     cp_file=fs._cp_file,
+    ...     makedirs=fs._makedirs,
+    ...     rm_file=fs._rm_file,
+    ...     profile=profile,
+    ... )
     """
 
     parents_required: bool | None = None
-
-
-def _resolve(fs: AsyncFileSystem, profile: StorageProfile | None) -> StorageProfile:
-    """The profile a strategy uses: the one given, the filesystem's, or none."""
-    if profile is not None:
-        return profile
-    declared = getattr(fs, "storage_profile", None)
-    return declared if isinstance(declared, StorageProfile) else StorageProfile()

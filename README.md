@@ -40,7 +40,7 @@ Async filesystems come first. Some features, such as observability, may come to 
 Each fsspec feature may have several strategies. You pick those that suit your storage: none is right for every
 storage.
 
-- Call a strategy as a function, with the filesystem and its arguments.
+- Call a strategy as a function, with its arguments and the storage's operations it uses, e.g. `ls=fs._ls`.
 - Subclass a provided base filesystem class, whose methods call the same functions.
 
 The package is on PyPI, but we recommend copying the modules you use into your own package, e.g. as

@@ -88,9 +88,9 @@ library never picks for them.
 
 - A tree walk, for example, wins on storages listing one folder per call. On object stores, one flat listing wins.
 - So each strategy's docstring says what it assumes of the storage, when it wins or loses, and the calls it makes.
-- A strategy calls only the filesystem's primitives, such as `_ls`, `_info` and `_rm_file`. So picking one strategy
-  never changes the behaviour of another.
-- A strategy needing another, or a native operation of the storage, takes it as a parameter.
+- A strategy takes only the storage's primitive operations, such as `ls`, `info` and `rm_file`, as functions. So
+  picking one strategy never changes the behaviour of another.
+- A strategy needing another, or a native operation of the storage, takes it as a parameter too.
 
 ### The strategy API
 
@@ -98,17 +98,31 @@ Every strategy follows the same shape, so that developers learn it once.
 
 #### Calling
 
-A strategy is a plain function returning an `Operation`. The filesystem comes first, then the operation's arguments,
-then keyword-only options:
+A strategy is a plain function returning an `Operation`. The operation's paths come first, then, keyword-only, the
+storage's operations it uses and the options:
 
 ```python
 limit = asyncio.Semaphore(32)  # Shared by all that uses the storage, files included.
-async with tree_rm(fs, "data/2024", concurrency_limit=limit) as op:
+rm = tree_rm(
+    "data/2024",
+    ls=fs._ls,
+    info=fs._info,
+    rm_file=fs._rm_file,
+    rm_folder=fs._rmdir,
+    concurrency_limit=limit,
+)
+async with rm as op:
     async for path in op:
         if isinstance(path, Exception):
             print("failed:", path)
 print(op.state.files_deleted)
 ```
+
+- The storage's operations are functions, not a filesystem. Any coroutine function called as fsspec calls its own
+  serves, e.g. `ls(path, detail=True)`, so one may come from a storage's SDK rather than a filesystem. It also leaves
+  room for another kind of operation later, e.g. a listing yielding pages.
+- They are required: a strategy guesses nothing, e.g. which request deletes a folder.
+- Paths come without a protocol, as the operations take them. The method wrapping a strategy strips it first.
 
 - `concurrency_limit` is an `asyncio.Semaphore`, of which each request holds a permit while it runs. Shared, it limits
   several operations, and the file objects, together: the caller chooses its scope. Without one, an operation has its
@@ -163,7 +177,15 @@ class MyFileSystem(AsyncFileSystem):
 
     async def _rm(self, path, recursive=False, **kwargs):
         if recursive:
-            _, errors = await collect(tree_rm(self, path, concurrency_limit=self.limit))
+            op = tree_rm(
+                self._strip_protocol(path),
+                ls=self._ls,
+                info=self._info,
+                rm_file=self._rm_file,
+                rm_folder=self._rmdir,
+                concurrency_limit=self.limit,
+            )
+            _, errors = await collect(op)
             if errors:
                 raise ExceptionGroup("rm failed", errors)
             return
@@ -181,13 +203,13 @@ come in two layers, by what they send:
 
 | Strategies | They send | They build on |
 |---|---|---|
-| `tree_find`, `tree_du`, `tree_glob` | Listings, and at most one `_info` for the root | `_scan` |
+| `tree_find`, `tree_du`, `tree_glob` | Listings, and at most one `info` for the root | `_scan` |
 | `tree_rm`, `tree_cp`, `tree_mv` | Requests changing the storage, besides the listings | `_Jobs` |
 
 `tree_walk` is `_listings` itself, made public. It raises for a missing or file root, as fsspec's `walk` does.
 
 `_scan`, in `tree/walk.py`, treats the root as fsspec's `_find` and `_glob` do. A missing root finds nothing, and a
-file root yields its own `_info` entry when asked. A folder root yields its own entry when asked, e.g. for `withdirs`.
+file root yields its own `info` entry when asked. A folder root yields its own entry when asked, e.g. for `withdirs`.
 The strategies that only read never handle the root themselves.
 
 Those changing a tree, `tree_rm`, `tree_cp` and `tree_mv`, run their requests with a second private engine, `_Jobs` in
@@ -215,8 +237,8 @@ Storages answer the same request differently. Writing a file into a missing fold
 raises `FileNotFoundError` on others. A strategy works on all of them, and a `StorageProfile` lets it send fewer
 requests.
 
-- A strategy takes `profile=` as an argument, so it works with any filesystem class, without subclassing.
-- Without one, it uses the filesystem's `storage_profile` attribute, which a filesystem class may set for all callers.
+- A strategy takes `profile=` as an argument, so it works with any storage. A filesystem wrapping it may hold one for
+  all its calls.
 - A field left None is unknown. The strategy then takes the way that is right on any storage, at the cost of requests.
 - So a profile only saves requests. It changes the outcome only if it is wrong, and each docstring says how.
 - The library never detects a storage's behaviour: the developer declares it.

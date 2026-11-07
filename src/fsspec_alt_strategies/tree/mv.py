@@ -19,18 +19,16 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..control import Operation, State
-from ..profile import _resolve
+from ..profile import StorageProfile
 from ._jobs import _Job
 from .cp import _Copy
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import Awaitable, Callable, Sequence
+    from collections.abc import Awaitable, Sequence
 
-    from fsspec.asyn import AsyncFileSystem
-
-    from ..profile import StorageProfile
-    from .walk import _Listing
+    from ._jobs import _Request
+    from .walk import _Info, _Listing, _Ls
 
 __all__ = ["MvState", "tree_mv"]
 
@@ -55,12 +53,16 @@ class MvState(State):
 
 
 def tree_mv(
-    fs: AsyncFileSystem,
     path1: str | Sequence[str],
     path2: str,
     *,
+    ls: _Ls,
+    info: _Info,
+    cp_file: _Request,
+    makedirs: _Request,
+    rm_file: _Request,
+    rm_folder: _Request,
     profile: StorageProfile | None = None,
-    rm_folder: Callable[[str], Awaitable[Any]] | None = None,
     concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[tuple[str, str], MvState]:
     """Move a folder and everything in it, moving while the tree is walked.
@@ -84,8 +86,8 @@ def tree_mv(
     path takes first yields a FileExistsError, and stays where it is.
 
     The tree is walked as `tree_walk` walks it. Each folder's files are moved
-    as soon as the folder is listed, each by a ``_cp_file`` then an
-    ``_rm_file``. A source folder is deleted once everything in it is moved,
+    as soon as the folder is listed, each by a ``cp_file`` then an
+    ``rm_file``. A source folder is deleted once everything in it is moved,
     so the deepest go first. A folder is created at the destination before
     files are copied into it, and for each empty folder.
 
@@ -104,26 +106,29 @@ def tree_mv(
     raises FileNotFoundError if ``path1`` does not exist, or matches nothing,
     and ValueError if ``path2`` is inside it.
 
-    Requests: as `tree_cp`, with one ``_rm_file`` more per file, and one
+    Requests: as `tree_cp`, with one ``rm_file`` more per file, and one
     ``rm_folder`` per folder. Each request holds a permit of
     ``concurrency_limit`` while it runs.
 
-    The profile's ``parents_required=False`` saves the ``_makedirs`` of each
+    The profile's ``parents_required=False`` saves the ``makedirs`` of each
     folder with files, as their copies create it.
 
     Parameters
     ----------
-    fs : fsspec.asyn.AsyncFileSystem
-        The filesystem.
     path1 : str or sequence of str
-        The folder or file to move, a glob pattern, or a list of them.
+        The folder or file to move, a glob pattern, or a list of them, as
+        ``ls`` takes paths.
     path2 : str
         Where to move it, as above.
+    ls, info, cp_file, makedirs : callable
+        The storage's operations, as with `tree_cp`.
+    rm_file : callable
+        Deletes a file, called as ``rm_file(path)``: e.g. the filesystem's
+        ``_rm_file``.
+    rm_folder : callable
+        Deletes an empty folder, as with `tree_rm`.
     profile : StorageProfile, optional
-        What the storage does. The filesystem's ``storage_profile`` if None, if
-        it has one.
-    rm_folder : callable, optional
-        An async function deleting an empty folder, as with `tree_rm`.
+        What the storage does. Unknown if None.
     concurrency_limit : asyncio.Semaphore, optional
         Held by each request while it runs. Share one to limit several
         operations, or files, together. The operation's own, of 32, if None.
@@ -141,17 +146,36 @@ def tree_mv(
 
     Examples
     --------
-    >>> async with tree_mv(fs, "data/2024", "archive/") as op:
+    >>> mv = tree_mv(
+    ...     "data/2024",
+    ...     "archive/",
+    ...     ls=fs._ls,
+    ...     info=fs._info,
+    ...     cp_file=fs._cp_file,
+    ...     makedirs=fs._makedirs,
+    ...     rm_file=fs._rm_file,
+    ...     rm_folder=fs._rmdir,
+    ... )
+    >>> async with mv as op:
     ...     async for moved in op:
     ...         if isinstance(moved, Exception):
     ...             print("failed:", moved)
     >>> op.state.files_moved
     1234
     """
-    resolved = _resolve(fs, profile)
     return Operation(
         lambda op: _Move(
-            fs, path1, path2, resolved, rm_folder, concurrency_limit, op
+            path1,
+            path2,
+            ls=ls,
+            info=info,
+            cp_file=cp_file,
+            makedirs=makedirs,
+            rm_file=rm_file,
+            rm_folder=rm_folder,
+            profile=profile or StorageProfile(),
+            concurrency_limit=concurrency_limit,
+            op=op,
         ).outcomes(),
         MvState(),
     )
@@ -165,16 +189,14 @@ class _Move(_Copy):
 
     def __init__(
         self,
-        fs: AsyncFileSystem,
         path1: str | Sequence[str],
         path2: str,
-        profile: StorageProfile,
-        rm_folder: Callable[[str], Awaitable[Any]] | None,
-        concurrency_limit: asyncio.Semaphore | None,
-        op: Operation[Any, Any],
+        *,
+        rm_folder: _Request,
+        **kwargs: Any,
     ) -> None:
-        super().__init__(fs, path1, path2, profile, concurrency_limit, op)
-        self.rm_folder = rm_folder or getattr(fs, "_rmdir", None) or fs._rm_file
+        super().__init__(path1, path2, **kwargs)
+        self.rm_folder = rm_folder
         self.folders_moved = 0
 
     def state(self) -> MvState:
@@ -198,7 +220,7 @@ class _Move(_Copy):
     async def copy_file(self, source: str, destination: str) -> None:
         await super().copy_file(source, destination)
         try:
-            await self.fs._rm_file(source)
+            await self.rm_file(source)
         except FileNotFoundError:
             pass  # Deleted by another: the file is moved all the same.
         except Exception as e:

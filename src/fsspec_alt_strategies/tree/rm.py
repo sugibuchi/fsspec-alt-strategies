@@ -20,11 +20,10 @@ from ._jobs import _expand, _Job, _Jobs, _Roots
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import Awaitable, Callable, Sequence
+    from collections.abc import Awaitable, Sequence
 
-    from fsspec.asyn import AsyncFileSystem
-
-    from .walk import _Listing
+    from ._jobs import _Request
+    from .walk import _Info, _Listing, _Ls
 
 __all__ = ["RmState", "tree_rm"]
 
@@ -49,10 +48,12 @@ class RmState(State):
 
 
 def tree_rm(
-    fs: AsyncFileSystem,
     path: str | Sequence[str],
     *,
-    rm_folder: Callable[[str], Awaitable[Any]] | None = None,
+    ls: _Ls,
+    info: _Info,
+    rm_file: _Request,
+    rm_folder: _Request,
     concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[str, RmState]:
     """Delete a folder and everything in it, deleting while the tree is walked.
@@ -86,25 +87,31 @@ def tree_rm(
     unknown. Iterating it raises FileNotFoundError if ``path`` does not exist,
     or matches nothing.
 
-    Requests: one ``_ls`` per folder, one ``_rm_file`` per file, and one
+    Requests: one ``ls`` per folder, one ``rm_file`` per file, and one
     ``rm_folder`` per folder. Patterns, or a list, add the requests of their
-    `tree_glob`.
-    Each request holds a permit of ``concurrency_limit`` while it
+    `tree_glob`. Each request holds a permit of ``concurrency_limit`` while it
     runs.
 
     Parameters
     ----------
-    fs : fsspec.asyn.AsyncFileSystem
-        The filesystem.
     path : str or sequence of str
-        The folder to delete. If it is a file, that file is deleted. If it is a
-        glob pattern, or a list of paths and patterns, all they match is
-        deleted.
-    rm_folder : callable, optional
-        An async function deleting an empty folder. By default, the
-        filesystem's ``_rmdir`` if it has one, otherwise its ``_rm_file``, as
-        fsspec's ``_rm`` does. A FileNotFoundError from it counts as deleted, as
-        object stores have no folders to delete.
+        The folder to delete, as ``ls`` takes it. If it is a file, that file is
+        deleted. If it is a glob pattern, or a list of paths and patterns, all
+        they match is deleted.
+    ls : callable
+        Lists a folder, called as ``ls(path, detail=True)``: e.g. the
+        filesystem's ``_ls``.
+    info : callable
+        Describes a path, called as ``info(path)``: e.g. the filesystem's
+        ``_info``. Only patterns use it.
+    rm_file : callable
+        Deletes a file, called as ``rm_file(path)``: e.g. the filesystem's
+        ``_rm_file``.
+    rm_folder : callable
+        Deletes an empty folder, called as ``rm_folder(path)``: e.g. the
+        filesystem's ``_rmdir``, or its ``_rm_file`` as fsspec's ``_rm`` does
+        without one. A FileNotFoundError from it counts as deleted, as object
+        stores have no folders to delete.
     concurrency_limit : asyncio.Semaphore, optional
         Held by each request while it runs. Share one to limit several
         operations, or files, together. The operation's own, of 32, if None.
@@ -120,7 +127,14 @@ def tree_rm(
 
     Examples
     --------
-    >>> async with tree_rm(fs, "data/2024") as op:
+    >>> rm = tree_rm(
+    ...     "data/2024",
+    ...     ls=fs._ls,
+    ...     info=fs._info,
+    ...     rm_file=fs._rm_file,
+    ...     rm_folder=fs._rmdir,
+    ... )
+    >>> async with rm as op:
     ...     async for path in op:
     ...         if isinstance(path, Exception):
     ...             op.cancel()  # Stop at the first failure.
@@ -129,7 +143,9 @@ def tree_rm(
     1234
     """
     return Operation(
-        lambda op: _Deletion(fs, path, rm_folder, concurrency_limit, op).outcomes(),
+        lambda op: _Deletion(
+            ls, info, rm_file, rm_folder, path, concurrency_limit, op
+        ).outcomes(),
         RmState(),
     )
 
@@ -139,22 +155,25 @@ class _Deletion(_Jobs):
 
     def __init__(
         self,
-        fs: AsyncFileSystem,
+        ls: _Ls,
+        info: _Info,
+        rm_file: _Request,
+        rm_folder: _Request,
         path: str | Sequence[str],
-        rm_folder: Callable[[str], Awaitable[Any]] | None,
         concurrency_limit: asyncio.Semaphore | None,
         op: Operation[str, RmState],
     ) -> None:
-        super().__init__(fs, concurrency_limit, op)
+        super().__init__(ls, info, concurrency_limit, op)
         self.path = path
-        self.rm_folder = rm_folder or getattr(fs, "_rmdir", None) or fs._rm_file
+        self.rm_file = rm_file
+        self.rm_folder = rm_folder
         self.files_found = 0
         self.files_deleted = 0
         self.folders_deleted = 0
 
     async def prepare(self) -> _Roots:
         if not isinstance(self.path, str) or has_magic(self.path):
-            return await _expand(self.fs, self.path, self.concurrency_limit)
+            return await _expand(self.ls, self.info, self.path, self.concurrency_limit)
         return _Roots([self.path])
 
     def state(self) -> RmState:
@@ -182,7 +201,7 @@ class _Deletion(_Jobs):
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "folder":
             return self.rm_folder(job.source)
-        return self.fs._rm_file(job.source)
+        return self.rm_file(job.source)
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "folder":

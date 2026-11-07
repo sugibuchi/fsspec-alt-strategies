@@ -11,6 +11,11 @@ It suits storages that list one folder per request, and those whose folders
 can be pruned. On object stores, one recursive listing usually costs fewer
 requests: `fsspec.asyn.AsyncFileSystem._find` there.
 
+The tree strategies take the storage's operations as functions, such as
+``ls``, rather than a filesystem: e.g. a filesystem's ``_ls``. They call each
+as fsspec calls its own, and take paths as those functions do, without a
+protocol.
+
 This module depends on `control`.
 """
 
@@ -26,8 +31,13 @@ from ..control import Operation, State
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Collection
+    from typing import TypeAlias
 
-    from fsspec.asyn import AsyncFileSystem
+    _Ls: TypeAlias = Callable[..., Awaitable[list[dict[str, Any]]]]
+    """Lists a folder, called as ``ls(path, detail=True)``, as fsspec's ``_ls``."""
+
+    _Info: TypeAlias = Callable[[str], Awaitable[dict[str, Any]]]
+    """Describes a path, called as ``info(path)``, as fsspec's ``_info``."""
 
 __all__ = ["WalkState", "tree_walk"]
 
@@ -49,9 +59,9 @@ class WalkState(State):
 
 
 def tree_walk(
-    fs: AsyncFileSystem,
     path: str,
     *,
+    ls: _Ls,
     maxdepth: int | None = None,
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
@@ -60,7 +70,7 @@ def tree_walk(
 ) -> Operation[dict[str, Any], WalkState]:
     """Walk a folder tree, listing several folders at a time.
 
-    It yields the ``_ls`` entry of each file and folder below ``path``, but not
+    It yields the ``ls`` entry of each file and folder below ``path``, but not
     ``path`` itself. The folders' listings come in the order they arrive, not
     in the tree's order. A folder that fails to list yields its error, and the
     walk goes on with the other folders.
@@ -79,21 +89,22 @@ def tree_walk(
     - with ``raise_on_error``, the error of the first folder that failed to
       list.
 
-    Requests: one ``_ls`` per folder walked, as ``concurrency_limit`` allows.
+    Requests: one ``ls`` per folder walked, as ``concurrency_limit`` allows.
 
     Parameters
     ----------
-    fs : fsspec.asyn.AsyncFileSystem
-        The filesystem.
     path : str
-        The folder to start from.
+        The folder to start from, as ``ls`` takes it.
+    ls : callable
+        Lists a folder, called as ``ls(path, detail=True)``: e.g. the
+        filesystem's ``_ls``.
     maxdepth : int, optional
         The deepest level to list: 1 lists only ``path``. No limit by default.
     topdown : bool
         Whether a folder's entries come before those below it, rather than
         after.
     descend : callable, optional
-        Called with the ``_ls`` entry of each subfolder found. The walk lists it
+        Called with the ``ls`` entry of each subfolder found. The walk lists it
         only if this returns True. All by default.
     raise_on_error : bool
         Whether a folder that fails to list raises its error, ending the walk,
@@ -105,7 +116,7 @@ def tree_walk(
     Returns
     -------
     Operation
-        Yielding the ``_ls`` entry of each file and folder found, or the error
+        Yielding the ``ls`` entry of each file and folder found, or the error
         of a folder that failed to list. Its state is a `WalkState`.
 
     Raises
@@ -120,7 +131,8 @@ def tree_walk(
     Examples
     --------
     >>> limit = asyncio.Semaphore(16)  # Shared, e.g. by a filesystem's operations.
-    >>> async with tree_walk(fs, "data", concurrency_limit=limit) as entries:
+    >>> walk = tree_walk("data", ls=fs._ls, concurrency_limit=limit)
+    >>> async with walk as entries:
     ...     async for entry in entries:
     ...         if isinstance(entry, Exception):
     ...             raise entry
@@ -132,7 +144,7 @@ def tree_walk(
         op: Operation[dict[str, Any], WalkState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         listings = _listings(
-            fs,
+            ls,
             path,
             maxdepth=maxdepth,
             topdown=topdown,
@@ -161,6 +173,14 @@ def tree_walk(
 def _check_maxdepth(maxdepth: int | None) -> None:
     if maxdepth is not None and maxdepth < 1:
         raise ValueError(f"maxdepth must be at least 1: {maxdepth}")
+
+
+def _trim(path: str) -> str:
+    """A path without its trailing "/", as fsspec's ``_strip_protocol`` leaves it.
+
+    A storage's root stays as it is, e.g. "/" on a local filesystem.
+    """
+    return path.rstrip("/") or path
 
 
 _DEFAULT_CONCURRENCY_LIMIT = 32
@@ -234,7 +254,7 @@ class _Listing:
     """A folder's listing, as ``_listings`` yields it.
 
     ``depth`` is 1 for the folder the walk started from, 2 for its subfolders,
-    and so on. ``entries`` are as the filesystem's ``_ls`` gives them, without
+    and so on. ``entries`` are as ``ls`` gives them, without
     the folder itself, and empty if the listing failed with ``error``.
     """
 
@@ -245,7 +265,7 @@ class _Listing:
 
 
 async def _listings(
-    fs: AsyncFileSystem,
+    ls: _Ls,
     path: str | Collection[str],
     *,
     maxdepth: int | None = None,
@@ -274,7 +294,7 @@ async def _listings(
     Each listing holds a permit of ``concurrency_limit`` while it runs.
     """
     _check_maxdepth(maxdepth)
-    roots = {fs._strip_protocol(p) for p in ([path] if isinstance(path, str) else path)}
+    roots = {_trim(p) for p in ([path] if isinstance(path, str) else path)}
     permits = _Permits(_limit(concurrency_limit))
     waiting: deque[tuple[str, int]] = deque()
     running: dict[asyncio.Task[list[dict[str, Any]]], tuple[str, int]] = {}
@@ -285,7 +305,7 @@ async def _listings(
             waiting.clear()
         while waiting and await permits.take():
             folder, depth = waiting.popleft()
-            running[permits.start(fs._ls(folder, detail=True))] = folder, depth
+            running[permits.start(ls(folder, detail=True))] = folder, depth
 
     waiting.extend((root, 1) for root in sorted(roots))
     await start()
@@ -317,7 +337,8 @@ async def _listings(
 
 
 async def _scan(
-    fs: AsyncFileSystem,
+    ls: _Ls,
+    info: _Info,
     path: str,
     *,
     maxdepth: int | None = None,
@@ -333,16 +354,16 @@ async def _scan(
     itself as fsspec's ``_find`` and ``_glob`` do:
 
     - missing, it yields nothing;
-    - a file, it yields the file's ``_info`` entry if ``file_root``, else
+    - a file, it yields the file's ``info`` entry if ``file_root``, else
       nothing;
-    - a folder, it yields the folder's own ``_info`` entry after its listing,
+    - a folder, it yields the folder's own ``info`` entry after its listing,
       if ``folder_root`` and the walk is not stopping.
     """
-    root = fs._strip_protocol(path)
+    root = _trim(path)
     listed = False
     try:
         listings = _listings(
-            fs,
+            ls,
             root,
             maxdepth=maxdepth,
             descend=descend,
@@ -354,13 +375,13 @@ async def _scan(
                 first, listed = not listed, True
                 yield listing
                 if first and folder_root and not (stopping and stopping()):
-                    yield await fs._info(root)
+                    yield await info(root)
     except (FileNotFoundError, NotADirectoryError) as e:
         # Only the root's own listing raises them: any later one is yielded.
         if listed:
             raise
         if file_root and isinstance(e, NotADirectoryError):
-            yield await fs._info(root)
+            yield await info(root)
 
 
 def _listing(
@@ -370,7 +391,7 @@ def _listing(
     roots: set[str],
     raise_on_error: bool,
 ) -> _Listing:
-    """The listing a finished ``_ls`` task gives, or its error."""
+    """The listing a finished ``ls`` task gives, or its error."""
     try:
         entries = task.result()
     except Exception as e:

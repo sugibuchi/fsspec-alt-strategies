@@ -30,13 +30,16 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
 ## The traps
 
 - Never use names suggesting ownership of fsspec's fundamentals, such as "base" or "core" packages of fsspec.
-- Each strategy is a stateless function taking a filesystem. Filesystem classes only wrap those functions. File
-  objects, in `files/`, and `control.Operation` are the exceptions: see DEVELOPMENT.md's "File objects".
-- A strategy calls only the filesystem's primitives, such as `_ls`, `_info` and `_rm_file`. It never calls another
-  high-level method, such as `_find` or `_glob`: another strategy may have replaced it. A strategy needing another
-  takes it as a parameter.
+- Each strategy is a stateless function taking the storage's operations as functions, never a filesystem: e.g.
+  `ls=fs._ls`. Filesystem classes only wrap those functions. File objects, in `files/`, and `control.Operation` are the
+  exceptions: see DEVELOPMENT.md's "File objects".
+- A strategy takes only primitive operations, such as `ls`, `info` and `rm_file`, called as fsspec calls its own,
+  e.g. `ls(path, detail=True)`. It never takes a high-level one, such as `_find` or `_glob`: another strategy may have
+  replaced it. A strategy needing another takes it as a parameter. Paths come without a protocol, as the operations
+  take them.
 - Every strategy follows DEVELOPMENT.md's "The strategy API":
-  - it is a plain function, `strategy(fs, ..., concurrency_limit=...)`, the limit an `asyncio.Semaphore`,, returning an `Operation` that works as it is iterated;
+  - it is a plain function, `strategy(paths, *, ls=..., ..., concurrency_limit=...)`, the operations keyword-only and
+    required, the limit an `asyncio.Semaphore`, returning an `Operation` that works as it is iterated;
   - the operation yields what it did mixed with exception objects, one per failed path, each noting its path;
   - it raises only errors ending the whole operation, such as a missing root;
   - its stopping mirrors `asyncio.Task`: `cancel()` starts nothing new but yields what is in flight, and `aclose()`
@@ -45,7 +48,7 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
   Two layers, by what a strategy sends: one that only reads builds on `tree.walk._scan`, which handles the root; one
   that changes the storage builds on `tree._jobs._Jobs`. Never write another loop or root handling.
 - What a storage does that fsspec leaves open is declared, never detected, in `profile.StorageProfile`. A strategy
-  takes `profile=`, falling back on `fs.storage_profile`, then on unknown. Unknown must be correct on any storage; a
+  takes `profile=`, unknown if None. Unknown must be correct on any storage; a
   field only saves requests. Add a field only when a strategy saves requests with it.
 - A strategy's name tells its family, e.g. `tree_rm` and `tree_glob`, never a bare `rm` or `glob`. Code using fsspec
   has those names already, as methods and modules.

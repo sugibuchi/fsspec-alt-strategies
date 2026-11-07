@@ -18,17 +18,16 @@ from typing import TYPE_CHECKING, Any
 from fsspec.utils import common_prefix
 
 from ..control import Operation, State
-from ..profile import _resolve
+from ..profile import StorageProfile
 from ._jobs import _expand, _Job, _Jobs, _Roots
+from .walk import _trim
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Sequence
 
-    from fsspec.asyn import AsyncFileSystem
-
-    from ..profile import StorageProfile
-    from .walk import _Listing
+    from ._jobs import _Request
+    from .walk import _Info, _Listing, _Ls
 
 __all__ = ["CpState", "tree_cp"]
 
@@ -50,10 +49,14 @@ class CpState(State):
 
 
 def tree_cp(
-    fs: AsyncFileSystem,
     path1: str | Sequence[str],
     path2: str,
     *,
+    ls: _Ls,
+    info: _Info,
+    cp_file: _Request,
+    makedirs: _Request,
+    rm_file: _Request,
     profile: StorageProfile | None = None,
     concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[tuple[str, str], CpState]:
@@ -83,7 +86,7 @@ def tree_cp(
     one only.
 
     The tree is walked as `tree_walk` walks it. Each folder's files are copied
-    as soon as the folder is listed, each by a ``_cp_file``. A folder is
+    as soon as the folder is listed, each by a ``cp_file``. A folder is
     created at the destination before files are copied into it, and for each
     empty folder.
 
@@ -100,28 +103,41 @@ def tree_cp(
     yielding them. Iterating it raises FileNotFoundError if ``path1`` does not
     exist, or matches nothing, and ValueError if ``path2`` is inside it.
 
-    Requests: one ``_info`` for ``path2``, unless it ends with "/" or ``path1``
+    Requests: one ``info`` for ``path2``, unless it ends with "/" or ``path1``
     is a pattern or a list. Patterns, or a list, add the requests of their
-    `tree_glob`. One ``_ls``
-    per folder, one ``_cp_file`` per file, and one ``_makedirs`` per
-    destination folder with files or empty. A storage refusing to overwrite
-    costs an ``_rm_file`` and a ``_cp_file`` more per file it refused. Each
-    request holds a permit of ``concurrency_limit`` while it runs.
+    `tree_glob`. One ``ls`` per folder, one ``cp_file`` per file, and one
+    ``makedirs`` per destination folder with files or empty. A storage
+    refusing to overwrite costs an ``rm_file`` and a ``cp_file`` more per file
+    it refused. Each request holds a permit of ``concurrency_limit`` while it
+    runs.
 
-    The profile's ``parents_required=False`` saves the ``_makedirs`` of each
+    The profile's ``parents_required=False`` saves the ``makedirs`` of each
     folder with files, as their copies create it.
 
     Parameters
     ----------
-    fs : fsspec.asyn.AsyncFileSystem
-        The filesystem.
     path1 : str or sequence of str
-        The folder or file to copy, a glob pattern, or a list of them.
+        The folder or file to copy, a glob pattern, or a list of them, as
+        ``ls`` takes paths.
     path2 : str
         Where to copy it, as above.
+    ls : callable
+        Lists a folder, called as ``ls(path, detail=True)``: e.g. the
+        filesystem's ``_ls``.
+    info : callable
+        Describes a path, called as ``info(path)``: e.g. the filesystem's
+        ``_info``.
+    cp_file : callable
+        Copies a file, called as ``cp_file(source, destination)``: e.g. the
+        filesystem's ``_cp_file``.
+    makedirs : callable
+        Creates a folder and its parents, called as
+        ``makedirs(path, exist_ok=True)``: e.g. the filesystem's ``_makedirs``.
+    rm_file : callable
+        Deletes a file, called as ``rm_file(path)``: e.g. the filesystem's
+        ``_rm_file``. Only a storage refusing to overwrite needs it.
     profile : StorageProfile, optional
-        What the storage does. The filesystem's ``storage_profile`` if None, if
-        it has one.
+        What the storage does. Unknown if None.
     concurrency_limit : asyncio.Semaphore, optional
         Held by each request while it runs. Share one to limit several
         operations, or files, together. The operation's own, of 32, if None.
@@ -139,16 +155,35 @@ def tree_cp(
 
     Examples
     --------
-    >>> async with tree_cp(fs, "data/2024", "backup/") as op:
+    >>> cp = tree_cp(
+    ...     "data/2024",
+    ...     "backup/",
+    ...     ls=fs._ls,
+    ...     info=fs._info,
+    ...     cp_file=fs._cp_file,
+    ...     makedirs=fs._makedirs,
+    ...     rm_file=fs._rm_file,
+    ... )
+    >>> async with cp as op:
     ...     async for copied in op:
     ...         if isinstance(copied, Exception):
     ...             print("failed:", copied)
     >>> op.state.files_copied
     1234
     """
-    resolved = _resolve(fs, profile)
     return Operation(
-        lambda op: _Copy(fs, path1, path2, resolved, concurrency_limit, op).outcomes(),
+        lambda op: _Copy(
+            path1,
+            path2,
+            ls=ls,
+            info=info,
+            cp_file=cp_file,
+            makedirs=makedirs,
+            rm_file=rm_file,
+            profile=profile or StorageProfile(),
+            concurrency_limit=concurrency_limit,
+            op=op,
+        ).outcomes(),
         CpState(),
     )
 
@@ -164,16 +199,24 @@ class _Copy(_Jobs):
 
     def __init__(
         self,
-        fs: AsyncFileSystem,
         path1: str | Sequence[str],
         path2: str,
+        *,
+        ls: _Ls,
+        info: _Info,
+        cp_file: _Request,
+        makedirs: _Request,
+        rm_file: _Request,
         profile: StorageProfile,
         concurrency_limit: asyncio.Semaphore | None,
         op: Operation[Any, Any],
     ) -> None:
-        super().__init__(fs, concurrency_limit, op)
+        super().__init__(ls, info, concurrency_limit, op)
         self.path1 = path1
         self.path2 = path2
+        self.cp_file = cp_file
+        self.makedirs = makedirs
+        self.rm_file = rm_file
         self.parents_required = profile.parents_required is not False
         self.prefix = ""
         self.base = ""
@@ -199,12 +242,14 @@ class _Copy(_Jobs):
         ``self.base``. For a list, a path under a root of ``self.places`` goes
         there instead.
         """
-        destination = self.fs._strip_protocol(self.path2)
+        destination = _trim(self.path2)
         if not isinstance(self.path1, str):
             roots = await self._place(destination)
             sources = [*roots.folders, *roots.files]
         elif has_magic(self.path1):
-            roots = await _expand(self.fs, self.path1, self.concurrency_limit)
+            roots = await _expand(
+                self.ls, self.info, self.path1, self.concurrency_limit
+            )
             sources = [*roots.folders, *roots.files]
             if not sources:
                 return roots  # Only errors, to yield.
@@ -214,7 +259,7 @@ class _Copy(_Jobs):
                 self.prefix = self.prefix.rpartition("/")[0]
             self.base = destination
         else:
-            root = self.fs._strip_protocol(self.path1)
+            root = _trim(self.path1)
             if root == destination:
                 return None
             roots = _Roots([root])
@@ -238,7 +283,7 @@ class _Copy(_Jobs):
         does, the first, in path order, goes, and each other is an error. That
         error is the root's own: what is in it is not copied either.
         """
-        roots = await _expand(self.fs, self.path1, self.concurrency_limit)
+        roots = await _expand(self.ls, self.info, self.path1, self.concurrency_limit)
         folders = set(roots.folders)
         placed: dict[str, str] = {}
         errors = list(roots.errors)
@@ -267,7 +312,7 @@ class _Copy(_Jobs):
             into = True
         else:
             try:
-                into = (await self.fs._info(destination))["type"] == "directory"
+                into = (await self.info(destination))["type"] == "directory"
             except FileNotFoundError:
                 into = False
         if not into or self.path1.endswith("/"):
@@ -319,17 +364,17 @@ class _Copy(_Jobs):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
-            return self.fs._makedirs(job.destination, exist_ok=True)
+            return self.makedirs(job.destination, exist_ok=True)
         return self.copy_file(job.source, job.destination)
 
     async def copy_file(self, source: str, destination: str) -> None:
         try:
             try:
-                await self.fs._cp_file(source, destination)
+                await self.cp_file(source, destination)
             except FileExistsError:
                 # The storage refuses to overwrite, which fsspec's copy does.
-                await self.fs._rm_file(destination)
-                await self.fs._cp_file(source, destination)
+                await self.rm_file(destination)
+                await self.cp_file(source, destination)
         except Exception as e:
             # Yielded among paths, the error must tell its paths itself.
             e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")

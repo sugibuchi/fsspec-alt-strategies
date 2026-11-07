@@ -16,13 +16,13 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from ..control import Operation, State
-from .walk import _check_maxdepth, _scan
+from .walk import _check_maxdepth, _scan, _trim
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator
 
-    from fsspec.asyn import AsyncFileSystem
+    from .walk import _Info, _Ls
 
 __all__ = ["FindState", "tree_find"]
 
@@ -44,9 +44,10 @@ class FindState(State):
 
 
 def tree_find(
-    fs: AsyncFileSystem,
     path: str,
     *,
+    ls: _Ls,
+    info: _Info,
     maxdepth: int | None = None,
     withdirs: bool = False,
     concurrency_limit: asyncio.Semaphore | None = None,
@@ -68,16 +69,20 @@ def tree_find(
     Once cancelled, it lists no new folder, and yields the paths of the
     listings in flight.
 
-    Requests: one ``_ls`` per folder, as ``concurrency_limit`` allows. One
-    ``_info`` more for ``path`` itself, if a file, or a folder with
+    Requests: one ``ls`` per folder, as ``concurrency_limit`` allows. One
+    ``info`` more for ``path`` itself, if a file, or a folder with
     ``withdirs``.
 
     Parameters
     ----------
-    fs : fsspec.asyn.AsyncFileSystem
-        The filesystem.
     path : str
-        The folder to search.
+        The folder to search, as ``ls`` takes it.
+    ls : callable
+        Lists a folder, called as ``ls(path, detail=True)``: e.g. the
+        filesystem's ``_ls``.
+    info : callable
+        Describes a path, called as ``info(path)``: e.g. the filesystem's
+        ``_info``.
     maxdepth : int, optional
         The deepest level to search: 1 finds only the files in ``path``. No
         limit by default.
@@ -90,7 +95,7 @@ def tree_find(
     Returns
     -------
     Operation
-        Yielding the ``_ls`` entry of each path found, or the error of a folder
+        Yielding the ``ls`` entry of each path found, or the error of a folder
         that failed to list. Its state is a `FindState`.
 
     Raises
@@ -105,7 +110,7 @@ def tree_find(
 
     Examples
     --------
-    >>> entries, errors = await collect(tree_find(fs, "data"))
+    >>> entries, errors = await collect(tree_find("data", ls=fs._ls, info=fs._info))
     >>> sorted(e["name"] for e in entries), errors
     (['data/2024/01/part-0.parquet', 'data/2024/02/part-0.parquet'], [])
     """
@@ -114,9 +119,10 @@ def tree_find(
     async def run(
         op: Operation[dict[str, Any], FindState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
-        root = fs._strip_protocol(path)
+        root = _trim(path)
         steps = _scan(
-            fs,
+            ls,
+            info,
             root,
             maxdepth=maxdepth,
             concurrency_limit=concurrency_limit,

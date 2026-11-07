@@ -27,12 +27,15 @@ from .glob import tree_glob
 from .walk import _limit, _listings, _Permits
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Sequence
-
-    from fsspec.asyn import AsyncFileSystem
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+    from typing import TypeAlias
 
     from ..control import Operation
-    from .walk import _Listing
+    from .walk import _Info, _Listing, _Ls
+
+    # For the strategies' signatures, as walk's _Ls is: none here takes one.
+    _Request: TypeAlias = Callable[..., Awaitable[Any]]  # noqa: PYI047
+    """A request changing the storage, e.g. fsspec's ``_rm_file``."""
 
 
 class _Job(NamedTuple):
@@ -57,7 +60,8 @@ class _Roots(NamedTuple):
 
 
 async def _expand(
-    fs: AsyncFileSystem,
+    ls: _Ls,
+    info: _Info,
     pattern: str | Sequence[str],
     concurrency_limit: asyncio.Semaphore | None,
 ) -> _Roots:
@@ -67,7 +71,7 @@ async def _expand(
     it. Matching nothing raises FileNotFoundError, as fsspec does.
     """
     matches, errors = await collect(
-        tree_glob(fs, pattern, concurrency_limit=concurrency_limit)
+        tree_glob(pattern, ls=ls, info=info, concurrency_limit=concurrency_limit)
     )
     if not matches and not errors:
         raise FileNotFoundError(pattern)
@@ -91,11 +95,13 @@ class _Jobs(ABC):
 
     def __init__(
         self,
-        fs: AsyncFileSystem,
+        ls: _Ls,
+        info: _Info,
         concurrency_limit: asyncio.Semaphore | None,
         op: Operation[Any, Any],
     ) -> None:
-        self.fs = fs
+        self.ls = ls
+        self.info = info
         # The listings, the jobs, and a pattern's glob share it.
         self.concurrency_limit = _limit(concurrency_limit)
         self.permits = _Permits(self.concurrency_limit)
@@ -209,7 +215,7 @@ class _Jobs(ABC):
         if not roots.folders:
             return None
         return _listings(
-            self.fs,
+            self.ls,
             roots.folders,
             concurrency_limit=self.concurrency_limit,
             stopping=self.op.cancelling,
