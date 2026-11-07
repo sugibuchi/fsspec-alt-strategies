@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """How an operation is run to its end, and watched by monitors meanwhile.
 
-`_collect` runs an operation to its end, returning all it yielded. `_watched`
-and `_collected` run an operation for an fsspec call, telling the monitors of
-the `monitoring` blocks around it, and fsspec's ``callback=``.
+From what its callers use to what that builds on:
+
+- `_collect` runs an operation to its end, returning all it yielded.
+- `_collected` does so for an fsspec call, as the call's monitors watch it.
+- `_watched` runs an operation for an fsspec call, yielding its items, telling
+  the monitors of the `monitoring` blocks around it, and fsspec's ``callback=``.
+- `_Counting` is the monitor fsspec's ``callback=`` is told through.
 
 This module depends on `control`.
 """
@@ -42,19 +46,11 @@ async def _collect(
     return found, errors
 
 
-class _Counting(Monitor):
-    """fsspec's ``callback=``, told of each path done, as fsspec's ``put`` tells it.
-
-    The total is not known ahead, as the operation lists while it works, so the
-    callback's size stays as its caller set it.
-    """
-
-    def __init__(self, callback: Any) -> None:
-        self.callback = callback
-
-    async def yielded(self, call: Call, op: Operation[Any, Any], item: Any) -> None:
-        if not isinstance(item, Exception):
-            self.callback.relative_update(1)
+async def _collected(
+    operation: Operation[Any, Any], call: Call, callback: Any = None
+) -> tuple[list[Any], list[Exception]]:
+    """`_collect` of an operation, as its monitors watch it."""
+    return await _collect(_watched(operation, call, callback))
 
 
 async def _watched(
@@ -90,8 +86,16 @@ async def _watched(
             await monitor.ended(call, operation, error)
 
 
-async def _collected(
-    operation: Operation[Any, Any], call: Call, callback: Any = None
-) -> tuple[list[Any], list[Exception]]:
-    """`_collect` of an operation, as its monitors watch it."""
-    return await _collect(_watched(operation, call, callback))
+class _Counting(Monitor):
+    """fsspec's ``callback=``, told of each path done, as fsspec's ``put`` tells it.
+
+    The total is not known ahead, as the operation lists while it works, so the
+    callback's size stays as its caller set it.
+    """
+
+    def __init__(self, callback: Any) -> None:
+        self.callback = callback
+
+    async def yielded(self, call: Call, op: Operation[Any, Any], item: Any) -> None:
+        if not isinstance(item, Exception):
+            self.callback.relative_update(1)
