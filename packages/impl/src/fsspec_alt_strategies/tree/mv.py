@@ -104,8 +104,8 @@ def tree_mv(
     ``cp_file``, and one ``rm_folder`` per folder. With ``renames_folders``,
     each folder root first costs an ``info`` of its target, unless ``path2``
     was found missing already, a ``makedirs`` of its parent, and its
-    ``mv_file``: a root moved whole costs nothing more. Each request holds a permit of ``concurrency_limit`` while
-    it runs.
+    ``mv_file``: a root moved whole costs nothing more. Each request holds a
+    permit of ``concurrency_limit`` while it runs.
 
     The profile's ``parents_required=False`` saves the ``makedirs`` of each
     folder with files, as their moves create it. Its ``implicit_folders=True``
@@ -129,7 +129,7 @@ def tree_mv(
         with it too, as the profile's ``renames_folders`` declares.
     rm_folder : callable
         Deletes an empty folder, as with `tree_rm`.
-    profile : StorageProfile, optional
+    profile : StorageProfile
         What the storage does: ``StorageProfile()`` if it is unknown.
     concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several

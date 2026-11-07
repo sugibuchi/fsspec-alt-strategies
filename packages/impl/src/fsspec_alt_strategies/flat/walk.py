@@ -12,6 +12,7 @@ This module depends on `_keys`, and `operation` and `paths` of `common`.
 
 from __future__ import annotations
 
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies_common.states import WalkState
@@ -134,12 +135,10 @@ def flat_walk(
             concurrency_limit=concurrency_limit,
             stopping=op.cancelling,
         )
-        try:
+        async with aclosing(entries):
             async for entry in entries:
                 op.state = WalkState(current=entry["name"], found=op.state.found + 1)
                 yield entry
-        finally:
-            await entries.aclose()
 
     return Operation(run, WalkState())
 

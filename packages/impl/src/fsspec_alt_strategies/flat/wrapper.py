@@ -35,11 +35,6 @@ if TYPE_CHECKING:
 __all__ = ["AsyncFlatWrapper", "SyncFlatWrapper"]
 
 
-def _under(found: dict[str, dict[str, Any]], prefix: str) -> list[dict[str, Any]]:
-    """The entries of a ``find`` starting with ``prefix``, as ``ils`` yields them."""
-    return [e for name, e in found.items() if name.startswith(prefix)]
-
-
 class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
     """An async filesystem, as a `FlatFileSystem`: its recursive methods the flat strategies.
 
@@ -81,7 +76,11 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
     Examples
     --------
     >>> flat = AsyncFlatWrapper(
-    ...     s3, rm_batch_size=1000, operation_concurrency=64, io_concurrency=8
+    ...     s3,
+    ...     rm_batch_size=1000,
+    ...     operation_concurrency=64,
+    ...     io_concurrency=8,
+    ...     storage_profile=StorageProfile(),
     ... )
     >>> with monitoring(Progress()):
     ...     flat.rm("bucket/data/2024", recursive=True)
@@ -164,7 +163,11 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
     Examples
     --------
     >>> flat = SyncFlatWrapper(
-    ...     fs, rm_batch_size=1000, operation_concurrency=8, io_concurrency=4
+    ...     fs,
+    ...     rm_batch_size=1000,
+    ...     operation_concurrency=8,
+    ...     io_concurrency=4,
+    ...     storage_profile=StorageProfile(),
     ... )
     >>> flat.find("bucket/data")
     """
@@ -205,3 +208,8 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
     async def _rm_if_there(self, path: str) -> None:
         with contextlib.suppress(FileNotFoundError):
             await asyncio.to_thread(self.fs.rm_file, path)
+
+
+def _under(found: dict[str, dict[str, Any]], prefix: str) -> list[dict[str, Any]]:
+    """The entries of a ``find`` starting with ``prefix``, as ``ils`` yields them."""
+    return [e for name, e in found.items() if name.startswith(prefix)]

@@ -55,9 +55,9 @@ class FlatFileSystem(_StrategyFileSystem):
     files in one request, with ``rm_batch_size``. It implements those fsspec
     leaves abstract too: ``_ls``, for fsspec's own methods, ``_info``,
     ``_rm_file`` and ``_cp_file``. It implements ``open_async``, giving its
-    files ``io_limit`` as their concurrency limit, and ``_open``. ``_cat_file``, ``_pipe_file``,
-    ``_get_file`` and ``_put_file`` read and write through ``open_async``'s
-    files.
+    files ``io_limit`` as their concurrency limit, and ``_open``. The data
+    methods, ``_cat_file``, ``_pipe_file``, ``_get_file`` and ``_put_file``,
+    read and write through ``open_async``'s files.
 
     Two limits bound its requests, each an `asyncio.Semaphore` of its own:
 

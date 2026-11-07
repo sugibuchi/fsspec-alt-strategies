@@ -124,7 +124,7 @@ def tree_cp(
     rm_file : callable
         Deletes a file, called as ``rm_file(path)``: e.g. the filesystem's
         ``_rm_file``. Only a storage refusing to overwrite needs it.
-    profile : StorageProfile, optional
+    profile : StorageProfile
         What the storage does: ``StorageProfile()`` if it is unknown.
     concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several

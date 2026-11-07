@@ -31,8 +31,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, Sequence
 
-    from ..common.types import _Info
-    from ._keys import _Ils
+    from ..common.types import _Ils, _Info
 
 __all__ = ["GlobState", "flat_glob"]
 

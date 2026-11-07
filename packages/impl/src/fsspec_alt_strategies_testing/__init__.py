@@ -47,7 +47,7 @@ class CallStats:
     ----------
     calls : collections.Counter
         The number of requests of each kind: "list", "info", "read", "write",
-        "delete", "copy" and "mkdir". A listing counts a request per page.
+        "delete", "copy", "rename" and "mkdir". A listing counts a request per page.
     max_concurrency : int
         The most requests in flight at once.
     transferred : collections.Counter
@@ -331,13 +331,6 @@ class SimulatedFileSystem(AsyncFileSystem):
         self._check_writable(path2)
         self._write(path2, data)
 
-    def _check_writable(self, path: str) -> None:
-        """Raise as a storage would, if its settings forbid writing ``path``."""
-        if self.parents_required and _parent_of(path) not in self._folders:
-            raise FileNotFoundError(_parent_of(path))
-        if not self.overwrite and path in self._file_data:
-            raise FileExistsError(path)
-
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         path = self._strip_protocol(path)
         await self._request("delete")
@@ -509,6 +502,13 @@ class SimulatedFileSystem(AsyncFileSystem):
             for p in self._descendants(path)
             if self.hierarchical or p in self._file_data
         ]
+
+    def _check_writable(self, path: str) -> None:
+        """Raise as a storage would, if its settings forbid writing ``path``."""
+        if self.parents_required and _parent_of(path) not in self._folders:
+            raise FileNotFoundError(_parent_of(path))
+        if not self.overwrite and path in self._file_data:
+            raise FileExistsError(path)
 
     def _make_dirs(self, path: str) -> None:
         if path in self._folders:

@@ -216,7 +216,8 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         self._settled = 0
         # The bytes read in sequence since the last seek away.
         self._run = 0
-        # Blocks no longer ahead of the position, by start, the least recently used first.
+        # Blocks no longer ahead of the position, by start, the least recently
+        # used first.
         self._kept: OrderedDict[int, tuple[int, bytes]] = OrderedDict()
         self._kept_bytes = 0
 
@@ -432,9 +433,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     - Until ``min_multipart_size`` bytes are written, they are buffered. A file
       closed by then is uploaded in one request.
     - Beyond, parts are uploaded as soon as they fill, as the concurrency
-      limit allows, while writing goes on. A file that has had n bytes written is assumed to
-      get n more: its parts grow, so as to split that into ``spread`` parts,
-      from ``min_block_size`` up to ``max_block_size``.
+      limit allows, while writing goes on. A file that has had n bytes
+      written is assumed to get n more: its parts grow, so as to split that
+      into ``spread`` parts, from ``min_block_size`` up to ``max_block_size``.
     - A write waits while the concurrency limit allows no upload. So the
       memory a file holds is its parts in flight, at most one per permit, and
       one part being filled. A limit shared by files bounds their parts in

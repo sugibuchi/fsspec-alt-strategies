@@ -41,7 +41,7 @@ class _AsyncFile(io.RawIOBase):
 
     The async counterparts are ``_read``, ``_write``, ``_flush`` and
     ``aclose``. A file not supporting one keeps the default here, which raises
-    `io.UnsupportedOperation`. ``seek`` and ``tell`` have none: as in fsspec's
+    `io.UnsupportedOperation`. ``seek`` and ``tell`` need none: as in fsspec's
     async files, they must send no request on the loop.
 
     ``flush(force=True)`` finishes the file as closing does, as fsspec's files

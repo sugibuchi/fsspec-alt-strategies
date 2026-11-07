@@ -110,8 +110,9 @@ def flat_mv(
     batch_size : int, optional
         The most keys of one ``rm_files``, e.g. 1000 on S3. ``cp_file``,
         ``rm_files`` and ``batch_size`` are given together, or not at all.
-    profile : StorageProfile, optional
-        What the storage does: ``StorageProfile()`` if it is unknown.
+    profile : StorageProfile
+        What the storage does: ``StorageProfile()`` if it is unknown. Its
+        ``renames_files`` chooses the way when both are given.
     concurrency_limit : asyncio.Semaphore
         Held by each request but the listing while it runs. Share one to
         limit several operations, or files, together.

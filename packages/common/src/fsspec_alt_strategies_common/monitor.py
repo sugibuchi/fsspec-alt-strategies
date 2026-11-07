@@ -8,11 +8,14 @@ caller sees of it, whatever copy it comes from, is here:
 
 - `State`, its progress so far;
 - `OperationHandler`, to stop it as an asyncio task is stopped, and tell how
-  it ended.
+  it ended;
+- `Monitored`, the marker of a filesystem whose calls monitors watch.
 
 `TreeFileSystem` and `FlatFileSystem` answer fsspec's methods, e.g. ``copy``,
 by running an operation to its end, so their callers see only the answer. A
-`Monitor` sees the operation itself, as it runs, within a `monitoring` block:
+`Monitor` sees the operation itself, as it runs, within a `monitoring` block.
+It is told the `Call` the operation answers, and a call it stops raises
+`CallCancelled`:
 
 >>> class Progress(Monitor):
 ...     async def yielded(self, call, item, state, op):
@@ -166,7 +169,7 @@ class Monitor:
     """What watches the operations of the calls within a `monitoring` block.
 
     A subclass overrides the methods it needs: each does nothing here. Each is
-    given what happened, the call and e.g. the item yielded, then the
+    given the call, then what happened, e.g. the item yielded, then the
     operation's state at that moment, then its handler, to act on it. Each is
     awaited where the operation runs, before it goes on: a slow monitor slows
     the call, as a slow loop body slows an operation. A monitor raising ends

@@ -102,7 +102,7 @@ def tree_rm(
         filesystem's ``_rmdir``, or its ``_rm_file`` as fsspec's ``_rm`` does
         without one. A FileNotFoundError from it counts as deleted, as object
         stores have no folders to delete.
-    profile : StorageProfile, optional
+    profile : StorageProfile
         What the storage does: ``StorageProfile()`` if it is unknown.
     concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several

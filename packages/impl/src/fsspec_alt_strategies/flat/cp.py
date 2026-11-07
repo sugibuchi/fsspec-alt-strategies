@@ -155,7 +155,7 @@ class _Copy(_Placing, _FlatJobs):
         self.files_found = 0
         self.files_done = 0
 
-    def state(self) -> Any:
+    def state(self) -> CpState:
         return CpState(
             errors=self.errors,
             current=self.current,

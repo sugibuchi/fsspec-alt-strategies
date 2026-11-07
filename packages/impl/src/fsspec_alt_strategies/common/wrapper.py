@@ -3,10 +3,10 @@
 """What the wrappers of the families share: the calls to the filesystem wrapped.
 
 A wrapper, e.g. `AsyncTreeWrapper`, is a family's filesystem class whose
-primitives are another filesystem's. `_AsyncFileSystemWrapper` calls an async one's
-coroutines, on its loop. `_SyncFileSystemWrapper` calls a sync one's methods, each in a
-thread. Both pass its own data methods, such as ``_cat_file``, on as they are,
-under ``io_limit``.
+primitives are another filesystem's. `_AsyncFileSystemWrapper` calls an async
+one's coroutines, on its loop. `_SyncFileSystemWrapper` calls a sync one's
+methods, each in a thread. Both pass the wrapped one's data methods, such as
+``_cat_file``, on as they are, under ``io_limit``.
 
 A wrapper is not cached, as fsspec caches filesystems: each is made on demand,
 e.g. to watch one call, and dropped after.

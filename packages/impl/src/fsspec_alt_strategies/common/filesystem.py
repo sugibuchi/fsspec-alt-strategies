@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """What the filesystem classes of the families share, e.g. `TreeFileSystem`'s.
 
-`_StrategyFileSystem` holds the two concurrency limits, and moves data through file
-objects: its ``_cat_file``, ``_pipe_file``, ``_get_file`` and ``_put_file``
-open the file with ``open_async``, which a subclass implements.
+`_StrategyFileSystem` holds the two concurrency limits, and moves data through
+file objects: its ``_cat_file``, ``_pipe_file``, ``_get_file`` and
+``_put_file`` open the file with ``open_async``, which a subclass implements.
 
 This module depends on nothing else in the package.
 """
