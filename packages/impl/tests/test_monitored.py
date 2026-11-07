@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from fsspec.implementations.local import LocalFileSystem
+from fsspec.implementations.memory import MemoryFileSystem
 
 from fsspec_alt_strategies.flat.wrapper import AsyncFlatWrapper
 from fsspec_alt_strategies.monitored import monitored
@@ -91,3 +92,15 @@ def test_the_known_local_filesystem(tmp_path: Path) -> None:
         tree.mv(f"{root}/data", f"{root}/moved", recursive=True)
     assert [(c.method, c.fs) for c in calls.calls] == [("mv", local)]
     assert local.cat_file(f"{root}/moved/a.txt") == b"a"
+
+
+def test_the_known_memory_filesystem() -> None:
+    memory = MemoryFileSystem()
+    # Its files are shared by every instance: a path of this test's own.
+    memory.pipe_file("/test_monitored/data/a.txt", b"a")
+    try:
+        tree = monitored(memory)
+        assert isinstance(tree, SyncTreeWrapper)
+        assert tree.find("/test_monitored") == ["/test_monitored/data/a.txt"]
+    finally:
+        memory.rm("/test_monitored", recursive=True)

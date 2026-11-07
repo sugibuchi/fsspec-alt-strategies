@@ -57,5 +57,41 @@ known_implementations: dict[str, KnownImplementation] = {
         "rm_batch_size": 1000,
         "storage_profile": StorageProfile(implicit_folders=True),
     },
+    "gcsfs.core.GCSFileSystem": {
+        "type": "flat",
+        "async": True,
+        "operation_concurrency": 32,
+        "io_concurrency": 8,
+        # As GCS's batch requests take at most 100 calls.
+        "rm_batch_size": 100,
+        # A bucket with a hierarchical namespace has folders of its own: unknown.
+        "storage_profile": StorageProfile(),
+    },
+    "fsspec.implementations.memory.MemoryFileSystem": {
+        "type": "tree",
+        "async": False,
+        "operation_concurrency": 4,
+        "io_concurrency": 4,
+        "storage_profile": StorageProfile(),
+    },
+    "fsspec.implementations.sftp.SFTPFileSystem": {
+        "type": "tree",
+        "async": False,
+        # One SSH channel, which paramiko does not share between threads.
+        "operation_concurrency": 1,
+        "io_concurrency": 1,
+        # Its mv is a rename, of a folder too; a file's folder must exist.
+        "storage_profile": StorageProfile(
+            parents_required=True, renames_files=True, renames_folders=True
+        ),
+    },
+    "fsspec.implementations.arrow.HadoopFileSystem": {
+        "type": "tree",
+        "async": False,
+        "operation_concurrency": 8,
+        "io_concurrency": 4,
+        # Its mv is HDFS's rename, of a folder too.
+        "storage_profile": StorageProfile(renames_files=True, renames_folders=True),
+    },
 }
 """The filesystems known, by the full name of their class, and how each is wrapped."""
