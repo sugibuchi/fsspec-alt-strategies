@@ -1,0 +1,265 @@
+"""Tests of `tree_cp`, placing paths as fsspec's ``copy`` does."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+from fsspec.asyn import AsyncFileSystem
+from fsspec.utils import other_paths
+
+from fsspec_alt_strategies.common.monitors import _collect
+from fsspec_alt_strategies.tree.cp import CpState, tree_cp
+from fsspec_alt_strategies_common.profile import StorageProfile
+from fsspec_alt_strategies_testing import SimulatedFileSystem
+
+
+def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
+    """`tree_cp` on a filesystem's own operations, which ``kwargs`` may replace."""
+    operations = {
+        "concurrency_limit": asyncio.Semaphore(32),
+        "ls": fs._ls,
+        "info": fs._info,
+        "cp_file": fs._cp_file,
+        "makedirs": fs._makedirs,
+        "rm_file": fs._rm_file,
+    }
+    return tree_cp(path1, path2, **{**operations, **kwargs})
+
+
+_FILES = [
+    "data/2023/01/part-0.parquet",
+    "data/2023/02/part-0.parquet",
+    "data/2024/01/part-0.parquet",
+    "data/README.md",
+]
+
+
+def _tree(fs: SimulatedFileSystem, prefix: str = "") -> None:
+    for path in _FILES:
+        fs.add_file(prefix + path, path.encode())
+    fs.add_file(prefix + "archive/old.txt")
+
+
+@pytest.mark.parametrize(
+    ("path1", "path2"),
+    [
+        ("data", "copied"),  # Onto a new path.
+        ("data", "archive"),  # Into an existing folder.
+        ("data", "new/"),  # Into a folder, by its trailing "/".
+        ("data/", "archive"),  # Its contents onto an existing folder.
+        ("data/README.md", "copied.md"),  # A file, onto a new path.
+        ("data/README.md", "archive"),  # A file, into a folder.
+    ],
+)
+async def test_places_as_fsspec(
+    any_fs: SimulatedFileSystem, path1: str, path2: str
+) -> None:
+    # In a bucket: fsspec's other_paths cannot place paths at the top level of
+    # a filesystem whose root is "", as it finds no "/" to split them at.
+    _tree(any_fs, "bucket/")
+    path1, path2 = f"bucket/{path1}", f"bucket/{path2}"
+    root = path1.rstrip("/")
+    files = sorted(p for p in any_fs._file_data if p.startswith(root + "/"))
+    paths = [root, *files] if files else [root]
+    dest_is_dir = path2.endswith("/") or path2.rstrip("/") in any_fs._folders
+    exists = dest_is_dir and not path1.endswith("/")
+    expected = dict(zip(paths, other_paths(paths, path2, exists=exists), strict=True))
+    data = {p: any_fs._file_data[p].data for p in paths if p in any_fs._file_data}
+
+    copied, errors = await _collect(_cp(any_fs, path1, path2))
+    assert errors == []
+    assert sorted(copied) == sorted((p, expected[p]) for p in data)
+    for source, content in data.items():
+        assert any_fs._file_data[expected[source]].data == content
+        assert any_fs._file_data[source].data == content  # The source is kept.
+
+
+@pytest.mark.parametrize(
+    ("pattern", "path2"),
+    [
+        ("data/*/01", "copied"),  # Folders, relative to their common prefix.
+        ("data/20*", "copied"),
+        ("data/**/*.parquet", "copied"),  # Files only.
+        ("data/*.md", "archive"),  # A single file goes into the destination.
+        ("data/2024/*", "copied/"),  # A single folder goes onto it.
+    ],
+)
+async def test_a_pattern_places_as_fsspec(
+    any_fs: SimulatedFileSystem, pattern: str, path2: str
+) -> None:
+    _tree(any_fs, "bucket/")
+    pattern, path2 = f"bucket/{pattern}", f"bucket/{path2}"
+    paths = await AsyncFileSystem._expand_path(any_fs, pattern, recursive=True)
+    # As fsspec's copy: a single path expanded goes into the destination.
+    destinations = other_paths(paths, path2, exists=len(paths) == 1)
+    expected = dict(zip(paths, destinations, strict=True))
+    files = [p for p in paths if p in any_fs._file_data]
+
+    copied, errors = await _collect(_cp(any_fs, pattern, path2))
+    assert errors == []
+    assert sorted(copied) == sorted((p, expected[p]) for p in files)
+
+
+@pytest.mark.parametrize(
+    ("paths", "path2"),
+    [
+        (["data/README.md", "data/2023/01/part-0.parquet"], "copied"),
+        (["data/*.md", "archive/old.txt"], "new/"),
+        (["missing", "data/README.md"], "copied"),  # A missing path is skipped.
+    ],
+)
+async def test_a_list_of_files_places_as_fsspec(
+    any_fs: SimulatedFileSystem, paths: list[str], path2: str
+) -> None:
+    _tree(any_fs)
+    files = await AsyncFileSystem._expand_path(any_fs, paths, recursive=True)
+    expected = dict(zip(files, other_paths(files, path2, flatten=True), strict=True))
+
+    copied, errors = await _collect(_cp(any_fs, paths, path2))
+    assert errors == []
+    assert sorted(copied) == sorted(expected.items())
+
+
+async def test_a_list_keeps_the_trees_of_its_folders(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    copied, errors = await _collect(
+        _cp(any_fs, ["data/2023", "data/2024/*", "data/README.md"], "copied")
+    )
+    assert errors == []
+    # As cp -r places them, where fsspec's copy puts every file in "copied".
+    assert sorted(copied) == [
+        ("data/2023/01/part-0.parquet", "copied/2023/01/part-0.parquet"),
+        ("data/2023/02/part-0.parquet", "copied/2023/02/part-0.parquet"),
+        ("data/2024/01/part-0.parquet", "copied/01/part-0.parquet"),
+        ("data/README.md", "copied/README.md"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("paths", "destination"),
+    [
+        (
+            ["data/2024/01/part-0.parquet", "data/2023/01/part-0.parquet"],
+            "copied/part-0.parquet",
+        ),
+        (["data/*/01"], "copied/01/part-0.parquet"),  # Folders.
+    ],
+)
+async def test_a_list_copies_only_the_first_of_a_name(
+    any_fs: SimulatedFileSystem, paths: list[str], destination: str
+) -> None:
+    _tree(any_fs)
+    copied, errors = await _collect(_cp(any_fs, paths, "copied"))
+    # The first in path order is copied, as GNU's cp does, never overwritten.
+    assert copied == [("data/2023/01/part-0.parquet", destination)]
+    assert any_fs._file_data[copied[0][1]].data == b"data/2023/01/part-0.parquet"
+    assert [type(e) for e in errors] == [FileExistsError]
+    assert "data/2024/01" in errors[0].__notes__[0]
+
+
+async def test_a_list_matching_nothing_raises(any_fs: SimulatedFileSystem) -> None:
+    _tree(any_fs)
+    with pytest.raises(FileNotFoundError):
+        await _collect(_cp(any_fs, ["missing", "data/*/13"], "copied"))
+
+
+async def test_a_pattern_onto_its_own_matches_is_refused(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    with pytest.raises(ValueError, match="into itself"):
+        await _collect(_cp(any_fs, "data/*", "data"))
+
+
+async def test_requests(hierarchical_fs: SimulatedFileSystem) -> None:
+    _tree(hierarchical_fs)
+    hierarchical_fs.add_dir("data/empty")
+    op = _cp(hierarchical_fs, "data", "copied")
+    copied, _ = await _collect(op)
+    assert len(copied) == 4
+    assert op.state == CpState(current=op.state.current, files_found=4, files_copied=4)
+    assert hierarchical_fs.stats.calls == {
+        "info": 1,  # Whether "copied" is a folder.
+        "list": 7,
+        # The folders with files, and the empty one: 2023 and 2024 hold only
+        # folders, which create them.
+        "mkdir": 5,
+        "copy": 4,
+    }
+    assert await hierarchical_fs._exists("copied/empty")
+
+    hierarchical_fs.reset_stats()
+    profile = StorageProfile(parents_required=False)
+    await _collect(_cp(hierarchical_fs, "data", "again", profile=profile))
+    assert hierarchical_fs.stats.calls["mkdir"] == 1  # Only the empty folder.
+
+
+async def test_a_storage_requiring_parents() -> None:
+    fs = SimulatedFileSystem(
+        hierarchical=True, parents_required=True, asynchronous=True
+    )
+    _tree(fs)
+    _, errors = await _collect(_cp(fs, "data", "new/deep/copied"))
+    assert errors == []
+    assert await fs._exists("new/deep/copied/2023/01/part-0.parquet")
+    _, errors = await _collect(_cp(fs, "data/README.md", "other/README.md"))
+    assert errors == []
+
+
+async def test_a_storage_refusing_to_overwrite() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, overwrite=False, asynchronous=True)
+    _tree(fs)
+    fs.add_file("target.md", b"old")
+    await _collect(_cp(fs, "data/README.md", "target.md"))
+    assert fs._file_data["target.md"].data == b"data/README.md"
+    # The refused copy, the old file's deletion, the copy again.
+    assert fs.stats.calls == {"info": 1, "list": 1, "copy": 2, "delete": 1}
+
+
+class _Locked(SimulatedFileSystem):
+    """Refuses to copy one file, as a storage without permission would."""
+
+    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
+        if self._strip_protocol(path1) == "data/2023/01/part-0.parquet":
+            raise PermissionError(path1)
+        await super()._cp_file(path1, path2, **kwargs)
+
+
+async def test_a_failure_is_yielded_and_the_rest_is_copied() -> None:
+    fs = _Locked(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    copied, errors = await _collect(_cp(fs, "data", "copied"))
+    assert [type(e) for e in errors] == [PermissionError]
+    assert errors[0].__notes__ == [
+        "Copying 'data/2023/01/part-0.parquet' to"
+        " 'copied/2023/01/part-0.parquet' failed."
+    ]
+    assert len(copied) == 3
+
+
+async def test_paths_it_refuses(any_fs: SimulatedFileSystem) -> None:
+    _tree(any_fs)
+    with pytest.raises(ValueError, match="Cannot copy 'data' into itself"):
+        await _collect(_cp(any_fs, "data", "data/inner"))
+    with pytest.raises(FileNotFoundError):
+        await _collect(_cp(any_fs, "missing", "copied"))
+
+
+async def test_cancel_yields_the_copies_sent() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
+    for i in range(10):
+        fs.add_file(f"root/file-{i}")
+    profile = StorageProfile(parents_required=False)
+    op = _cp(
+        fs, "root", "copied", profile=profile, concurrency_limit=asyncio.Semaphore(10)
+    )
+    copied = []
+    async for pair in op:
+        copied.append(pair)
+        op.cancel()
+    assert len(copied) == fs.stats.calls["copy"] == 10
+    assert op.cancelled()

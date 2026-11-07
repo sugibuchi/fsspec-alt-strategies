@@ -2,10 +2,23 @@
 
 ## Layout
 
+The repository is a uv workspace of two packages, each built and published on its own:
+
+- `packages/common`, the distribution `fsspec-alt-strategies-common`, is the interface the strategies share with
+  their callers. It is installed.
+- `packages/impl`, the distribution `fsspec-alt-strategies`, is the strategies, meant to be copied into a project,
+  and the simulated filesystem their tests use.
+
+The root holds the tooling: the ruff, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
+
 | Path                            | Contents                                                       |
 |---------------------------------|----------------------------------------------------------------|
-| `src/fsspec_alt_strategies/`    | The package.                                                   |
+| `packages/common/src/fsspec_alt_strategies_common/` | The interface, installed: one for all the copies in a project. |
 | `.../control.py`                | `Operation` and `State`: the strategy API. `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
+| `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
+| `.../states.py`                 | The states the strategies report, e.g. `FindState` of `tree_find` and `flat_find`. |
+| `packages/common/tests/`        | The interface's tests, which never import the strategies.      |
+| `packages/impl/src/fsspec_alt_strategies/` | The strategies, copied.                              |
 | `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
 | `.../tree/walk.py`              | `tree_walk`, the concurrent folder walk under the tree strategies.  |
 | `.../tree/find.py`              | `tree_find`, a find listing several folders at a time.              |
@@ -38,34 +51,34 @@
 | `.../common/operations.py`      | The types of the storage's operations, such as `ls` and `info`. |
 | `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
 | `.../common/patterns.py`        | Glob patterns, matched as fsspec's `_glob` matches them, by both globs. |
-| `.../common/states.py`          | The states shared by counterparts, e.g. `FindState` of `tree_find` and `flat_find`. |
-| `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
 | `.../files/`                    | Base classes for a filesystem's file objects, by what its storage allows. |
 | `.../files/adaptive.py`         | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts. |
 | `.../files/buffered.py`         | `LocallyBufferedFile`, for storages transferring only whole files. |
 | `.../files/fsspec_transaction.py` | Files written in a transaction, by strategy: a temporary path, a local buffer, or the storage's own. |
 | `.../files/fsspec_async.py`     | `AsyncFileAdapter` and `SyncFileAdapter`, giving file objects the API of those `open_async` returns. |
 | `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
-| `src/fsspec_alt_strategies_testing/` | `SimulatedFileSystem`, for tests and benchmarks: a package apart, so that copies leave it out. |
-| `tests/`                        | The tests, in the package's layout, with the shared fixtures in `tests/conftest.py`. |
+| `packages/impl/src/fsspec_alt_strategies_testing/` | `SimulatedFileSystem`, for tests and benchmarks: a package apart, so that copies leave it out. |
+| `packages/impl/tests/`          | The strategies' tests, in the package's layout, with the shared fixtures in `conftest.py`. |
 | `.github/workflows/ci.yaml`     | Lint and tests, on pull requests and pushes to `main`.         |
 
-The only runtime dependency is fsspec. The version comes from the git tag, through hatch-vcs.
+The interface depends on fsspec alone, and the strategies on fsspec and the interface. Both take their version from
+the git tag, through hatch-vcs.
 
 ## Setup
 
 All Python commands go through [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync                          # the package, editable, with the dev dependencies
+uv sync                          # both packages, editable, with the dev dependencies
 uv run pre-commit install        # ruff and file checks before each commit
 ```
 
 ## Tests
 
 ```bash
-uv run pytest                    # the tests
-uv run pytest --cov              # with coverage of src/fsspec_alt_strategies
+uv run pytest                    # the tests of both packages, from the root
+uv run pytest --cov              # with coverage of both packages
+uv build --all-packages          # both distributions
 uvx ruff check .                 # lint
 uvx ruff format .                # format
 ```
@@ -85,7 +98,8 @@ CI runs ruff and pytest on every supported Python version.
   strategy is for.
 - A strategy replacing an fsspec method answers as that method does. Test it against fsspec's own, called as
   e.g. `AsyncFileSystem._glob(fs, ...)` on the same filesystem.
-- Test folders have no `__init__.py`. Share code through `conftest.py` or helpers at the top of `tests/`.
+- Test folders have no `__init__.py`. Share code through `conftest.py`. The interface's tests never import the
+  strategies, as the interface never does.
 
 ## Design
 
@@ -375,21 +389,27 @@ operation instead, and falls back on its own way where it fails:
 
 ### Copied, not only installed
 
-The package is on PyPI, but we recommend copying its modules into your own package, e.g. as `_contrib/strategy`. A
-filesystem's behaviour then never changes with a release of this library.
+The strategies are on PyPI, but we recommend copying their modules into your own package, e.g. as
+`_contrib/strategy`. A filesystem's behaviour then never changes with a release of this library.
+
+The interface is not copied: `fsspec-alt-strategies-common` is installed, once per project.
+
+- Every copy then shares one `Operation`, one `CallCancelled` and one `StorageProfile`, so that callers catch and
+  pass them whatever copy they come from.
+- Its monitors are one context variable: a `monitoring` block watches the calls of every copy.
+- It changes rarely, and keeps compatible: copies of different versions use it at once.
 
 So the code stays easy to copy:
 
 - The package imports itself only with relative imports, so a copy works under any name.
-- It depends on nothing but fsspec and the standard library.
+- It depends on nothing but fsspec, the interface and the standard library.
 - Each file starts with its SPDX license header, which copies keep.
 - Each strategy depends on few shared modules, and its module docstring names them.
-- The package's `__init__.py` re-exports only the shared interface: `control`'s classes and `StorageProfile`. Those
-  modules depend on nothing else, and every copy keeps them, as the strategies use them.
-- No other `__init__.py` imports a module, so a copy may leave out those it does not use. Users import the rest from
-  the modules, e.g. `fsspec_alt_strategies.tree.find`.
+- No `__init__.py` imports a module, so a copy may leave out those it does not use. Users import from the modules,
+  e.g. `fsspec_alt_strategies.tree.find`. The interface's `__init__.py` re-exports its public API.
 
-`tests/test_copyable.py` checks the first three rules. It also imports a copy of the package under another name.
+`packages/impl/tests/test_copyable.py` checks the first three rules. It also imports a copy of the package under
+another name. `packages/common/tests/test_dependencies.py` checks the interface's imports and headers.
 
 The version is in `_version.py`, which hatch-vcs writes when the package is built. A copy taken from a wheel or an
 installed package keeps the version it was copied at. A copy of the source tree has none, and reports "0.0.0".
@@ -447,4 +467,4 @@ then ends cleanly.
 
 ## Releases
 
-A release is a version tag pushed to the repository. The version comes from the tag.
+A release is a version tag pushed to the repository. The version of both packages comes from the tag.

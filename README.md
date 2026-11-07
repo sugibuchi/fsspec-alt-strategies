@@ -48,9 +48,18 @@ storage.
 - Subclass a family's abstract filesystem, `TreeFileSystem` or `FlatFileSystem`, whose methods call the same functions.
   You implement the storage's primitives, such as `_ls` and `open_async`.
 
-The package is on PyPI, but we recommend copying the modules you use into your own package, e.g. as
-`_contrib/strategy`. Your filesystem's behaviour then never changes with a release of this library. The modules use
-relative imports only and depend on nothing but fsspec, so a copy works under any name. Keep their license headers.
+The strategies are on PyPI, as `fsspec-alt-strategies`, but we recommend copying the modules you use into your own
+package, e.g. as `_contrib/strategy`. Your filesystem's behaviour then never changes with a release of this library.
+The modules use relative imports only, so a copy works under any name. Keep their license headers.
+
+The interface they share is a package of its own, installed rather than copied:
+
+```bash
+pip install fsspec-alt-strategies-common
+```
+
+It holds `Operation`, the monitors and `StorageProfile`, so that every copy in a project shares one of each. The copies
+depend on it and on fsspec alone.
 
 ## Choosing with numbers
 

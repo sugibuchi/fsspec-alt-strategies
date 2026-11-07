@@ -13,7 +13,7 @@ dist/
 wheels/
 
 # Written by hatch-vcs when the package is built
-src/fsspec_alt_strategies/_version.py
+packages/*/src/*/_version.py
 
 # Virtual environments
 .venv/

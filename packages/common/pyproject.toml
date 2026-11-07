@@ -1,0 +1,63 @@
+[project]
+name = "fsspec-alt-strategies-common"
+dynamic = ["version"]
+description = "The interface the fsspec-alt-strategies strategies share: operations, monitors and storage profiles"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Tsuyoshi SUGIBUCHI" }]
+keywords = ["fsspec", "filesystem", "async"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Filesystems",
+    "Typing :: Typed",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "fsspec>=2024.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/sugibuchi/fsspec-alt-strategies"
+Source = "https://github.com/sugibuchi/fsspec-alt-strategies"
+Issues = "https://github.com/sugibuchi/fsspec-alt-strategies/issues"
+Changelog = "https://github.com/sugibuchi/fsspec-alt-strategies/releases"
+
+[build-system]
+requires = ["hatchling>=1.27.0", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+# The git repository is the workspace's, two folders up.
+raw-options = { root = "../..", version_scheme = "post-release" }
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/fsspec_alt_strategies_common/_version.py"
+template = '''
+# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+# SPDX-License-Identifier: Apache-2.0
+"""The version of the package, written when it is built."""
+
+__version__ = "{version}"
+'''
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fsspec_alt_strategies_common"]
+
+[tool.uv]
+# Rebuild the package when its git commit or tags change, as its version
+# comes from git (hatch-vcs), not only when pyproject.toml changes.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { git = { commit = true, tags = true } },
+]

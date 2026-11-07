@@ -2,6 +2,22 @@ version = 1
 revision = 5
 requires-python = ">=3.11"
 
+[manifest]
+members = [
+    "fsspec-alt-strategies",
+    "fsspec-alt-strategies-common",
+]
+
+[manifest.dependency-groups]
+dev = [
+    { name = "fsspec-alt-strategies", editable = "packages/impl" },
+    { name = "fsspec-alt-strategies-common", editable = "packages/common" },
+    { name = "pre-commit", specifier = ">=4.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pytest-asyncio", specifier = ">=1.0" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+]
+
 [[package]]
 name = "cfgv"
 version = "3.5.0"
@@ -175,29 +191,27 @@ wheels = [
 
 [[package]]
 name = "fsspec-alt-strategies"
-source = { editable = "." }
+source = { editable = "packages/impl" }
+dependencies = [
+    { name = "fsspec" },
+    { name = "fsspec-alt-strategies-common" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fsspec", specifier = ">=2024.2.0" },
+    { name = "fsspec-alt-strategies-common", editable = "packages/common" },
+]
+
+[[package]]
+name = "fsspec-alt-strategies-common"
+source = { editable = "packages/common" }
 dependencies = [
     { name = "fsspec" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-]
-
 [package.metadata]
 requires-dist = [{ name = "fsspec", specifier = ">=2024.2.0" }]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pre-commit", specifier = ">=4.0" },
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "pytest-asyncio", specifier = ">=1.0" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-]
 
 [[package]]
 name = "identify"

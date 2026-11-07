@@ -7,10 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 All Python goes through uv (never call `python`/`pip` directly).
 
 ```bash
-uv sync                                   # the package, editable, with dev dependencies
-uv run pytest                             # the tests
-uv run pytest tests/test_package.py -k version  # one file / matching tests
-uv run pytest --cov                       # with coverage of src/fsspec_alt_strategies
+uv sync                                   # both packages, editable, with dev dependencies
+uv run pytest                             # the tests of both, from the workspace root
+uv run pytest packages/impl/tests/test_package.py -k version  # one file / matching tests
+uv run pytest --cov                       # with coverage of both packages
+uv build --all-packages                   # both distributions
 uvx ruff check .                          # lint (ruff is not a dev dependency; config in pyproject.toml)
 uvx ruff format .                         # format
 ```
@@ -25,7 +26,14 @@ CI, in `.github/workflows/ci.yaml`, runs ruff and pytest on pull requests and pu
 ## What this project is
 
 A third-party library of alternative, filesystem-independent strategies for fsspec. README.md lists the planned
-features. DEVELOPMENT.md's Design section has the choices that shape the code: read it before adding a strategy.
+features. It is a uv workspace of two packages, each built and published on its own:
+
+- `packages/common`, `fsspec_alt_strategies_common`: the interface the strategies share with their callers, in
+  `control.py`, `profile.py` and `states.py`. It is installed, never copied.
+- `packages/impl`, `fsspec_alt_strategies`: the strategies, copied into the projects using them, and
+  `fsspec_alt_strategies_testing`, the simulated filesystem.
+
+The workspace root holds the tooling: ruff, pytest and coverage settings, CI, and the docs. DEVELOPMENT.md's Design section has the choices that shape the code: read it before adding a strategy.
 
 ## The traps
 
@@ -60,22 +68,26 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
 - A strategy's name tells its family, e.g. `tree_rm` and `tree_glob`, never a bare `rm` or `glob`. Code using fsspec
   has those names already, as methods and modules.
 - Never swallow `CancelledError`.
-- The package's `__init__.py` re-exports `__version__` and the shared interface only: the public classes and
-  functions of `control.py` and `profile.py`, which depend on nothing else. No other `__init__.py` re-exports anything.
-  Users import the rest from each module, so a copy can leave out modules it does not use.
+- `fsspec_alt_strategies_common` holds only what callers use, and what every copy must share: one `Operation`, one
+  set of monitors, one `StorageProfile`. The machinery stays in the copied package, e.g. `common/monitors.py`. The
+  interface depends on nothing but fsspec and the standard library, and never imports the strategies.
+- `fsspec_alt_strategies_common/__init__.py` re-exports its public API. In `fsspec_alt_strategies`, no `__init__.py`
+  re-exports anything but `__version__`: users import from each module, so a copy can leave out modules it does not use.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
 - The library never chooses a strategy for the developer. Each strategy's docstring says what it assumes of the
   storage, and when it wins or loses.
 - Async first: write the async version; a sync one only when asked.
 - Users copy the modules into their own package. So the package imports itself only with relative imports, and depends
-  on nothing but fsspec and the standard library.
+  on nothing but fsspec, `fsspec_alt_strategies_common` and the standard library.
 - `SimulatedFileSystem` lives in its own top-level package, `fsspec_alt_strategies_testing`, so that copies of the
   strategies leave it out. Never move it, or anything for tests only, into `fsspec_alt_strategies`.
-- Each file in `src/` starts with the SPDX license header, as copies must keep it. `tests/test_copyable.py` checks
-  this and the import rules.
+- Each file in `packages/*/src/` starts with the SPDX license header, as copies must keep it.
+  `packages/impl/tests/test_copyable.py` checks this and the import rules; `packages/common/tests/test_dependencies.py`
+  does for the interface.
 - `_version.py` is written by hatch-vcs and git-ignored: never edit or commit it.
-- Test folders have no `__init__.py`. Never import one test file from another.
-- Test strategies on `SimulatedFileSystem`, with the fixtures of `tests/conftest.py`: `flat_fs`, `hierarchical_fs` and
+- Test folders have no `__init__.py`. Never import one test file from another. The interface's tests never import
+  the strategies.
+- Test strategies on `SimulatedFileSystem`, with the fixtures of `packages/impl/tests/conftest.py`: `flat_fs`, `hierarchical_fs` and
   `any_fs`, which runs a test on both. Assert the requests made, from `fs.stats.calls`.
 - A strategy replacing an fsspec method answers as it does. Test it against fsspec's own, e.g.
   `AsyncFileSystem._glob(fs, ...)`: the subclass's method may be overridden.
@@ -88,7 +100,7 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
 - `from __future__ import annotations` everywhere, with type-only imports under `TYPE_CHECKING`: ruff's `TC` rules.
 - Public API docstrings are in numpy style: `Parameters`, `Returns`, `Raises`, `See Also`, `Examples`. Internal
   docstrings stay prose.
-- The public API is what the package's `__all__` exports. Keep machinery out of it.
+- The public API is what each module's `__all__` exports. Keep machinery out of it.
 
 ### Writing docs
 
