@@ -12,12 +12,11 @@ This module depends on `control`, `profile`, `walk`, `find`, `du`, `glob`,
 
 from __future__ import annotations
 
-from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import sync_wrapper
 
-from ..common.filesystem import _failed_root, _FileSystem, _raise, _triples
+from ..common.filesystem import _failed_root, _FileSystem, _raise
 from ..control import collect
 from .cp import tree_cp
 from .du import tree_du
@@ -25,7 +24,7 @@ from .find import tree_find
 from .glob import tree_glob
 from .mv import tree_mv
 from .rm import tree_rm
-from .walk import _listings
+from .walk import tree_walk
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -44,7 +43,9 @@ class TreeFileSystem(_FileSystem):
     when recursive, with `tree_walk`, `tree_find`, `tree_du`, `tree_glob`,
     `tree_rm`, `tree_cp` and `tree_mv`. Their answers are fsspec's, and their
     failures are raised, a single one as it is, several in an ExceptionGroup.
-    A folder that fails to list is left out, as fsspec's ``walk`` omits it.
+    A folder that fails to list is left out of ``_walk``, and passed to
+    ``on_error`` if callable: fsspec's ``walk`` yields it empty, but
+    `tree_walk`'s error tells its folder only in its note.
 
     A subclass implements the storage's primitives, which fsspec leaves
     abstract: ``_ls``, ``_info``, ``_rm_file``, ``_rmdir``, ``_cp_file`` and
@@ -111,17 +112,17 @@ class TreeFileSystem(_FileSystem):
     ) -> AsyncGenerator[tuple[str, Any, Any]]:
         detail = kwargs.pop("detail", False)
         root = self._strip_protocol(path)
-        listings = _listings(
-            self._ls,
+        walk = tree_walk(
             root,
+            ls=self._ls,
             maxdepth=maxdepth,
             topdown=topdown,
             raise_on_error=on_error == "raise",
             concurrency_limit=self.operation_limit,
         )
-        async with aclosing(listings):
+        async with walk:
             try:
-                first = await anext(listings)
+                first = await anext(walk)
             except StopAsyncIteration:
                 return
             except NotADirectoryError:
@@ -132,15 +133,26 @@ class TreeFileSystem(_FileSystem):
             except OSError as e:
                 yield _failed_root(root, e, on_error, detail)
                 return
-            listing = first
+            item = first
             while True:
-                if listing.error is None:
-                    yield _triples(listing.folder, listing.entries, detail)
+                if isinstance(item, Exception):
+                    # Left out: fsspec's walk yields the folder empty, but the
+                    # error tells its folder only in its note.
+                    if callable(on_error):
+                        on_error(item)
                 else:
-                    # A folder that fails is yielded empty, as fsspec's walk does.
-                    yield _failed_root(listing.folder, listing.error, on_error, detail)
+                    folder, dirs, files = item
+                    yield (
+                        (folder, dirs, files)
+                        if detail
+                        else (
+                            folder,
+                            list(dirs),
+                            list(files),
+                        )
+                    )
                 try:
-                    listing = await anext(listings)
+                    item = await anext(walk)
                 except StopAsyncIteration:
                     return
 

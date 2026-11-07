@@ -117,20 +117,6 @@ def _raise(errors: list[Exception], doing: str) -> None:
         raise ExceptionGroup(f"{doing} failed for {len(errors)} paths", errors)
 
 
-def _triples(
-    folder: str, entries: list[dict[str, Any]], detail: bool
-) -> tuple[str, Any, Any]:
-    """A folder's ``(path, dirs, files)``, as fsspec's ``walk`` yields them."""
-    dirs: dict[str, Any] = {}
-    files: dict[str, Any] = {}
-    for entry in entries:
-        name = entry["name"].rstrip("/").rsplit("/", 1)[-1]
-        (dirs if entry["type"] == "directory" else files)[name] = entry
-    if detail:
-        return folder, dirs, files
-    return folder, list(dirs), list(files)
-
-
 def _failed_root(
     root: str,
     error: Exception,

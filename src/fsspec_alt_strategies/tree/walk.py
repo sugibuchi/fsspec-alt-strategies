@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """A concurrent walk of a folder tree, a folder per listing request.
 
-`tree_walk` lists folders breadth first, several at a time, and yields each entry
-as its folder's listing arrives. A ``descend`` predicate prunes the folders it
+`tree_walk` lists folders breadth first, several at a time, and yields each
+folder's ``(path, dirs, files)`` as its listing arrives, as fsspec's ``walk``
+gives them. A ``descend`` predicate prunes the folders it
 lists, as glob needs. Its engine, ``_listings``, is also the engine under the
 other tree strategies, such as find, rm and du.
 
@@ -25,7 +26,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _Queue
-from ..common.paths import _check_maxdepth, _trim
+from ..common.paths import _check_maxdepth, _trim, _triples
 from ..common.states import WalkState
 from ..control import Operation
 
@@ -46,21 +47,23 @@ def tree_walk(
     descend: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
     concurrency_limit: asyncio.Semaphore,
-) -> Operation[dict[str, Any], WalkState]:
+) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
     """Walk a folder tree, listing several folders at a time.
 
-    It yields the ``ls`` entry of each file and folder below ``path``, but not
-    ``path`` itself. The folders' listings come in the order they arrive, not
-    in the tree's order. A folder that fails to list yields its error, and the
-    walk goes on with the other folders.
+    It yields each folder listed as ``(path, dirs, files)``, as fsspec's
+    ``walk`` does with ``detail=True``: ``path`` itself first, then each folder
+    below it. ``dirs`` and ``files`` map the names in the folder to their
+    ``ls`` entries. An empty folder yields empty ones. The folders come in the
+    order their listings arrive, not in the tree's order. A folder that fails
+    to list yields its error instead, and the walk goes on with the others.
 
-    With ``topdown``, a folder's entries come before those below it. Without,
-    they come after all of those below it, as fsspec's ``walk`` orders them.
-    The listings run as concurrently either way, but bottom up holds back each
-    folder's entries until its subtree is done. So a walk bottom up that is
-    cancelled leaves out the folders whose subtrees were not done.
+    With ``topdown``, a folder comes before those below it. Without, it comes
+    after all of those below it, as fsspec's ``walk`` orders them. The
+    listings run as concurrently either way, but bottom up holds back each
+    folder until its subtree is done. So a walk bottom up that is cancelled
+    leaves out the folders whose subtrees were not done.
 
-    Once cancelled, it lists no new folder, and yields the entries of the
+    Once cancelled, it lists no new folder, and yields the folders of the
     listings in flight. Iterating it raises these errors, which end it:
 
     - FileNotFoundError, if ``path`` does not exist;
@@ -80,8 +83,7 @@ def tree_walk(
     maxdepth : int, optional
         The deepest level to list: 1 lists only ``path``. No limit by default.
     topdown : bool
-        Whether a folder's entries come before those below it, rather than
-        after.
+        Whether a folder comes before those below it, rather than after.
     descend : callable, optional
         Called with the ``ls`` entry of each subfolder found. The walk lists it
         only if this returns True. All by default.
@@ -95,8 +97,8 @@ def tree_walk(
     Returns
     -------
     Operation
-        Yielding the ``ls`` entry of each file and folder found, or the error
-        of a folder that failed to list. Its state is a `WalkState`.
+        Yielding ``(path, dirs, files)`` for each folder listed, or the error of
+        a folder that failed to list. Its state is a `WalkState`.
 
     Raises
     ------
@@ -105,23 +107,24 @@ def tree_walk(
 
     See Also
     --------
-    fsspec_alt_strategies.control.collect : All the entries, at once.
+    fsspec_alt_strategies.control.collect : All the folders, at once.
 
     Examples
     --------
     >>> limit = asyncio.Semaphore(16)  # Shared, e.g. by a filesystem's operations.
     >>> walk = tree_walk("data", ls=fs._ls, concurrency_limit=limit)
-    >>> async with walk as entries:
-    ...     async for entry in entries:
-    ...         if isinstance(entry, Exception):
-    ...             raise entry
-    ...         print(entry["name"], entry["type"])
+    >>> async with walk as folders:
+    ...     async for folder in folders:
+    ...         if isinstance(folder, Exception):
+    ...             raise folder
+    ...         path, dirs, files = folder
+    ...         print(path, sorted(dirs), sorted(files))
     """
     _check_maxdepth(maxdepth)
 
     async def run(
-        op: Operation[dict[str, Any], WalkState],
-    ) -> AsyncGenerator[dict[str, Any] | Exception]:
+        op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
+    ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
         listings = _listings(
             ls,
             path,
@@ -143,8 +146,8 @@ def tree_walk(
                 )
                 if listing.error is not None:
                     yield listing.error
-                for entry in listing.entries:
-                    yield entry
+                else:
+                    yield _triples(listing.folder, listing.entries, detail=True)
 
     return Operation(run, WalkState(folders_listed=0))
 
@@ -180,8 +183,8 @@ async def _listings(
 ) -> AsyncGenerator[_Listing]:
     """Walk a folder tree as `tree_walk` does, yielding each folder's listing.
 
-    The tree strategies need a listing's folder, which `tree_walk`'s entries do
-    not carry. A failed listing is yielded with its error, and its subfolders
+    The tree strategies need a listing's depth and error, which `tree_walk`'s
+    folders do not carry. A failed listing is yielded with its error, and its subfolders
     are not walked. ``path``'s own listing fails by raising, as fsspec's walk
     does, since nothing has been done yet.
 

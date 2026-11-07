@@ -46,7 +46,7 @@ async def test_finds_what_tree_walk_finds(
     _tree(flat_fs)
     entries, errors = await collect(_walk(flat_fs, path, topdown=topdown, **kwargs))
     assert errors == []
-    expected, _ = await collect(
+    folders, _ = await collect(
         tree_walk(
             path,
             ls=flat_fs._ls,
@@ -55,6 +55,10 @@ async def test_finds_what_tree_walk_finds(
             **kwargs,
         )
     )
+    # tree_walk yields each folder's entries together: all of them, here.
+    expected = [
+        e for _, dirs, files in folders for e in [*dirs.values(), *files.values()]
+    ]
     key = lambda e: e["name"]  # noqa: E731
     assert sorted(entries, key=key) == sorted(expected, key=key)
 

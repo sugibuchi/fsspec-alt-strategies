@@ -224,7 +224,7 @@ Or they subclass a family's abstract filesystem, `TreeFileSystem` in `tree/files
 - `_cat_file`, `_pipe_file`, `_get_file` and `_put_file` go through `open_async`'s files, so data moves as the file
   classes move it.
 - The failures of a strategy are raised: one as it is, several in an ExceptionGroup. A folder that fails to list is
-  left out of a walk, as fsspec's `walk` omits it.
+  left out of a walk, and passed to `on_error` if callable: fsspec's `walk` yields it empty.
 - fsspec has no async `mv`, nor builds a sync one from `_mv`: each class wraps its `_mv` itself.
 
 Choosing the class chooses the family: a developer wanting one strategy of another overrides that method, as above.

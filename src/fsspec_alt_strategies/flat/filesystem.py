@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import sync_wrapper
 
-from ..common.filesystem import _failed_root, _FileSystem, _raise, _triples
+from ..common.filesystem import _failed_root, _FileSystem, _raise
+from ..common.paths import _triples
 from ..control import collect
 from .cp import flat_cp
 from .du import flat_du
