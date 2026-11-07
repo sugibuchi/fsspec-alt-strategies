@@ -111,7 +111,8 @@ class _AsyncFile(io.RawIOBase):
         """
         await self._requests.cancel_all()
 
-    # The rest.
+    # What every file shares, built on those: flushing, closing, the garbage
+    # collector's abort, and waiting on the loop.
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.path!r}>"
