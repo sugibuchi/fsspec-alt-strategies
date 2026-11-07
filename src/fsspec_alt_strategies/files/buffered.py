@@ -248,17 +248,35 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         return size
 
     def load(self) -> None:
-        """Download the file now, if not yet, so that a missing file raises now."""
-        self._ensure_loaded()
+        """Download the file now, if not yet, so that a missing file raises now.
+
+        If the storage refuses, e.g. with FileNotFoundError, or FileExistsError
+        for "x", the file is closed, uploading nothing: its opener has it no
+        more. A file closed, or force-flushed, only raises.
+        """
+        self._check_open()
+        self._check_not_forced()
+        try:
+            self._ensure_loaded()
+        except OSError:
+            self.discard()
+            self.close()
+            raise
 
     async def aload(self) -> None:
         """Download the file now, if not yet: `load`'s async counterpart.
 
         A filesystem's ``open_async`` awaits it, so that seek and tell need no
-        request on the loop.
+        request on the loop. If it raises, the file is closed, as with `load`.
         """
+        self._check_open()
         self._check_not_forced()
-        await self._load()
+        try:
+            await self._load()
+        except OSError:
+            self.discard()
+            await self.aclose()
+            raise
 
     def discard(self) -> None:
         """Upload nothing on closing: the changes are lost."""

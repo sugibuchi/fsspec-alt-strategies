@@ -51,6 +51,17 @@ def test_reads_with_one_request(fs: SimulatedFileSystem) -> None:
     assert fs.stats.calls == {"read": 1}
 
 
+def test_a_load_that_fails_closes_the_file(fs: SimulatedFileSystem) -> None:
+    fs.add_file("taken.bin", b"old")
+    f = _Whole(fs, "taken.bin", "xb")
+    with pytest.raises(FileExistsError):
+        f.load()
+    # Its opener has it no more: closed, so that the collector need not warn.
+    assert f.closed
+    assert fs._file_data["taken.bin"].data == b"old"
+    assert "write" not in fs.stats.calls
+
+
 def test_opening_downloads_nothing_until_used(fs: SimulatedFileSystem) -> None:
     f = _Whole(fs, "missing.bin", "rb")
     assert fs.stats.calls == {}
