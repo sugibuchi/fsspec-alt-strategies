@@ -34,7 +34,7 @@ def test_a_filesystem_is_wrapped_as_its_entry_says() -> None:
         fs,
         {
             _SIMULATED: {
-                "class_name": "FlatFileSystem",
+                "type": "flat",
                 "async": True,
                 "operation_concurrency": 3,
                 "io_concurrency": 2,
@@ -54,7 +54,7 @@ def test_a_subclass_takes_the_entry_of_its_class() -> None:
         pass
 
     entry: Any = {
-        "class_name": "TreeFileSystem",
+        "type": "tree",
         "async": True,
         "operation_concurrency": 2,
         "io_concurrency": 1,

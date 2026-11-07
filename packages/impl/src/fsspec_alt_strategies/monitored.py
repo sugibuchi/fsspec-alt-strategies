@@ -30,10 +30,10 @@ if TYPE_CHECKING:
 __all__ = ["monitored"]
 
 _WRAPPERS: dict[tuple[str, bool], Any] = {
-    ("TreeFileSystem", True): AsyncTreeWrapper,
-    ("TreeFileSystem", False): SyncTreeWrapper,
-    ("FlatFileSystem", True): AsyncFlatWrapper,
-    ("FlatFileSystem", False): SyncFlatWrapper,
+    ("tree", True): AsyncTreeWrapper,
+    ("tree", False): SyncTreeWrapper,
+    ("flat", True): AsyncFlatWrapper,
+    ("flat", False): SyncFlatWrapper,
 }
 
 
@@ -84,12 +84,12 @@ def monitored(
     else:
         name = f"{type(fs).__module__}.{type(fs).__qualname__}"
         raise ValueError(f"No known implementation says how to wrap {name}")
-    wrapper = _WRAPPERS[(entry["class_name"], entry["async"])]
+    wrapper = _WRAPPERS[(entry["type"], entry["async"])]
     options: dict[str, Any] = {
         "operation_concurrency": entry["operation_concurrency"],
         "io_concurrency": entry["io_concurrency"],
         "storage_profile": entry.get("storage_profile"),
     }
-    if entry["class_name"] == "FlatFileSystem":
+    if entry["type"] == "flat":
         options["rm_batch_size"] = entry["rm_batch_size"]
     return wrapper(fs, **options)

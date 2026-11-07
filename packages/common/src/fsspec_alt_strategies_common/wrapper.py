@@ -24,8 +24,8 @@ __all__ = ["KnownImplementation", "known_implementations"]
 KnownImplementation = TypedDict(
     "KnownImplementation",
     {
-        # The family of the wrapper: "TreeFileSystem" or "FlatFileSystem".
-        "class_name": Literal["TreeFileSystem", "FlatFileSystem"],
+        # The family of the wrapper: a TreeFileSystem, or a FlatFileSystem.
+        "type": Literal["tree", "flat"],
         # Whether the filesystem is an AsyncFileSystem, awaited, or a sync one.
         "async": bool,
         "operation_concurrency": int,
@@ -39,7 +39,7 @@ KnownImplementation = TypedDict(
 
 known_implementations: dict[str, KnownImplementation] = {
     "fsspec.implementations.local.LocalFileSystem": {
-        "class_name": "TreeFileSystem",
+        "type": "tree",
         "async": False,
         "operation_concurrency": 8,
         "io_concurrency": 4,
@@ -49,7 +49,7 @@ known_implementations: dict[str, KnownImplementation] = {
         ),
     },
     "s3fs.core.S3FileSystem": {
-        "class_name": "FlatFileSystem",
+        "type": "flat",
         "async": True,
         "operation_concurrency": 32,
         "io_concurrency": 8,
