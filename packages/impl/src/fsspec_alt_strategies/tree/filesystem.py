@@ -20,7 +20,7 @@ from fsspec.asyn import sync_wrapper
 
 from fsspec_alt_strategies_common.monitor import Call
 
-from ..common.filesystem import _failed_folder, _FileSystem, _raise, _with
+from ..common.filesystem import _failed_folder, _raise, _StrategyFileSystem, _with
 from ..common.operation import _collected, _watched
 from .cp import tree_cp
 from .du import tree_du
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 __all__ = ["TreeFileSystem"]
 
 
-class TreeFileSystem(_FileSystem):
+class TreeFileSystem(_StrategyFileSystem):
     """An abstract async filesystem, its recursive methods the tree strategies.
 
     It suits storages with a hierarchical namespace, which list one folder per
