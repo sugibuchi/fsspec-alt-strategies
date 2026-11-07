@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import sync_wrapper
 
-from ..common.filesystem import _failed_folder, _FileSystem, _raise
+from ..common.filesystem import _failed_folder, _FileSystem, _raise, _with
 from ..control import collect
 from .cp import tree_cp
 from .du import tree_du
@@ -114,7 +114,7 @@ class TreeFileSystem(_FileSystem):
         root = self._strip_protocol(path)
         walk = tree_walk(
             root,
-            ls=self._ls,
+            ls=_with(self._ls, kwargs),
             maxdepth=maxdepth,
             topdown=topdown,
             # The failed folders' errors, which fsspec's on_error then handles:
@@ -141,15 +141,9 @@ class TreeFileSystem(_FileSystem):
                     yield _failed_folder(item.folder, item, on_error, detail)  # type: ignore[attr-defined]
                 else:
                     folder, dirs, files = item
-                    yield (
-                        (folder, dirs, files)
-                        if detail
-                        else (
-                            folder,
-                            list(dirs),
-                            list(files),
-                        )
-                    )
+                    if not detail:
+                        dirs, files = list(dirs), list(files)
+                    yield folder, dirs, files
                 try:
                     item = await anext(walk)
                 except StopAsyncIteration:
@@ -166,7 +160,7 @@ class TreeFileSystem(_FileSystem):
         entries, _ = await collect(
             tree_find(
                 self._strip_protocol(path),
-                ls=self._ls,
+                ls=_with(self._ls, kwargs),
                 info=self._info,
                 maxdepth=maxdepth,
                 withdirs=withdirs,
@@ -180,11 +174,13 @@ class TreeFileSystem(_FileSystem):
     async def _du(
         self, path: str, total: bool = True, maxdepth: int | None = None, **kwargs: Any
     ) -> Any:
-        if kwargs.get("withdirs"):
-            return await super()._du(path, total=total, maxdepth=maxdepth, **kwargs)
+        if kwargs.pop("withdirs", False):
+            return await super()._du(
+                path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
+            )
         op = tree_du(
             self._strip_protocol(path),
-            ls=self._ls,
+            ls=_with(self._ls, kwargs),
             info=self._info,
             maxdepth=maxdepth,
             concurrency_limit=self.operation_limit,
@@ -196,13 +192,14 @@ class TreeFileSystem(_FileSystem):
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
         detail = kwargs.pop("detail", False)
+        withdirs = kwargs.pop("withdirs", True)
         entries, _ = await collect(
             tree_glob(
                 self._plain(path),
-                ls=self._ls,
+                ls=_with(self._ls, kwargs),
                 info=self._info,
                 maxdepth=maxdepth,
-                withdirs=kwargs.pop("withdirs", True),
+                withdirs=withdirs,
                 concurrency_limit=self.operation_limit,
             )
         )

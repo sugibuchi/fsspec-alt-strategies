@@ -44,8 +44,11 @@ class _Tree(TreeFileSystem):
         options = {"operation_concurrency": 4, "io_concurrency": 2}
         super().__init__(**{**options, **kwargs})
         self.inner = inner
+        # The extra keyword arguments each listing was given, e.g. refresh=True.
+        self.ls_kwargs: list[dict[str, Any]] = []
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+        self.ls_kwargs.append(kwargs)
         return await self.inner._ls(path, detail=detail)
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
@@ -137,6 +140,29 @@ async def test_walk_answers_as_fsspec(
     assert sorted(walked, key=key) == sorted(expected, key=key)
     if kwargs.get("topdown") is False and len(walked) > 1:
         assert walked[-1][0] == "data"  # The root comes last.
+
+
+async def _walked(fs: _Tree, path: str, **kwargs: Any) -> Any:
+    return [t async for t in fs._walk(path, **kwargs)]
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        _walked,
+        lambda fs, path, **kw: fs._find(path, **kw),
+        lambda fs, path, **kw: fs._du(path, **kw),
+        lambda fs, path, **kw: fs._glob(path + "/*/*", **kw),
+    ],
+    ids=["walk", "find", "du", "glob"],
+)
+async def test_extra_keyword_arguments_go_to_every_listing(
+    fs: _Tree, method: Any
+) -> None:
+    # As fsspec's recursive methods pass them on to _ls, e.g. to skip a cache.
+    await method(fs, "data", refresh=True)
+    assert fs.ls_kwargs
+    assert all(kwargs == {"refresh": True} for kwargs in fs.ls_kwargs)
 
 
 class _Forbidding(SimulatedFileSystem):

@@ -12,6 +12,7 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -107,6 +108,15 @@ class _FileSystem(AsyncFileSystem):
             with open(lpath, "rb") as local:  # noqa: ASYNC230
                 while chunk := local.read(self.transfer_size):
                     await f.write(chunk)
+
+
+def _with(func: Callable[..., Any], kwargs: dict[str, Any]) -> Callable[..., Any]:
+    """``func``, given ``kwargs`` too at each call, e.g. ``_ls`` with refresh=True.
+
+    fsspec's recursive methods pass their extra keyword arguments on to the
+    listing, which the strategies call with the path and ``detail`` alone.
+    """
+    return functools.partial(func, **kwargs) if kwargs else func
 
 
 def _raise(errors: list[Exception], doing: str) -> None:
