@@ -29,7 +29,11 @@ from .monitor import (
 )
 from .profile import StorageProfile
 from .states import CpState, DuState, FindState, GlobState, MvState, RmState, WalkState
-from .wrapper import KnownImplementation, known_implementations
+from .wrapper import (
+    DEFAULT_IMPLEMENTATION,
+    KnownImplementation,
+    known_implementations,
+)
 
 try:
     from ._version import __version__ as __version__
@@ -37,6 +41,7 @@ except ImportError:  # A source tree never built: no version file.
     __version__ = "0.0.0"
 
 __all__ = [
+    "DEFAULT_IMPLEMENTATION",
     "Call",
     "CallCancelled",
     "CpState",
