@@ -146,8 +146,9 @@ class TransactionFile(io.RawIOBase):
 
     Reads and writes go to the file its transaction staged. Closing finishes
     the writing, as the transaction does, but makes nothing visible: `commit`
-    does, closing first if needed. Leaving a ``with`` block by an exception
-    discards.
+    does, closing first if needed. ``flush(force=True)`` finishes the writing
+    too, leaving the file open for nothing but closing, as fsspec's files do
+    in a transaction. Leaving a ``with`` block by an exception discards.
 
     The garbage collector discards a file neither committed nor discarded,
     warning with a ResourceWarning. On a thread running an event loop, which
@@ -175,6 +176,8 @@ class TransactionFile(io.RawIOBase):
         self._outcome: str | None = None
         # Whether closing finished the writing: a failed one is never committed.
         self._finished = False
+        # Whether flush(force=True) finished it, or tried to, before closing.
+        self._forced = False
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.path!r}>"
@@ -186,6 +189,9 @@ class TransactionFile(io.RawIOBase):
     def _method(self, name: str) -> Any:
         """The staged file's method, which a file-like object may lack."""
         self._check_open()
+        if self._forced:
+            # The staged file is finished, and may be closed.
+            raise ValueError(f"Force-flushed, can only close: {self.path}")
         method = getattr(self._file, name, None)
         if method is None:
             raise io.UnsupportedOperation(f"{name} on {self.path}")
@@ -194,6 +200,8 @@ class TransactionFile(io.RawIOBase):
     def _can(self, query: str, method: str) -> bool:
         # A file-like object lacking e.g. readable() can read if it has read().
         self._check_open()
+        if self._forced:
+            return False  # Finished: it can only close.
         if (answer := getattr(self._file, query, None)) is not None:
             return answer()
         return hasattr(self._file, method)
@@ -232,11 +240,35 @@ class TransactionFile(io.RawIOBase):
     def truncate(self, size: int | None = None) -> int:
         return self._method("truncate")(size)
 
-    def flush(self) -> None:
+    def flush(self, force: bool = False) -> None:
+        """Flush the staged file, or, if ``force``, finish the writing.
+
+        Forced, it finishes the writing as closing does, as fsspec's files do
+        in a transaction. The writing stays invisible until `commit`. The file
+        then allows only `close`, `commit` and `discard`.
+
+        Raises
+        ------
+        ValueError
+            If forced twice, as fsspec's files do.
+        """
+        if force:
+            self._check_open()
+            if self._forced:
+                raise ValueError(
+                    f"Force flush cannot be called more than once: {self.path}"
+                )
+            # Set first: a failed end is not tried again by closing. Open, the
+            # file is undecided: commit and discard close it.
+            self._forced = True
+            self.transaction.end_staging()
+            self._finished = True
+            return
         # io.IOBase.close flushes after end_staging or discard closed the file,
         # or after a discard that failed: a decided file sends nothing.
         if (
             self.closed
+            or self._forced
             or self._outcome is not None
             or getattr(self._file, "closed", False)
         ):
@@ -249,7 +281,7 @@ class TransactionFile(io.RawIOBase):
         if self.closed:
             return
         try:
-            if self._outcome is None:
+            if self._outcome is None and not self._forced:
                 self.transaction.end_staging()
                 self._finished = True
         finally:

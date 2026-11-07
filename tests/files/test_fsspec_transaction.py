@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 import io
 import time
@@ -449,6 +450,37 @@ def test_a_failed_close_is_never_committed() -> None:
     assert t.steps == ["start_staging", "end_staging", "discard"]
 
 
+def test_a_forced_flush_finishes_the_writing_but_commits_nothing() -> None:
+    t = _Recorded("f.bin", io.BytesIO())
+    f = TransactionFile(t)
+    f.write(b"abc")
+    f.flush(force=True)
+    assert t.steps == ["start_staging", "end_staging"]
+    assert not f.closed
+    # As fsspec's files: it can only close now, and is forced once.
+    with pytest.raises(ValueError, match="only close"):
+        f.write(b"more")
+    assert not f.writable()
+    f.flush()  # A plain flush sends nothing more.
+    with pytest.raises(ValueError, match="more than once"):
+        f.flush(force=True)
+    f.close()
+    f.commit()
+    assert t.steps == ["start_staging", "end_staging", "commit"]
+
+
+def test_a_failed_forced_flush_is_never_committed() -> None:
+    t = _Recorded("f.bin", _Failing())
+    f = TransactionFile(t)
+    with pytest.raises(OSError, match="upload failed"):
+        f.flush(force=True)
+    f.close()  # The writing is not tried again.
+    with pytest.raises(ValueError, match="failed"):
+        f.commit()
+    f.discard()
+    assert t.steps == ["start_staging", "end_staging", "discard"]
+
+
 class _TransactionalFS(SimulatedFileSystem):
     """Opens files for writing in the strategy set, inside fsspec's transactions."""
 
@@ -492,3 +524,23 @@ def test_in_fsspec_transactions(strategy: str) -> None:
     with fs.open("out/d.bin", "wb") as f:  # No transaction: written at once.
         f.write(b"d")
     assert fs.cat_file("out/d.bin") == b"d"
+
+
+@pytest.mark.parametrize("commit", [True, False])
+@pytest.mark.parametrize("strategy", ["temp", "buffer", "adaptive", "buffered"])
+def test_a_forced_flush_in_fsspec_transactions(strategy: str, commit: bool) -> None:
+    fs = _TransactionalFS(hierarchical=True)
+    fs.strategy = strategy
+    with contextlib.suppress(RuntimeError), fs.transaction:
+        f = fs.open("out/a.bin", "wb")
+        f.write(_BIG)
+        f.flush(force=True)
+        # Finished, but invisible until the transaction ends, as in fsspec.
+        assert not fs.exists("out/a.bin")
+        if not commit:
+            raise RuntimeError("the transaction failed")
+    # fsspec commits or discards the file, though never closed. Discarded,
+    # nothing is left, not even a temporary file.
+    assert fs.find("out") == (["out/a.bin"] if commit else [])
+    if commit:
+        assert fs.cat_file("out/a.bin") == _BIG
