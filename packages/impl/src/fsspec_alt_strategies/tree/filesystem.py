@@ -65,7 +65,8 @@ class TreeFileSystem(_StrategyFileSystem):
     - ``io_limit``, the reads and writes of data, by its files.
 
     ``storage_profile``, a `StorageProfile`, tells the strategies what the
-    storage does. A subclass sets it for its storage.
+    storage does. It is required: `StorageProfile()` says the storage is
+    unknown, and the strategies then take the way right on any storage.
 
     A recursive ``mv`` moves each file with ``_mv_file``, which is fsspec's
     copy then delete. A subclass whose storage renames a path in one request
@@ -79,6 +80,8 @@ class TreeFileSystem(_StrategyFileSystem):
         The requests of the strategies at a time.
     io_concurrency : int
         The reads and writes of data at a time.
+    storage_profile : StorageProfile
+        What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
@@ -109,11 +112,13 @@ class TreeFileSystem(_StrategyFileSystem):
     ...
     ...     def _open(self, path, mode="rb", **kwargs):
     ...         return MyFile(self, path, mode, concurrency_limit=self.io_limit)
-    >>> fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
+    >>> fs = MyFileSystem(
+    ...     operation_concurrency=32, io_concurrency=8, storage_profile=StorageProfile()
+    ... )
     """
 
-    storage_profile: StorageProfile | None = None
-    """What the storage does, for the strategies. Unknown if None."""
+    storage_profile: StorageProfile
+    """What the storage does, for the strategies, as given when made."""
 
     # What a subclass implements: the storage's primitives, as fsspec names them.
 

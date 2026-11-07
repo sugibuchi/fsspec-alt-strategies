@@ -15,7 +15,11 @@ from fsspec_alt_strategies_testing import SimulatedFileSystem
 if TYPE_CHECKING:
     from pathlib import Path
 
-_LIMITS = {"operation_concurrency": 4, "io_concurrency": 2}
+_LIMITS: dict[str, Any] = {
+    "operation_concurrency": 4,
+    "io_concurrency": 2,
+    "storage_profile": StorageProfile(),
+}
 _FILES = ["data/2023/01/a.txt", "data/2023/02/b.txt", "data/2024/c.txt", "data/d.txt"]
 
 
@@ -101,9 +105,8 @@ async def test_a_sync_filesystem_moves_a_folder_whole(tmp_path: Path) -> None:
     local, root = _local(tmp_path)
     tree = SyncTreeWrapper(
         local,
-        storage_profile=StorageProfile(renames_folders=True),
         asynchronous=True,
-        **_LIMITS,
+        **{**_LIMITS, "storage_profile": StorageProfile(renames_folders=True)},
     )
     await tree._mv(f"{root}/data", f"{root}/moved", recursive=True)
     assert not local.exists(f"{root}/data")

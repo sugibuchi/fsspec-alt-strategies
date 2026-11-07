@@ -30,7 +30,8 @@ KnownImplementation = TypedDict(
         "async": bool,
         "operation_concurrency": int,
         "io_concurrency": int,
-        "storage_profile": NotRequired[StorageProfile | None],
+        # What the storage does: StorageProfile() if it is unknown.
+        "storage_profile": StorageProfile,
         # A flat wrapper's batch of deletions, e.g. 1000 on S3.
         "rm_batch_size": NotRequired[int],
     },

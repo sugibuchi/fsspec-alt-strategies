@@ -76,6 +76,8 @@ class FlatFileSystem(_StrategyFileSystem):
         The requests of the strategies at a time.
     io_concurrency : int
         The reads and writes of data at a time.
+    storage_profile : StorageProfile
+        What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
@@ -107,14 +109,16 @@ class FlatFileSystem(_StrategyFileSystem):
     ...
     ...     def _open(self, path, mode="rb", **kwargs):
     ...         return MyFile(self, path, mode, concurrency_limit=self.io_limit)
-    >>> fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
+    >>> fs = MyFileSystem(
+    ...     operation_concurrency=32, io_concurrency=8, storage_profile=StorageProfile()
+    ... )
     """
 
     rm_batch_size: int
     """The most keys ``_rm_files`` deletes in one request, e.g. 1000 on S3."""
 
-    storage_profile: StorageProfile | None = None
-    """What the storage does, for the strategies. Unknown if None."""
+    storage_profile: StorageProfile
+    """What the storage does, for the strategies, as given when made."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

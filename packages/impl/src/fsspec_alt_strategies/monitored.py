@@ -88,7 +88,7 @@ def monitored(
     options: dict[str, Any] = {
         "operation_concurrency": entry["operation_concurrency"],
         "io_concurrency": entry["io_concurrency"],
-        "storage_profile": entry.get("storage_profile"),
+        "storage_profile": entry["storage_profile"],
     }
     if entry["type"] == "flat":
         options["rm_batch_size"] = entry["rm_batch_size"]

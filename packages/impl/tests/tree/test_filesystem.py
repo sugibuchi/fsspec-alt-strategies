@@ -50,7 +50,11 @@ class _Tree(TreeFileSystem):
     cachable = False
 
     def __init__(self, inner: SimulatedFileSystem, **kwargs: Any) -> None:
-        options = {"operation_concurrency": 4, "io_concurrency": 2}
+        options = {
+            "operation_concurrency": 4,
+            "io_concurrency": 2,
+            "storage_profile": StorageProfile(),
+        }
         super().__init__(**{**options, **kwargs})
         self.inner = inner
         # The extra keyword arguments each listing was given, e.g. refresh=True.
@@ -240,12 +244,11 @@ async def test_recursive_rm_copy_and_mv(fs: _Tree, inner: SimulatedFileSystem) -
 
 async def test_a_rename_moves_a_folder_whole(inner: SimulatedFileSystem) -> None:
     class Renaming(_Tree):
-        storage_profile = StorageProfile(renames_folders=True)
-
         async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
             await self.inner._rename(path1, path2)
 
-    renaming = Renaming(inner, asynchronous=True)
+    profile = StorageProfile(renames_folders=True)
+    renaming = Renaming(inner, storage_profile=profile, asynchronous=True)
     inner.reset_stats()
     await renaming._mv("data", "moved", recursive=True)
     assert inner.stats.calls == {"info": 1, "rename": 1}

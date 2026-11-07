@@ -45,8 +45,8 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
         The requests of the strategies at a time.
     io_concurrency : int
         The data methods' calls at a time, such as ``_cat_file``.
-    storage_profile : StorageProfile, optional
-        What the storage does. Unknown if None.
+    storage_profile : StorageProfile
+        What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`.
 
@@ -67,7 +67,7 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
         *,
         operation_concurrency: int,
         io_concurrency: int,
-        storage_profile: StorageProfile | None = None,
+        storage_profile: StorageProfile,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -101,8 +101,8 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
         The requests of the strategies at a time, each in a thread.
     io_concurrency : int
         The data methods' calls at a time, such as ``_cat_file``.
-    storage_profile : StorageProfile, optional
-        What the storage does. Unknown if None.
+    storage_profile : StorageProfile
+        What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
@@ -128,7 +128,7 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
         *,
         operation_concurrency: int,
         io_concurrency: int,
-        storage_profile: StorageProfile | None = None,
+        storage_profile: StorageProfile,
         **kwargs: Any,
     ) -> None:
         super().__init__(

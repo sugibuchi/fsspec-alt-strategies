@@ -9,6 +9,7 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 from fsspec_alt_strategies.flat.wrapper import AsyncFlatWrapper, SyncFlatWrapper
+from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -18,6 +19,7 @@ _OPTIONS: dict[str, Any] = {
     "rm_batch_size": 2,
     "operation_concurrency": 4,
     "io_concurrency": 2,
+    "storage_profile": StorageProfile(),
 }
 _FILES = ["data/2023/01/a.txt", "data/2023/02/b.txt", "data/2024/c.txt", "data/d.txt"]
 

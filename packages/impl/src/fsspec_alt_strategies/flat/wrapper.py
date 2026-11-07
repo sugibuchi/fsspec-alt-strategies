@@ -64,8 +64,8 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
         The requests of the strategies at a time.
     io_concurrency : int
         The data methods' calls at a time, such as ``_cat_file``.
-    storage_profile : StorageProfile, optional
-        What the storage does. Unknown if None.
+    storage_profile : StorageProfile
+        What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`.
 
@@ -94,7 +94,7 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
         rm_batch_size: int,
         operation_concurrency: int,
         io_concurrency: int,
-        storage_profile: StorageProfile | None = None,
+        storage_profile: StorageProfile,
         **kwargs: Any,
     ) -> None:
         self.rm_batch_size = rm_batch_size
@@ -147,8 +147,8 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
         The requests of the strategies at a time, each in a thread.
     io_concurrency : int
         The data methods' calls at a time, such as ``_cat_file``.
-    storage_profile : StorageProfile, optional
-        What the storage does. Unknown if None.
+    storage_profile : StorageProfile
+        What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
@@ -176,7 +176,7 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
         rm_batch_size: int,
         operation_concurrency: int,
         io_concurrency: int,
-        storage_profile: StorageProfile | None = None,
+        storage_profile: StorageProfile,
         **kwargs: Any,
     ) -> None:
         self.rm_batch_size = rm_batch_size

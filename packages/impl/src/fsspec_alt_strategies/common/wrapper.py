@@ -39,13 +39,11 @@ class _FileSystemWrapper:
         self,
         fs: Any,
         *,
-        storage_profile: StorageProfile | None = None,
+        storage_profile: StorageProfile,
         **kwargs: Any,
     ) -> None:
         self.fs = fs
-        super().__init__(**kwargs)
-        if storage_profile is not None:
-            self.storage_profile = storage_profile
+        super().__init__(storage_profile=storage_profile, **kwargs)
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} of {self.fs!r}>"

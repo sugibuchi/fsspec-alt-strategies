@@ -13,6 +13,7 @@ from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
 from fsspec_alt_strategies.flat.filesystem import FlatFileSystem
 from fsspec_alt_strategies_common.monitor import Call, Monitor, monitoring
+from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -47,7 +48,11 @@ class _Flat(FlatFileSystem):
     rm_batch_size = 2
 
     def __init__(self, inner: SimulatedFileSystem, **kwargs: Any) -> None:
-        options = {"operation_concurrency": 4, "io_concurrency": 2}
+        options = {
+            "operation_concurrency": 4,
+            "io_concurrency": 2,
+            "storage_profile": StorageProfile(),
+        }
         super().__init__(**{**options, **kwargs})
         self.inner = inner
 

@@ -22,7 +22,10 @@ _SIMULATED = "fsspec_alt_strategies_testing.SimulatedFileSystem"
 
 def test_a_monitored_filesystem_is_returned_as_it_is() -> None:
     tree = AsyncTreeWrapper(
-        SimulatedFileSystem(), operation_concurrency=1, io_concurrency=1
+        SimulatedFileSystem(),
+        operation_concurrency=1,
+        io_concurrency=1,
+        storage_profile=StorageProfile(),
     )
     assert monitored(tree) is tree
 
@@ -58,6 +61,7 @@ def test_a_subclass_takes_the_entry_of_its_class() -> None:
         "async": True,
         "operation_concurrency": 2,
         "io_concurrency": 1,
+        "storage_profile": StorageProfile(),
     }
     assert isinstance(monitored(Mine(), {_SIMULATED: entry}), AsyncTreeWrapper)
 

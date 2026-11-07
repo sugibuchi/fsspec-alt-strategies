@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
     from fsspec.callbacks import Callback
 
+    from fsspec_alt_strategies_common.profile import StorageProfile
+
 _MiB = 1024 * 1024
 
 
@@ -49,6 +51,10 @@ class _StrategyFileSystem(
     ``concurrency_limit``. Each is an `asyncio.Semaphore`, its own per
     instance.
 
+    ``storage_profile`` tells the strategies what the storage does. It is
+    required: a filesystem whose storage is unknown says so, with
+    ``StorageProfile()``.
+
     Each family's class declares the abstract methods its subclasses implement,
     so that a reader finds them all in one place.
     """
@@ -61,6 +67,7 @@ class _StrategyFileSystem(
         *args: Any,
         operation_concurrency: int,
         io_concurrency: int,
+        storage_profile: StorageProfile,
         **kwargs: Any,
     ) -> None:
         for name, value in (
@@ -72,6 +79,7 @@ class _StrategyFileSystem(
         super().__init__(*args, **kwargs)
         self.operation_concurrency = operation_concurrency
         self.io_concurrency = io_concurrency
+        self.storage_profile = storage_profile
         self.operation_limit = asyncio.Semaphore(operation_concurrency)
         self.io_limit = asyncio.Semaphore(io_concurrency)
 
