@@ -28,10 +28,9 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, Sequence
 
-    from fsspec_alt_strategies_common.control import Operation
-
     from ..common.jobs import _Roots
     from ..common.operations import _Ils, _Info
+    from ..operation import Operation
 
 
 async def _expand(

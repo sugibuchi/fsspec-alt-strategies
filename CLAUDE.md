@@ -39,7 +39,7 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
 
 - Never use names suggesting ownership of fsspec's fundamentals, such as "base" or "core" packages of fsspec.
 - Each strategy is a stateless function taking the storage's operations as functions, never a filesystem: e.g.
-  `ls=fs._ls`. Filesystem classes only wrap those functions. File objects, in `files/`, and `control.Operation` are the
+  `ls=fs._ls`. Filesystem classes only wrap those functions. File objects, in `files/`, and `operation.Operation` are the
   exceptions: see DEVELOPMENT.md's "File objects".
 - A strategy takes only primitive operations, such as `ls`, `info` and `rm_file`, called as fsspec calls its own,
   e.g. `ls(path, detail=True)`. It never takes a high-level one, such as `_find` or `_glob`: another strategy may have
@@ -68,7 +68,7 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
 - A strategy's name tells its family, e.g. `tree_rm` and `tree_glob`, never a bare `rm` or `glob`. Code using fsspec
   has those names already, as methods and modules.
 - Never swallow `CancelledError`.
-- `fsspec_alt_strategies_common` holds only what callers use, and what every copy must share: one `Operation`, one
+- `fsspec_alt_strategies_common` holds only what callers use, and what every copy must share: one `OperationHandler`, one
   set of monitors, one `StorageProfile`. The machinery stays in the copied package, e.g. `common/monitors.py`. The
   interface depends on nothing but fsspec and the standard library, and never imports the strategies.
 - `fsspec_alt_strategies_common/__init__.py` re-exports its public API. In `fsspec_alt_strategies`, no `__init__.py`

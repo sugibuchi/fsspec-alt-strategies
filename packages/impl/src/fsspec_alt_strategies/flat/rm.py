@@ -7,7 +7,8 @@ fsspec's, and the object stores' own, list every key first, then delete them,
 in batches where the storage can. `flat_rm` sends each batch as soon as the
 listing has given its keys.
 
-This module depends on `_jobs`, and `jobs` and `paths` of `common`.
+This module depends on `_jobs`, `operation`, and `jobs` and `paths` of
+`common`.
 """
 
 from __future__ import annotations
@@ -15,11 +16,11 @@ from __future__ import annotations
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
-from fsspec_alt_strategies_common.control import Operation
 from fsspec_alt_strategies_common.states import RmState
 
 from ..common.jobs import _Job, _Roots
 from ..common.paths import _trim
+from ..operation import Operation
 from ._jobs import _expand, _FlatJobs, _keys_of
 
 if TYPE_CHECKING:

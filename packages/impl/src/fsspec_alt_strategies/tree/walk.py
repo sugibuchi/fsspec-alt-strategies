@@ -15,7 +15,7 @@ requests: `fsspec.asyn.AsyncFileSystem._find` there.
 The tree strategies take the storage's operations as functions, such as
 ``ls``, rather than a filesystem: see `common.operations`.
 
-This module depends on `jobs` and `paths` of `common`.
+This module depends on `operation`, and `jobs` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -25,11 +25,11 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from fsspec_alt_strategies_common.control import Operation
 from fsspec_alt_strategies_common.states import WalkState
 
 from ..common.jobs import _Queue
 from ..common.paths import _check_maxdepth, _trim, _triples
+from ..operation import Operation
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Collection

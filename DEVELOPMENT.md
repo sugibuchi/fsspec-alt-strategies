@@ -14,11 +14,12 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | Path                            | Contents                                                       |
 |---------------------------------|----------------------------------------------------------------|
 | `packages/common/src/fsspec_alt_strategies_common/` | The interface, installed: one for all the copies in a project. |
-| `.../control.py`                | `Operation` and `State`: the strategy API. `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
+| `.../control.py`                | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
 | `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
 | `.../states.py`                 | The states the strategies report, e.g. `FindState` of `tree_find` and `flat_find`. |
 | `packages/common/tests/`        | The interface's tests, which never import the strategies.      |
 | `packages/impl/src/fsspec_alt_strategies/` | The strategies, copied.                              |
+| `.../operation.py`              | `Operation`, which a strategy returns: iterated, it does the work. It implements `OperationHandler`. |
 | `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
 | `.../tree/walk.py`              | `tree_walk`, the concurrent folder walk under the tree strategies.  |
 | `.../tree/find.py`              | `tree_find`, a find listing several folders at a time.              |
@@ -173,7 +174,9 @@ print(op.state.files_deleted)
 
 #### Operations
 
-An `Operation` does its work as it is iterated, a few requests ahead of the caller.
+An `Operation`, in `operation.py`, does its work as it is iterated, a few requests ahead of the caller. Its
+control is the interface's `OperationHandler`, which a `Monitor` is given, so that any copy's operations are
+stopped the same way.
 
 - It yields what it did, e.g. each path deleted, mixed with the error of each path that failed, as an exception object.
   Errors on single paths are never raised: the caller decides what to do with each.
@@ -394,7 +397,7 @@ The strategies are on PyPI, but we recommend copying their modules into your own
 
 The interface is not copied: `fsspec-alt-strategies-common` is installed, once per project.
 
-- Every copy then shares one `Operation`, one `CallCancelled` and one `StorageProfile`, so that callers catch and
+- Every copy then shares one `OperationHandler`, one `CallCancelled` and one `StorageProfile`, so that callers catch and
   pass them whatever copy they come from.
 - Its monitors are one context variable: a `monitoring` block watches the calls of every copy.
 - It changes rarely, and keeps compatible: copies of different versions use it at once.

@@ -24,7 +24,9 @@ from fsspec_alt_strategies_common.control import CallCancelled, Monitor, _monito
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    from fsspec_alt_strategies_common.control import Call, Operation
+    from fsspec_alt_strategies_common.control import Call, OperationHandler, State
+
+    from ..operation import Operation
 
 
 async def _collect(
@@ -68,10 +70,10 @@ async def _watched(
     try:
         async with operation:
             for monitor in monitors:
-                await monitor.started(call, operation)
+                await monitor.started(call, operation, operation.state)
             async for item in operation:
                 for monitor in monitors:
-                    await monitor.yielded(call, operation, item)
+                    await monitor.yielded(call, operation, operation.state, item)
                 yield item
         if operation.cancelled():
             raise CallCancelled(call, operation.state)
@@ -83,7 +85,7 @@ async def _watched(
         raise
     finally:
         for monitor in monitors:
-            await monitor.ended(call, operation, error)
+            await monitor.ended(call, operation, operation.state, error)
 
 
 class _Counting(Monitor):
@@ -96,6 +98,8 @@ class _Counting(Monitor):
     def __init__(self, callback: Any) -> None:
         self.callback = callback
 
-    async def yielded(self, call: Call, op: Operation[Any, Any], item: Any) -> None:
+    async def yielded(
+        self, call: Call, op: OperationHandler, state: State, item: Any
+    ) -> None:
         if not isinstance(item, Exception):
             self.callback.relative_update(1)

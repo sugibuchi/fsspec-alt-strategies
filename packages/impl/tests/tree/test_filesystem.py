@@ -321,15 +321,17 @@ class _Recording(Monitor):
         self.cancel_after = cancel_after
         self.events: list[tuple[str, str, Any]] = []
 
-    async def started(self, call: Call, op: Any) -> None:
+    async def started(self, call: Call, op: Any, state: Any) -> None:
         self.events.append(("started", call.method, self.name))
 
-    async def yielded(self, call: Call, op: Any, item: Any) -> None:
+    async def yielded(self, call: Call, op: Any, state: Any, item: Any) -> None:
         self.events.append(("yielded", call.method, item))
         if self.cancel_after is not None and len(self.events) > self.cancel_after:
             op.cancel()
 
-    async def ended(self, call: Call, op: Any, error: BaseException | None) -> None:
+    async def ended(
+        self, call: Call, op: Any, state: Any, error: BaseException | None
+    ) -> None:
         self.events.append(("ended", call.method, type(error)))
 
 

@@ -58,7 +58,7 @@ The interface they share is a package of its own, installed rather than copied:
 pip install fsspec-alt-strategies-common
 ```
 
-It holds `Operation`, the monitors and `StorageProfile`, so that every copy in a project shares one of each. The copies
+It holds the operations' control and states, the monitors and `StorageProfile`, so that every copy in a project shares one of each. The copies
 depend on it and on fsspec alone.
 
 ## Choosing with numbers

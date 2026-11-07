@@ -200,10 +200,10 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
             self.calls: list[str] = []
             self.items = 0
 
-        async def started(self, call: Call, op: Any) -> None:
+        async def started(self, call: Call, op: Any, state: Any) -> None:
             self.calls.append(call.method)
 
-        async def yielded(self, call: Call, op: Any, item: Any) -> None:
+        async def yielded(self, call: Call, op: Any, state: Any, item: Any) -> None:
             self.items += 1
 
     monitor = Counting()

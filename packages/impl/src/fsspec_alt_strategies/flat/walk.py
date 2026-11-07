@@ -7,17 +7,17 @@
 all the keys under a prefix at once. `flat_walk` makes that one listing, and
 derives the folders from the keys.
 
-This module depends on `_keys`, and `paths` of `common`.
+This module depends on `_keys`, `operation`, and `paths` of `common`.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fsspec_alt_strategies_common.control import Operation
 from fsspec_alt_strategies_common.states import WalkState
 
 from ..common.paths import _check_maxdepth, _trim
+from ..operation import Operation
 from ._keys import _close, _folder, _folders
 
 if TYPE_CHECKING:

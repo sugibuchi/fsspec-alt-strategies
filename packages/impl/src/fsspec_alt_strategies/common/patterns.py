@@ -30,8 +30,7 @@ from .paths import _trim
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    from fsspec_alt_strategies_common.control import Operation
-
+    from ..operation import Operation
     from .operations import _Info
 
 

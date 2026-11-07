@@ -5,8 +5,9 @@
 The strategies are copied into a project. This package is not: it is installed
 once, so that every copy in a project, of any version, shares one interface.
 
-- `control`: `Operation`, which a strategy returns, its `State`, and the
-  monitors watching the operations behind a filesystem's fsspec methods.
+- `control`: `State`, an operation's progress, `OperationHandler`, its control,
+  and the monitors watching the operations behind a filesystem's fsspec
+  methods.
 - `profile`: `StorageProfile`, what a storage does that fsspec leaves open.
 - `states`: the states the strategies report, such as `FindState`.
 
@@ -16,7 +17,14 @@ block watches the calls of every copy.
 
 from __future__ import annotations
 
-from .control import Call, CallCancelled, Monitor, Operation, State, monitoring
+from .control import (
+    Call,
+    CallCancelled,
+    Monitor,
+    OperationHandler,
+    State,
+    monitoring,
+)
 from .profile import StorageProfile
 from .states import CpState, DuState, FindState, GlobState, MvState, RmState, WalkState
 
@@ -34,7 +42,7 @@ __all__ = [
     "GlobState",
     "Monitor",
     "MvState",
-    "Operation",
+    "OperationHandler",
     "RmState",
     "State",
     "StorageProfile",

@@ -3,7 +3,7 @@
 The interface the strategies of [fsspec-alt-strategies](https://github.com/sugibuchi/fsspec-alt-strategies) share with
 their callers:
 
-- `Operation` and `State`, which a strategy returns.
+- `OperationHandler` and `State`: the control and the progress of the operation a strategy returns.
 - `Monitor` and `monitoring`, watching the operations behind a filesystem's fsspec methods.
 - `StorageProfile`, what a storage does that fsspec leaves open.
 - The states the strategies report, such as `FindState`.

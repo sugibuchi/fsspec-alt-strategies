@@ -27,10 +27,9 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, Sequence
 
-    from fsspec_alt_strategies_common.control import Operation
-
     from ..common.jobs import _Roots
     from ..common.operations import _Info, _Ls
+    from ..operation import Operation
     from .walk import _Listing
 
 

@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from fsspec_alt_strategies.common.monitors import _collect
-from fsspec_alt_strategies_common.control import Operation, State
+from fsspec_alt_strategies.operation import Operation
+from fsspec_alt_strategies_common.control import State
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
