@@ -67,6 +67,17 @@ known_implementations: dict[str, KnownImplementation] = {
         # A bucket with a hierarchical namespace has folders of its own: unknown.
         "storage_profile": StorageProfile(),
     },
+    "adlfs.spec.AzureBlobFileSystem": {
+        # Its ls lists one folder per request, with walk_blobs and a delimiter,
+        # with a hierarchical namespace or without.
+        "type": "tree",
+        "async": True,
+        "operation_concurrency": 32,
+        "io_concurrency": 8,
+        # Its folders are real with a hierarchical namespace, prefixes without,
+        # and one class serves both: unknown.
+        "storage_profile": StorageProfile(),
+    },
     "fsspec.implementations.memory.MemoryFileSystem": {
         "type": "tree",
         "async": False,
