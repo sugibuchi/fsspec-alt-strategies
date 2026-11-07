@@ -80,6 +80,11 @@ class _FlatJobs(_Jobs):
             return None
         return self._keys(roots.folders)
 
+    def fed(self, item: dict[str, Any]) -> list[Any]:
+        self.current = item["name"]
+        self.add(item)
+        return []
+
     async def _keys(self, folders: Sequence[str]) -> AsyncGenerator[dict[str, Any]]:
         """The keys under each folder, as ``ils`` lists them.
 
@@ -104,8 +109,3 @@ class _FlatJobs(_Jobs):
                 entry = await self.info(folder)
             if entry["type"] != "directory":
                 yield entry
-
-    def fed(self, item: dict[str, Any]) -> list[Any]:
-        self.current = item["name"]
-        self.add(item)
-        return []

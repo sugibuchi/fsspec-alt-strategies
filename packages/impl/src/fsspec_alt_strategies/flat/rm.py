@@ -185,11 +185,6 @@ class _Deletion(_FlatJobs):
         if self.batch:
             self.send()
 
-    def send(self) -> None:
-        """Queue the deletion of the batch, and start another."""
-        paths, self.batch = tuple(self.batch), []
-        self.waiting.append(_Job("delete", paths[-1], paths=paths))
-
     def run(self, job: _Job) -> Awaitable[Any]:
         return self.rm_files(list(job.paths))
 
@@ -201,3 +196,8 @@ class _Deletion(_FlatJobs):
         # Yielded among paths, the error must tell its paths itself.
         error.add_note(f"Deleting {_keys_of(job.paths)} failed.")
         return [error]
+
+    def send(self) -> None:
+        """Queue the deletion of the batch, and start another."""
+        paths, self.batch = tuple(self.batch), []
+        self.waiting.append(_Job("delete", paths[-1], paths=paths))

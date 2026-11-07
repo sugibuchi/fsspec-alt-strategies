@@ -271,3 +271,47 @@ async def test_batches_delete_markers_without_copying_them() -> None:
     assert deleted == [["data/", "data/a.txt", "data/empty/"]]
     assert sorted(keys) == ["moved/a.txt"]
     assert op.state == MvState(current=op.state.current, files_found=1, files_moved=1)
+
+
+async def test_batches_move_a_key_listed_twice_once() -> None:
+    keys = {"data/a.txt": b"a", "data/b.txt": b"b"}
+    copied: list[str] = []
+    deleted: list[list[str]] = []
+
+    async def ils(prefix: str) -> AsyncIterator[dict[str, Any]]:
+        # A listing may give a key twice, e.g. across pages of a changing prefix.
+        for name in ["data/a.txt", "data/a.txt", "data/b.txt"]:
+            yield {"name": name, "size": 1, "type": "file"}
+
+    async def info(path: str) -> dict[str, Any]:
+        raise FileNotFoundError(path)
+
+    async def cp_file(source: str, destination: str) -> None:
+        copied.append(source)
+        keys[destination] = keys[source]
+
+    async def rm_files(paths: list[str]) -> None:
+        deleted.append(sorted(paths))
+        for path in paths:
+            del keys[path]
+
+    op = flat_mv(
+        "data",
+        "moved",
+        ils=ils,
+        info=info,
+        cp_file=cp_file,
+        rm_files=rm_files,
+        batch_size=10,
+        profile=StorageProfile(),
+        concurrency_limit=asyncio.Semaphore(4),
+    )
+    moved, errors = await _collect(op)
+    assert errors == []
+    assert sorted(moved) == [
+        ("data/a.txt", "moved/a.txt"),
+        ("data/b.txt", "moved/b.txt"),
+    ]
+    assert sorted(copied) == ["data/a.txt", "data/b.txt"]
+    assert deleted == [["data/a.txt", "data/b.txt"]]
+    assert op.state == MvState(current=op.state.current, files_found=2, files_moved=2)

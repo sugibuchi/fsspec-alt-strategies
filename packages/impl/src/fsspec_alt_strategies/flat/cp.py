@@ -176,14 +176,6 @@ class _Copy(_Placing, _FlatJobs):
     def run(self, job: _Job) -> Awaitable[Any]:
         return self.copy_file(job.source, job.destination)
 
-    async def copy_file(self, source: str, destination: str) -> None:
-        try:
-            await self.cp_file(source, destination)
-        except Exception as e:
-            # Yielded among paths, the error must tell its paths itself.
-            e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")
-            raise
-
     def done(self, job: _Job) -> list[Any]:
         self.files_done += 1
         return [(job.source, job.destination)]
@@ -191,3 +183,12 @@ class _Copy(_Placing, _FlatJobs):
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         # Noted where it happened, in copy_file.
         return [error]
+
+    async def copy_file(self, source: str, destination: str) -> None:
+        """Copy a key, noting its paths on an error."""
+        try:
+            await self.cp_file(source, destination)
+        except Exception as e:
+            # Yielded among paths, the error must tell its paths itself.
+            e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")
+            raise

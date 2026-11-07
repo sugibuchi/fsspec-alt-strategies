@@ -51,7 +51,7 @@ class FlatFileSystem(_StrategyFileSystem):
 
     It suits flat storages, such as object stores, which list every key under a
     prefix in one paginated request. It overrides fsspec's ``_walk``,
-    ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``mv`` when
+    ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``_mv`` when
     recursive, with `flat_walk`, `flat_find`, `flat_du`, `flat_glob`, `flat_rm`,
     `flat_cp` and `flat_mv`. Their answers are fsspec's, and their failures are
     raised, a single one as it is, several in an ExceptionGroup. ``_walk``
@@ -186,6 +186,8 @@ class FlatFileSystem(_StrategyFileSystem):
     @abstractmethod
     def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         """Open a file, as fsspec's ``_open`` does, for the sync ``open``."""
+
+    # fsspec's recursive methods, answered by the flat strategies.
 
     async def _walk(
         self,

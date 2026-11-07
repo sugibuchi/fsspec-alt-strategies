@@ -253,7 +253,9 @@ class _Move(_Copy):
         super().__init__(path1, path2, **kwargs)
         self.rm_files = rm_files
         self.batch_size = batch_size
-        # The keys to delete, each with where it was copied, None for a marker.
+        # The keys to delete. Each key moving, from its listing to its
+        # deletion, has where it is copied, None for a marker: listed again,
+        # it is skipped.
         self.batch: list[str] = []
         self.copied: dict[str, str | None] = {}
         # The copies queued or running, and whether the listing has ended: the
@@ -271,9 +273,13 @@ class _Move(_Copy):
 
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
-        if name.endswith("/"):
-            self.delete_later(name, None)  # A folder's marker: deleted only.
+        if name in self.copied:
             return
+        if name.endswith("/"):
+            self.copied[name] = None
+            self.delete_later(name)  # A folder's marker: deleted only.
+            return
+        self.copied[name] = self.target(name)
         self.copying += 1
         super().add(entry)
 
@@ -290,21 +296,6 @@ class _Move(_Copy):
         self.copying = sum(j.kind == "copy" for j in self.running.values())
         self.send_if_ready()
 
-    def delete_later(self, source: str, destination: str | None) -> None:
-        """Add a key to the batch to delete, and send the batch if it is ready."""
-        self.copied[source] = destination
-        self.batch.append(source)
-        self.send_if_ready()
-
-    def send_if_ready(self) -> None:
-        """Send the batch if full, or if nothing more can join it."""
-        if not self.batch:
-            return
-        done = (self.listed or self.op.cancelling()) and self.copying == 0
-        if len(self.batch) >= self.batch_size or done:
-            paths, self.batch = tuple(self.batch), []
-            self.waiting.append(_Job("delete", paths[-1], paths=paths))
-
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "delete":
             return self.rm_files(list(job.paths))
@@ -313,7 +304,7 @@ class _Move(_Copy):
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "copy":
             self.copying -= 1
-            self.delete_later(job.source, job.destination)
+            self.delete_later(job.source)
             return []
         moved = []
         for path in job.paths:
@@ -325,6 +316,7 @@ class _Move(_Copy):
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         if job.kind == "copy":
             self.copying -= 1
+            self.copied.pop(job.source)
             self.send_if_ready()
             return super().failed(job, error)
         for path in job.paths:
@@ -334,3 +326,17 @@ class _Move(_Copy):
             " places."
         )
         return [error]
+
+    def delete_later(self, source: str) -> None:
+        """Add a key to the batch to delete, and send the batch if it is ready."""
+        self.batch.append(source)
+        self.send_if_ready()
+
+    def send_if_ready(self) -> None:
+        """Send the batch if full, or if nothing more can join it."""
+        if not self.batch:
+            return
+        done = (self.listed or self.op.cancelling()) and self.copying == 0
+        if len(self.batch) >= self.batch_size or done:
+            paths, self.batch = tuple(self.batch), []
+            self.waiting.append(_Job("delete", paths[-1], paths=paths))
