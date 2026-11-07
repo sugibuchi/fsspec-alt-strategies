@@ -420,15 +420,23 @@ async def test_sequential_may_be_chosen_when_the_upload_starts(
     assert await flat_fs._cat_file("f.bin") == data
 
 
-async def test_a_file_fitting_one_part_is_uploaded_in_one_request(
-    flat_fs: SimulatedFileSystem,
+@pytest.mark.parametrize(
+    ("size", "requests"),
+    [
+        # Past min_multipart_size, but no bigger than the smallest part: a multipart
+        # upload's start and completion would be two requests more, for nothing.
+        (4 * _KiB, ["all"]),
+        # Bigger, it goes in parts, sent at once.
+        (6 * _KiB, ["start", "complete"]),
+    ],
+)
+async def test_a_file_no_bigger_than_a_part_is_uploaded_in_one_request(
+    flat_fs: SimulatedFileSystem, size: int, requests: list[str]
 ) -> None:
-    # Past min_multipart_size, but one part when closed: a multipart upload's start
-    # and completion would be two requests more, for nothing.
-    data = b"x" * (6 * _KiB)
-    async with _Writer(flat_fs, "f.bin", min_multipart_size=5 * _KiB) as f:
+    data = b"x" * size
+    async with _Writer(flat_fs, "f.bin", min_multipart_size=3 * _KiB) as f:
         await f._write(data)
-    assert f.requests == ["all"]
+    assert f.requests == requests
     assert await flat_fs._cat_file("f.bin") == data
 
 
