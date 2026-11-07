@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import pickle
 from contextlib import nullcontext
@@ -250,6 +251,42 @@ async def test_a_sync_filesystem_is_refused(router: _Router) -> None:
     router.makers["memory"] = MemoryFileSystem
     with pytest.raises(TypeError, match="SyncTreeWrapper"):
         await router._info("lake/memory/x")
+
+
+class _Preparing(_Router):
+    """A router whose routing needs a request first, e.g. a setting."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.ready = False
+        self.prepared: list[str] = []
+
+    async def _prepare_route(self, path: str) -> None:
+        self.prepared.append(path)
+        await asyncio.sleep(0)  # The request.
+        self.ready = True
+
+    def _route(self, path: str) -> tuple[AsyncFileSystem, str] | None:
+        assert self.ready
+        return super()._route(path)
+
+
+async def test_routing_awaits_its_preparation() -> None:
+    router = _Preparing()
+    router.tree.add_file("a/1.txt", b"1")
+    assert await router._find("routed://lake/tree/a") == ["lake/tree/a/1.txt"]
+    assert router.prepared == ["lake/tree/a"]
+    router.ready = False
+    await router._rm(["lake/tree/a/1.txt"])
+    assert not router.tree._file_data
+
+
+def test_a_sync_method_awaits_the_preparation_too() -> None:
+    router = _Preparing(asynchronous=False)
+    router.tree.add_file("a/1.txt", b"1")
+    with router.open("lake/tree/a/1.txt", "rb"):
+        pass
+    assert router.prepared == ["lake/tree/a/1.txt"]
 
 
 def test_a_storages_profile(router: _Router) -> None:

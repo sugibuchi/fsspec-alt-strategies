@@ -332,7 +332,12 @@ A subclass implements three methods:
 - `_outer(fs, path)` gives the router's path of an inner one, so that every name answered is the router's.
 - `_roots(path)`, a coroutine, lists a folder above the storages, as `_ls` with `detail=True` does.
 
-It may override two hooks:
+It may override these hooks:
+
+- `_prepare_route(path)`, a coroutine, is awaited before `_route`. A subclass whose routing needs a request, e.g. a
+  setting of the service, makes it there and keeps the answer, as `_route` is sync. By default, it does nothing.
+  - A sync method of a sync router awaits it on the loop. One of an asynchronous router cannot, e.g. `open`: `_route`
+    then routes with what it has.
 
 - `_same_storage(fs1, path1, fs2, path2)` names the one filesystem copying or moving between two storages' paths
   itself. It returns that filesystem and both paths as its own, or None for a transfer. By default, it returns
