@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..common.wrapper import _AsyncWrapping, _SyncWrapping
+from ..common.wrapper import _AsyncFileSystemWrapper, _SyncFileSystemWrapper
 from .filesystem import TreeFileSystem
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 __all__ = ["AsyncTreeWrapper", "SyncTreeWrapper"]
 
 
-class AsyncTreeWrapper(_AsyncWrapping, TreeFileSystem):
+class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
     """An async filesystem, as a `TreeFileSystem`: its recursive methods the tree strategies.
 
     Its primitives, such as ``_ls``, ``_rm_file`` and ``_mv_file``, are the
@@ -79,7 +79,7 @@ class AsyncTreeWrapper(_AsyncWrapping, TreeFileSystem):
         )
 
 
-class SyncTreeWrapper(_SyncWrapping, TreeFileSystem):
+class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
     """A sync filesystem, as a `TreeFileSystem`: its recursive methods the tree strategies.
 
     Its primitives, such as ``_ls``, ``_rm_file`` and ``_mv_file``, call the

@@ -3,8 +3,8 @@
 """What the wrappers of the families share: the calls to the filesystem wrapped.
 
 A wrapper, e.g. `AsyncTreeWrapper`, is a family's filesystem class whose
-primitives are another filesystem's. `_AsyncWrapping` calls an async one's
-coroutines, on its loop. `_SyncWrapping` calls a sync one's methods, each in a
+primitives are another filesystem's. `_AsyncFileSystemWrapper` calls an async one's
+coroutines, on its loop. `_SyncFileSystemWrapper` calls a sync one's methods, each in a
 thread. Both pass its own data methods, such as ``_cat_file``, on as they are,
 under ``io_limit``.
 
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from fsspec_alt_strategies_common.profile import StorageProfile
 
 
-class _Wrapping:
+class _FileSystemWrapper:
     """The filesystem wrapped, and its paths, as the wrapper's own."""
 
     # Made on demand, and dropped after: fsspec keeps none.
@@ -58,7 +58,7 @@ class _Wrapping:
         return self.fs.unstrip_protocol(name)
 
 
-class _AsyncWrapping(_Wrapping):
+class _AsyncFileSystemWrapper(_FileSystemWrapper):
     """The primitives of an async filesystem, awaited on its loop."""
 
     fs: AsyncFileSystem
@@ -116,7 +116,7 @@ class _AsyncWrapping(_Wrapping):
         return self.fs._open(path, mode=mode, **kwargs)
 
 
-class _SyncWrapping(_Wrapping):
+class _SyncFileSystemWrapper(_FileSystemWrapper):
     """The primitives of a sync filesystem, each run in a thread.
 
     The threads are those of the loop's default executor. ``operation_limit``

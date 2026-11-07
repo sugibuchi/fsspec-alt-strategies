@@ -21,7 +21,7 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-from ..common.wrapper import _AsyncWrapping, _SyncWrapping
+from ..common.wrapper import _AsyncFileSystemWrapper, _SyncFileSystemWrapper
 from .filesystem import FlatFileSystem
 
 if TYPE_CHECKING:
@@ -40,7 +40,7 @@ def _under(found: dict[str, dict[str, Any]], prefix: str) -> list[dict[str, Any]
     return [e for name, e in found.items() if name.startswith(prefix)]
 
 
-class AsyncFlatWrapper(_AsyncWrapping, FlatFileSystem):
+class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
     """An async filesystem, as a `FlatFileSystem`: its recursive methods the flat strategies.
 
     Its primitives, such as ``_info``, ``_cp_file`` and ``_mv_file``, are the
@@ -123,7 +123,7 @@ class AsyncFlatWrapper(_AsyncWrapping, FlatFileSystem):
             await self.fs._rm_file(path)
 
 
-class SyncFlatWrapper(_SyncWrapping, FlatFileSystem):
+class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
     """A sync filesystem, as a `FlatFileSystem`: its recursive methods the flat strategies.
 
     Its primitives, such as ``_info``, ``_cp_file`` and ``_mv_file``, call the
