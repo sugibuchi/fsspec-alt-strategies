@@ -40,6 +40,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../flat/glob.py`              | `flat_glob`, a glob listing only the keys starting as its pattern does. |
 | `.../flat/rm.py`                | `flat_rm`, a recursive delete in batches, sent as the listing goes on. |
 | `.../flat/cp.py`                | `flat_cp`, a recursive copy that copies each key as it is listed. |
+| `.../flat/transfer.py`          | `flat_transfer`, `flat_cp` between two storages, each key by a `copy_file` the caller gives. |
 | `.../flat/mv.py`                | `flat_mv`, a recursive move: a `mv_file` per key, or a copy per key and a deletion per batch. |
 | `.../flat/filesystem.py`        | `FlatFileSystem`, an abstract async filesystem whose recursive methods are the flat strategies. |
 | `.../flat/wrapper.py`           | `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `FlatFileSystem`. |
@@ -379,13 +380,16 @@ per request even on object stores. Its order differs, as a listing is in no orde
   known to be done, and only the folders' names wait, never the listing.
 - `maxdepth` and `descend` leave paths out, but save no request: the listing gives all the keys anyway.
 
-`flat_rm`, `flat_cp` and `flat_mv` run on the same engine as the tree's, `_Jobs`, fed by `_FlatJobs` in
+`flat_rm`, `flat_cp`, `flat_transfer` and `flat_mv` run on the same engine as the tree's, `_Jobs`, fed by `_FlatJobs` in
 `flat/_jobs.py` with the keys under each root:
 
 - Object stores delete many keys per request. So `flat_rm` takes `rm_files(paths)` and a `batch_size`, and sends each
   batch as soon as the listing has given its keys. A batch that fails yields one error, noting its keys.
 - `flat_cp` copies each key as it is listed, placed as `tree_cp` places it. A folder's marker is not copied: flat
   storages need no folder for the files in it.
+- `flat_transfer` is `flat_cp` between two storages, taking its operations as `tree_transfer` does. The destination
+  may be a tree, so it makes each destination folder once, before its first key, unless the profile says no folder is
+  needed. A folder's marker makes its folder, so that a tree keeps it even when empty.
 - `flat_mv` moves each key by `mv_file`, or copies it and deletes the keys copied in batches. Which is given decides,
   and the profile's `renames_files` if both are. Unknown, batches are right on any storage. Cancelled, it still deletes the keys copied, so that no file is
   left in both places: its `stopping` keeps their batches, which the engine would otherwise drop.
@@ -408,7 +412,7 @@ The fields, and the requests each saves:
 
 | Field              | Saves                                                                              |
 |--------------------|------------------------------------------------------------------------------------|
-| `parents_required` | False: the `makedirs` of each folder with files, in `tree_cp` and `tree_mv`.       |
+| `parents_required` | False: the `makedirs` of each folder with files, in `tree_cp`, `tree_mv` and the transfers. |
 | `implicit_folders` | True: those, and the `rm_folder` of each folder, in `tree_rm` and `tree_mv`.       |
 | `renames_files`    | True: the data copied by `flat_mv`, given both ways, as it moves each key by `mv_file`. |
 | `renames_folders`  | True: all requests in a folder moved whole by one `mv_file`, in `tree_mv`.         |
