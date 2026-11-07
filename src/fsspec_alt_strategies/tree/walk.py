@@ -276,28 +276,29 @@ async def _scan(
       if ``folder_root`` and the walk is not stopping.
     """
     root = _trim(path)
-    listed = False
-    try:
-        listings = _listings(
-            ls,
-            root,
-            maxdepth=maxdepth,
-            descend=descend,
-            concurrency_limit=concurrency_limit,
-            stopping=stopping,
-        )
-        async with aclosing(listings):
-            async for listing in listings:
-                first, listed = not listed, True
-                yield listing
-                if first and folder_root and not (stopping and stopping()):
-                    yield await info(root)
-    except (FileNotFoundError, NotADirectoryError) as e:
-        # Only the root's own listing raises them: any later one is yielded.
-        if listed:
-            raise
-        if file_root and isinstance(e, NotADirectoryError):
+    listings = _listings(
+        ls,
+        root,
+        maxdepth=maxdepth,
+        descend=descend,
+        concurrency_limit=concurrency_limit,
+        stopping=stopping,
+    )
+    async with aclosing(listings):
+        try:
+            root_listing = await anext(listings)
+        except StopAsyncIteration:
+            return  # Stopping before the root was listed.
+        except (FileNotFoundError, NotADirectoryError) as e:
+            # Only the root's own listing raises them: any later one is yielded.
+            if file_root and isinstance(e, NotADirectoryError):
+                yield await info(root)
+            return
+        yield root_listing
+        if folder_root and not (stopping and stopping()):
             yield await info(root)
+        async for listing in listings:
+            yield listing
 
 
 def _listing(
