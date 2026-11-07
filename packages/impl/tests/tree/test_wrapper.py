@@ -74,6 +74,30 @@ def test_an_async_filesystem_on_its_own_loop() -> None:
     assert sorted(inner._file_data) == sorted("moved" + p[4:] for p in _FILES)
 
 
+class _RecursiveDelete(SimulatedFileSystem):
+    """A storage deleting a folder whole, in one request."""
+
+    async def _rm_tree(self, path: str) -> None:
+        await self._rm(path, recursive=True)
+
+
+async def test_an_async_filesystem_deletes_a_folder_by_its_rm_tree() -> None:
+    inner = _RecursiveDelete(hierarchical=True, asynchronous=True)
+    for path in _FILES:
+        inner.add_file(path, path.encode())
+    tree = AsyncTreeWrapper(inner, **_LIMITS)
+    assert tree._rm_tree == inner._rm_tree
+    inner.reset_stats()
+    await tree._rm("data", recursive=True)
+    # Its kind asked, then one deletion: no listing.
+    assert inner.stats.calls == {"info": 1, "delete": 1}
+    assert not inner._file_data
+
+
+def test_a_filesystem_without_rm_tree_leaves_it_none() -> None:
+    assert AsyncTreeWrapper(_simulated(), **_LIMITS)._rm_tree is None
+
+
 def test_wrappers_are_made_anew() -> None:
     inner = _simulated()
     assert AsyncTreeWrapper(inner, **_LIMITS) is not AsyncTreeWrapper(inner, **_LIMITS)
