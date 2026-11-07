@@ -77,6 +77,10 @@ def tree_cp(
     created at the destination before files are copied into it, and for each
     empty folder.
 
+    The copies run concurrently, so the destination's paths are created in
+    another order than the source's. A storage listing in creation order
+    shows it.
+
     Unlike fsspec's ``copy``, it keeps going past a failure, and reports each.
     A copy cancelled or failed leaves what was copied so far: it deletes
     nothing.

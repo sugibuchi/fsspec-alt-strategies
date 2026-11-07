@@ -54,6 +54,10 @@ def flat_cp(
     ending with "/", is not copied, as fsspec's ``copy`` copies no folder:
     flat storages need none for the files in it.
 
+    The copies run concurrently, so the destination's keys are created in
+    another order than the source's. A storage listing in creation order
+    shows it.
+
     Unlike fsspec's ``copy``, it keeps going past a failure, and reports each.
     A copy cancelled or failed leaves what was copied so far: it deletes
     nothing.
