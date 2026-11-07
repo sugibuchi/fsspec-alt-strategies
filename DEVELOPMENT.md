@@ -16,6 +16,7 @@
 | `.../tree/mv.py`                | `tree_mv`, a recursive move: a copy deleting as it goes.       |
 | `.../tree/_jobs.py`             | The private engine's tree side: it feeds `common`'s with the walk's listings. |
 | `.../flat/`                     | The strategies listing a flat namespace by key prefix, as object stores do. |
+| `.../flat/walk.py`              | `flat_walk`, a walk of one listing of a prefix, its folders derived from the keys. |
 | `.../flat/find.py`              | `flat_find`, a find streaming one listing of a prefix.          |
 | `.../flat/du.py`                | `flat_du`, the size of the files under a prefix, from the listing alone. |
 | `.../flat/glob.py`              | `flat_glob`, a glob listing only the keys starting as its pattern does. |
@@ -268,6 +269,14 @@ fsspec has no such listing, so `SimulatedFileSystem` has its own, `_ils`, counti
 strategy on `flat_fs`, against fsspec's own method on it.
 
 `flat_glob` matches with `tree_glob`'s compiled patterns, so the two never answer differently.
+
+`flat_walk` yields what `tree_walk` yields, from one listing rather than one per folder: fsspec's `walk` lists a folder
+per request even on object stores. Its order differs, as a listing is in no order of folders:
+
+- Top down, each folder comes before what is in it, but its files may come after its subfolders'.
+- Bottom up, the files come as listed, and the folders once the listing ends, the deepest first. Only then is a folder
+  known to be done, and only the folders' names wait, never the listing.
+- `maxdepth` and `descend` leave paths out, but save no request: the listing gives all the keys anyway.
 
 `flat_rm`, `flat_cp` and `flat_mv` run on the same engine as the tree's, `_Jobs`, fed by `_FlatJobs` in
 `flat/_jobs.py` with the keys under each root:

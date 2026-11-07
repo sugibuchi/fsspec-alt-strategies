@@ -17,7 +17,32 @@ from dataclasses import dataclass
 
 from ..control import State
 
-__all__ = ["CpState", "DuState", "FindState", "GlobState", "MvState", "RmState"]
+__all__ = [
+    "CpState",
+    "DuState",
+    "FindState",
+    "GlobState",
+    "MvState",
+    "RmState",
+    "WalkState",
+]
+
+
+@dataclass(frozen=True, kw_only=True)
+class WalkState(State):
+    """The progress of a walk, such as `tree_walk` or `flat_walk`.
+
+    Attributes
+    ----------
+    folders_listed : int or None
+        The folders listed so far, those that failed included. None for a
+        strategy listing no folders, such as `flat_walk`.
+    found : int
+        The entries found so far.
+    """
+
+    folders_listed: int | None = None
+    found: int = 0
 
 
 @dataclass(frozen=True, kw_only=True)

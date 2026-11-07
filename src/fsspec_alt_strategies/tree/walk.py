@@ -14,7 +14,7 @@ requests: `fsspec.asyn.AsyncFileSystem._find` there.
 The tree strategies take the storage's operations as functions, such as
 ``ls``, rather than a filesystem: see `common.operations`.
 
-This module depends on `control`, and `jobs` and `paths` of `common`.
+This module depends on `control`, and `jobs`, `paths` and `states` of `common`.
 """
 
 from __future__ import annotations
@@ -27,7 +27,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _Permits
 from ..common.paths import _check_maxdepth, _trim
-from ..control import Operation, State
+from ..common.states import WalkState
+from ..control import Operation
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Collection
@@ -35,22 +36,6 @@ if TYPE_CHECKING:
     from ..common.operations import _Info, _Ls
 
 __all__ = ["WalkState", "tree_walk"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class WalkState(State):
-    """The progress of a `tree_walk`.
-
-    Attributes
-    ----------
-    folders_listed : int
-        The folders listed so far, those that failed included.
-    found : int
-        The entries found so far.
-    """
-
-    folders_listed: int = 0
-    found: int = 0
 
 
 def tree_walk(
@@ -162,7 +147,7 @@ def tree_walk(
                 for entry in listing.entries:
                     yield entry
 
-    return Operation(run, WalkState())
+    return Operation(run, WalkState(folders_listed=0))
 
 
 @dataclass(frozen=True, slots=True)

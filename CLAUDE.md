@@ -52,8 +52,8 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
 - A family of strategies, such as `tree/` or `flat/`, never imports another. What two share goes in `common/`, a
   private module per concern, e.g. `common/patterns.py` for glob patterns.
 - The flat strategies, in `flat/`, list with `ils(prefix)`, an async iterator of entries, never pages: see
-  DEVELOPMENT.md's "The flat strategies". They build on `flat._keys._scan`, which derives folders from keys and handles
-  the root.
+  DEVELOPMENT.md's "The flat strategies". Those that only read build on `flat._keys`, which derives folders from keys:
+  its `_scan` handles the root as fsspec's `_find` does, and `flat_walk` as `tree_walk` does.
 - What a storage does that fsspec leaves open is declared, never detected, in `profile.StorageProfile`. A strategy
   takes `profile=`, unknown if None. Unknown must be correct on any storage; a
   field only saves requests. Add a field only when a strategy saves requests with it.
