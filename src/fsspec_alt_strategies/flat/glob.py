@@ -11,18 +11,19 @@ first wildcard, e.g. ``data/2024-`` for ``data/2024-*.parquet``.
 The paths are matched as `tree_glob` matches them, with the same compiled
 patterns: the two never answer differently.
 
-This module depends on `control`, `_keys`, and `paths` and `patterns` of `common`.
+This module depends on `control`, `_keys`, and `paths`, `patterns` and `states` of
+`common`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _Search
-from ..control import Operation, State
+from ..common.states import GlobState
+from ..control import Operation
 from ._keys import _close, _folder, _folders
 
 if TYPE_CHECKING:
@@ -32,20 +33,7 @@ if TYPE_CHECKING:
     from ..common.operations import _Info
     from ._keys import _Ils
 
-__all__ = ["FlatGlobState", "flat_glob"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class FlatGlobState(State):
-    """The progress of a `flat_glob`.
-
-    Attributes
-    ----------
-    matched : int
-        The paths matched so far.
-    """
-
-    matched: int = 0
+__all__ = ["GlobState", "flat_glob"]
 
 
 def flat_glob(
@@ -56,7 +44,7 @@ def flat_glob(
     maxdepth: int | None = None,
     withdirs: bool = True,
     concurrency_limit: asyncio.Semaphore,
-) -> Operation[dict[str, Any], FlatGlobState]:
+) -> Operation[dict[str, Any], GlobState]:
     """Find the paths matching glob patterns, listing only the keys they can match.
 
     It matches what fsspec's ``_glob`` matches, with ``*``, ``?``, ``[...]`` and
@@ -109,7 +97,7 @@ def flat_glob(
     -------
     Operation
         Yielding the entry of each path matched. Its state is a
-        `FlatGlobState`.
+        `GlobState`.
 
     Raises
     ------
@@ -144,7 +132,7 @@ def flat_glob(
             literals.append(trimmed)
 
     async def run(
-        op: Operation[dict[str, Any], FlatGlobState],
+        op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any]]:
         found: set[str] = set()
         async for entry in _infos(info, literals, concurrency_limit, op, found):
@@ -155,7 +143,7 @@ def flat_glob(
             async for match in _matches(ils, prefix, group, op, found):
                 yield match
 
-    return Operation(run, FlatGlobState())
+    return Operation(run, GlobState())
 
 
 def _listings(
@@ -175,7 +163,7 @@ async def _matches(
     ils: _Ils,
     prefix: str,
     searches: list[_Search],
-    op: Operation[dict[str, Any], FlatGlobState],
+    op: Operation[dict[str, Any], GlobState],
     found: set[str],
 ) -> AsyncGenerator[dict[str, Any]]:
     """The matches of patterns in one listing, noted in ``found``."""
@@ -197,7 +185,7 @@ async def _matches(
                 if matched in found or not any(s.matched(candidate) for s in searches):
                     continue
                 found.add(matched)
-                op.state = FlatGlobState(
+                op.state = GlobState(
                     errors=op.state.errors,
                     current=matched,
                     matched=op.state.matched + 1,

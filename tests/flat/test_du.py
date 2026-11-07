@@ -9,7 +9,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.control import collect
-from fsspec_alt_strategies.flat.du import FlatDuState, flat_du
+from fsspec_alt_strategies.flat.du import DuState, flat_du
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 
@@ -50,5 +50,5 @@ async def test_sends_only_the_listing() -> None:
     _tree(fs)
     op = _du(fs, "data")
     await collect(op)
-    assert op.state == FlatDuState(current=op.state.current, files=5, size=221)
+    assert op.state == DuState(current=op.state.current, files=5, size=221)
     assert fs.stats.calls == {"list": 3}

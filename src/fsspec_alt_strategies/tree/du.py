@@ -6,17 +6,18 @@
 each file's size with a request of its own. `tree_du` adds up the sizes the
 listings already give.
 
-This module depends on `control`, `walk`, and `paths` of `common`.
+This module depends on `control`, `walk`, and `paths` and `states` of `common`.
 """
 
 from __future__ import annotations
 
 from contextlib import aclosing
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _check_maxdepth
-from ..control import Operation, State
+from ..common.states import DuState
+from ..control import Operation
 from .walk import _scan
 
 if TYPE_CHECKING:
@@ -26,26 +27,6 @@ if TYPE_CHECKING:
     from ..common.operations import _Info, _Ls
 
 __all__ = ["DuState", "tree_du"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class DuState(State):
-    """The progress of a `tree_du`.
-
-    Attributes
-    ----------
-    folders_listed : int
-        The folders listed so far, those that failed included.
-    files : int
-        The files counted so far.
-    size : int
-        Their size so far, in bytes. Once the operation has run to its end, it
-        is what fsspec's ``_du`` returns.
-    """
-
-    folders_listed: int = 0
-    files: int = 0
-    size: int = 0
 
 
 def tree_du(
@@ -160,4 +141,4 @@ def tree_du(
                 for entry in files:
                     yield entry
 
-    return Operation(run, DuState())
+    return Operation(run, DuState(folders_listed=0))

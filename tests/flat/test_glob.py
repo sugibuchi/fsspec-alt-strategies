@@ -9,7 +9,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.control import collect
-from fsspec_alt_strategies.flat.glob import FlatGlobState, flat_glob
+from fsspec_alt_strategies.flat.glob import GlobState, flat_glob
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -116,7 +116,7 @@ async def test_lists_only_the_keys_starting_as_the_pattern() -> None:
     # A page per key, 2 keys: fsspec's lists all 6 entries of data, the three
     # tables and the README too.
     assert fs.stats.calls == {"list": 2}
-    assert op.state == FlatGlobState(current=op.state.current, matched=2)
+    assert op.state == GlobState(current=op.state.current, matched=2)
 
     fs.reset_stats()
     await AsyncFileSystem._glob(fs, "data/2024-*.csv")

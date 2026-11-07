@@ -6,17 +6,18 @@
 walks a tree one folder at a time, unless the filesystem lists whole trees.
 `tree_find` lists several folders at a time, as `tree_walk` does.
 
-This module depends on `control`, `walk`, and `paths` of `common`.
+This module depends on `control`, `walk`, and `paths` and `states` of `common`.
 """
 
 from __future__ import annotations
 
 from contextlib import aclosing
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _check_maxdepth, _trim
-from ..control import Operation, State
+from ..common.states import FindState
+from ..control import Operation
 from .walk import _scan
 
 if TYPE_CHECKING:
@@ -26,22 +27,6 @@ if TYPE_CHECKING:
     from ..common.operations import _Info, _Ls
 
 __all__ = ["FindState", "tree_find"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class FindState(State):
-    """The progress of a `tree_find`.
-
-    Attributes
-    ----------
-    folders_listed : int
-        The folders listed so far, those that failed included.
-    found : int
-        The paths found so far.
-    """
-
-    folders_listed: int = 0
-    found: int = 0
 
 
 def tree_find(
@@ -155,4 +140,4 @@ def tree_find(
                 for entry in found:
                     yield entry
 
-    return Operation(run, FindState())
+    return Operation(run, FindState(folders_listed=0))

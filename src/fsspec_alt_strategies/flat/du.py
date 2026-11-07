@@ -6,17 +6,18 @@
 finds the files, then asks each file's size with a request of its own. `flat_du`
 adds up the sizes the listing already gives, page by page.
 
-This module depends on `control`, `_keys`, and `paths` of `common`.
+This module depends on `control`, `_keys`, and `paths` and `states` of `common`.
 """
 
 from __future__ import annotations
 
 from contextlib import aclosing
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _check_maxdepth
-from ..control import Operation, State
+from ..common.states import DuState
+from ..control import Operation
 from ._keys import _scan
 
 if TYPE_CHECKING:
@@ -26,24 +27,7 @@ if TYPE_CHECKING:
     from ..common.operations import _Info
     from ._keys import _Ils
 
-__all__ = ["FlatDuState", "flat_du"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class FlatDuState(State):
-    """The progress of a `flat_du`.
-
-    Attributes
-    ----------
-    files : int
-        The files counted so far.
-    size : int
-        Their size so far, in bytes. Once the operation has run to its end, it
-        is what fsspec's ``_du`` returns.
-    """
-
-    files: int = 0
-    size: int = 0
+__all__ = ["DuState", "flat_du"]
 
 
 def flat_du(
@@ -53,7 +37,7 @@ def flat_du(
     info: _Info,
     maxdepth: int | None = None,
     concurrency_limit: asyncio.Semaphore,
-) -> Operation[dict[str, Any], FlatDuState]:
+) -> Operation[dict[str, Any], DuState]:
     """Measure the files under a prefix, from one listing streamed as it comes.
 
     It assumes that ``ils`` gives each file's size, as listings of object
@@ -93,7 +77,7 @@ def flat_du(
     Returns
     -------
     Operation
-        Yielding the entry of each file counted. Its state is a `FlatDuState`.
+        Yielding the entry of each file counted. Its state is a `DuState`.
 
     Raises
     ------
@@ -115,7 +99,7 @@ def flat_du(
     _check_maxdepth(maxdepth)
 
     async def run(
-        op: Operation[dict[str, Any], FlatDuState],
+        op: Operation[dict[str, Any], DuState],
     ) -> AsyncGenerator[dict[str, Any]]:
         steps = _scan(
             ils,
@@ -135,4 +119,4 @@ def flat_du(
                 )
                 yield entry
 
-    return Operation(run, FlatDuState())
+    return Operation(run, DuState())

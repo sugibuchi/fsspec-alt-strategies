@@ -6,17 +6,18 @@
 same paths. fsspec's, and the object stores' own, gather every page of the
 listing before answering. `flat_find` yields each path as its page arrives.
 
-This module depends on `control`, `_keys`, and `paths` of `common`.
+This module depends on `control`, `_keys`, and `paths` and `states` of `common`.
 """
 
 from __future__ import annotations
 
 from contextlib import aclosing
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _check_maxdepth
-from ..control import Operation, State
+from ..common.states import FindState
+from ..control import Operation
 from ._keys import _scan
 
 if TYPE_CHECKING:
@@ -26,20 +27,7 @@ if TYPE_CHECKING:
     from ..common.operations import _Info
     from ._keys import _Ils
 
-__all__ = ["FlatFindState", "flat_find"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class FlatFindState(State):
-    """The progress of a `flat_find`.
-
-    Attributes
-    ----------
-    found : int
-        The paths found so far.
-    """
-
-    found: int = 0
+__all__ = ["FindState", "flat_find"]
 
 
 def flat_find(
@@ -50,7 +38,7 @@ def flat_find(
     maxdepth: int | None = None,
     withdirs: bool = False,
     concurrency_limit: asyncio.Semaphore,
-) -> Operation[dict[str, Any], FlatFindState]:
+) -> Operation[dict[str, Any], FindState]:
     """Find the files under a prefix, from one listing streamed as it comes.
 
     It finds the paths fsspec's ``_find`` finds. A missing ``path`` finds
@@ -97,7 +85,7 @@ def flat_find(
     Returns
     -------
     Operation
-        Yielding the entry of each path found. Its state is a `FlatFindState`.
+        Yielding the entry of each path found. Its state is a `FindState`.
 
     Raises
     ------
@@ -119,7 +107,7 @@ def flat_find(
     _check_maxdepth(maxdepth)
 
     async def run(
-        op: Operation[dict[str, Any], FlatFindState],
+        op: Operation[dict[str, Any], FindState],
     ) -> AsyncGenerator[dict[str, Any]]:
         steps = _scan(
             ils,
@@ -137,4 +125,4 @@ def flat_find(
                 )
                 yield entry
 
-    return Operation(run, FlatFindState())
+    return Operation(run, FindState())

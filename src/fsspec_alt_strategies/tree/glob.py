@@ -15,19 +15,21 @@ pattern, as nothing below it can match.
 Several patterns are matched in one walk per tree: a folder is listed once if
 any of them can match in it, and each path is matched with all of them.
 
-This module depends on `control`, `walk`, and `paths` and `patterns` of `common`.
+This module depends on `control`, `walk`, and `paths`, `patterns` and `states` of
+`common`.
 """
 
 from __future__ import annotations
 
 from contextlib import aclosing
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _trim
 from ..common.patterns import _infos, _inside, _Search
-from ..control import Operation, State
+from ..common.states import GlobState
+from ..control import Operation
 from .walk import _scan
 
 if TYPE_CHECKING:
@@ -38,22 +40,6 @@ if TYPE_CHECKING:
     from .walk import _Listing
 
 __all__ = ["GlobState", "tree_glob"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class GlobState(State):
-    """The progress of a `tree_glob`.
-
-    Attributes
-    ----------
-    folders_listed : int
-        The folders listed so far, those that failed included.
-    matched : int
-        The paths matched so far.
-    """
-
-    folders_listed: int = 0
-    matched: int = 0
 
 
 def tree_glob(
@@ -171,7 +157,7 @@ def tree_glob(
             async for match in walk:
                 yield match
 
-    return Operation(run, GlobState())
+    return Operation(run, GlobState(folders_listed=0))
 
 
 def _walks(searches: list[_Search]) -> list[tuple[str, list[_Search]]]:

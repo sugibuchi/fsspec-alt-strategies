@@ -9,7 +9,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.control import collect
-from fsspec_alt_strategies.flat.find import FlatFindState, flat_find
+from fsspec_alt_strategies.flat.find import FindState, flat_find
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -64,7 +64,7 @@ async def test_requests() -> None:
     assert len(entries) == 5
     # The 5 keys under data/, 2 a page: no info, and no listing per folder.
     assert fs.stats.calls == {"list": 3}
-    assert op.state == FlatFindState(current=op.state.current, found=5)
+    assert op.state == FindState(current=op.state.current, found=5)
 
     fs.reset_stats()
     await collect(_find(fs, "data", withdirs=True))
