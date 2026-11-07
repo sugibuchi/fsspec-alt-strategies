@@ -327,6 +327,27 @@ def test_undecided_files_are_discarded_when_collected(
     assert fs.ls("", detail=False) == []  # Not even the temporary file.
 
 
+def test_a_failed_discard_of_a_collected_file_is_logged(
+    fs: SimulatedFileSystem,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(self: TransactionFile) -> None:
+        raise OSError("discard failed")
+
+    f = _temp(fs, "f.bin")
+    f.write(b"abc")
+    # On the class: the patch must not hold the file, which is to be collected.
+    monkeypatch.setattr(TransactionFile, "discard", fail)
+    with pytest.warns(ResourceWarning, match="Undecided"):
+        del f
+        gc.collect()
+    [record] = caplog.records
+    assert record.levelname == "WARNING"
+    assert "f.bin" in record.getMessage()
+    assert isinstance(record.exc_info[1], OSError)  # type: ignore[index]
+
+
 def test_undecided_file_collected_on_its_loop_aborts_later(
     fs: SimulatedFileSystem,
 ) -> None:

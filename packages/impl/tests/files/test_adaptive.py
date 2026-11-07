@@ -604,6 +604,50 @@ def test_file_collected_unclosed_off_its_loop_waits_for_the_abort() -> None:
     assert not fs.exists("f.bin")
 
 
+class _FailingAbort(_Writer):
+    async def _abort_multipart_upload(self) -> None:
+        await super()._abort_multipart_upload()
+        raise OSError("abort failed")
+
+
+async def test_a_failed_abort_of_a_collected_file_is_logged(
+    flat_fs: SimulatedFileSystem, caplog: pytest.LogCaptureFixture
+) -> None:
+    f = _FailingAbort(flat_fs, "f.bin")
+    for _ in range(20):
+        await f._write(b"x" * 1000)
+    await asyncio.sleep(0.01)
+    with pytest.warns(ResourceWarning, match="Unclosed"):
+        del f
+        gc.collect()
+    for _ in range(10):
+        await asyncio.sleep(0.001)
+    # Nobody awaits the abort scheduled: only the log tells of its failure.
+    [record] = caplog.records
+    assert record.levelname == "WARNING"
+    assert "f.bin" in record.getMessage()
+    assert isinstance(record.exc_info[1], OSError)  # type: ignore[index]
+
+
+def test_a_failed_abort_off_the_loop_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fs = SimulatedFileSystem()
+
+    async def open_file() -> _Writer:
+        return _FailingAbort(fs, "f.bin")
+
+    f = asyncio.run_coroutine_threadsafe(open_file(), fs.loop).result()
+    f.write(b"x" * 20 * _KiB)
+    time.sleep(0.05)
+    with pytest.warns(ResourceWarning, match="Unclosed"):
+        del f
+        gc.collect()
+    [record] = caplog.records
+    assert record.levelname == "WARNING"
+    assert "f.bin" in record.getMessage()
+
+
 _LEFT_OPEN_AT_EXIT = """
 from fsspec.asyn import get_loop
 

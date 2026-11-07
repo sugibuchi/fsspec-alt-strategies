@@ -511,6 +511,18 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 Long operations are iterated, so the caller sees each step, and its `state` so far. The caller can cancel one, which
 then ends cleanly.
 
+### Logging
+
+The library tells its callers by what it returns and raises, not by logging.
+
+- Strategies and file objects log nothing in their routine work. A backend logs its own requests, in its hooks.
+- A file object logs a WARNING, with `logging.getLogger(__name__)`, only for an error no caller can be told of. That
+  is an abort or discard run by the garbage collector, which fails.
+- An abort failing after another error adds a note to that error, which is raised: it is not logged.
+- A file collected while open, or a `TransactionFile` collected undecided, emits a `ResourceWarning`, as Python's
+  own files do.
+- No exception is swallowed silently, and `CancelledError` never is.
+
 ## Releases
 
 A release is a version tag pushed to the repository. The version of both packages comes from the tag.
