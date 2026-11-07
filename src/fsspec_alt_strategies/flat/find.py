@@ -12,7 +12,6 @@ This module depends on `control`, `_keys`, and `paths` and `states` of `common`.
 from __future__ import annotations
 
 from contextlib import aclosing
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _check_maxdepth
@@ -120,9 +119,7 @@ def flat_find(
         )
         async with aclosing(steps):
             async for entry in steps:
-                op.state = replace(
-                    op.state, current=entry["name"], found=op.state.found + 1
-                )
+                op.state = FindState(current=entry["name"], found=op.state.found + 1)
                 yield entry
 
     return Operation(run, FindState())

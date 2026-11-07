@@ -17,7 +17,6 @@ This module depends on `control`, `_keys`, and `paths`, `patterns` and `states` 
 
 from __future__ import annotations
 
-from dataclasses import replace
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
@@ -186,8 +185,10 @@ async def _matches(
                 if matched in found or not any(s.matched(candidate) for s in searches):
                     continue
                 found.add(matched)
-                op.state = replace(
-                    op.state, current=matched, matched=op.state.matched + 1
+                op.state = GlobState(
+                    errors=op.state.errors,
+                    current=matched,
+                    matched=op.state.matched + 1,
                 )
                 yield candidate
             if op.cancelling():

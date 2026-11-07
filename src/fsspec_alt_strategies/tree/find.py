@@ -12,7 +12,6 @@ This module depends on `control`, `walk`, and `paths` and `states` of `common`.
 from __future__ import annotations
 
 from contextlib import aclosing
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _check_maxdepth, _trim
@@ -123,14 +122,18 @@ def tree_find(
             async for step in steps:
                 if isinstance(step, dict):
                     # The root's own entry.
-                    op.state = state = replace(state, found=state.found + 1)
+                    op.state = state = FindState(
+                        errors=state.errors,
+                        current=state.current,
+                        folders_listed=state.folders_listed,
+                        found=state.found + 1,
+                    )
                     yield step
                     continue
                 found = [
                     e for e in step.entries if withdirs or e["type"] != "directory"
                 ]
-                op.state = state = replace(
-                    state,
+                op.state = state = FindState(
                     errors=state.errors + (step.error is not None),
                     current=step.folder,
                     folders_listed=state.folders_listed + 1,

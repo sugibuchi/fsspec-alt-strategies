@@ -22,7 +22,6 @@ This module depends on `control`, `walk`, and `paths`, `patterns` and `states` o
 from __future__ import annotations
 
 from contextlib import aclosing
-from dataclasses import replace
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
@@ -204,7 +203,13 @@ async def _walk(
             if isinstance(step, dict):
                 # The root's own entry, as it matches.
                 if step["name"].rstrip("/") not in found:
-                    op.state = replace(op.state, matched=op.state.matched + 1)
+                    state = op.state
+                    op.state = GlobState(
+                        errors=state.errors,
+                        current=state.current,
+                        folders_listed=state.folders_listed,
+                        matched=state.matched + 1,
+                    )
                     yield step
                 continue
             for match in _matches_in(step, searches, op, found):
@@ -229,8 +234,7 @@ def _matches_in(
             # A match of a pattern without wildcards, found already.
             and e["name"].rstrip("/") not in found
         ]
-    op.state = replace(
-        state,
+    op.state = GlobState(
         errors=state.errors + (listing.error is not None),
         current=listing.folder,
         folders_listed=state.folders_listed + 1,

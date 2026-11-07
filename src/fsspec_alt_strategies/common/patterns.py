@@ -11,18 +11,18 @@ A ``**`` matches any number of segments, so only those before the first ``**``
 can rule a folder out. Without a ``**``, nor can a folder as deep as the
 pattern, as nothing below it can match.
 
-This module depends on `paths`.
+This module depends on `paths` and `states`.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from fsspec.utils import glob_translate
 
 from .paths import _trim
+from .states import GlobState
 
 if TYPE_CHECKING:
     import asyncio
@@ -36,13 +36,12 @@ async def _infos(
     info: _Info,
     paths: list[str],
     concurrency_limit: asyncio.Semaphore,
-    op: Operation[dict[str, Any], Any],
+    op: Operation[dict[str, Any], GlobState],
     found: set[str],
 ) -> AsyncGenerator[dict[str, Any]]:
     """The ``info`` of each pattern without wildcards that exists, noted in ``found``.
 
-    Each ``info`` holds a permit of ``concurrency_limit`` while it runs. The
-    operation's state has ``current`` and ``matched``, as a glob's has.
+    Each ``info`` holds a permit of ``concurrency_limit`` while it runs.
     """
     for path in dict.fromkeys(paths):
         if op.cancelling():
@@ -53,7 +52,13 @@ async def _infos(
         except FileNotFoundError:
             continue
         found.add(entry["name"].rstrip("/"))
-        op.state = replace(op.state, current=path, matched=op.state.matched + 1)
+        state = op.state
+        op.state = GlobState(
+            errors=state.errors,
+            current=path,
+            folders_listed=state.folders_listed,
+            matched=state.matched + 1,
+        )
         yield entry
 
 

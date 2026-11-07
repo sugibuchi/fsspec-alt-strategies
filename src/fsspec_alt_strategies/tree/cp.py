@@ -12,7 +12,7 @@ This module depends on `control`, `profile`, `walk`, `_jobs`, and `paths` of
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
@@ -231,8 +231,7 @@ class _Copy(_Jobs):
         self.after_mkdir: dict[str, list[_Job]] = {}
 
     def state(self) -> Any:
-        return replace(
-            self.op.state,
+        return CpState(
             errors=self.errors,
             current=self.current,
             files_found=self.files_found,

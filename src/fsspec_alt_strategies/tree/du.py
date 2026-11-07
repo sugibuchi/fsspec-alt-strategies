@@ -12,7 +12,6 @@ This module depends on `control`, `walk`, and `paths` and `states` of `common`.
 from __future__ import annotations
 
 from contextlib import aclosing
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _check_maxdepth
@@ -120,17 +119,17 @@ def tree_du(
             async for step in steps:
                 if isinstance(step, dict):
                     # The root's own entry, as it is a file.
-                    op.state = state = replace(
-                        state,
+                    op.state = state = DuState(
+                        errors=state.errors,
                         current=step["name"],
+                        folders_listed=state.folders_listed,
                         files=state.files + 1,
                         size=state.size + (step.get("size") or 0),
                     )
                     yield step
                     continue
                 files = [e for e in step.entries if e["type"] != "directory"]
-                op.state = state = replace(
-                    state,
+                op.state = state = DuState(
                     errors=state.errors + (step.error is not None),
                     current=step.folder,
                     folders_listed=state.folders_listed + 1,

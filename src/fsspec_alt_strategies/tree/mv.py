@@ -15,7 +15,7 @@ This module depends on `control`, `profile`, `walk`, `_jobs` and `cp`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..control import Operation, State
@@ -202,8 +202,7 @@ class _Move(_Copy):
         self.folders_moved = 0
 
     def state(self) -> MvState:
-        return replace(
-            self.op.state,
+        return MvState(
             errors=self.errors,
             current=self.current,
             files_found=self.files_found,
