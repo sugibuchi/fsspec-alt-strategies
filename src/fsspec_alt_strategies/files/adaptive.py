@@ -108,15 +108,22 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
     fetching a block for a few bytes reads more than needed.
 
     Its many requests read one version of the file, even if another client
-    replaces it meanwhile: the blocks of two versions never mix.
+    replaces it meanwhile: the blocks of two versions never mix. A version is
+    what the storage names one with: an ETag, or a version id.
 
-    - ``version`` is the version read, e.g. an ETag or a version id from the
-      filesystem's ``_info``. If None, the first response pins it.
+    - ``version`` is the version to read, e.g. from the filesystem's
+      ``_info``. If None, the first response decides it.
     - `_fetch_range` asks for ``version`` when the storage can, e.g. with
-      If-Match or a version id, so that the storage refuses another one.
-    - `_fetch_range` passes the version each response came from to
-      `_pin_version`. Another version raises OSError with ``errno.ESTALE``,
-      even on storages that cannot ask for one.
+      If-Match for an ETag, or by its version id. The storage then refuses, or
+      never sends, another version's bytes.
+    - `_fetch_range` passes the version of every response to
+      `_check_version`, which raises OSError with ``errno.ESTALE`` for another
+      one. This is needed even where the storage can ask for a version: the
+      first fetches run at once, before any version is known.
+
+    An ETag names the file's content, so a read by If-Match fails once another
+    client replaces the file. A version id names a version the storage keeps,
+    e.g. in a versioned S3 bucket: the read goes on with it.
 
     Parameters
     ----------
@@ -160,14 +167,14 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
     ...     async def _fetch_range(self, start, end):
     ...         return await self.fs._cat_file(self.path, start=start, end=end)
 
-    Pinning the version, on a storage reading by ETag:
+    Reading one version, on a storage reading by ETag:
 
-    >>> class MyPinnedFile(AdaptiveReadableFile):
+    >>> class MyVersionedFile(AdaptiveReadableFile):
     ...     async def _fetch_range(self, start, end):
     ...         data, etag = await self.client.get(
     ...             self.path, start, end, if_match=self.version
     ...         )
-    ...         self._pin_version(etag)
+    ...         self._check_version(etag)
     ...         return data
     """
 
@@ -220,14 +227,16 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         """Fetch the bytes [start, end) of the file in one request.
 
         It asks for ``version`` if the storage can, and passes the version the
-        response came from to `_pin_version` if the storage tells it.
+        response came from to `_check_version` if the storage tells it.
         """
 
-    def _pin_version(self, version: str) -> None:
-        """Pin the version read, or raise if a response came from another one.
+    def _check_version(self, version: str) -> None:
+        """Check the version a response came from, e.g. its ETag.
 
-        Fetches run at once, so the first to arrive pins it. A storage that
-        cannot ask for a version still never mixes two: the read raises.
+        `_fetch_range` calls it for every response. The first call, when no
+        ``version`` was given, sets it: fetches run at once, so it is the first
+        response to arrive. Any later response from another version raises
+        OSError with ``errno.ESTALE``, so that the read never mixes two.
         """
         if self.version is None:
             self.version = version

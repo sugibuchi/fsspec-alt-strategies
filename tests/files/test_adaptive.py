@@ -303,7 +303,7 @@ class _Versioned(AdaptiveReadableFile):
         if self.conditional and self.version not in (None, store.version):
             # The storage refuses, e.g. with 412 Precondition Failed.
             raise OSError(errno.ESTALE, "Precondition failed", self.path)
-        self._pin_version(store.version)
+        self._check_version(store.version)
         return store.data[start:end]
 
 
@@ -313,14 +313,14 @@ async def test_reads_one_version(conditional: bool) -> None:
     store = _Store(old)
     async with _Versioned(store, conditional) as f:
         assert await f._read(8 * _KiB) == old[: 8 * _KiB]
-        assert f.version == "v1"  # Pinned by the first response.
+        assert f.version == "v1"  # Set by the first response.
         store.replace(new)
         # Elsewhere, so that it fetches from the new version: never mixed.
         await f._seek(200 * _KiB)
         with pytest.raises(OSError) as raised:
             await f._read(4 * _KiB)
         assert raised.value.errno == errno.ESTALE
-        # And again: the file stays pinned to the version it began reading.
+        # And again: the file keeps to the version it began reading.
         with pytest.raises(OSError) as raised:
             await f._read(4 * _KiB)
         assert raised.value.errno == errno.ESTALE

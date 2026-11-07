@@ -272,8 +272,8 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
   read or write is split into, and caps the bytes read ahead at `spread` blocks of `max_block_size`. An adaptive file given no limit gets its
   own, of `spread`.
 - They follow Python's file API, not the strategy API: errors are raised.
-- A file read in many requests reads one version: `AdaptiveReadableFile` pins it, by `version` or the first response,
-  and raises OSError with `errno.ESTALE` on another.
+- A file read in many requests reads one version: `AdaptiveReadableFile` keeps to `version`, or the first response's.
+  `_check_version` checks every response's, e.g. its ETag, and raises OSError with `errno.ESTALE` on another.
 - fsspec's `open_async` returns a file whose methods are awaited. `files/fsspec_async.py` has `AsyncFileAdapter`,
   giving our files that API, so that `open` and `open_async` share a filesystem's requests. Its methods await the
   files' async counterparts, such as `_read`, which `_AsyncFile` declares. The files keep only the sync API themselves.
