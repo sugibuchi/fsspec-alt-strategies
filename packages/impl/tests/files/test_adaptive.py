@@ -527,6 +527,67 @@ async def test_large_file_is_uploaded_in_growing_parts(
     assert f.max_in_flight <= 4
 
 
+class _CappedWriter(_Writer):
+    """Records the size of every request uploading bytes."""
+
+    def __init__(self, fs: SimulatedFileSystem, path: str, **kwargs: Any) -> None:
+        super().__init__(fs, path, **kwargs)
+        self.sizes: list[int] = []
+
+    async def _upload_all(self, data: bytes) -> None:
+        self.sizes.append(len(data))
+        await super()._upload_all(data)
+
+    async def _upload_part(
+        self, data: bytes, start: int, end: int, index: int, last: bool
+    ) -> Any:
+        self.sizes.append(len(data))
+        return await super()._upload_part(data, start, end, index, last)
+
+
+@pytest.mark.parametrize("sequential", [False, True])
+@pytest.mark.parametrize(
+    "size", [0, 5 * _KiB, 6 * _KiB, 7 * _KiB, 11 * _KiB, 13 * _KiB, 300 * _KiB]
+)
+async def test_no_request_exceeds_max_request_size(
+    flat_fs: SimulatedFileSystem, size: int, sequential: bool
+) -> None:
+    data = os.urandom(size)
+    async with _CappedWriter(
+        flat_fs, "f.bin", max_request_size=6 * _KiB, sequential=sequential
+    ) as f:
+        for i in range(0, len(data), 1000):
+            await f._write(data[i : i + 1000])
+    assert await flat_fs._cat_file("f.bin") == data
+    assert all(s <= 6 * _KiB for s in f.sizes)
+    if size <= 6 * _KiB:
+        assert f.requests == ["all"]  # Within the cap: one request.
+    else:
+        assert f.requests == ["start", "complete"]
+        parts = [f.parts[i] for i in sorted(f.parts)]
+        assert all(end - start >= 4 * _KiB for start, end, _, _ in parts[:-1])
+        assert [last for _, _, last, _ in parts] == [False] * (len(parts) - 1) + [True]
+
+
+async def test_a_small_file_beyond_max_request_size_goes_in_parts(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    # Below min_multipart_size, but too big for one request.
+    data = os.urandom(7 * _KiB)
+    async with _CappedWriter(
+        flat_fs, "f.bin", min_multipart_size=64 * _KiB, max_request_size=4 * _KiB
+    ) as f:
+        await f._write(data)
+    assert f.requests == ["start", "complete"]
+    assert f.sizes == [4 * _KiB, 3 * _KiB]
+    assert await flat_fs._cat_file("f.bin") == data
+
+
+async def test_max_request_size_must_fit_a_part(flat_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="max_request_size"):
+        _Writer(flat_fs, "f.bin", max_request_size=1 * _KiB)
+
+
 async def test_sequential_parts_go_one_at_a_time_in_order(
     flat_fs: SimulatedFileSystem,
 ) -> None:

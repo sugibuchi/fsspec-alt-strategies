@@ -616,6 +616,8 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
   - `AdaptiveReadableFile` and `AdaptiveWritableFile` are for storages reading byte ranges and writing in parts.
     The writer aborts its upload on any failure, and after an exception in its `with` block. A failed part raises
     OSError, whether it fails while writing or closing.
+  - A storage limiting each request's size declares it in the writer's `max_request_size`. Parts never exceed it,
+    a last part beyond it is split, and a file beyond it is never uploaded in one request.
 - Their requests are the storage's own. They never call fsspec's `_cat_file` or `_put_file`: many filesystems
   implement these with their file objects.
 - Their requests run on an asyncio event loop, such as the filesystem's `loop`. Their sync methods wait on it through
