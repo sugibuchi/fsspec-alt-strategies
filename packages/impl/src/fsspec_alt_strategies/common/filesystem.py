@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import io
 import os
 from abc import ABCMeta
 from glob import has_magic
@@ -124,12 +125,14 @@ class _StrategyFileSystem(
     ) -> bytes:
         f = await self.open_async(path, "rb", **kwargs)
         async with f:
+            position = 0
             if start is not None:
-                f.seek(start if start >= 0 else max(0, f.size + start))
+                position = start if start >= 0 else max(0, f.size + start)
+                await _skip(f, position, self.transfer_size)
             if end is not None:
                 if end < 0:
                     end = f.size + end
-                return await f.read(end - f.tell())
+                return await f.read(max(0, end - position))
             return await f.read()
 
     async def _pipe_file(
@@ -176,6 +179,27 @@ class _StrategyFileSystem(
                 while chunk := local.read(self.transfer_size):
                     await f.write(chunk)
                     callback.relative_update(len(chunk))
+
+
+async def _skip(f: Any, start: int, chunk_size: int) -> None:
+    """Move a file just opened to ``start``: by seeking, or else by reading.
+
+    A storage SDK's handle may stream its data, unable to seek. Its bytes up
+    to ``start`` are then read and dropped, a chunk at a time, so that memory
+    stays bounded.
+    """
+    try:
+        if f.seekable():
+            f.seek(start)
+            return
+    except (io.UnsupportedOperation, OSError):
+        pass
+    skipped = 0
+    while skipped < start:
+        chunk = await f.read(min(chunk_size, start - skipped))
+        if not chunk:
+            return  # Past the end: the read after answers nothing.
+        skipped += len(chunk)
 
 
 def _with(func: Callable[..., Any], kwargs: dict[str, Any]) -> Callable[..., Any]:

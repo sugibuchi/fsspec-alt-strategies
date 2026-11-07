@@ -6,6 +6,7 @@ data methods the wrappers pass on, and the helpers shaping fsspec's answers.
 
 from __future__ import annotations
 
+import io
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -17,6 +18,7 @@ from fsspec_alt_strategies.common.filesystem import (
     _raise,
     _StrategyFileSystem,
 )
+from fsspec_alt_strategies.files.fsspec_async import SyncFileAdapter
 from fsspec_alt_strategies.tree.wrapper import AsyncTreeWrapper, SyncTreeWrapper
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
@@ -85,6 +87,50 @@ async def test_a_sync_wrapper_passes_data_methods_on(tmp_path: Path) -> None:
     assert sorted(inner.ls("/w", detail=False)) == ["/w/a", "/w/b", "/w/d", "/w/e"]
     assert tree.unstrip_protocol("/w/d") == "memory:///w/d"
     assert tree.io_limit._value == 1
+
+
+class _Unseekable(io.BytesIO):
+    """An SDK's handle streaming its data: it cannot seek, and notes its reads."""
+
+    def __init__(self, data: bytes) -> None:
+        super().__init__(data)
+        self.reads: list[int] = []
+
+    def seekable(self) -> bool:
+        return False
+
+    def seek(self, *args: Any) -> int:
+        raise io.UnsupportedOperation("seek")
+
+    def read(self, size: int | None = -1) -> bytes:
+        self.reads.append(-1 if size is None else size)
+        return super().read(size)
+
+
+class _Streaming(SyncTreeWrapper):
+    """A storage whose files cannot seek."""
+
+    def __init__(self, data: bytes) -> None:
+        super().__init__(MemoryFileSystem(), asynchronous=True, **_LIMITS)
+        self.data = data
+        self.opened: list[_Unseekable] = []
+
+    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+        self.opened.append(_Unseekable(self.data))
+        return SyncFileAdapter(self.opened[-1], mode=mode, size=len(self.data))
+
+
+async def test_a_range_of_an_unseekable_file_skips_its_start() -> None:
+    fs = _Streaming(b"0123456789")
+    fs.transfer_size = 3
+    cat = _StrategyFileSystem._cat_file
+    assert await cat(fs, "f", start=7, end=9) == b"78"
+    # Read and dropped in chunks no bigger than a transfer.
+    assert fs.opened[-1].reads == [3, 3, 1, 2]
+    assert await cat(fs, "f", start=-3) == b"789"
+    assert await cat(fs, "f", start=4, end=-4) == b"45"
+    assert await cat(fs, "f", start=20, end=30) == b""
+    assert await cat(fs, "f", start=6, end=2) == b""
 
 
 async def test_a_local_folder_is_no_transfer(tmp_path: Path) -> None:
