@@ -308,6 +308,15 @@ Or they wrap an existing filesystem as one, to use the strategies and monitors w
 
 Choosing the class chooses the family: a developer wanting one strategy of another overrides that method, as above.
 
+Each family's class has `_transfer(path1, other, path2, *, copy_file=None)`, declared on `_StrategyFileSystem`. It
+returns the source family's transfer strategy, not yet started, so that a caller copying between storages needs to
+know neither family:
+
+- `other` is any async fsspec filesystem. Its `_info`, `_makedirs` and `_rm_file` are the destination's operations.
+- Its `storage_profile` is the destination's profile. A filesystem without one is unknown, `StorageProfile()`.
+- `copy_file` streams through both `open_async` by default. A caller may give a server-side copy instead.
+- The requests hold the source's `operation_limit`, as `_copy`'s do.
+
 #### The tree strategies
 
 The strategies in `tree/` walk with the walk's private engine, `_listings`, which yields each folder's listing. They
