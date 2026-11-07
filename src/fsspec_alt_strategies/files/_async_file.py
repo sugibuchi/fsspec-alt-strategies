@@ -82,41 +82,8 @@ class _AsyncFile(io.RawIOBase):
         # not try again.
         self._forced = False
 
-    def __repr__(self) -> str:
-        return f"<{type(self).__name__} {self.path!r}>"
-
-    def _sync(self, coro: Coroutine[Any, Any, _T]) -> _T:
-        """Wait for ``coro`` to run on the loop, from another thread."""
-        if self._on_its_loop():
-            coro.close()  # Never awaited, without a warning.
-            raise RuntimeError(
-                f"Waiting on its own loop, which would never run: {self.path}"
-            )
-        if not self.loop.is_running() or sys.is_finalizing():
-            # During shutdown, the loop's daemon thread is frozen, yet its loop
-            # still looks running: waiting would hang, as on a stopped loop.
-            coro.close()
-            raise RuntimeError(f"Waiting on a loop that is not running: {self.path}")
-        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        try:
-            # In steps, so that Ctrl+C interrupts the wait, even on Windows.
-            while not concurrent.futures.wait([future], timeout=1).done:
-                pass
-            return future.result()
-        except BaseException:
-            # E.g. KeyboardInterrupt while waiting: the coroutine stops too.
-            future.cancel()
-            raise
-
-    def _check_open(self) -> None:
-        if self.closed:
-            raise ValueError(f"I/O operation on closed file: {self.path}")
-
-    def _check_not_forced(self) -> None:
-        """Refuse a write once a forced flush finished the file, as fsspec's files do."""
-        if self._forced:
-            raise ValueError(f"Force-flushed, can only close: {self.path}")
-
+    # What a subclass overrides, besides io.RawIOBase's own methods.
+    #
     # io.RawIOBase's read and write raise a bare NotImplementedError: these
     # raise what its other unsupported operations do, naming the file too.
 
@@ -127,6 +94,33 @@ class _AsyncFile(io.RawIOBase):
     async def _write(self, data: Any) -> int:
         """Write as ``write`` does."""
         raise io.UnsupportedOperation(f"write on {self.path}")
+
+    async def _finish(self) -> None:
+        """Send what shows the file as written, e.g. complete its upload.
+
+        Closing, or a forced flush, calls it once. A file only read sends
+        nothing.
+        """
+
+    async def _close(self) -> None:
+        """Finish the file, unless a forced flush did, and end its requests."""
+        try:
+            if not self._forced:
+                await self._finish()
+        finally:
+            await self._requests.cancel_all()
+
+    async def _abort(self) -> None:
+        """Undo the file's requests, keeping nothing: a subclass adds to it."""
+        await self._requests.cancel_all()
+
+    def _release(self) -> None:
+        """Free what the file holds locally, e.g. a buffer, sending nothing."""
+
+    # The rest.
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} {self.path!r}>"
 
     def flush(self, force: bool = False) -> None:
         """Send nothing, or, if ``force``, finish the file as closing does.
@@ -156,24 +150,6 @@ class _AsyncFile(io.RawIOBase):
             )
         self._forced = True
         await self._finish()
-
-    async def _finish(self) -> None:
-        """Send what shows the file as written, e.g. complete its upload.
-
-        Closing, or a forced flush, calls it once. A file only read sends
-        nothing.
-        """
-
-    def _release(self) -> None:
-        """Free what the file holds locally, e.g. a buffer, sending nothing."""
-
-    async def _close(self) -> None:
-        """Finish the file, unless a forced flush did, and end its requests."""
-        try:
-            if not self._forced:
-                await self._finish()
-        finally:
-            await self._requests.cancel_all()
 
     async def aclose(self) -> None:
         """Close the file, finishing or cancelling its requests."""
@@ -225,6 +201,35 @@ class _AsyncFile(io.RawIOBase):
         finally:
             io.RawIOBase.close(self)
 
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
+    def _sync(self, coro: Coroutine[Any, Any, _T]) -> _T:
+        """Wait for ``coro`` to run on the loop, from another thread."""
+        if self._on_its_loop():
+            coro.close()  # Never awaited, without a warning.
+            raise RuntimeError(
+                f"Waiting on its own loop, which would never run: {self.path}"
+            )
+        if not self.loop.is_running() or sys.is_finalizing():
+            # During shutdown, the loop's daemon thread is frozen, yet its loop
+            # still looks running: waiting would hang, as on a stopped loop.
+            coro.close()
+            raise RuntimeError(f"Waiting on a loop that is not running: {self.path}")
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        try:
+            # In steps, so that Ctrl+C interrupts the wait, even on Windows.
+            while not concurrent.futures.wait([future], timeout=1).done:
+                pass
+            return future.result()
+        except BaseException:
+            # E.g. KeyboardInterrupt while waiting: the coroutine stops too.
+            future.cancel()
+            raise
+
     def _on_its_loop(self) -> bool:
         """Whether this runs on the file's loop, where nothing can wait for it."""
         try:
@@ -252,15 +257,14 @@ class _AsyncFile(io.RawIOBase):
         io.RawIOBase.close(self)
         return future
 
-    async def _abort(self) -> None:
-        """Undo the file's requests, keeping nothing: a subclass adds to it."""
-        await self._requests.cancel_all()
+    def _check_open(self) -> None:
+        if self.closed:
+            raise ValueError(f"I/O operation on closed file: {self.path}")
 
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.aclose()
+    def _check_not_forced(self) -> None:
+        """Refuse a write once a forced flush finished the file, as fsspec's files do."""
+        if self._forced:
+            raise ValueError(f"Force-flushed, can only close: {self.path}")
 
 
 @dataclass(eq=False)
