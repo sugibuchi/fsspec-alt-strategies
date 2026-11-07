@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from fsspec_alt_strategies.control import collect
+from fsspec_alt_strategies.common.monitors import _collect
 from fsspec_alt_strategies.flat.mv import MvState, flat_mv
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
@@ -41,7 +41,7 @@ def _tree(fs: SimulatedFileSystem) -> None:
 
 async def test_moves_the_keys(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
-    moved, errors = await collect(_mv(flat_fs, "data", "moved"))
+    moved, errors = await _collect(_mv(flat_fs, "data", "moved"))
     assert errors == []
     assert sorted(moved) == [(p, "moved" + p[len("data") :]) for p in _FILES]
     assert sorted(flat_fs._file_data) == [
@@ -54,7 +54,7 @@ async def test_requests() -> None:
     fs = SimulatedFileSystem(page_size=2, asynchronous=True)
     _tree(fs)
     op = _mv(fs, "data", "moved/", batch_size=3)
-    await collect(op)
+    await _collect(op)
     # 2 pages, a copy per key, and the 4 sources deleted in 2 batches.
     assert fs.stats.calls == {"list": 2, "copy": 4, "delete": 2}
     assert op.state == MvState(current=op.state.current, files_found=4, files_moved=4)
@@ -62,7 +62,7 @@ async def test_requests() -> None:
 
 async def test_a_pattern_moves_its_matches(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
-    moved, errors = await collect(_mv(flat_fs, "data/202*", "moved"))
+    moved, errors = await _collect(_mv(flat_fs, "data/202*", "moved"))
     assert errors == []
     # Relative to the matches' common prefix, "data", as fsspec places them.
     assert sorted(dst for _, dst in moved) == [
@@ -84,7 +84,7 @@ async def test_a_failed_batch_leaves_its_keys_in_both_places(
     async def rm_files(paths: list[str]) -> None:
         raise PermissionError("refused")
 
-    moved, errors = await collect(_mv(flat_fs, "data", "moved", rm_files=rm_files))
+    moved, errors = await _collect(_mv(flat_fs, "data", "moved", rm_files=rm_files))
     assert moved == []
     assert [type(e) for e in errors] == [PermissionError]
     assert "they are in both places" in errors[0].__notes__[0]
@@ -100,7 +100,7 @@ async def test_a_failed_copy_keeps_its_source(flat_fs: SimulatedFileSystem) -> N
             raise PermissionError(source)
         await flat_fs._cp_file(source, destination)
 
-    moved, errors = await collect(_mv(flat_fs, "data", "moved", cp_file=cp_file))
+    moved, errors = await _collect(_mv(flat_fs, "data", "moved", cp_file=cp_file))
     assert len(moved) == 3
     assert errors[0].__notes__ == [
         "Moving 'data/README.md' to 'moved/README.md' failed."
@@ -121,7 +121,7 @@ async def test_cancel_still_deletes_the_keys_copied() -> None:
         op.cancel()
 
     op = _mv(fs, "data", "moved", cp_file=cp_file)
-    moved, _ = await collect(op)
+    moved, _ = await _collect(op)
     assert op.cancelled()
     # Each key copied was deleted too: none is in both places.
     assert copied

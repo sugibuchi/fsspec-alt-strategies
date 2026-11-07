@@ -19,7 +19,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _Jobs, _roots_of
-from ..control import collect
+from ..common.monitors import _collect
 from .glob import tree_glob
 from .walk import _listings
 
@@ -40,7 +40,7 @@ async def _expand(
     concurrency_limit: asyncio.Semaphore,
 ) -> _Roots:
     """The roots matching glob patterns, found with `tree_glob`."""
-    matches, errors = await collect(
+    matches, errors = await _collect(
         tree_glob(pattern, ls=ls, info=info, concurrency_limit=concurrency_limit)
     )
     return _roots_of(matches, errors, pattern)

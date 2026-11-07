@@ -1,4 +1,4 @@
-"""Tests of `control`: `Operation`, its stopping, and `collect`."""
+"""Tests of `control`: `Operation` and its stopping, and `_collect`, running one to its end."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from fsspec_alt_strategies.control import Operation, State, collect
+from fsspec_alt_strategies.common.monitors import _collect
+from fsspec_alt_strategies.control import Operation, State
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -102,7 +103,7 @@ async def test_an_error_ending_it_is_raised() -> None:
 
 async def test_collect_splits_items_and_errors() -> None:
     op = _counting(7, [])
-    items, errors = await collect(op)
+    items, errors = await _collect(op)
     assert items == [1, 2, 3, 4, 6]
     assert [e.args for e in errors] == [(0,), (5,)]
     assert op.done()

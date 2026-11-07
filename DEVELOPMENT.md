@@ -5,7 +5,7 @@
 | Path                            | Contents                                                       |
 |---------------------------------|----------------------------------------------------------------|
 | `src/fsspec_alt_strategies/`    | The package.                                                   |
-| `.../control.py`                | `Operation`, `State` and `collect`: the strategy API. `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
+| `.../control.py`                | `Operation` and `State`: the strategy API. `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
 | `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
 | `.../tree/walk.py`              | `tree_walk`, the concurrent folder walk under the tree strategies.  |
 | `.../tree/find.py`              | `tree_find`, a find listing several folders at a time.              |
@@ -29,7 +29,7 @@
 | `.../flat/_jobs.py`             | The private engine's flat side: it feeds `common`'s with the keys of each root. |
 | `.../common/`                   | Private machinery the families share, so that none imports another. |
 | `.../common/filesystem.py`      | What the filesystem classes share: the two limits, and data moved through file objects. |
-| `.../common/monitors.py`        | How the filesystem classes run an operation, as the monitors and fsspec's `callback=` watch it. |
+| `.../common/monitors.py`        | How an operation is run to its end, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
 | `.../common/operations.py`      | The types of the storage's operations, such as `ls` and `info`. |
@@ -179,9 +179,8 @@ Its stopping follows `asyncio.Task`'s, so that it needs no learning:
 Cancelling the task iterating it, e.g. with `asyncio.timeout`, raises `CancelledError` as usual. The operation then
 cancels its requests and never swallows the error.
 
-`collect(op)` runs an operation to its end. It returns what was yielded, split into a list of items and a list of
-errors, in the order yielded. Strategies yield in the order the storage answers, so `collect` does not sort: fsspec's
-`_find` and `_glob` do.
+Strategies yield in the order the storage answers. A caller wanting fsspec's order sorts, as fsspec's `_find` and
+`_glob` do.
 
 #### Attaching
 
@@ -205,7 +204,7 @@ class MyFileSystem(AsyncFileSystem):
                 rm_folder=self._rmdir,
                 concurrency_limit=self.limit,
             )
-            _, errors = await collect(op)
+            errors = [e async for e in op if isinstance(e, Exception)]
             if errors:
                 raise ExceptionGroup("rm failed", errors)
             return

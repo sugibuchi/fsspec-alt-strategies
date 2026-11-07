@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.control import collect
+from fsspec_alt_strategies.common.monitors import _collect
 from fsspec_alt_strategies.tree.find import FindState, tree_find
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
@@ -52,7 +52,7 @@ async def test_finds_as_fsspec(
     any_fs: SimulatedFileSystem, path: str, kwargs: dict[str, Any]
 ) -> None:
     _tree(any_fs)
-    entries, errors = await collect(_find(any_fs, path, **kwargs))
+    entries, errors = await _collect(_find(any_fs, path, **kwargs))
     assert errors == []
     expected = await _fsspec_find(any_fs, path, detail=True, **kwargs)
     assert _names(entries) == list(expected)
@@ -73,7 +73,7 @@ async def test_entries_are_the_listings(any_fs: SimulatedFileSystem) -> None:
 
 async def test_the_whole_filesystem(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    entries, _ = await collect(_find(any_fs, "", withdirs=True))
+    entries, _ = await _collect(_find(any_fs, "", withdirs=True))
     assert _names(entries) == await _fsspec_find(any_fs, "", withdirs=True)
 
 
@@ -81,7 +81,7 @@ async def test_lists_folders_concurrently() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(20):
         fs.add_file(f"root/{i:02}/file")
-    entries, _ = await collect(
+    entries, _ = await _collect(
         _find(fs, "root", concurrency_limit=asyncio.Semaphore(5))
     )
     assert len(entries) == 20
@@ -94,7 +94,7 @@ async def test_the_roots_info_holds_a_permit_too(path: str) -> None:
     _tree(fs)
     # One permit, held in turn by the listings and the root's info, never both.
     op = _find(fs, path, withdirs=True, concurrency_limit=asyncio.Semaphore(1))
-    entries, _ = await asyncio.wait_for(collect(op), timeout=5)
+    entries, _ = await asyncio.wait_for(_collect(op), timeout=5)
     assert path in {e["name"] for e in entries}
     assert fs.stats.max_concurrency == 1
 
@@ -115,7 +115,7 @@ async def test_a_failed_folder_is_yielded() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
     async with _find(fs, "data") as op:
-        entries, errors = await collect(op)
+        entries, errors = await _collect(op)
     assert [type(e) for e in errors] == [PermissionError]
     assert _names(entries) == [
         "data/2024/01/part-0.parquet",

@@ -90,7 +90,8 @@ def flat_du(
     --------
     >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
     >>> op = flat_du("data", ils=my_ils, info=fs._info, concurrency_limit=limit)
-    >>> await collect(op)
+    >>> async for _ in op:
+    ...     pass
     >>> op.state.size, op.state.files
     (73400320, 70)
     """

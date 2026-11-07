@@ -1,15 +1,17 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""How the filesystem classes run an operation, as its monitors watch it.
+"""How an operation is run to its end, and watched by monitors meanwhile.
 
-`_watched` and `_collected` run an operation for an fsspec call, telling the
-monitors of the `monitoring` blocks around it, and fsspec's ``callback=``.
+`_collect` runs an operation to its end, returning all it yielded. `_watched`
+and `_collected` run an operation for an fsspec call, telling the monitors of
+the `monitoring` blocks around it, and fsspec's ``callback=``.
 
 This module depends on `control`.
 """
 
 from __future__ import annotations
 
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 # _monitors is control's, beside the monitoring blocks setting it.
@@ -19,6 +21,25 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from ..control import Call, Operation
+
+
+async def _collect(
+    items: Operation[Any, Any] | AsyncGenerator[Any],
+) -> tuple[list[Any], list[Exception]]:
+    """Run an operation to its end, and return what it yielded but errors, and its errors.
+
+    Both lists are in the order yielded, which is the order the storage
+    answered: callers sort, as fsspec's ``_find`` and ``_glob`` do.
+    """
+    found: list[Any] = []
+    errors: list[Exception] = []
+    async with aclosing(items):
+        async for item in items:
+            if isinstance(item, Exception):
+                errors.append(item)
+            else:
+                found.append(item)
+    return found, errors
 
 
 class _Counting(Monitor):
@@ -72,12 +93,5 @@ async def _watched(
 async def _collected(
     operation: Operation[Any, Any], call: Call, callback: Any = None
 ) -> tuple[list[Any], list[Exception]]:
-    """`collect` of an operation, as its monitors watch it."""
-    items: list[Any] = []
-    errors: list[Exception] = []
-    async for item in _watched(operation, call, callback):
-        if isinstance(item, Exception):
-            errors.append(item)
-        else:
-            items.append(item)
-    return items, errors
+    """`_collect` of an operation, as its monitors watch it."""
+    return await _collect(_watched(operation, call, callback))

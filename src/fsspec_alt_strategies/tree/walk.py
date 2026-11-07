@@ -110,7 +110,6 @@ def tree_walk(
 
     See Also
     --------
-    fsspec_alt_strategies.control.collect : All the folders, at once.
 
     Examples
     --------

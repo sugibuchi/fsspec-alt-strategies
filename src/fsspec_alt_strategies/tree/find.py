@@ -91,15 +91,14 @@ def tree_find(
     See Also
     --------
     tree_walk : The walk under it.
-    fsspec_alt_strategies.control.collect : All the paths, at once.
 
     Examples
     --------
     >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
     >>> find = tree_find("data", ls=fs._ls, info=fs._info, concurrency_limit=limit)
-    >>> entries, errors = await collect(find)
-    >>> sorted(e["name"] for e in entries), errors
-    (['data/2024/01/part-0.parquet', 'data/2024/02/part-0.parquet'], [])
+    >>> found = [item async for item in find]
+    >>> sorted(e["name"] for e in found if not isinstance(e, Exception))
+    ['data/2024/01/part-0.parquet', 'data/2024/02/part-0.parquet']
     """
     _check_maxdepth(maxdepth)
 

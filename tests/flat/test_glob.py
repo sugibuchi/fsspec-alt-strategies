@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.control import collect
+from fsspec_alt_strategies.common.monitors import _collect
 from fsspec_alt_strategies.flat.glob import GlobState, flat_glob
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
@@ -67,7 +67,7 @@ async def test_answers_as_fsspec(
     flat_fs: SimulatedFileSystem, path: str, kwargs: dict[str, Any]
 ) -> None:
     _tree(flat_fs)
-    entries, errors = await collect(_glob(flat_fs, path, **kwargs))
+    entries, errors = await _collect(_glob(flat_fs, path, **kwargs))
     assert errors == []
     expected = await AsyncFileSystem._glob(flat_fs, path, detail=True, **kwargs)
     assert sorted(e["name"] for e in entries) == list(expected)
@@ -88,7 +88,7 @@ async def test_several_patterns_answer_as_fsspecs_globs_together(
     flat_fs: SimulatedFileSystem, paths: list[str]
 ) -> None:
     _tree(flat_fs)
-    entries, _ = await collect(_glob(flat_fs, paths))
+    entries, _ = await _collect(_glob(flat_fs, paths))
     expected: dict[str, Any] = {}
     for path in paths:
         expected |= await AsyncFileSystem._glob(flat_fs, path, detail=True)
@@ -110,7 +110,7 @@ async def test_lists_only_the_keys_starting_as_the_pattern() -> None:
     _tree(fs)
     prefixes: list[str] = []
     op = _glob(fs, "data/2024-*.csv", ils=_recorded(fs, prefixes))
-    entries, _ = await collect(op)
+    entries, _ = await _collect(op)
     assert len(entries) == 2
     assert prefixes == ["data/2024-"]
     # A page per key, 2 keys: fsspec's lists all 6 entries of data, the three
@@ -129,7 +129,7 @@ async def test_plain_paths_are_asked_for_concurrently() -> None:
     for path in paths:
         fs.add_file(path)
     op = _glob(fs, paths, concurrency_limit=asyncio.Semaphore(4))
-    entries, _ = await collect(op)
+    entries, _ = await _collect(op)
     assert sorted(e["name"] for e in entries) == paths
     assert fs.stats.calls == {"info": 20}
     assert fs.stats.max_concurrency == 4  # Not one after another.
@@ -140,7 +140,7 @@ async def test_patterns_share_a_listing() -> None:
     _tree(fs)
     prefixes: list[str] = []
     patterns = ["data/sales/2024/*", "data/sales/*", "data/s*/README.md", "other/*"]
-    await collect(_glob(fs, patterns, ils=_recorded(fs, prefixes)))
+    await _collect(_glob(fs, patterns, ils=_recorded(fs, prefixes)))
     # data/sales/ is in data/s: one listing serves the three.
     assert prefixes == ["data/s", "other/"]
 

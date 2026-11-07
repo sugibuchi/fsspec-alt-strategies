@@ -8,9 +8,6 @@ failed. The caller handles each, and can stop the operation as an asyncio task
 is stopped: `Operation.cancel` asks it to stop, and `Operation.done` and
 `Operation.cancelled` tell how it ended.
 
-`collect` runs an operation to its end, for callers that want everything at
-once.
-
 `TreeFileSystem` and `FlatFileSystem` answer fsspec's methods, e.g. ``copy``,
 by running an operation to its end, so their callers see only the answer. A
 `Monitor` sees the operation itself, as it runs, within a `monitoring` block:
@@ -48,7 +45,6 @@ __all__ = [
     "Monitor",
     "Operation",
     "State",
-    "collect",
     "monitoring",
 ]
 
@@ -214,40 +210,6 @@ class Operation(Generic[T, S]):
 
     async def __aexit__(self, *exc_info: object) -> None:
         await self.aclose()
-
-
-async def collect(operation: Operation[T, State]) -> tuple[list[T], list[Exception]]:
-    """Run an operation to its end, and return all it yielded.
-
-    Parameters
-    ----------
-    operation : Operation
-        The operation, not iterated yet.
-
-    Returns
-    -------
-    items : list
-        What it yielded but errors, in the order yielded.
-    errors : list of Exception
-        The errors it yielded, in the order yielded.
-
-    Examples
-    --------
-    >>> limit = asyncio.Semaphore(32)
-    >>> find = tree_find("data", ls=fs._ls, info=fs._info, concurrency_limit=limit)
-    >>> entries, errors = await collect(find)
-    >>> if errors:
-    ...     raise ExceptionGroup("find failed", errors)
-    """
-    items: list[T] = []
-    errors: list[Exception] = []
-    async with operation:
-        async for item in operation:
-            if isinstance(item, Exception):
-                errors.append(item)
-            else:
-                items.append(item)
-    return items, errors
 
 
 @dataclass(frozen=True)

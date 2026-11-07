@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.control import collect
+from fsspec_alt_strategies.common.monitors import _collect
 from fsspec_alt_strategies.flat.find import FindState, flat_find
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
@@ -49,7 +49,7 @@ async def test_finds_as_fsspec(
     flat_fs: SimulatedFileSystem, path: str, kwargs: dict[str, Any]
 ) -> None:
     _tree(flat_fs)
-    entries, errors = await collect(_find(flat_fs, path, **kwargs))
+    entries, errors = await _collect(_find(flat_fs, path, **kwargs))
     assert errors == []
     expected = await AsyncFileSystem._find(flat_fs, path, detail=True, **kwargs)
     assert sorted(e["name"] for e in entries) == list(expected)
@@ -60,14 +60,14 @@ async def test_requests() -> None:
     fs = SimulatedFileSystem(page_size=2, asynchronous=True)
     _tree(fs)
     op = _find(fs, "data")
-    entries, _ = await collect(op)
+    entries, _ = await _collect(op)
     assert len(entries) == 5
     # The 5 keys under data/, 2 a page: no info, and no listing per folder.
     assert fs.stats.calls == {"list": 3}
     assert op.state == FindState(current=op.state.current, found=5)
 
     fs.reset_stats()
-    await collect(_find(fs, "data", withdirs=True))
+    await _collect(_find(fs, "data", withdirs=True))
     assert fs.stats.calls == {"list": 3, "info": 1}  # The info of data itself.
 
 
@@ -103,7 +103,7 @@ async def _info(path: str) -> dict[str, Any]:
 
 async def test_markers_are_folders() -> None:
     ils = _listing("data/", "data/empty/", "data/a/b.txt")
-    entries, _ = await collect(
+    entries, _ = await _collect(
         flat_find(
             "data",
             ils=ils,
@@ -118,7 +118,7 @@ async def test_markers_are_folders() -> None:
         {"name": "data/a/b.txt", "size": 1, "type": "file"},
         {"name": "data/empty", "size": 0, "type": "directory"},
     ]
-    files, _ = await collect(
+    files, _ = await _collect(
         flat_find("data", ils=ils, info=_info, concurrency_limit=asyncio.Semaphore(32))
     )
     assert [e["name"] for e in files] == ["data/a/b.txt"]
@@ -131,7 +131,7 @@ async def test_an_error_of_the_listing_ends_it() -> None:
 
     op = flat_find("data", ils=ils, info=_info, concurrency_limit=asyncio.Semaphore(32))
     with pytest.raises(PermissionError):
-        await collect(op)
+        await _collect(op)
 
 
 def test_maxdepth_must_be_positive(flat_fs: SimulatedFileSystem) -> None:

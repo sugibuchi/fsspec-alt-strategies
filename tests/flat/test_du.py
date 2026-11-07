@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.control import collect
+from fsspec_alt_strategies.common.monitors import _collect
 from fsspec_alt_strategies.flat.du import DuState, flat_du
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
@@ -37,7 +37,7 @@ async def test_measures_as_fsspec(
 ) -> None:
     _tree(flat_fs)
     op = _du(flat_fs, path, maxdepth=maxdepth)
-    entries, errors = await collect(op)
+    entries, errors = await _collect(op)
     assert errors == []
     total = await AsyncFileSystem._du(flat_fs, path, maxdepth=maxdepth)
     assert op.state.size == total
@@ -49,6 +49,6 @@ async def test_sends_only_the_listing() -> None:
     fs = SimulatedFileSystem(page_size=2, asynchronous=True)
     _tree(fs)
     op = _du(fs, "data")
-    await collect(op)
+    await _collect(op)
     assert op.state == DuState(current=op.state.current, files=5, size=221)
     assert fs.stats.calls == {"list": 3}

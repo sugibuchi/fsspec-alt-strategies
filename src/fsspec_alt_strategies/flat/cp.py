@@ -114,7 +114,9 @@ def flat_cp(
     ...     cp_file=fs._cp_file,
     ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
-    >>> copied, errors = await collect(cp)
+    >>> async for copied in cp:
+    ...     if isinstance(copied, Exception):
+    ...         print("failed:", copied)
     """
     return Operation(
         lambda op: _Copy(

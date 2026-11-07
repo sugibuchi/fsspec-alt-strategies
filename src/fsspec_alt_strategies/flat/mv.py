@@ -119,7 +119,9 @@ def flat_mv(
     ...     batch_size=1000,
     ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
-    >>> moved, errors = await collect(mv)
+    >>> async for moved in mv:
+    ...     if isinstance(moved, Exception):
+    ...         print("failed:", moved)
     """
     if batch_size < 1:
         raise ValueError(f"batch_size must be at least 1: {batch_size}")
