@@ -334,7 +334,12 @@ A subclass implements three methods:
 
 It may override two hooks:
 
-- `_same_storage(fs1, fs2)` tells whether `fs1` copies and moves to `fs2`'s paths itself. By default, only `fs1 is fs2`.
+- `_same_storage(fs1, path1, fs2, path2)` names the one filesystem copying or moving between two storages' paths
+  itself. It returns that filesystem and both paths as its own, or None for a transfer. By default, it returns
+  `(fs1, path1, path2)` only when `fs1 is fs2`.
+  - Two filesystems may differ yet share a storage, e.g. through one client. The subclass then maps the other's path
+    to the one it returns, as no namespace is assumed shared.
+  - `path1` may be a list, of one call's sources. The paths it returns keep their shape.
 - `_server_copy(fs1, path1, fs2, path2)` copies a file across without the data passing through the router. It returns
   False where it cannot, and the file is streamed instead. It raises on any other failure.
 
@@ -395,8 +400,9 @@ class VolumesFileSystem(AsyncRoutingFileSystem):
         names = await self.client.list_children(path)  # Catalogs, or schemas.
         return [{"name": n, "type": "directory", "size": 0} for n in names]
 
-    def _same_storage(self, fs1, fs2):
-        return fs1.workspace == fs2.workspace  # One API copies between volumes.
+    def _same_storage(self, fs1, path1, fs2, path2):
+        # One API copies between volumes. Their paths are full, so fs1 takes path2 as it is.
+        return (fs1, path1, path2) if fs1.workspace == fs2.workspace else None
 ```
 
 A router of an account's containers, each with its own client, might route on the first segment. Its server copy is

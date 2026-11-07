@@ -81,8 +81,8 @@ class AsyncRoutingFileSystem(
     fsspec's ``glob`` does. A change above the storages, e.g. ``rm`` of a
     catalog, raises PermissionError.
 
-    A copy or move between two paths of one storage, as ``_same_storage``
-    tells, is the inner filesystem's own. Between two storages, it is the
+    A copy or move between two paths of one storage is the inner filesystem's
+    own: ``_same_storage`` names that filesystem, and both paths as its own. Between two storages, it is the
     source's ``_transfer``, of a `TreeFileSystem` or a `FlatFileSystem`, given
     a ``copy_file`` trying ``_server_copy``, then streaming the data. An inner
     filesystem without ``_transfer`` gets fsspec's own copy instead, a file at
@@ -188,15 +188,26 @@ class AsyncRoutingFileSystem(
 
     # What a subclass may override.
 
-    def _same_storage(self, fs1: AsyncFileSystem, fs2: AsyncFileSystem) -> bool:
-        """Whether ``fs1`` copies and moves to ``fs2``'s paths itself.
+    def _same_storage(
+        self,
+        fs1: AsyncFileSystem,
+        path1: str | list[str],
+        fs2: AsyncFileSystem,
+        path2: str,
+    ) -> tuple[AsyncFileSystem, str | list[str], str] | None:
+        """The one filesystem copying or moving ``path1`` to ``path2`` itself, or None.
 
-        Then a copy or move between them is ``fs1``'s own ``_copy`` or
-        ``_mv``, given ``fs2``'s inner path. It is so for the same filesystem.
-        A subclass whose two filesystems share a namespace, e.g. one client's,
-        says so too.
+        ``path1`` is ``fs1``'s inner path, or a list of them, and ``path2``
+        ``fs2``'s. It returns the filesystem doing the copy or move with its
+        own ``_copy`` or ``_mv``, and both paths as that filesystem's, the
+        first in the shape given. None means two storages: the copy is a
+        transfer.
+
+        Here, it is only so for the same filesystem, whose paths are its own
+        already. A subclass whose two filesystems share a storage, e.g. one
+        client's, returns one of them, with the other's path mapped to it.
         """
-        return fs1 is fs2
+        return (fs1, path1, path2) if fs1 is fs2 else None
 
     async def _server_copy(
         self, fs1: AsyncFileSystem, path1: str, fs2: AsyncFileSystem, path2: str
@@ -456,8 +467,9 @@ class AsyncRoutingFileSystem(
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         fs1, inner1 = self._required(path1)
         fs2, inner2 = self._required(path2)
-        if self._same_storage(fs1, fs2):
-            await self._on(fs1, inner1, path1, fs1._cp_file(inner1, inner2, **kwargs))
+        if same := self._same_storage(fs1, inner1, fs2, inner2):
+            fs, p1, p2 = same
+            await self._on(fs, p1, path1, fs._cp_file(p1, p2, **kwargs))
         elif await self._on(fs1, inner1, path1, fs1._isdir(inner1)):
             # fsspec's copy gives folders too, which each filesystem makes.
             await self._on(fs2, inner2, path2, fs2._makedirs(inner2, exist_ok=True))
@@ -468,8 +480,9 @@ class AsyncRoutingFileSystem(
     async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         fs1, inner1 = self._required(path1)
         fs2, inner2 = self._required(path2)
-        if self._same_storage(fs1, fs2):
-            await self._on(fs1, inner1, path1, fs1._mv_file(inner1, inner2, **kwargs))
+        if same := self._same_storage(fs1, inner1, fs2, inner2):
+            fs, p1, p2 = same
+            await self._on(fs, p1, path1, fs._mv_file(p1, p2, **kwargs))
         else:
             copy_file = self._copy_file(fs1, fs2, delete=True)
             await self._on(fs1, inner1, path1, copy_file(inner1, inner2))
@@ -681,14 +694,15 @@ class AsyncRoutingFileSystem(
         async def copy(group: _Group) -> None:
             fs1, inner1, outer1 = group
             sources = self._one(inner1)
-            if self._same_storage(fs1, fs2):
+            if same := self._same_storage(fs1, sources, fs2, inner2):
+                fs, p1, p2 = same
                 await self._on(
-                    fs1,
-                    sources,
+                    fs,
+                    p1,
                     self._one(outer1),
-                    fs1._copy(
-                        sources,
-                        inner2,
+                    fs._copy(
+                        p1,
+                        p2,
                         recursive,
                         on_error,
                         maxdepth,
@@ -735,32 +749,25 @@ class AsyncRoutingFileSystem(
         async def mv(group: _Group) -> None:
             fs1, inner1, outer1 = group
             sources, outer = self._one(inner1), self._one(outer1)
-            if self._same_storage(fs1, fs2):
-                own = getattr(fs1, "_mv", None)
+            if same := self._same_storage(fs1, sources, fs2, inner2):
+                fs, p1, p2 = same
+                own = getattr(fs, "_mv", None)
                 if own is not None:
                     await self._on(
-                        fs1,
-                        sources,
+                        fs,
+                        p1,
                         outer,
-                        own(
-                            sources,
-                            inner2,
-                            recursive=recursive,
-                            maxdepth=maxdepth,
-                            **kwargs,
-                        ),
+                        own(p1, p2, recursive=recursive, maxdepth=maxdepth, **kwargs),
                     )
                     return
                 # A plain fsspec filesystem has no async mv: its sync one's way.
                 await self._on(
-                    fs1,
-                    sources,
+                    fs,
+                    p1,
                     outer,
-                    fs1._copy(sources, inner2, recursive, "raise", maxdepth, **kwargs),
+                    fs._copy(p1, p2, recursive, "raise", maxdepth, **kwargs),
                 )
-                await self._on(
-                    fs1, sources, outer, fs1._rm(sources, recursive=recursive)
-                )
+                await self._on(fs, p1, outer, fs._rm(p1, recursive=recursive))
             elif recursive and maxdepth is None and hasattr(fs1, "_transfer"):
                 errors = await self._transferred(
                     fs1,

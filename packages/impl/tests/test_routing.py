@@ -460,6 +460,56 @@ async def test_copy_of_a_file_across_storages(router: _Router) -> None:
     assert router.flat._file_data["one.txt"].data == b"data/a/1.txt"
 
 
+class _Shared(_Router):
+    """Also "lake/shared/<path>": another filesystem of the tree's storage.
+
+    Its inner paths are the tree's, under "shared/".
+    """
+
+    def __init__(self, same: bool, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.same = same
+        self.makers["shared"] = lambda: _Tree(
+            self.tree, storage_profile=StorageProfile(), **_OPTIONS
+        )
+
+    def _route(self, path: str) -> tuple[AsyncFileSystem, str] | None:
+        target = super()._route(path)
+        if target is not None and self.names[id(target[0])] == "shared":
+            return target[0], f"shared/{target[1]}" if target[1] else "shared"
+        return target
+
+    def _outer(self, fs: AsyncFileSystem, path: str) -> str:
+        if self.names[id(fs)] == "shared":
+            return f"lake/{path}"
+        return super()._outer(fs, path)
+
+    def _same_storage(
+        self, fs1: AsyncFileSystem, path1: Any, fs2: AsyncFileSystem, path2: str
+    ) -> Any:
+        if self.same and fs1.fs is fs2.fs:  # type: ignore[attr-defined]
+            return fs2, path1, path2  # One namespace: fs2 takes fs1's paths.
+        return super()._same_storage(fs1, path1, fs2, path2)
+
+
+@pytest.mark.parametrize("same", [True, False])
+async def test_same_storage_names_the_filesystem_and_its_paths(same: bool) -> None:
+    router = _Shared(same)
+    for path in _FILES:
+        router.tree.add_file(path, path.encode())
+    shared = router.backend("shared")
+    await router._copy("lake/tree/data", "lake/shared/copied", recursive=True)
+    assert {p for p in router.tree._file_data if p.startswith("shared/")} == {
+        p.replace("data", "shared/copied", 1) for p in _FILES
+    }
+    # Native: one storage copy per file. Otherwise, streamed.
+    assert router.tree.stats.calls.get("copy", 0) == (3 if same else 0)
+    assert router.tree.stats.calls.get("read", 0) == (0 if same else 3)
+    await router._mv_file("lake/shared/copied/a/1.txt", "lake/tree/one.txt")
+    assert "one.txt" in router.tree._file_data
+    assert shared is router.backend("shared")
+
+
 @pytest.mark.parametrize("source", ["tree", "flat"])
 async def test_mv_across_storages_deletes_each_source(
     router: _Router, source: str
