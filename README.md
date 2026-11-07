@@ -23,6 +23,8 @@ This library offers other ways of doing the same things. It is a third-party pro
   path that failed, reports its progress, and stops as an asyncio task does.
 - **Filesystem classes,** `TreeFileSystem` and `FlatFileSystem`, whose fsspec methods are a family's strategies, with
   one concurrency limit for requests and one for data.
+- **A router,** `AsyncRoutingFileSystem`, the base of a filesystem spanning several storages, e.g. a cloud's volumes.
+  It passes each call to the storage's own filesystem, and copies between storages with the source's strategy.
 - **Wrappers** that give an existing fsspec filesystem those methods, and `monitored()`, which picks the wrapper for a
   known filesystem.
 - **Monitors,** which watch the operations behind fsspec's methods, such as `fs.rm(...)`, without changing their API.

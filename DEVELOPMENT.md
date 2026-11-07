@@ -49,6 +49,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../common/`                   | Private machinery the families share, so that none imports another. |
 | `.../common/filesystem.py`      | What the filesystem classes share: the two limits, and data moved through file objects. |
 | `.../common/wrapper.py`         | What the wrappers share: the calls to the filesystem wrapped, awaited or in threads. |
+| `.../common/routing.py`         | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. |
 | `.../common/operation.py`       | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
@@ -318,6 +319,107 @@ know neither family:
 - Its `storage_profile` is the destination's profile. A filesystem without one is unknown, `StorageProfile()`.
 - `copy_file` streams through both `open_async` by default. A caller may give a server-side copy instead.
 - The requests hold the source's `operation_limit`, as `_copy`'s do.
+
+#### Routers
+
+Some namespaces span several storages, each with a filesystem of its own, e.g. a cloud's volumes. A router passes each
+call to the filesystem of the path's storage. `AsyncRoutingFileSystem`, in `common/routing.py`, is its base: a plain
+async fsspec filesystem, knowing no family and importing none.
+
+A subclass implements three methods:
+
+- `_route(path)` gives the inner filesystem and its path, or None above every storage. It keeps a trailing "/".
+- `_outer(fs, path)` gives the router's path of an inner one, so that every name answered is the router's.
+- `_roots(path)`, a coroutine, lists a folder above the storages, as `_ls` with `detail=True` does.
+
+It may override two hooks:
+
+- `_same_storage(fs1, fs2)` tells whether `fs1` copies and moves to `fs2`'s paths itself. By default, only `fs1 is fs2`.
+- `_server_copy(fs1, path1, fs2, path2)` copies a file across without the data passing through the router. It returns
+  False where it cannot, and the file is streamed instead. It raises on any other failure.
+
+How it passes calls on:
+
+- The primitives, such as `_info`, `_cat_file` and `_open`, call the inner filesystem's own, under its inner path.
+- The recursive methods, such as `_find`, `_glob`, `_rm` and `_copy`, call the inner one's own too, so that its
+  strategies run.
+- The paths of one call, e.g. a list given to `rm`, are grouped by storage, and the groups run at once.
+- Above the storages, `_ls` and `_info` answer from `_roots`. `find`, `du` and `walk` are fsspec's own walk, a folder at
+  a time, handing each storage's folder to its filesystem.
+- A glob whose literal prefix routes goes whole to that storage. Any other is fsspec's own, over `_roots`.
+- A change above the storages raises PermissionError.
+- An inner filesystem's error gets a note naming the router's path. Its `filename`, if the inner path, becomes the
+  router's.
+- fsspec makes no sync `mv` or `rmdir`, so the router has its own, as the families' classes do.
+- `test_routing.py` fails on any fsspec method the router neither passes on nor lists as inherited on purpose.
+
+A copy or move between two storages is the source's `_transfer`, so the source's family lists it:
+
+- Its `copy_file` tries `_server_copy`, then `streaming_copy`, under the router's `transfer_limit`.
+- An inner filesystem without `_transfer`, a plain fsspec one, gets fsspec's own copy, a `_cp_file` per file.
+- A move deletes each source file as soon as its copy succeeds, then the source folders left empty.
+- The call is the router's own, as a monitor sees it.
+
+The rest of a router:
+
+- Its inner filesystems are async, on the router's loop. A sync one raises TypeError: wrap it, e.g. in a
+  `SyncTreeWrapper`.
+- A subclass makes them when first needed, with `_backend(key, make)`, e.g. one per volume. `close()` closes them.
+- Pickling keeps the constructor's arguments, as fsspec's does, so a copy makes its inner filesystems again.
+- It has no `storage_profile`: `storage_profile_of(path)` gives the storage's. Its only limit is
+  `transfer_concurrency`.
+- Its transaction is its own. `_open` passes `autocommit` on, and fsspec adds each file to the router's transaction.
+  The commit goes file by file, so it is not atomic across storages.
+- Each call it passes on runs within `routing(self)`, so that a monitor's `Call.via` names it.
+
+A router of volumes might read as below. Its catalogs and schemas are above the storages. Each volume's filesystem
+takes full paths, so that one volume's filesystem can copy to another's paths:
+
+```python
+class VolumesFileSystem(AsyncRoutingFileSystem):
+    protocol = "volumes"
+
+    def _route(self, path):
+        parts = path.split("/", 3)  # catalog/schema/volume/path
+        if len(parts) < 3:
+            return None
+        fs = self._backend(tuple(parts[:3]), lambda: self._volume(*parts[:3]))
+        return fs, path  # The volume's filesystem takes full paths.
+
+    def _outer(self, fs, path):
+        return path
+
+    async def _roots(self, path):
+        names = await self.client.list_children(path)  # Catalogs, or schemas.
+        return [{"name": n, "type": "directory", "size": 0} for n in names]
+
+    def _same_storage(self, fs1, fs2):
+        return fs1.workspace == fs2.workspace  # One API copies between volumes.
+```
+
+A router of an account's containers, each with its own client, might route on the first segment. Its server copy is
+the storage's copy from a URL, refused across accounts:
+
+```python
+class AccountFileSystem(AsyncRoutingFileSystem):
+    def _route(self, path):
+        container, _, inner = path.partition("/")
+        if not container:
+            return None
+        return self._backend(container, lambda: self._container(container)), inner
+
+    def _outer(self, fs, path):
+        return f"{fs.container}/{path}".rstrip("/")
+
+    async def _roots(self, path):
+        return [{"name": c, "type": "directory", "size": 0} async for c in self.list_containers()]
+
+    async def _server_copy(self, fs1, path1, fs2, path2):
+        if fs1.account != fs2.account:
+            return False
+        await fs2.copy_from_url(fs1.url(path1), path2)
+        return True
+```
 
 #### The tree strategies
 
