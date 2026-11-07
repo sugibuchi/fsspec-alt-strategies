@@ -58,7 +58,7 @@ import threading
 import uuid
 import warnings
 from abc import ABC, abstractmethod
-from typing import IO, TYPE_CHECKING, Any
+from typing import IO, TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -173,10 +173,10 @@ class TransactionFile(io.RawIOBase):
         self.path = transaction.path
         self._file: Any = transaction.start_staging()
         # None while undecided, then "committed" or "discarded".
-        self._outcome: str | None = None
+        self._outcome: Literal["committed", "discarded"] | None = None
         # "open" while reads and writes go to the staged file. Then "ended" by
         # closing or a forced flush, or "failed" if that raised: never committed.
-        self._staging = "open"
+        self._staging: Literal["open", "ended", "failed"] = "open"
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.path!r}>"
