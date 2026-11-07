@@ -156,6 +156,9 @@ class _Listing:
     ``depth`` is 1 for the folder the walk started from, 2 for its subfolders,
     and so on. ``entries`` are as ``ls`` gives them, without
     the folder itself, and empty if the listing failed with ``error``.
+
+    ``depth`` 0 is no listing, but the walk's root itself, as `_scan` yields
+    it: ``entries`` hold only the root's ``info`` entry, under ``folder``.
     """
 
     folder: str
@@ -240,7 +243,7 @@ async def _scan(
     stopping: Callable[[], object] | None = None,
     file_root: bool = False,
     folder_root: bool = False,
-) -> AsyncGenerator[_Listing | dict[str, Any]]:
+) -> AsyncGenerator[_Listing]:
     """Walk as the strategies that only read do, such as find, du and glob.
 
     It yields each folder's listing, as ``_listings`` does, but treats ``path``
@@ -251,6 +254,10 @@ async def _scan(
       nothing;
     - a folder, it yields the folder's own ``info`` entry after its listing,
       if ``folder_root`` and the walk is not stopping.
+
+    The root's own entry comes as a `_Listing` of depth 0, which is no listing.
+    So the strategies filter and count it as any entry, but count no folder
+    listed for it.
     """
     root = _trim(path)
     listings = _listings(
@@ -271,13 +278,13 @@ async def _scan(
             if file_root and isinstance(e, NotADirectoryError):
                 async with concurrency_limit:
                     entry = await info(root)
-                yield entry
+                yield _Listing(root, 0, [entry])
             return
         yield root_listing
         if folder_root and not (stopping and stopping()):
             async with concurrency_limit:
                 entry = await info(root)
-            yield entry
+            yield _Listing(root, 0, [entry])
         async for listing in listings:
             yield listing
 

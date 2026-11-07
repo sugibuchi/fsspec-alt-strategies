@@ -116,28 +116,18 @@ def tree_du(
         )
         state = op.state
         async with aclosing(steps):
-            async for step in steps:
-                if isinstance(step, dict):
-                    # The root's own entry, as it is a file.
-                    op.state = state = DuState(
-                        errors=state.errors,
-                        current=step["name"],
-                        folders_listed=state.folders_listed,
-                        files=state.files + 1,
-                        size=state.size + (step.get("size") or 0),
-                    )
-                    yield step
-                    continue
-                files = [e for e in step.entries if e["type"] != "directory"]
+            async for listing in steps:
+                files = [e for e in listing.entries if e["type"] != "directory"]
                 op.state = state = DuState(
-                    errors=state.errors + (step.error is not None),
-                    current=step.folder,
-                    folders_listed=state.folders_listed + 1,
+                    errors=state.errors + (listing.error is not None),
+                    current=listing.folder,
+                    # Depth 0 is the root's own entry: no folder listed.
+                    folders_listed=state.folders_listed + (listing.depth > 0),
                     files=state.files + len(files),
                     size=state.size + sum(e.get("size") or 0 for e in files),
                 )
-                if step.error is not None:
-                    yield step.error
+                if listing.error is not None:
+                    yield listing.error
                 for entry in files:
                     yield entry
 

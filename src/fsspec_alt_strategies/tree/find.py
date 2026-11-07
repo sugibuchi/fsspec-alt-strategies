@@ -119,28 +119,19 @@ def tree_find(
         )
         state = op.state
         async with aclosing(steps):
-            async for step in steps:
-                if isinstance(step, dict):
-                    # The root's own entry.
-                    op.state = state = FindState(
-                        errors=state.errors,
-                        current=state.current,
-                        folders_listed=state.folders_listed,
-                        found=state.found + 1,
-                    )
-                    yield step
-                    continue
+            async for listing in steps:
                 found = [
-                    e for e in step.entries if withdirs or e["type"] != "directory"
+                    e for e in listing.entries if withdirs or e["type"] != "directory"
                 ]
                 op.state = state = FindState(
-                    errors=state.errors + (step.error is not None),
-                    current=step.folder,
-                    folders_listed=state.folders_listed + 1,
+                    errors=state.errors + (listing.error is not None),
+                    current=listing.folder,
+                    # Depth 0 is the root's own entry: no folder listed.
+                    folders_listed=state.folders_listed + (listing.depth > 0),
                     found=state.found + len(found),
                 )
-                if step.error is not None:
-                    yield step.error
+                if listing.error is not None:
+                    yield listing.error
                 for entry in found:
                     yield entry
 

@@ -199,20 +199,8 @@ async def _walk(
         and any(s.matched({"name": root, "type": "directory"}) for s in searches),
     )
     async with aclosing(steps):
-        async for step in steps:
-            if isinstance(step, dict):
-                # The root's own entry, as it matches.
-                if step["name"].rstrip("/") not in found:
-                    state = op.state
-                    op.state = GlobState(
-                        errors=state.errors,
-                        current=state.current,
-                        folders_listed=state.folders_listed,
-                        matched=state.matched + 1,
-                    )
-                    yield step
-                continue
-            for match in _matches_in(step, searches, op, found):
+        async for listing in steps:
+            for match in _matches_in(listing, searches, op, found):
                 yield match
 
 
@@ -237,7 +225,8 @@ def _matches_in(
     op.state = GlobState(
         errors=state.errors + (listing.error is not None),
         current=listing.folder,
-        folders_listed=state.folders_listed + 1,
+        # Depth 0 is the root's own entry: no folder listed.
+        folders_listed=state.folders_listed + (listing.depth > 0),
         matched=state.matched + len(matches) - (listing.error is not None),
     )
     return matches
