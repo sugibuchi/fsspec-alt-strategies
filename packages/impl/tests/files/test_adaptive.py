@@ -402,6 +402,18 @@ class _Writer(AdaptiveWritableFile):
         self.requests.append("abort")
 
 
+async def test_a_file_fitting_one_part_is_uploaded_in_one_request(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    # Past min_multipart_size, but one part when closed: a multipart upload's start
+    # and completion would be two requests more, for nothing.
+    data = b"x" * (6 * _KiB)
+    async with _Writer(flat_fs, "f.bin", min_multipart_size=5 * _KiB) as f:
+        await f._write(data)
+    assert f.requests == ["all"]
+    assert await flat_fs._cat_file("f.bin") == data
+
+
 async def test_small_file_is_uploaded_in_one_request(
     flat_fs: SimulatedFileSystem,
 ) -> None:
