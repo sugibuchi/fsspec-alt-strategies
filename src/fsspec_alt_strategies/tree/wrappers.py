@@ -7,13 +7,21 @@ wrapper is light, and not cached: make one on demand, e.g. to watch a call
 with a monitor, and drop it after. The developer chooses the wrapper: none is
 chosen for a filesystem.
 
-This module depends on `filesystem`, and `wrapping` of `common`.
+This module depends on `filesystem`, and `wrapper` of `common`.
 """
 
 from __future__ import annotations
 
-from ..common.wrapping import _AsyncWrapping, _SyncWrapping
+from typing import TYPE_CHECKING, Any
+
+from ..common.wrapper import _AsyncWrapping, _SyncWrapping
 from .filesystem import TreeFileSystem
+
+if TYPE_CHECKING:
+    from fsspec.asyn import AsyncFileSystem
+    from fsspec.spec import AbstractFileSystem
+
+    from ..profile import StorageProfile
 
 __all__ = ["AsyncTreeWrapper", "SyncTreeWrapper"]
 
@@ -52,6 +60,23 @@ class AsyncTreeWrapper(_AsyncWrapping, TreeFileSystem):
     >>> with monitoring(Progress()):
     ...     tree.rm("data/2024", recursive=True)
     """
+
+    def __init__(
+        self,
+        fs: AsyncFileSystem,
+        *,
+        operation_concurrency: int,
+        io_concurrency: int,
+        storage_profile: StorageProfile | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            fs,
+            operation_concurrency=operation_concurrency,
+            io_concurrency=io_concurrency,
+            storage_profile=storage_profile,
+            **kwargs,
+        )
 
 
 class SyncTreeWrapper(_SyncWrapping, TreeFileSystem):
@@ -96,3 +121,20 @@ class SyncTreeWrapper(_SyncWrapping, TreeFileSystem):
     ... )
     >>> tree.mv("data/2024", "archive/2024", recursive=True)
     """
+
+    def __init__(
+        self,
+        fs: AbstractFileSystem,
+        *,
+        operation_concurrency: int,
+        io_concurrency: int,
+        storage_profile: StorageProfile | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            fs,
+            operation_concurrency=operation_concurrency,
+            io_concurrency=io_concurrency,
+            storage_profile=storage_profile,
+            **kwargs,
+        )

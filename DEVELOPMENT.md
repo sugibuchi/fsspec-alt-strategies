@@ -31,7 +31,7 @@
 | `.../flat/_jobs.py`             | The private engine's flat side: it feeds `common`'s with the keys of each root. |
 | `.../common/`                   | Private machinery the families share, so that none imports another. |
 | `.../common/filesystem.py`      | What the filesystem classes share: the two limits, and data moved through file objects. |
-| `.../common/wrapping.py`        | What the wrappers share: the calls to the filesystem wrapped, awaited or in threads. |
+| `.../common/wrapper.py`         | What the wrappers share: the calls to the filesystem wrapped, awaited or in threads. |
 | `.../common/monitors.py`        | How an operation is run to its end, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |

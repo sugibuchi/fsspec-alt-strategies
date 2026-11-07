@@ -12,7 +12,7 @@ wrapper's ``_ils`` lists with the wrapped filesystem's ``find`` of the
 prefix's folder, which object stores answer in one paginated listing. A
 subclass may list by the prefix itself instead, e.g. with the storage's SDK.
 
-This module depends on `filesystem`, and `wrapping` of `common`.
+This module depends on `filesystem`, and `wrapper` of `common`.
 """
 
 from __future__ import annotations
@@ -21,11 +21,16 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-from ..common.wrapping import _AsyncWrapping, _SyncWrapping
+from ..common.wrapper import _AsyncWrapping, _SyncWrapping
 from .filesystem import FlatFileSystem
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from fsspec.asyn import AsyncFileSystem
+    from fsspec.spec import AbstractFileSystem
+
+    from ..profile import StorageProfile
 
 __all__ = ["AsyncFlatWrapper", "SyncFlatWrapper"]
 
@@ -82,9 +87,24 @@ class AsyncFlatWrapper(_AsyncWrapping, FlatFileSystem):
     ...     flat.rm("bucket/data/2024", recursive=True)
     """
 
-    def __init__(self, fs: Any, *, rm_batch_size: int, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        fs: AsyncFileSystem,
+        *,
+        rm_batch_size: int,
+        operation_concurrency: int,
+        io_concurrency: int,
+        storage_profile: StorageProfile | None = None,
+        **kwargs: Any,
+    ) -> None:
         self.rm_batch_size = rm_batch_size
-        super().__init__(fs, **kwargs)
+        super().__init__(
+            fs,
+            operation_concurrency=operation_concurrency,
+            io_concurrency=io_concurrency,
+            storage_profile=storage_profile,
+            **kwargs,
+        )
 
     async def _ils(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
         found = await self.fs._find(prefix.rpartition("/")[0], detail=True)
@@ -149,9 +169,24 @@ class SyncFlatWrapper(_SyncWrapping, FlatFileSystem):
     >>> flat.find("bucket/data")
     """
 
-    def __init__(self, fs: Any, *, rm_batch_size: int, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        fs: AbstractFileSystem,
+        *,
+        rm_batch_size: int,
+        operation_concurrency: int,
+        io_concurrency: int,
+        storage_profile: StorageProfile | None = None,
+        **kwargs: Any,
+    ) -> None:
         self.rm_batch_size = rm_batch_size
-        super().__init__(fs, **kwargs)
+        super().__init__(
+            fs,
+            operation_concurrency=operation_concurrency,
+            io_concurrency=io_concurrency,
+            storage_profile=storage_profile,
+            **kwargs,
+        )
 
     async def _ils(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
         found = await asyncio.to_thread(
