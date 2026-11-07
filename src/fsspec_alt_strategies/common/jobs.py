@@ -80,89 +80,65 @@ def _roots_of(
     return _Roots(list(folders), files, errors)
 
 
-class _Permits:
-    """An operation's share of a concurrency limit, taken as its requests start.
+class _Queue(Generic[_T]):
+    """Items waiting for a permit of a concurrency limit, and the requests running.
 
-    A request takes a permit to start, and gives it back once done. When none
-    is free, `waiter` is a task getting the next one: awaited along with the
-    operation's own requests, it picks up the permits that others sharing the
-    limit give back.
+    Each item's request starts once a permit is free, and gives it back once
+    done. When none is free, a waiter task gets the next one: awaited, in
+    `pending`, along with the owner's requests, it picks up the permits that
+    others sharing the limit give back. The owner takes each finished
+    request's item back with `pop`.
     """
 
     def __init__(self, limit: asyncio.Semaphore) -> None:
         self.limit = limit
-        self.waiting: asyncio.Task[bool] | None = None
+        self.waiting: deque[_T] = deque()
+        self.running: dict[asyncio.Task[Any], _T] = {}
+        self.waiter: asyncio.Task[bool] | None = None
 
-    async def take(self) -> bool:
+    async def start(self, run: Callable[[_T], Awaitable[Any]]) -> None:
+        """Start the request of each item waiting, while permits are free."""
+        while self.waiting and await self._take():
+            item = self.waiting.popleft()
+            task = asyncio.ensure_future(run(item))
+            task.add_done_callback(lambda _: self.limit.release())
+            self.running[task] = item
+
+    async def _take(self) -> bool:
         """Take a permit if one is free now, or got by the waiter."""
-        if self.waiting is not None:
-            if not self.waiting.done():
+        if self.waiter is not None:
+            if not self.waiter.done():
                 return False
-            self.waiting = None  # Its permit is now this operation's.
+            self.waiter = None  # Its permit is now this queue's.
             return True
         if self.limit.locked():
             return False
         await self.limit.acquire()  # A permit is free: this does not wait.
         return True
 
-    def waiter(self) -> asyncio.Task[bool]:
-        """A task done once the next permit is this operation's."""
-        if self.waiting is None:
-            self.waiting = asyncio.ensure_future(self.limit.acquire())
-        return self.waiting
-
-    def start(self, request: Awaitable[Any]) -> asyncio.Task[Any]:
-        """Run a request with a permit taken, giving it back once done."""
-        task = asyncio.ensure_future(request)
-        task.add_done_callback(lambda _: self.limit.release())
-        return task
-
-    async def close(self) -> None:
-        """Stop waiting for a permit, and give back one got but not used."""
-        task, self.waiting = self.waiting, None
-        if task is None:
-            return
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        if not task.cancelled() and task.exception() is None:
-            self.limit.release()
-
-
-class _Queue(Generic[_T]):
-    """Items waiting for a permit of a concurrency limit, and the requests running.
-
-    Each item's request starts once a permit is free, and holds it until done.
-    The owner waits for `pending` along with what else it waits for, and takes
-    each finished request's item back with `pop`.
-    """
-
-    def __init__(self, limit: asyncio.Semaphore) -> None:
-        self.permits = _Permits(limit)
-        self.waiting: deque[_T] = deque()
-        self.running: dict[asyncio.Task[Any], _T] = {}
-
-    async def start(self, run: Callable[[_T], Awaitable[Any]]) -> None:
-        """Start the request of each item waiting, while permits are free."""
-        while self.waiting and await self.permits.take():
-            item = self.waiting.popleft()
-            self.running[self.permits.start(run(item))] = item
-
     def pending(self) -> list[asyncio.Task[Any]]:
         """The requests running, and the waiter for a permit if items wait."""
-        return [*self.running, *([self.permits.waiter()] if self.waiting else [])]
+        if self.waiting and self.waiter is None:
+            self.waiter = asyncio.ensure_future(self.limit.acquire())
+        return [*self.running, *([self.waiter] if self.waiting else [])]
 
     def pop(self, task: asyncio.Task[Any]) -> _T | None:
         """The item of a request done, or None for the waiter, whose permit `start` takes."""
         return self.running.pop(task, None)
 
     async def close(self) -> None:
-        """Cancel the requests running, and give back the permits."""
+        """Cancel the requests running, stop waiting, and give back a permit got."""
         tasks = list(self.running)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.running.clear()
-        await self.permits.close()
+        waiter, self.waiter = self.waiter, None
+        if waiter is not None:
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+            if not waiter.cancelled() and waiter.exception() is None:
+                self.limit.release()
 
 
 class _Jobs(ABC):
