@@ -120,6 +120,22 @@ class TreeFileSystem(_StrategyFileSystem):
     storage_profile: StorageProfile
     """What the storage does, for the strategies, as given when made."""
 
+    def __init__(
+        self,
+        *args: Any,
+        operation_concurrency: int,
+        io_concurrency: int,
+        storage_profile: StorageProfile,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            *args,
+            operation_concurrency=operation_concurrency,
+            io_concurrency=io_concurrency,
+            storage_profile=storage_profile,
+            **kwargs,
+        )
+
     # What a subclass implements: the storage's primitives, as fsspec names them.
 
     @abstractmethod

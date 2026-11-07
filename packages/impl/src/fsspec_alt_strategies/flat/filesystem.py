@@ -120,8 +120,21 @@ class FlatFileSystem(_StrategyFileSystem):
     storage_profile: StorageProfile
     """What the storage does, for the strategies, as given when made."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        *args: Any,
+        operation_concurrency: int,
+        io_concurrency: int,
+        storage_profile: StorageProfile,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            *args,
+            operation_concurrency=operation_concurrency,
+            io_concurrency=io_concurrency,
+            storage_profile=storage_profile,
+            **kwargs,
+        )
         size = getattr(self, "rm_batch_size", None)
         if not isinstance(size, int) or size < 1:
             raise ValueError(f"rm_batch_size must be set, to at least 1: {size}")
