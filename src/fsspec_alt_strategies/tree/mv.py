@@ -93,7 +93,9 @@ def tree_mv(
     ``concurrency_limit`` while it runs.
 
     The profile's ``parents_required=False`` saves the ``makedirs`` of each
-    folder with files, as their copies create it.
+    folder with files, as their copies create it. Its ``implicit_folders=True``
+    saves those, and the ``rm_folder`` of each source folder too, as a folder
+    goes with its last file.
 
     Parameters
     ----------
@@ -218,15 +220,28 @@ class _Move(_Copy):
             outcome = super().done(job)
             # An empty folder: made at the destination, it can go.
             if job.source and self.remaining[job.source] == 0:
-                self.waiting.append(_Job("rmdir", job.source, job.destination))
+                outcome += self.remove(job.source)
             return outcome
         if job.kind == "rmdir":
             self.folders_moved += 1
         else:
             self.files_done += 1
+        outcome: list[Any] = [(job.source, job.destination)]
         if (folder := self.child_done(job.source)) is not None:
-            self.waiting.append(_Job("rmdir", folder, self.target(folder)))
-        return [(job.source, job.destination)]
+            outcome += self.remove(folder)
+        return outcome
+
+    def remove(self, folder: str) -> list[Any]:
+        """Delete a source folder now empty, and return what that moved at once.
+
+        An implicit folder went with its last file: it is moved, with no
+        request, as one found already gone is.
+        """
+        job = _Job("rmdir", folder, self.target(folder))
+        if self.implicit_folders:
+            return self.done(job)
+        self.waiting.append(job)
+        return []
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         if job.kind != "rmdir":

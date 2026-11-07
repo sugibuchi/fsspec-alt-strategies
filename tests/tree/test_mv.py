@@ -160,6 +160,47 @@ async def test_profile_saves_the_mkdirs(hierarchical_fs: SimulatedFileSystem) ->
     assert await hierarchical_fs._exists("moved/empty")
 
 
+async def test_implicit_folders_save_the_folder_requests(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    sent: list[str] = []
+
+    async def rm_folder(path: str) -> None:
+        sent.append(f"rmdir {path}")  # Requests a real object store may send.
+        await flat_fs._rmdir(path)
+
+    async def makedirs(path: str, exist_ok: bool = False) -> None:
+        sent.append(f"mkdir {path}")
+        await flat_fs._makedirs(path, exist_ok=exist_ok)
+
+    unknown = _mv(flat_fs, "data", "moved", rm_folder=rm_folder, makedirs=makedirs)
+    moved_unknown, _ = await _collect(unknown)
+    assert sent  # Unknown, each folder is made, then deleted.
+
+    sent.clear()
+    profile = StorageProfile(implicit_folders=True)
+    op = _mv(
+        flat_fs,
+        "moved",
+        "data",
+        rm_folder=rm_folder,
+        makedirs=makedirs,
+        profile=profile,
+    )
+    moved, errors = await _collect(op)
+    assert (sent, errors) == ([], [])
+    # The same outcome: the folders moved too, as one found already gone is.
+    assert len(moved) == len(moved_unknown)
+    assert op.state.folders_moved == unknown.state.folders_moved == 6
+    assert sorted(p for p in flat_fs._file_data if p.startswith("data/")) == _FILES
+
+
+def test_implicit_folders_cannot_require_parents() -> None:
+    with pytest.raises(ValueError, match="parents_required"):
+        StorageProfile(implicit_folders=True, parents_required=True)
+
+
 async def test_a_storage_requiring_parents() -> None:
     fs = SimulatedFileSystem(
         hierarchical=True, parents_required=True, asynchronous=True

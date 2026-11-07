@@ -95,8 +95,9 @@ def tree_cp(
     it refused. Each request holds a permit of ``concurrency_limit`` while it
     runs.
 
-    The profile's ``parents_required=False`` saves the ``makedirs`` of each
-    folder with files, as their copies create it.
+    The profile's ``parents_required=False``, or ``implicit_folders=True``,
+    saves the ``makedirs`` of each folder with files, as their copies create
+    it.
 
     Parameters
     ----------
@@ -202,7 +203,11 @@ class _Copy(_Placing, _TreeJobs):
         self.cp_file = cp_file
         self.makedirs = makedirs
         self.rm_file = rm_file
-        self.parents_required = profile.parents_required is not False
+        # Unknown, folders are made first. Implicit folders need none.
+        self.parents_required = (
+            profile.parents_required is not False and not profile.implicit_folders
+        )
+        self.implicit_folders = bool(profile.implicit_folders)
         self._placing()
         self.files_found = 0
         self.files_done = 0

@@ -271,6 +271,7 @@ class TreeFileSystem(_FileSystem):
                 info=self._info,
                 rm_file=self._rm_file,
                 rm_folder=self._rmdir,
+                profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
             ),
             Call(self, "rm", path),

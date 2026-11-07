@@ -10,6 +10,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.common.monitors import _collect
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.tree.rm import RmState, tree_rm
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
@@ -73,6 +74,27 @@ async def test_requests_on_an_object_store(flat_fs: SimulatedFileSystem) -> None
     # Object stores have no folders to delete: _rmdir sends nothing.
     assert len(deleted) == 5 + 7
     assert flat_fs.stats.calls == {"list": 7, "delete": 5}
+
+
+async def test_implicit_folders_save_the_folder_deletions(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    folders: list[str] = []
+
+    async def rm_folder(path: str) -> None:
+        folders.append(path)  # A request a real object store may send.
+        await flat_fs._rmdir(path)
+
+    profile = StorageProfile(implicit_folders=True)
+    op = _rm(flat_fs, "data", rm_folder=rm_folder, profile=profile)
+    deleted, errors = await _collect(op)
+    assert (folders, errors) == ([], [])
+    # As a folder found already gone: not yielded.
+    assert sorted(deleted) == sorted(_FILES)
+    assert op.state.folders_deleted == 0
+    assert not await flat_fs._exists("data")
+    assert await flat_fs._exists("other/kept")
 
 
 async def test_a_file(any_fs: SimulatedFileSystem) -> None:

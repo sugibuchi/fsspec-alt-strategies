@@ -337,6 +337,15 @@ requests.
 - So a profile only saves requests. It changes the outcome only if it is wrong, and each docstring says how.
 - The library never detects a storage's behaviour: the developer declares it.
 
+The fields, and the requests each saves:
+
+| Field              | Saves                                                                              |
+|--------------------|------------------------------------------------------------------------------------|
+| `parents_required` | False: the `makedirs` of each folder with files, in `tree_cp` and `tree_mv`.       |
+| `implicit_folders` | True: those, and the `rm_folder` of each folder, in `tree_rm` and `tree_mv`.       |
+
+A field may imply another: implicit folders need no parents made. A profile contradicting itself raises `ValueError`.
+
 A fact gets a field only once a strategy saves requests with it. Facts that cost nothing to handle as they come have
 none. An example is a copy refused because the file exists: `tree_mv` then deletes the old file and copies again.
 

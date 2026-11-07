@@ -6,7 +6,7 @@
 whole tree first, then deletes each path. `tree_rm` deletes each folder's files
 as soon as the folder is listed, and each folder once it is empty.
 
-This module depends on `control`, `_jobs`, and `jobs` and `states` of `common`.
+This module depends on `control`, `profile`, `_jobs`, and `jobs` and `states` of `common`.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from ..common.jobs import _Job, _Roots
 from ..common.states import RmState
 from ..control import Operation
+from ..profile import StorageProfile
 from ._jobs import _expand, _TreeJobs
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ def tree_rm(
     info: _Info,
     rm_file: _Request,
     rm_folder: _Request,
+    profile: StorageProfile | None = None,
     concurrency_limit: asyncio.Semaphore,
 ) -> Operation[str, RmState]:
     """Delete a folder and everything in it, deleting while the tree is walked.
@@ -74,6 +76,10 @@ def tree_rm(
     `tree_glob`. Each request holds a permit of ``concurrency_limit`` while it
     runs.
 
+    The profile's ``implicit_folders=True`` saves the ``rm_folder`` of each
+    folder, as a folder goes with its last file. Such a folder is not yielded,
+    as one found already gone is not.
+
     Parameters
     ----------
     path : str or sequence of str
@@ -94,6 +100,8 @@ def tree_rm(
         filesystem's ``_rmdir``, or its ``_rm_file`` as fsspec's ``_rm`` does
         without one. A FileNotFoundError from it counts as deleted, as object
         stores have no folders to delete.
+    profile : StorageProfile, optional
+        What the storage does. Unknown if None.
     concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several
         operations, or files, together.
@@ -127,7 +135,14 @@ def tree_rm(
     """
     return Operation(
         lambda op: _Deletion(
-            ls, info, rm_file, rm_folder, path, concurrency_limit, op
+            ls,
+            info,
+            rm_file,
+            rm_folder,
+            path,
+            profile or StorageProfile(),
+            concurrency_limit,
+            op,
         ).outcomes(),
         RmState(folders_deleted=0),
     )
@@ -143,6 +158,7 @@ class _Deletion(_TreeJobs):
         rm_file: _Request,
         rm_folder: _Request,
         path: str | Sequence[str],
+        profile: StorageProfile,
         concurrency_limit: asyncio.Semaphore,
         op: Operation[str, RmState],
     ) -> None:
@@ -150,6 +166,7 @@ class _Deletion(_TreeJobs):
         self.path = path
         self.rm_file = rm_file
         self.rm_folder = rm_folder
+        self.implicit_folders = bool(profile.implicit_folders)
         self.files_found = 0
         self.files_deleted = 0
         self.folders_deleted = 0
@@ -179,7 +196,7 @@ class _Deletion(_TreeJobs):
                 self.files_found += 1
                 self.waiting.append(_Job("file", entry["name"].rstrip("/")))
         if not listing.entries:
-            self.waiting.append(_Job("folder", listing.folder))
+            self.remove(listing.folder)
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "folder":
@@ -206,4 +223,11 @@ class _Deletion(_TreeJobs):
     def after(self, path: str) -> None:
         """Queue the deletion of a path's folder, if it is now empty."""
         if (folder := self.child_done(path)) is not None:
+            self.remove(folder)
+
+    def remove(self, folder: str) -> None:
+        """Queue the deletion of an empty folder, unless it went with its last file."""
+        if self.implicit_folders:
+            self.after(folder)  # Gone already, as a FileNotFoundError tells.
+        else:
             self.waiting.append(_Job("folder", folder))

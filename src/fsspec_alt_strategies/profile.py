@@ -41,10 +41,22 @@ class StorageProfile:
         Whether writing a file into a missing folder fails, rather than
         creating its parents. Unknown by default, taken as True: folders are
         created before files are written into them.
+    implicit_folders : bool, optional
+        Whether folders exist only through the files under them, with no
+        entry of their own, as on object stores without a hierarchical
+        namespace. A folder then goes with its last file, and a file written
+        creates its parents. Unknown by default, taken as False: a folder
+        emptied is deleted.
+
+    Raises
+    ------
+    ValueError
+        If ``implicit_folders`` is True and ``parents_required`` too, as a
+        file's parents then exist as soon as it does.
 
     Examples
     --------
-    >>> profile = StorageProfile(parents_required=False)
+    >>> profile = StorageProfile(implicit_folders=True)
     >>> op = tree_cp(
     ...     "data/2024",
     ...     "archive/2024",
@@ -59,3 +71,11 @@ class StorageProfile:
     """
 
     parents_required: bool | None = None
+    implicit_folders: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.implicit_folders and self.parents_required:
+            raise ValueError(
+                "parents_required cannot be True with implicit_folders: a file's"
+                " parents exist as soon as it does"
+            )
