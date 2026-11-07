@@ -231,6 +231,34 @@ async def test_above_the_storages_lists_the_roots(router: _Router) -> None:
     assert await router._exists("lake/tree")
 
 
+class _Stripping(_Router):
+    """A router whose path conversion drops a trailing "/"."""
+
+    def _route(self, path: str) -> tuple[AsyncFileSystem, str] | None:
+        target = super()._route(path)
+        return target and (target[0], target[1].rstrip("/"))
+
+
+def test_a_trailing_slash_is_kept_on_the_inner_path() -> None:
+    router = _Stripping()
+    assert router._target("lake/tree/data/")[1] == "data/"  # type: ignore[index]
+    assert router._target("lake/tree/data")[1] == "data"  # type: ignore[index]
+    assert router._target("lake/tree/")[1] == ""  # type: ignore[index]
+
+
+async def test_a_call_passed_on_keeps_the_slash() -> None:
+    router = _Stripping()
+    tree = router.backend("tree")
+    given: list[str] = []
+
+    async def copy(path1: str, path2: str, *args: Any, **kwargs: Any) -> None:
+        given.extend([path1, path2])
+
+    tree._copy = copy
+    await router._copy("lake/tree/a/", "lake/tree/dest/")
+    assert given == ["a/", "dest/"]
+
+
 class _RootDescribing(_Router):
     async def _root_info(self, path: str) -> dict[str, Any]:
         return {"name": path, "size": 0, "type": "directory", "owner": "me"}

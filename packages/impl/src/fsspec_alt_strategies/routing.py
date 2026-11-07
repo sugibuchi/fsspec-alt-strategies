@@ -179,9 +179,10 @@ class AsyncRoutingFileSystem(
         """The inner filesystem of a path, and its path there, or None above them all.
 
         ``path`` is the router's, without the protocol. A trailing "/" is kept,
-        and must be kept in the inner path, as it means a folder to a copy or
-        a glob. So may glob patterns: where the literal part routes, the
-        pattern's must route to the same filesystem.
+        as it means a folder to a copy or a glob: the router puts it back on
+        the inner path if ``_route`` drops it. So may glob patterns: where
+        the literal part routes, the pattern's must route to the same
+        filesystem.
 
         It raises FileNotFoundError for a path no storage has, e.g. a missing
         volume. It may make the inner filesystem, with `_backend`.
@@ -311,13 +312,23 @@ class AsyncRoutingFileSystem(
     # Routing.
 
     def _target(self, path: str) -> tuple[AsyncFileSystem, str] | None:
-        """``_route`` of a path given to a method, refusing a sync filesystem."""
-        target = self._route(_plain(self, path))
-        if target is not None and not getattr(target[0], "async_impl", False):
+        """``_route`` of a path given to a method, refusing a sync filesystem.
+
+        A trailing "/" of the path is kept on a non-empty inner path, as it
+        means a folder to a copy or a glob: ``_route`` need not keep it.
+        """
+        plain = _plain(self, path)
+        target = self._route(plain)
+        if target is None:
+            return None
+        fs, inner = target
+        if not getattr(fs, "async_impl", False):
             raise TypeError(
-                f"{target[0]!r} is not async: a router passes its calls on to async "
+                f"{fs!r} is not async: a router passes its calls on to async "
                 "filesystems only. Wrap it, e.g. in a SyncTreeWrapper."
             )
+        if plain.endswith("/") and inner and not inner.endswith("/"):
+            return fs, f"{inner}/"
         return target
 
     def _required(self, path: str) -> tuple[AsyncFileSystem, str]:

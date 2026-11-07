@@ -328,7 +328,8 @@ async fsspec filesystem, knowing no family and importing none.
 
 A subclass implements three methods:
 
-- `_route(path)` gives the inner filesystem and its path, or None above every storage. It keeps a trailing "/".
+- `_route(path)` gives the inner filesystem and its path, or None above every storage. A trailing "/" means a folder to a
+  copy or a glob: the router puts it back on a non-empty inner path that lacks it.
 - `_outer(fs, path)` gives the router's path of an inner one, so that every name answered is the router's.
 - `_roots(path)`, a coroutine, lists a folder above the storages, as `_ls` with `detail=True` does.
 
