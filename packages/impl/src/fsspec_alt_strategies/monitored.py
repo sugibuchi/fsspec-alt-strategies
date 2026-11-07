@@ -14,7 +14,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from fsspec.asyn import AsyncFileSystem
+
 from fsspec_alt_strategies_common.monitor import Monitored
+from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_common.wrapper import known_implementations
 
 from .flat.wrapper import AsyncFlatWrapper, SyncFlatWrapper
@@ -40,6 +43,7 @@ _WRAPPERS: dict[tuple[str, bool], Any] = {
 def monitored(
     fs: AbstractFileSystem,
     implementations: Mapping[str, KnownImplementation] | None = None,
+    wrap_unknown_fs: bool = False,
 ) -> AbstractFileSystem:
     """The filesystem, as one whose calls the monitors see.
 
@@ -49,6 +53,11 @@ def monitored(
     the entry's limits and profile. The wrapper is new, and may be dropped
     once used.
 
+    A filesystem no entry names is wrapped only if ``wrap_unknown_fs``: as
+    a `TreeFileSystem`, one request at a time, with an unknown profile. That
+    is right on any storage, if slow. It is async as the filesystem is an
+    `AsyncFileSystem`.
+
     Parameters
     ----------
     fs : AbstractFileSystem
@@ -57,6 +66,9 @@ def monitored(
         How each filesystem class is wrapped, by the full name of the class,
         e.g. "s3fs.core.S3FileSystem". The interface's
         `known_implementations` if None.
+    wrap_unknown_fs : bool, default False
+        Whether to wrap a filesystem no entry names, the way right on any
+        storage, rather than raise.
 
     Returns
     -------
@@ -66,8 +78,8 @@ def monitored(
     Raises
     ------
     ValueError
-        If ``fs`` is not monitored, and no entry names its class: it is never
-        wrapped by guess.
+        If ``fs`` is not monitored, no entry names its class, and
+        ``wrap_unknown_fs`` is False.
 
     Examples
     --------
@@ -82,8 +94,16 @@ def monitored(
         if entry is not None:
             break
     else:
-        name = f"{type(fs).__module__}.{type(fs).__qualname__}"
-        raise ValueError(f"No known implementation says how to wrap {name}")
+        if not wrap_unknown_fs:
+            name = f"{type(fs).__module__}.{type(fs).__qualname__}"
+            raise ValueError(f"No known implementation says how to wrap {name}")
+        entry = {
+            "type": "tree",
+            "async": isinstance(fs, AsyncFileSystem),
+            "operation_concurrency": 1,
+            "io_concurrency": 1,
+            "storage_profile": StorageProfile(),
+        }
     wrapper = _WRAPPERS[(entry["type"], entry["async"])]
     options: dict[str, Any] = {
         "operation_concurrency": entry["operation_concurrency"],

@@ -104,3 +104,12 @@ def test_the_known_memory_filesystem() -> None:
         assert tree.find("/test_monitored") == ["/test_monitored/data/a.txt"]
     finally:
         memory.rm("/test_monitored", recursive=True)
+
+
+@pytest.mark.parametrize("asynchronous", [True, False])
+def test_an_unknown_filesystem_is_wrapped_if_asked(asynchronous: bool) -> None:
+    fs = SimulatedFileSystem() if asynchronous else LocalFileSystem()
+    tree = monitored(fs, {}, wrap_unknown_fs=True)
+    assert isinstance(tree, AsyncTreeWrapper if asynchronous else SyncTreeWrapper)
+    assert (tree.operation_concurrency, tree.io_concurrency) == (1, 1)
+    assert tree.storage_profile == StorageProfile()
