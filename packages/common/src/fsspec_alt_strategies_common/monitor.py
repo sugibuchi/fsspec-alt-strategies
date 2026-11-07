@@ -38,7 +38,7 @@ import asyncio
 import contextvars
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -55,7 +55,9 @@ __all__ = [
     "OperationHandler",
     "State",
     "current_monitors",
+    "current_routers",
     "monitoring",
+    "routing",
 ]
 
 
@@ -126,6 +128,26 @@ class OperationHandler(ABC):
         """Whether it ended: run to its end, stopped, closed, or failed."""
 
 
+_routers: contextvars.ContextVar[tuple[AbstractFileSystem, ...]] = (
+    contextvars.ContextVar("fsspec_alt_strategies_routers", default=())
+)
+
+
+def current_routers() -> tuple[AbstractFileSystem, ...]:
+    """The routers the caller was called through, the outermost first.
+
+    A router, a filesystem passing each call on to the filesystem of the
+    path's storage, enters `routing` around the calls it makes. A `Call` made
+    within takes them as its ``via``.
+
+    Returns
+    -------
+    tuple of AbstractFileSystem
+        The routers, none outside any.
+    """
+    return _routers.get()
+
+
 @dataclass(frozen=True)
 class Call:
     """The fsspec method an operation answers, as a `Monitor` is told it.
@@ -141,12 +163,17 @@ class Call:
         The path it was given, as given, e.g. with the protocol.
     path2 : str, optional
         The second path, for ``copy`` and ``mv``.
+    via : tuple of AbstractFileSystem
+        The routers the call came through to ``fs``, the outermost first, or
+        none if ``fs`` was called directly. Its paths are then ``fs``'s own,
+        not the router's. It is `current_routers` when the call is made.
     """
 
     fs: AbstractFileSystem
     method: str
     path: str | list[str]
     path2: str | list[str] | None = None
+    via: tuple[AbstractFileSystem, ...] = field(default_factory=current_routers)
 
 
 class CallCancelled(Exception):
@@ -352,3 +379,40 @@ class monitoring:
 
     async def __aexit__(self, *exc_info: object) -> None:
         self.__exit__(*exc_info)
+
+
+class routing:
+    """Mark the calls made within the block as made through ``router``.
+
+    A router enters it around each call it passes on, so that a `Call` made
+    within names it in ``via``. Routers nest: one routing to another adds
+    itself after it. Only a ``with`` block spanning no ``yield`` is safe in an
+    async generator, as the generator runs in its caller's context.
+
+    Parameters
+    ----------
+    router : AbstractFileSystem
+        The router passing the calls on.
+
+    See Also
+    --------
+    current_routers : The routers around the caller.
+
+    Examples
+    --------
+    >>> with routing(self):
+    ...     return await fs._find(inner_path)
+    """
+
+    def __init__(self, router: AbstractFileSystem) -> None:
+        self.router = router
+        self._token: contextvars.Token[tuple[AbstractFileSystem, ...]] | None = None
+
+    def __enter__(self) -> Self:
+        self._token = _routers.set((*_routers.get(), self.router))
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if self._token is not None:
+            _routers.reset(self._token)
+            self._token = None

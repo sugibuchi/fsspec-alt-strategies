@@ -14,7 +14,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | Path                            | Contents                                                       |
 |---------------------------------|----------------------------------------------------------------|
 | `packages/common/src/fsspec_alt_strategies_common/` | The interface, installed: one for all the copies in a project. |
-| `.../monitor.py`                | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitored`, `Call`, `CallCancelled`, `Monitor`, `monitoring` and `current_monitors`: watching the operations behind the filesystems' fsspec methods. |
+| `.../monitor.py`                | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitored`, `Call`, `CallCancelled`, `Monitor`, `monitoring` and `current_monitors`: watching the operations behind the filesystems' fsspec methods. `routing` and `current_routers`: the routers a call came through. |
 | `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
 | `.../states.py`                 | The states the strategies report, e.g. `FindState` of `tree_find` and `flat_find`. |
 | `.../wrapper.py`                | `KnownImplementation` and `known_implementations`: how each known filesystem class is wrapped, to be monitored. |
@@ -272,6 +272,8 @@ changing fsspec's API. The filesystems run their operations with `common/operati
 - Each method takes the `Call`, then the item yielded or the error ending the call, then the `state`, then the
   `OperationHandler`. `started` takes no item.
 - A `Call` names the method, its paths, and the filesystem called. A call to a wrapper names the filesystem wrapped.
+- Its `via` names the routers it came through, the outermost first, as `current_routers()` tells them. A router enters
+  `with routing(self):` around each call it passes on. The call's paths are then the inner filesystem's own.
 - `with monitoring(monitor):`, or `async with`, sets a context variable. Every call within the block is watched,
   whoever makes it, and blocks nest.
 - The filesystems read the monitors with `current_monitors()`, so that the context variable stays the interface's own.

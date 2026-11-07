@@ -27,7 +27,9 @@ from .monitor import (
     OperationHandler,
     State,
     current_monitors,
+    current_routers,
     monitoring,
+    routing,
 )
 from .profile import StorageProfile
 from .states import CpState, DuState, FindState, GlobState, MvState, RmState, WalkState
@@ -56,6 +58,8 @@ __all__ = [
     "StorageProfile",
     "WalkState",
     "current_monitors",
+    "current_routers",
     "known_implementations",
     "monitoring",
+    "routing",
 ]
