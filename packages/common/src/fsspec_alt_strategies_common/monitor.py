@@ -45,6 +45,7 @@ __all__ = [
     "Call",
     "CallCancelled",
     "Monitor",
+    "Monitored",
     "OperationHandler",
     "State",
     "monitoring",
@@ -67,6 +68,14 @@ class State:
 
     errors: int = 0
     current: str | None = None
+
+
+class Monitored(ABC):  # noqa: B024, a marker: it declares no method.
+    """A filesystem whose fsspec methods tell the monitors of their operations.
+
+    A marker: the filesystem classes of the strategies, and their wrappers,
+    inherit it. A filesystem without it is wrapped to be monitored.
+    """
 
 
 class OperationHandler(ABC):

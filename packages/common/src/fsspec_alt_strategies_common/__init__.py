@@ -10,6 +10,7 @@ once, so that every copy in a project, of any version, shares one interface.
   methods.
 - `profile`: `StorageProfile`, what a storage does that fsspec leaves open.
 - `states`: the states the strategies report, such as `FindState`.
+- `wrapper`: `known_implementations`, how a known filesystem is wrapped.
 
 Its monitors are one context variable for the whole project: a `monitoring`
 block watches the calls of every copy.
@@ -21,12 +22,14 @@ from .monitor import (
     Call,
     CallCancelled,
     Monitor,
+    Monitored,
     OperationHandler,
     State,
     monitoring,
 )
 from .profile import StorageProfile
 from .states import CpState, DuState, FindState, GlobState, MvState, RmState, WalkState
+from .wrapper import KnownImplementation, known_implementations
 
 try:
     from ._version import __version__ as __version__
@@ -40,12 +43,15 @@ __all__ = [
     "DuState",
     "FindState",
     "GlobState",
+    "KnownImplementation",
     "Monitor",
+    "Monitored",
     "MvState",
     "OperationHandler",
     "RmState",
     "State",
     "StorageProfile",
     "WalkState",
+    "known_implementations",
     "monitoring",
 ]

@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+# SPDX-License-Identifier: Apache-2.0
+"""A filesystem whose calls the monitors see: as it is, or wrapped.
+
+`monitored` returns a filesystem that tells the monitors of a `monitoring`
+block of its operations. One inheriting the interface's `Monitored`, such as a
+`TreeFileSystem` or a wrapper, already does. Any other is wrapped as its entry
+in the known implementations says: none is chosen for a filesystem not there.
+
+This module depends on `wrapper` of `tree` and `flat`.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from fsspec_alt_strategies_common.monitor import Monitored
+from fsspec_alt_strategies_common.wrapper import known_implementations
+
+from .flat.wrapper import AsyncFlatWrapper, SyncFlatWrapper
+from .tree.wrapper import AsyncTreeWrapper, SyncTreeWrapper
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from fsspec.spec import AbstractFileSystem
+
+    from fsspec_alt_strategies_common.wrapper import KnownImplementation
+
+__all__ = ["monitored"]
+
+_WRAPPERS: dict[tuple[str, bool], Any] = {
+    ("TreeFileSystem", True): AsyncTreeWrapper,
+    ("TreeFileSystem", False): SyncTreeWrapper,
+    ("FlatFileSystem", True): AsyncFlatWrapper,
+    ("FlatFileSystem", False): SyncFlatWrapper,
+}
+
+
+def monitored(
+    fs: AbstractFileSystem,
+    implementations: Mapping[str, KnownImplementation] | None = None,
+) -> AbstractFileSystem:
+    """The filesystem, as one whose calls the monitors see.
+
+    A filesystem inheriting `Monitored` is returned as it is. Any other is
+    wrapped, as the entry of its class says, or of the nearest class it
+    inherits: as a `TreeFileSystem` or a `FlatFileSystem`, async or not, with
+    the entry's limits and profile. The wrapper is new, and may be dropped
+    once used.
+
+    Parameters
+    ----------
+    fs : AbstractFileSystem
+        The filesystem.
+    implementations : mapping, optional
+        How each filesystem class is wrapped, by the full name of the class,
+        e.g. "s3fs.core.S3FileSystem". The interface's
+        `known_implementations` if None.
+
+    Returns
+    -------
+    AbstractFileSystem
+        ``fs``, or a wrapper of it.
+
+    Raises
+    ------
+    ValueError
+        If ``fs`` is not monitored, and no entry names its class: it is never
+        wrapped by guess.
+
+    Examples
+    --------
+    >>> with monitoring(Progress()):
+    ...     monitored(fsspec.filesystem("file")).rm("data/2024", recursive=True)
+    """
+    if isinstance(fs, Monitored):
+        return fs
+    table = known_implementations if implementations is None else implementations
+    for cls in type(fs).__mro__:
+        entry = table.get(f"{cls.__module__}.{cls.__qualname__}")
+        if entry is not None:
+            break
+    else:
+        name = f"{type(fs).__module__}.{type(fs).__qualname__}"
+        raise ValueError(f"No known implementation says how to wrap {name}")
+    wrapper = _WRAPPERS[(entry["class_name"], entry["async"])]
+    options: dict[str, Any] = {
+        "operation_concurrency": entry["operation_concurrency"],
+        "io_concurrency": entry["io_concurrency"],
+        "storage_profile": entry.get("storage_profile"),
+    }
+    if entry["class_name"] == "FlatFileSystem":
+        options["rm_batch_size"] = entry["rm_batch_size"]
+    return wrapper(fs, **options)

@@ -17,8 +17,10 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../monitor.py`                | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
 | `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
 | `.../states.py`                 | The states the strategies report, e.g. `FindState` of `tree_find` and `flat_find`. |
+| `.../wrapper.py`                | `known_implementations`: how each known filesystem class is wrapped, to be monitored. |
 | `packages/common/tests/`        | The interface's tests, which never import the strategies.      |
 | `packages/impl/src/fsspec_alt_strategies/` | The strategies, copied.                              |
+| `.../monitored.py`              | `monitored(fs)`: the filesystem if `Monitored`, else wrapped as its known implementation says. |
 | `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
 | `.../tree/walk.py`              | `tree_walk`, the concurrent folder walk under the tree strategies.  |
 | `.../tree/find.py`              | `tree_find`, a find listing several folders at a time.              |

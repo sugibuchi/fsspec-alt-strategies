@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import AsyncFileSystem
 from fsspec.callbacks import DEFAULT_CALLBACK
 
+from fsspec_alt_strategies_common.monitor import Monitored
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
@@ -36,7 +38,9 @@ class _AbstractFileSystemMeta(type(AsyncFileSystem), ABCMeta):  # type: ignore[m
     """
 
 
-class _StrategyFileSystem(AsyncFileSystem, metaclass=_AbstractFileSystemMeta):
+class _StrategyFileSystem(
+    AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemMeta
+):
     """An async filesystem with two concurrency limits, moving data through files.
 
     ``operation_limit`` bounds the requests of the strategies, such as
