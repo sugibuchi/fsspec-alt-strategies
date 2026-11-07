@@ -46,7 +46,9 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
     stops at once, waiting for writes in flight. There are no callbacks and no result classes.
 - The tree strategies, in `tree/`, walk with `tree.walk._listings`, which is private: never expose its `_Listing`.
   Two layers, by what a strategy sends: one that only reads builds on `tree.walk._scan`, which handles the root; one
-  that changes the storage builds on `tree._jobs._Jobs`. Never write another loop or root handling.
+  that changes the storage builds on `tree._jobs._TreeJobs`. Never write another loop or root handling.
+- The strategies changing a storage, in any family, run on `common.jobs._Jobs`, fed by the family's source: listings
+  for `tree`, keys for `flat`. A copy or move places its paths with `common.placement._Placing`.
 - A family of strategies, such as `tree/` or `flat/`, never imports another. What two share goes in `common/`, a
   private module per concern, e.g. `common/patterns.py` for glob patterns.
 - The flat strategies, in `flat/`, list with `ils(prefix)`, an async iterator of entries, never pages: see

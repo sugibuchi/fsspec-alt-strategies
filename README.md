@@ -6,8 +6,8 @@ Alternative, filesystem-independent strategies for [fsspec](https://github.com/f
 >
 > - a concurrent tree walk, and these strategies built on it: find, du, a pruning glob, and a recursive delete, copy
 >   and move;
-> - for flat namespaces, such as object stores, a find, du and glob streaming one listing of a key prefix, the glob
->   listing only the keys starting as its pattern does;
+> - for flat namespaces, such as object stores, strategies streaming one listing of a key prefix: find, du, a glob
+>   listing only the keys starting as its pattern does, a delete in batches, and a copy and move;
 > - storage profiles, where a developer declares what a storage does, such as whether writes need the parent folder;
 > - abstract file classes that adapt their requests to how a file is read or written:
 >   - a reader that pins the version it reads, failing if the file changes meanwhile;

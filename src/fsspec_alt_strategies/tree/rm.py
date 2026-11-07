@@ -6,46 +6,27 @@
 whole tree first, then deletes each path. `tree_rm` deletes each folder's files
 as soon as the folder is listed, and each folder once it is empty.
 
-This module depends on `control`, `walk` and `_jobs`.
+This module depends on `control`, `_jobs`, and `jobs` and `states` of `common`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
-from ..control import Operation, State
-from ._jobs import _expand, _Job, _Jobs, _Roots
+from ..common.jobs import _Job, _Roots
+from ..common.states import RmState
+from ..control import Operation
+from ._jobs import _expand, _TreeJobs
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Sequence
 
-    from ..common.operations import _Info, _Ls
-    from ._jobs import _Request
+    from ..common.operations import _Info, _Ls, _Request
     from .walk import _Listing
 
 __all__ = ["RmState", "tree_rm"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class RmState(State):
-    """The progress of a `tree_rm`.
-
-    Attributes
-    ----------
-    files_found : int
-        The files found so far. It grows as the walk goes on.
-    files_deleted : int
-        The files deleted so far.
-    folders_deleted : int
-        The folders deleted so far.
-    """
-
-    files_found: int = 0
-    files_deleted: int = 0
-    folders_deleted: int = 0
 
 
 def tree_rm(
@@ -148,11 +129,11 @@ def tree_rm(
         lambda op: _Deletion(
             ls, info, rm_file, rm_folder, path, concurrency_limit, op
         ).outcomes(),
-        RmState(),
+        RmState(folders_deleted=0),
     )
 
 
-class _Deletion(_Jobs):
+class _Deletion(_TreeJobs):
     """The jobs of one `tree_rm`: a deletion per file, then per folder."""
 
     def __init__(

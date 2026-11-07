@@ -3,61 +3,34 @@
 """The engine under the tree strategies that change a tree, such as tree_rm.
 
 They walk the tree as tree_walk does, and start their jobs, e.g. deleting a
-file, as each folder's listing arrives. `_Jobs` runs both at once, each
-request holding a permit of one concurrency limit, and yields what each step
-did. A subclass says what a listing queues, how a job runs, and what its
-outcome is.
+file, as each folder's listing arrives: `_TreeJobs` feeds `common`'s `_Jobs`
+with the walk's listings. A subclass says what a listing queues, how a job
+runs, and what its outcome is.
 
 A glob pattern is expanded first, as fsspec's ``_expand_path`` expands it:
 its matching folders are then walked at once.
 
-This module depends on `control`, `walk` and `glob`.
+This module depends on `control`, `walk`, `glob`, and `jobs` of `common`.
 """
 
 from __future__ import annotations
 
-import asyncio
-from abc import ABC, abstractmethod
-from collections import deque
-from contextlib import aclosing
-from typing import TYPE_CHECKING, Any, NamedTuple
+from abc import abstractmethod
+from typing import TYPE_CHECKING, Any
 
+from ..common.jobs import _Jobs, _roots_of
 from ..control import collect
 from .glob import tree_glob
-from .walk import _listings, _Permits
+from .walk import _listings
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
-    from typing import TypeAlias
+    import asyncio
+    from collections.abc import AsyncGenerator, Sequence
 
+    from ..common.jobs import _Roots
     from ..common.operations import _Info, _Ls
     from ..control import Operation
     from .walk import _Listing
-
-    # For the strategies' signatures, as walk's _Ls is: none here takes one.
-    _Request: TypeAlias = Callable[..., Awaitable[Any]]  # noqa: PYI047
-    """A request changing the storage, e.g. fsspec's ``_rm_file``."""
-
-
-class _Job(NamedTuple):
-    """A request to make: its kind, e.g. "copy", and the paths it is about."""
-
-    kind: str
-    source: str
-    destination: str = ""
-
-
-class _Roots(NamedTuple):
-    """Where an operation starts: what it walks, and what it handles alone.
-
-    ``folders`` are walked, at once. A single path of unknown kind is among
-    them, as its listing tells. ``files`` are known files, e.g. glob matches.
-    ``errors`` are those found in finding the roots, yielded first.
-    """
-
-    folders: Sequence[str]
-    files: Sequence[str] = ()
-    errors: Sequence[Exception] = ()
 
 
 async def _expand(
@@ -66,32 +39,14 @@ async def _expand(
     pattern: str | Sequence[str],
     concurrency_limit: asyncio.Semaphore,
 ) -> _Roots:
-    """The roots matching glob patterns, as fsspec's ``_expand_path`` finds them.
-
-    A match inside a folder that matches is left out: walking the folder finds
-    it. Matching nothing raises FileNotFoundError, as fsspec does.
-    """
+    """The roots matching glob patterns, found with `tree_glob`."""
     matches, errors = await collect(
         tree_glob(pattern, ls=ls, info=info, concurrency_limit=concurrency_limit)
     )
-    if not matches and not errors:
-        raise FileNotFoundError(pattern)
-    folders: dict[str, None] = {}
-    files: list[str] = []
-    # Sorted, a folder comes before all in it.
-    for entry in sorted(matches, key=lambda e: e["name"]):
-        name = entry["name"].rstrip("/")
-        parts = name.split("/")
-        if any("/".join(parts[:i]) in folders for i in range(1, len(parts))):
-            continue
-        if entry["type"] == "directory":
-            folders[name] = None
-        else:
-            files.append(name)
-    return _Roots(list(folders), files, errors)
+    return _roots_of(matches, errors, pattern)
 
 
-class _Jobs(ABC):
+class _TreeJobs(_Jobs):
     """The jobs of one operation, run while its tree is walked."""
 
     def __init__(
@@ -101,117 +56,20 @@ class _Jobs(ABC):
         concurrency_limit: asyncio.Semaphore,
         op: Operation[Any, Any],
     ) -> None:
+        super().__init__(concurrency_limit, op)
         self.ls = ls
         self.info = info
-        # The listings, the jobs, and a pattern's glob share it.
-        self.concurrency_limit = concurrency_limit
-        self.permits = _Permits(self.concurrency_limit)
-        self.op = op
-        self.errors = 0
-        self.current: str | None = None
         # The paths in each folder listed that are not done yet, for strategies
         # finishing a folder after all in it, as a deletion does. A folder with
         # a failure in it never reaches zero, and nor do the folders above it.
         self.remaining: dict[str, int] = {}
         self.parents: dict[str, str] = {}
-        self.waiting: deque[_Job] = deque()
-        self.running: dict[asyncio.Task[Any], _Job] = {}
-        # The walk's next listing, awaited along with the jobs.
-        self.next: asyncio.Task[_Listing] | None = None
-
-    @abstractmethod
-    async def prepare(self) -> _Roots | None:
-        """What to walk, or None if there is nothing to do."""
-
-    @abstractmethod
-    def state(self) -> Any:
-        """The operation's state now."""
-
-    @abstractmethod
-    def file_root(self, path: str) -> None:
-        """Queue the jobs for ``path``, a root of the operation, which is a file."""
 
     @abstractmethod
     def add(self, listing: _Listing) -> None:
         """Queue the jobs for a folder listed without error."""
 
-    @abstractmethod
-    def run(self, job: _Job) -> Awaitable[Any]:
-        """The coroutine doing a job."""
-
-    @abstractmethod
-    def done(self, job: _Job) -> list[Any]:
-        """Count a job done, queue what it allows, and return what to yield."""
-
-    @abstractmethod
-    def failed(self, job: _Job, error: Exception) -> list[Any]:
-        """Handle a job's error, and return what to yield: the error, noted."""
-
-    async def outcomes(self) -> AsyncGenerator[Any]:
-        """Yield each outcome, as the operation does, keeping its state up to date."""
-        roots = await self.prepare()
-        if roots is None:
-            return
-        try:
-            if roots.errors:
-                self.errors += len(roots.errors)
-                self.op.state = self.state()
-                for error in roots.errors:
-                    yield error
-            async with aclosing(self.steps(roots)) as steps:
-                async for outcomes in steps:
-                    self.op.state = self.state()
-                    for outcome in outcomes:
-                        yield outcome
-        finally:
-            # Closing the steps waits for the jobs running, and counts them.
-            self.op.state = self.state()
-
-    async def steps(self, roots: _Roots) -> AsyncGenerator[list[Any]]:
-        """Run the jobs, yielding what each step did: a listing, or a job done.
-
-        Closing this stops the operation: it starts nothing new, and waits for
-        the jobs running, as their outcome would otherwise be unknown.
-        """
-        listings = self.walk(roots)
-        try:
-            yield await self.begin(roots, listings)
-            while True:
-                await self.start()
-                if not (pending := self.pending()):
-                    break
-                done, _ = await asyncio.wait(
-                    pending, return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in done:
-                    if (outcome := self.take(task, listings)) is not None:
-                        yield outcome
-        except GeneratorExit:
-            self.waiting.clear()
-            while self.running:
-                done, _ = await asyncio.wait(self.running)
-                for task in done:
-                    self.finish(task)
-            raise
-        finally:
-            # Listings are only reads, so cancelling them loses nothing. The
-            # jobs are cancelled only when this task itself is.
-            tasks = [*self.running, *([self.next] if self.next else [])]
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            await self.permits.close()
-            if listings is not None:
-                await listings.aclose()
-
-    def pending(self) -> list[asyncio.Task[Any]]:
-        """What to wait for: the jobs, the next listing, and a permit if needed."""
-        pending = [*self.running, *([self.next] if self.next else [])]
-        if self.waiting:
-            pending.append(self.permits.waiter())
-        return pending
-
-    def walk(self, roots: _Roots) -> AsyncGenerator[_Listing] | None:
+    def source(self, roots: _Roots) -> AsyncGenerator[_Listing] | None:
         """The listings of the root folders, if any, walked at once."""
         if not roots.folders:
             return None
@@ -223,66 +81,26 @@ class _Jobs(ABC):
         )
 
     async def begin(
-        self, roots: _Roots, listings: AsyncGenerator[_Listing] | None
+        self, roots: _Roots, source: AsyncGenerator[_Listing] | None
     ) -> list[Any]:
         """Queue the files' jobs, and list the folders: the first step.
 
         A single root of unknown kind is among the folders: if it is a file,
         its listing says so, and its jobs are queued instead.
         """
-        for path in roots.files:
-            self.file_root(path)
-        if listings is None:
-            return []
         try:
-            first = await anext(listings)
+            return await super().begin(roots, source)
         except NotADirectoryError as e:
             self.file_root(e.args[0])
             return []
-        self.next = asyncio.ensure_future(anext(listings))
-        return self.listed(first)
 
-    def take(
-        self, task: asyncio.Task[Any], listings: AsyncGenerator[_Listing] | None
-    ) -> list[Any] | None:
-        """Handle a finished task, returning its step, or None if it has none."""
-        if task in self.running:
-            return self.finish(task)
-        if task is not self.next or listings is None:
-            return None  # The waiter's permit, which start takes.
-        self.next = None
-        try:
-            listing = task.result()
-        except StopAsyncIteration:
-            return None
-        self.next = asyncio.ensure_future(anext(listings))
-        return self.listed(listing)
-
-    def listed(self, listing: _Listing) -> list[Any]:
-        self.current = listing.folder
-        if listing.error is not None:
+    def fed(self, item: _Listing) -> list[Any]:
+        self.current = item.folder
+        if item.error is not None:
             self.errors += 1
-            return [listing.error]
-        self.add(listing)
+            return [item.error]
+        self.add(item)
         return []
-
-    async def start(self) -> None:
-        if self.op.cancelling():
-            self.waiting.clear()
-        while self.waiting and await self.permits.take():
-            job = self.waiting.popleft()
-            self.running[self.permits.start(self.run(job))] = job
-
-    def finish(self, task: asyncio.Task[Any]) -> list[Any]:
-        job = self.running.pop(task)
-        self.current = job.source or job.destination
-        try:
-            task.result()
-        except Exception as e:
-            outcome = self.failed(job, e)
-            self.errors += sum(isinstance(o, Exception) for o in outcome)
-            return outcome
-        return self.done(job)
 
     def track(self, listing: _Listing) -> None:
         """Count the paths in a listed folder, for `child_done`."""

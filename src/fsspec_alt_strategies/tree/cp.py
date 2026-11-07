@@ -6,48 +6,30 @@
 whole tree first, then copies each path. `tree_cp` copies each folder's files
 as soon as the folder is listed.
 
-This module depends on `control`, `profile`, `walk`, `_jobs`, and `paths` of
-`common`.
+This module depends on `control`, `profile`, `_jobs`, and `jobs`, `placement`
+and `states` of `common`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
-from fsspec.utils import common_prefix
-
-from ..common.paths import _trim
-from ..control import Operation, State
+from ..common.jobs import _Job
+from ..common.placement import _Placing
+from ..common.states import CpState
+from ..control import Operation
 from ..profile import StorageProfile
-from ._jobs import _expand, _Job, _Jobs, _Roots
+from ._jobs import _expand, _TreeJobs
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Sequence
 
-    from ..common.operations import _Info, _Ls
-    from ._jobs import _Request
+    from ..common.jobs import _Roots
+    from ..common.operations import _Info, _Ls, _Request
     from .walk import _Listing
 
 __all__ = ["CpState", "tree_cp"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class CpState(State):
-    """The progress of a `tree_cp`.
-
-    Attributes
-    ----------
-    files_found : int
-        The files found so far. It grows as the walk goes on.
-    files_copied : int
-        The files copied so far.
-    """
-
-    files_found: int = 0
-    files_copied: int = 0
 
 
 def tree_cp(
@@ -191,7 +173,7 @@ def tree_cp(
     )
 
 
-class _Copy(_Jobs):
+class _Copy(_Placing, _TreeJobs):
     """The jobs of one `tree_cp`: a folder made where needed, and a copy per file.
 
     A file's copy waits for its destination folder, when the storage needs it.
@@ -221,10 +203,7 @@ class _Copy(_Jobs):
         self.makedirs = makedirs
         self.rm_file = rm_file
         self.parents_required = profile.parents_required is not False
-        self.prefix = ""
-        self.base = ""
-        # For a list: where each root goes, by the root.
-        self.places: dict[str, str] = {}
+        self._placing()
         self.files_found = 0
         self.files_done = 0
         # The copies waiting for their destination folder, by that folder.
@@ -238,102 +217,8 @@ class _Copy(_Jobs):
             files_copied=self.files_done,
         )
 
-    async def prepare(self) -> _Roots | None:
-        """Set where the paths go, as fsspec's ``copy`` places them.
-
-        A path under ``self.prefix`` goes to the same place under
-        ``self.base``. For a list, a path under a root of ``self.places`` goes
-        there instead.
-        """
-        destination = _trim(self.path2)
-        if not isinstance(self.path1, str):
-            roots = await self._place(destination)
-            sources = [*roots.folders, *roots.files]
-        elif has_magic(self.path1):
-            roots = await _expand(
-                self.ls, self.info, self.path1, self.concurrency_limit
-            )
-            sources = [*roots.folders, *roots.files]
-            if not sources:
-                return roots  # Only errors, to yield.
-            self.prefix = common_prefix(sources)
-            if sources == list(roots.files) and len(sources) == 1:
-                # A single file goes into the destination.
-                self.prefix = self.prefix.rpartition("/")[0]
-            self.base = destination
-        else:
-            root = _trim(self.path1)
-            if root == destination:
-                return None
-            roots = _Roots([root])
-            sources = [root]
-            self.prefix = root
-            self.base = await self._base(root, destination)
-        for source in sources:
-            target = self.target(source)
-            if target == source and len(sources) == 1:
-                return None
-            if not source or target == source or target.startswith(source + "/"):
-                raise ValueError(
-                    f"Cannot {self.verb} {source!r} into itself: {target!r}"
-                )
-        return roots
-
-    async def _place(self, destination: str) -> _Roots:
-        """Place each root of a list into ``destination``, under its name.
-
-        Two roots of the same name would go to the same place. As GNU's cp
-        does, the first, in path order, goes, and each other is an error. That
-        error is the root's own: what is in it is not copied either.
-        """
-        roots = await _expand(self.ls, self.info, self.path1, self.concurrency_limit)
-        folders = set(roots.folders)
-        placed: dict[str, str] = {}
-        errors = list(roots.errors)
-        for source in sorted([*roots.folders, *roots.files]):
-            name = source.rpartition("/")[2]
-            target = f"{destination}/{name}" if destination else name
-            if (other := placed.get(target)) is not None:
-                error = FileExistsError(target)
-                error.add_note(
-                    f"{self.doing} {source!r} to {target!r} skipped: {other!r} goes"
-                    " there too."
-                )
-                errors.append(error)
-                continue
-            placed[target] = source
-            self.places[source] = target
-        return _Roots(
-            [s for s in self.places if s in folders],
-            [s for s in self.places if s not in folders],
-            errors,
-        )
-
-    async def _base(self, root: str, destination: str) -> str:
-        """Where ``root``, a single path, goes: into ``destination``, or onto it."""
-        if self.path2.endswith("/"):
-            into = True
-        else:
-            try:
-                into = (await self.info(destination))["type"] == "directory"
-            except FileNotFoundError:
-                into = False
-        if not into or self.path1.endswith("/"):
-            return destination
-        name = root.rsplit("/", 1)[-1]
-        return f"{destination}/{name}" if destination else name
-
-    def target(self, path: str) -> str:
-        """Where a path goes."""
-        if self.places:
-            # The root it is under, found from the path up.
-            root = path
-            while root not in self.places and "/" in root:
-                root = root.rpartition("/")[0]
-            return self.places[root] + path[len(root) :]
-        if self.prefix:
-            return self.base + path[len(self.prefix) :]
-        return f"{self.base}/{path}" if self.base else path
+    async def expand(self, pattern: str | Sequence[str]) -> _Roots:
+        return await _expand(self.ls, self.info, pattern, self.concurrency_limit)
 
     def file_root(self, path: str) -> None:
         self.files_found += 1

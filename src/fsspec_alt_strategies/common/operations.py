@@ -24,3 +24,9 @@ if TYPE_CHECKING:
 
     _Info: TypeAlias = Callable[[str], Awaitable[dict[str, Any]]]  # noqa: PYI047
     """Describes a path, called as ``info(path)``, as fsspec's ``_info``."""
+
+    _Request: TypeAlias = Callable[..., Awaitable[Any]]  # noqa: PYI047
+    """A request changing the storage, e.g. fsspec's ``_rm_file``."""
+
+    _Requests: TypeAlias = Callable[[list[str]], Awaitable[Any]]  # noqa: PYI047
+    """A request about several paths, e.g. deleting them, as S3's DeleteObjects."""

@@ -344,6 +344,18 @@ class SimulatedFileSystem(AsyncFileSystem):
         self._file(path)
         self._unlink(path)
 
+    async def _rm_files(self, paths: list[str]) -> None:
+        """Delete files in one request, as S3's DeleteObjects does.
+
+        It is no fsspec method: the flat strategies take it as their
+        ``rm_files``. A path that is no file is left out, as object stores
+        leave out a key that does not exist.
+        """
+        await self._request("delete")
+        for path in map(self._strip_protocol, paths):
+            if path in self._file_data:
+                self._unlink(path)
+
     async def _rm(
         self,
         path: str | list[str],

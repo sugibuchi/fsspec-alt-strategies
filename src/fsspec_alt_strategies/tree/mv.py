@@ -10,47 +10,28 @@ delete, and deletes each source folder once it is empty.
 It is for storages without a rename of their own. Where a storage renames a
 file or a folder in one request, that request wins.
 
-This module depends on `control`, `profile`, `walk`, `_jobs` and `cp`.
+This module depends on `control`, `profile`, `cp`, and `jobs` and `states` of
+`common`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ..control import Operation, State
+from ..common.jobs import _Job
+from ..common.states import MvState
+from ..control import Operation
 from ..profile import StorageProfile
-from ._jobs import _Job
 from .cp import _Copy
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Sequence
 
-    from ..common.operations import _Info, _Ls
-    from ._jobs import _Request
+    from ..common.operations import _Info, _Ls, _Request
     from .walk import _Listing
 
 __all__ = ["MvState", "tree_mv"]
-
-
-@dataclass(frozen=True, kw_only=True)
-class MvState(State):
-    """The progress of a `tree_mv`.
-
-    Attributes
-    ----------
-    files_found : int
-        The files found so far. It grows as the walk goes on.
-    files_moved : int
-        The files moved so far.
-    folders_moved : int
-        The source folders deleted so far, once all in them was moved.
-    """
-
-    files_found: int = 0
-    files_moved: int = 0
-    folders_moved: int = 0
 
 
 def tree_mv(
@@ -179,7 +160,7 @@ def tree_mv(
             concurrency_limit=concurrency_limit,
             op=op,
         ).outcomes(),
-        MvState(),
+        MvState(folders_moved=0),
     )
 
 

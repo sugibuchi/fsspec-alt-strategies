@@ -14,13 +14,20 @@
 | `.../tree/rm.py`                | `tree_rm`, a recursive delete that deletes while it walks.          |
 | `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks.        |
 | `.../tree/mv.py`                | `tree_mv`, a recursive move: a copy deleting as it goes.       |
-| `.../tree/_jobs.py`             | The private engine running a strategy's jobs, e.g. deletions, while the walk goes on. |
+| `.../tree/_jobs.py`             | The private engine's tree side: it feeds `common`'s with the walk's listings. |
 | `.../flat/`                     | The strategies listing a flat namespace by key prefix, as object stores do. |
 | `.../flat/find.py`              | `flat_find`, a find streaming one listing of a prefix.          |
 | `.../flat/du.py`                | `flat_du`, the size of the files under a prefix, from the listing alone. |
 | `.../flat/glob.py`              | `flat_glob`, a glob listing only the keys starting as its pattern does. |
+| `.../flat/rm.py`                | `flat_rm`, a recursive delete in batches, sent as the listing goes on. |
+| `.../flat/cp.py`                | `flat_cp`, a recursive copy that copies each key as it is listed. |
+| `.../flat/mv.py`                | `flat_mv`, a recursive move: a copy per key, then its deletion in a batch. |
 | `.../flat/_keys.py`             | The private listing under them: a prefix's keys, and the folders they imply. |
+| `.../flat/_jobs.py`             | The private engine's flat side: it feeds `common`'s with the keys of each root. |
 | `.../common/`                   | Private machinery the families share, so that none imports another. |
+| `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found. |
+| `.../common/permits.py`         | An operation's share of a concurrency limit, taken as its requests start. |
+| `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
 | `.../common/operations.py`      | The types of the storage's operations, such as `ls` and `info`. |
 | `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
 | `.../common/patterns.py`        | Glob patterns, matched as fsspec's `_glob` matches them, by both globs. |
@@ -213,7 +220,7 @@ come in two layers, by what they send:
 | Strategies | They send | They build on |
 |---|---|---|
 | `tree_find`, `tree_du`, `tree_glob` | Listings, and at most one `info` for the root | `_scan` |
-| `tree_rm`, `tree_cp`, `tree_mv` | Requests changing the storage, besides the listings | `_Jobs` |
+| `tree_rm`, `tree_cp`, `tree_mv` | Requests changing the storage, besides the listings | `_TreeJobs` |
 
 `tree_walk` is `_listings` itself, made public. It raises for a missing or file root, as fsspec's `walk` does.
 
@@ -222,9 +229,11 @@ file root yields its own `info` entry when asked. A folder root yields its own e
 The strategies that only read never handle the root themselves.
 
 Those changing a tree, `tree_rm`, `tree_cp` and `tree_mv`, run their requests with a second private engine, `_Jobs` in
-`tree/_jobs.py`. It starts each folder's jobs, e.g. its files' deletions, as soon as the folder is listed, and runs
-them along with the listings still in flight. It also drains them on `cancel()`, and waits for them on closing. A
-strategy subclasses it, saying what a listing queues, how a job runs, and what its outcome is.
+`common/jobs.py`. It starts the jobs for each item found, e.g. a listed folder's file deletions, and runs them along
+with the search still in flight. It also drains them on `cancel()`, and waits for them on closing. Each family feeds
+it from a source of its own: `_TreeJobs`, in `tree/_jobs.py`, with the walk's listings. A strategy subclasses that,
+saying what a listing queues, how a job runs, and what its outcome is. A copy or move places its paths with
+`_Placing`, in `common/placement.py`.
 
 They take glob patterns, as fsspec's `rm`, `copy` and `mv` do. A pattern is expanded with `tree_glob` first, and
 the folders it matches are then walked at once. The expansion is not streamed into the jobs: `tree_cp` and `tree_mv`
@@ -259,8 +268,19 @@ called as `ils(prefix)` and giving an async iterator of entries:
 fsspec has no such listing, so `SimulatedFileSystem` has its own, `_ils`, counting a request per page. Test a flat
 strategy on `flat_fs`, against fsspec's own method on it.
 
-`flat_glob` matches with `tree_glob`'s compiled patterns, so the two never answer differently. The strategies changing a
-tree, such as a `flat_rm` deleting the keys in batches while the listing goes on, are still to come.
+`flat_glob` matches with `tree_glob`'s compiled patterns, so the two never answer differently.
+
+`flat_rm`, `flat_cp` and `flat_mv` run on the same engine as the tree's, `_Jobs`, fed by `_FlatJobs` in
+`flat/_jobs.py` with the keys under each root:
+
+- Object stores delete many keys per request. So `flat_rm` takes `rm_files(paths)` and a `batch_size`, and sends each
+  batch as soon as the listing has given its keys. A batch that fails yields one error, noting its keys.
+- `flat_cp` copies each key as it is listed, placed as `tree_cp` places it. A folder's marker is not copied: flat
+  storages need no folder for the files in it.
+- `flat_mv` deletes the keys copied in batches. Cancelled, it still deletes those, so that no file is left in both
+  places: its `stopping` keeps their batches, which the engine would otherwise drop.
+
+`SimulatedFileSystem` has `_rm_files` too, a batch deletion counting one request, as S3's DeleteObjects does.
 
 #### Storage profiles
 

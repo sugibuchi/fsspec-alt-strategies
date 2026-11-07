@@ -185,6 +185,16 @@ async def test_ils_lists_a_raw_prefix_a_page_at_a_time() -> None:
     assert fs.stats.calls == {"list": 3}
 
 
+async def test_rm_files_deletes_several_in_one_request(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    for name in ("d/a", "d/b", "d/c"):
+        flat_fs.add_file(name)
+    await flat_fs._rm_files(["d/a", "d/b", "missing"])  # A missing key is no error.
+    assert flat_fs.stats.calls == {"delete": 1}
+    assert list(flat_fs._file_data) == ["d/c"]
+
+
 def test_sync_methods() -> None:
     # fsspec makes the sync methods from the async ones, run in its IO thread.
     fs = SimulatedFileSystem(hierarchical=True)
