@@ -409,7 +409,7 @@ So the code stays easy to copy:
   e.g. `fsspec_alt_strategies.tree.find`. The interface's `__init__.py` re-exports its public API.
 
 `packages/impl/tests/test_copyable.py` checks the first three rules. It also imports a copy of the package under
-another name. `packages/common/tests/test_dependencies.py` checks the interface's imports and headers.
+another name.
 
 The version is in `_version.py`, which hatch-vcs writes when the package is built. A copy taken from a wheel or an
 installed package keeps the version it was copied at. A copy of the source tree has none, and reports "0.0.0".

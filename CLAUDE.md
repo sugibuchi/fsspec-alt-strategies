@@ -82,8 +82,7 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
 - `SimulatedFileSystem` lives in its own top-level package, `fsspec_alt_strategies_testing`, so that copies of the
   strategies leave it out. Never move it, or anything for tests only, into `fsspec_alt_strategies`.
 - Each file in `packages/*/src/` starts with the SPDX license header, as copies must keep it.
-  `packages/impl/tests/test_copyable.py` checks this and the import rules; `packages/common/tests/test_dependencies.py`
-  does for the interface.
+  `packages/impl/tests/test_copyable.py` checks this and the import rules for the copied package.
 - `_version.py` is written by hatch-vcs and git-ignored: never edit or commit it.
 - Test folders have no `__init__.py`. Never import one test file from another. The interface's tests never import
   the strategies.
