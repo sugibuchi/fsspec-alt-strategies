@@ -138,7 +138,7 @@ class _Recording(_Forbidding):
 
 
 @pytest.mark.parametrize("topdown", [True, False])
-async def test_raise_on_error_stops_at_once(topdown: bool) -> None:
+async def test_on_error_raise_stops_at_once(topdown: bool) -> None:
     fs = _Recording(hierarchical=True, asynchronous=True)
     fs.requested = []
     _tree(fs)
@@ -148,7 +148,7 @@ async def test_raise_on_error_stops_at_once(topdown: bool) -> None:
                 fs,
                 "data",
                 topdown=topdown,
-                raise_on_error=True,
+                on_error="raise",
                 concurrency_limit=asyncio.Semaphore(1),
             )
         )
@@ -241,11 +241,30 @@ async def test_cancel_yields_the_listings_in_flight() -> None:
     )
 
 
-async def test_failed_listing_notes_its_folder() -> None:
+async def test_failed_listing_names_its_folder() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
     errors = [i for i in await _all(_walk(fs, "data")) if isinstance(i, Exception)]
     assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
+    assert errors[0].folder == "data/2023"
+
+
+async def test_on_error_omits_or_calls() -> None:
+    fs = _Forbidding(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    omitted = await _all(_walk(fs, "data", on_error="omit"))
+    assert not any(isinstance(i, Exception) for i in omitted)
+    called: list[Exception] = []
+    items = await _all(_walk(fs, "data", on_error=called.append))
+    assert not any(isinstance(i, Exception) for i in items)
+    assert [type(e) for e in called] == [PermissionError]
+    # Either way, the folders that did list are all there.
+    assert sorted(i[0] for i in items) == sorted(i[0] for i in omitted)
+
+
+def test_on_error_is_checked_at_once(any_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="on_error"):
+        _walk(any_fs, "data", on_error="ignore")
 
 
 async def test_listings_carry_folder_and_depth(any_fs: SimulatedFileSystem) -> None:

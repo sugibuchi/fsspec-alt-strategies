@@ -117,15 +117,15 @@ def _raise(errors: list[Exception], doing: str) -> None:
         raise ExceptionGroup(f"{doing} failed for {len(errors)} paths", errors)
 
 
-def _failed_root(
-    root: str,
+def _failed_folder(
+    folder: str,
     error: Exception,
     on_error: str | Callable[[Exception], Any],
     detail: bool,
 ) -> tuple[str, Any, Any]:
-    """What fsspec's ``walk`` yields for a root that failed to list."""
+    """What fsspec's ``walk`` yields for a folder that failed to list, the root too."""
     if on_error == "raise":
         raise error
     if callable(on_error):
         on_error(error)
-    return (root, {}, {}) if detail else (root, [], [])
+    return (folder, {}, {}) if detail else (folder, [], [])

@@ -224,7 +224,8 @@ Or they subclass a family's abstract filesystem, `TreeFileSystem` in `tree/files
 - `_cat_file`, `_pipe_file`, `_get_file` and `_put_file` go through `open_async`'s files, so data moves as the file
   classes move it.
 - The failures of a strategy are raised: one as it is, several in an ExceptionGroup. A folder that fails to list is
-  left out of a walk, and passed to `on_error` if callable: fsspec's `walk` yields it empty.
+  yielded empty by a walk, as fsspec's `walk` yields it, and `on_error` handles every folder's failure, not only the
+  root's as fsspec's does.
 - fsspec has no async `mv`, nor builds a sync one from `_mv`: each class wraps its `_mv` itself.
 
 Choosing the class chooses the family: a developer wanting one strategy of another overrides that method, as above.
@@ -262,9 +263,9 @@ methods and modules. The prefix keeps an import from shadowing them, and tells t
 
 `tree_walk` is meant to replace fsspec's `walk`, so it already has two of its options:
 
-- `topdown=False` yields a folder's entries only after those of all the folders below it.
-- `raise_on_error=True` raises a folder's error instead of yielding it. With filtering, it will implement fsspec's
-  `on_error`.
+- `topdown=False` yields a folder only after all the folders below it.
+- `on_error` takes fsspec's values: `"omit"`, `"raise"` or a callable. Its default, None, yields each folder's error, as every
+  strategy does.
 
 #### The flat strategies
 

@@ -139,6 +139,43 @@ async def test_walk_answers_as_fsspec(
         assert walked[-1][0] == "data"  # The root comes last.
 
 
+class _Forbidding(SimulatedFileSystem):
+    """Refuses to list one folder, as a storage without permission would."""
+
+    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+        if self._strip_protocol(path) == "data/2023":
+            raise PermissionError(path)
+        return await super()._ls(path, detail=detail, **kwargs)
+
+
+@pytest.mark.parametrize("on_error", ["omit", "callable", "raise"])
+async def test_walk_handles_a_failed_folder_as_fsspec(on_error: str) -> None:
+    inner = _Forbidding(hierarchical=True, asynchronous=True)
+    _tree(inner)
+    fs = _Tree(inner, asynchronous=True)
+    seen: list[Exception] = []
+    handler: Any = seen.append if on_error == "callable" else on_error
+    if on_error == "raise":
+        with pytest.raises(PermissionError):
+            [t async for t in fs._walk("data", on_error=handler)]
+        return
+    walked = [t async for t in fs._walk("data", on_error=handler)]
+    fsspec_seen: list[Exception] = []
+    fsspec_handler: Any = fsspec_seen.append if on_error == "callable" else on_error
+    expected = [
+        t async for t in AsyncFileSystem._walk(inner, "data", on_error=fsspec_handler)
+    ]
+    # The failed folder too, yielded empty.
+    assert sorted(walked) == sorted(expected)
+    assert ("data/2023", [], []) in walked
+    # Unlike fsspec's, which passes on_error to the root's listing only, as its
+    # walk recurses without it: here every folder's failure reaches it.
+    assert [type(e) for e in seen] == (
+        [PermissionError] if on_error == "callable" else []
+    )
+    assert fsspec_seen == []
+
+
 async def test_recursive_rm_copy_and_mv(fs: _Tree, inner: SimulatedFileSystem) -> None:
     before = {p: f.data for p, f in inner._file_data.items()}
     await fs._copy("data", "copied", recursive=True)

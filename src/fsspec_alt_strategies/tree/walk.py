@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import aclosing
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..common.jobs import _Queue
 from ..common.paths import _check_maxdepth, _trim, _triples
@@ -45,7 +45,7 @@ def tree_walk(
     maxdepth: int | None = None,
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
-    raise_on_error: bool = False,
+    on_error: Literal["omit", "raise"] | Callable[[Exception], object] | None = None,
     concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
     """Walk a folder tree, listing several folders at a time.
@@ -56,6 +56,8 @@ def tree_walk(
     ``ls`` entries. An empty folder yields empty ones. The folders come in the
     order their listings arrive, not in the tree's order. A folder that fails
     to list yields its error instead, and the walk goes on with the others.
+    The error names its folder in its note, and as its ``folder`` attribute.
+    ``on_error`` handles those errors as with fsspec's ``walk``, otherwise.
 
     With ``topdown``, a folder comes before those below it. Without, it comes
     after all of those below it, as fsspec's ``walk`` orders them. The
@@ -68,7 +70,7 @@ def tree_walk(
 
     - FileNotFoundError, if ``path`` does not exist;
     - NotADirectoryError, if ``path`` is a file;
-    - with ``raise_on_error``, the error of the first folder that failed to
+    - with ``on_error="raise"``, the error of the first folder that failed to
       list.
 
     Requests: one ``ls`` per folder walked, as ``concurrency_limit`` allows.
@@ -87,9 +89,10 @@ def tree_walk(
     descend : callable, optional
         Called with the ``ls`` entry of each subfolder found. The walk lists it
         only if this returns True. All by default.
-    raise_on_error : bool
-        Whether a folder that fails to list raises its error, ending the walk,
-        rather than yielding it.
+    on_error : {"omit", "raise"} or callable, optional
+        What to do with the error of a folder that fails to list: yield it, if
+        None, as every strategy does; leave it out, with "omit"; raise it,
+        ending the walk, with "raise"; or call this with it, leaving it out.
     concurrency_limit : asyncio.Semaphore
         Held by each request while it runs. Share one to limit several
         operations, or files, together.
@@ -103,7 +106,7 @@ def tree_walk(
     Raises
     ------
     ValueError
-        If ``maxdepth`` is less than 1.
+        If ``maxdepth`` is less than 1, or ``on_error`` is none of the above.
 
     See Also
     --------
@@ -121,6 +124,8 @@ def tree_walk(
     ...         print(path, sorted(dirs), sorted(files))
     """
     _check_maxdepth(maxdepth)
+    if not (on_error in (None, "omit", "raise") or callable(on_error)):
+        raise ValueError(f"on_error must be 'omit', 'raise' or callable: {on_error!r}")
 
     async def run(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
@@ -131,7 +136,7 @@ def tree_walk(
             maxdepth=maxdepth,
             topdown=topdown,
             descend=descend,
-            raise_on_error=raise_on_error,
+            raise_on_error=on_error == "raise",
             concurrency_limit=concurrency_limit,
             stopping=op.cancelling,
         )
@@ -144,10 +149,13 @@ def tree_walk(
                     folders_listed=state.folders_listed + 1,
                     found=state.found + len(listing.entries),
                 )
-                if listing.error is not None:
-                    yield listing.error
-                else:
+                if listing.error is None:
                     yield _triples(listing.folder, listing.entries, detail=True)
+                elif on_error is None:
+                    yield listing.error
+                elif callable(on_error):
+                    on_error(listing.error)
+                # Else "omit": left out.
 
     return Operation(run, WalkState(folders_listed=0))
 
@@ -251,8 +259,10 @@ def _listing(
         # another listing.
         if folder in roots or raise_on_error:
             raise
-        # Yielded among entries, the error must tell its folder itself.
+        # Yielded among folders, the error must tell its folder itself: in its
+        # note for people, and as an attribute for code, e.g. fsspec's walk.
         e.add_note(f"Listing {folder!r} failed.")
+        e.folder = folder  # type: ignore[attr-defined]
         return _Listing(folder, depth, [], e)
     if folder in roots and any(
         e["name"].rstrip("/") == folder and e["type"] != "directory" for e in entries

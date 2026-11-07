@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import sync_wrapper
 
-from ..common.filesystem import _failed_root, _FileSystem, _raise
+from ..common.filesystem import _failed_folder, _FileSystem, _raise
 from ..common.paths import _triples
 from ..control import collect
 from .cp import flat_cp
@@ -146,7 +146,7 @@ class FlatFileSystem(_FileSystem):
             yield (root, {}, {"": entry}) if detail else (root, [], [""])
             return
         except OSError as e:
-            yield _failed_root(root, e, on_error, detail)
+            yield _failed_folder(root, e, on_error, detail)
             return
         # Each folder's entries, the folders as deep as fsspec's walk lists.
         start = len(root) + 1 if root else 0

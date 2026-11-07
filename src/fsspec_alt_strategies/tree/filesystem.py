@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import sync_wrapper
 
-from ..common.filesystem import _failed_root, _FileSystem, _raise
+from ..common.filesystem import _failed_folder, _FileSystem, _raise
 from ..control import collect
 from .cp import tree_cp
 from .du import tree_du
@@ -43,9 +43,9 @@ class TreeFileSystem(_FileSystem):
     when recursive, with `tree_walk`, `tree_find`, `tree_du`, `tree_glob`,
     `tree_rm`, `tree_cp` and `tree_mv`. Their answers are fsspec's, and their
     failures are raised, a single one as it is, several in an ExceptionGroup.
-    A folder that fails to list is left out of ``_walk``, and passed to
-    ``on_error`` if callable: fsspec's ``walk`` yields it empty, but
-    `tree_walk`'s error tells its folder only in its note.
+    A folder that fails to list is yielded empty by ``_walk``, as fsspec's
+    ``walk`` yields it. ``on_error`` handles every folder's failure, where
+    fsspec's applies it to the root only, as its walk recurses without it.
 
     A subclass implements the storage's primitives, which fsspec leaves
     abstract: ``_ls``, ``_info``, ``_rm_file``, ``_rmdir``, ``_cp_file`` and
@@ -117,7 +117,9 @@ class TreeFileSystem(_FileSystem):
             ls=self._ls,
             maxdepth=maxdepth,
             topdown=topdown,
-            raise_on_error=on_error == "raise",
+            # The failed folders' errors, which fsspec's on_error then handles:
+            # its "omit" still yields them empty.
+            on_error="raise" if on_error == "raise" else None,
             concurrency_limit=self.operation_limit,
         )
         async with walk:
@@ -131,15 +133,12 @@ class TreeFileSystem(_FileSystem):
                 yield (root, {}, {"": entry}) if detail else (root, [], [""])
                 return
             except OSError as e:
-                yield _failed_root(root, e, on_error, detail)
+                yield _failed_folder(root, e, on_error, detail)
                 return
             item = first
             while True:
                 if isinstance(item, Exception):
-                    # Left out: fsspec's walk yields the folder empty, but the
-                    # error tells its folder only in its note.
-                    if callable(on_error):
-                        on_error(item)
+                    yield _failed_folder(item.folder, item, on_error, detail)  # type: ignore[attr-defined]
                 else:
                     folder, dirs, files = item
                     yield (
