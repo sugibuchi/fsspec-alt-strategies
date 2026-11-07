@@ -138,6 +138,8 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         self._changed = self._kind in "wx"
         self._discarded = False
 
+    # What a subclass implements: the storage's requests.
+
     @abstractmethod
     async def _download(self, target: IO[bytes]) -> None:
         """Write the whole file into ``target``, in one request.
@@ -162,6 +164,18 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         """
         await self._upload(source)
 
+    # The checks before an operation.
+
+    def _check_readable(self) -> None:
+        if not self.readable():
+            raise io.UnsupportedOperation(f"File not open for reading: {self.path}")
+
+    def _check_writable(self) -> None:
+        if not self.writable():
+            raise io.UnsupportedOperation(f"File not open for writing: {self.path}")
+
+    # The file's API: io's methods, each with its async counterpart, and its own.
+
     def readable(self) -> bool:
         self._check_open()
         return self._kind == "r" or self._plus
@@ -173,6 +187,65 @@ class LocallyBufferedFile(_AsyncFile, ABC):
     def seekable(self) -> bool:
         self._check_open()
         return True
+
+    def read(self, size: int | None = -1) -> bytes:
+        self._check_readable()
+        return self._ensure_loaded().read(-1 if size is None else size)
+
+    def readall(self) -> bytes:
+        return self.read(-1)
+
+    def readinto(self, buffer: Any) -> int:
+        data = self.read(len(memoryview(buffer)))
+        memoryview(buffer).cast("B")[: len(data)] = data
+        return len(data)
+
+    async def _read(self, size: int = -1) -> bytes:
+        """Read as ``read`` does."""
+        self._check_readable()
+        self._check_not_forced()
+        return (await self._load()).read(size)
+
+    def write(self, data: Any) -> int:
+        self._check_writable()
+        self._check_not_forced()
+        return self._write_to(self._ensure_loaded(), data)
+
+    async def _write(self, data: Any) -> int:
+        """Write as ``write`` does."""
+        self._check_writable()
+        self._check_not_forced()
+        return self._write_to(await self._load(), data)
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        return self._ensure_loaded().seek(offset, whence)
+
+    async def _seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        """Move as ``seek`` does."""
+        self._check_not_forced()
+        return (await self._load()).seek(offset, whence)
+
+    def tell(self) -> int:
+        return self._ensure_loaded().tell()
+
+    def truncate(self, size: int | None = None) -> int:
+        self._check_writable()
+        self._check_not_forced()
+        buffer = self._ensure_loaded()
+        size = buffer.tell() if size is None else size
+        _check_size(size, self.max_size, self.path)
+        self._changed = True
+        return buffer.truncate(size)
+
+    @property
+    def size(self) -> int | None:
+        """The file's size so far, once downloaded or created: None before."""
+        if self._buffer is None:
+            return None
+        pos = self._buffer.tell()
+        size = self._buffer.seek(0, io.SEEK_END)
+        self._buffer.seek(pos)
+        return size
 
     def load(self) -> None:
         """Download the file now, if not yet, so that a missing file raises now."""
@@ -186,6 +259,29 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         """
         self._check_not_forced()
         await self._load()
+
+    def discard(self) -> None:
+        """Upload nothing on closing: the changes are lost."""
+        self._discarded = True
+
+    # Finishing and aborting, for _AsyncFile.
+
+    async def _finish(self) -> None:
+        try:
+            if self._changed and not self._discarded:
+                buffer = await self._load()
+                buffer.seek(0)
+                async with self._requests.concurrency_limit:
+                    upload = self._create if self._kind == "x" else self._upload
+                    await upload(buffer)
+        finally:
+            self._drop_buffer()
+
+    async def _abort(self) -> None:
+        self._drop_buffer()
+        await super()._abort()
+
+    # The buffer underneath.
 
     def _ensure_loaded(self) -> IO[bytes]:
         """The buffer, once the file is open and loaded: each operation's precondition.
@@ -229,53 +325,6 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         self._buffer = buffer
         return buffer
 
-    @property
-    def size(self) -> int | None:
-        """The file's size so far, once downloaded or created: None before."""
-        if self._buffer is None:
-            return None
-        pos = self._buffer.tell()
-        size = self._buffer.seek(0, io.SEEK_END)
-        self._buffer.seek(pos)
-        return size
-
-    def _check_readable(self) -> None:
-        if not self.readable():
-            raise io.UnsupportedOperation(f"File not open for reading: {self.path}")
-
-    def _check_writable(self) -> None:
-        if not self.writable():
-            raise io.UnsupportedOperation(f"File not open for writing: {self.path}")
-
-    def read(self, size: int | None = -1) -> bytes:
-        self._check_readable()
-        return self._ensure_loaded().read(-1 if size is None else size)
-
-    def readall(self) -> bytes:
-        return self.read(-1)
-
-    def readinto(self, buffer: Any) -> int:
-        data = self.read(len(memoryview(buffer)))
-        memoryview(buffer).cast("B")[: len(data)] = data
-        return len(data)
-
-    async def _read(self, size: int = -1) -> bytes:
-        """Read as ``read`` does."""
-        self._check_readable()
-        self._check_not_forced()
-        return (await self._load()).read(size)
-
-    def write(self, data: Any) -> int:
-        self._check_writable()
-        self._check_not_forced()
-        return self._write_to(self._ensure_loaded(), data)
-
-    async def _write(self, data: Any) -> int:
-        """Write as ``write`` does."""
-        self._check_writable()
-        self._check_not_forced()
-        return self._write_to(await self._load(), data)
-
     def _write_to(self, buffer: IO[bytes], data: Any) -> int:
         if self._kind == "a":
             buffer.seek(0, io.SEEK_END)
@@ -285,49 +334,12 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         self._changed = True
         return size
 
-    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
-        return self._ensure_loaded().seek(offset, whence)
-
-    async def _seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
-        """Move as ``seek`` does."""
-        self._check_not_forced()
-        return (await self._load()).seek(offset, whence)
-
-    def tell(self) -> int:
-        return self._ensure_loaded().tell()
-
-    def truncate(self, size: int | None = None) -> int:
-        self._check_writable()
-        self._check_not_forced()
-        buffer = self._ensure_loaded()
-        size = buffer.tell() if size is None else size
-        _check_size(size, self.max_size, self.path)
-        self._changed = True
-        return buffer.truncate(size)
-
-    def discard(self) -> None:
-        """Upload nothing on closing: the changes are lost."""
-        self._discarded = True
-
-    async def _finish(self) -> None:
-        try:
-            if self._changed and not self._discarded:
-                buffer = await self._load()
-                buffer.seek(0)
-                async with self._requests.concurrency_limit:
-                    upload = self._create if self._kind == "x" else self._upload
-                    await upload(buffer)
-        finally:
-            self._drop_buffer()
-
-    async def _abort(self) -> None:
-        self._drop_buffer()
-        await super()._abort()
-
     def _drop_buffer(self) -> None:
         buffer, self._buffer = self._buffer, None
         if buffer is not None:
             buffer.close()
+
+    # The conventions of Python's file objects.
 
     def __exit__(self, exc_type: object, *exc_info: object) -> None:
         if exc_type is not None:

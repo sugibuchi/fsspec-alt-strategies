@@ -219,6 +219,8 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         self._kept: OrderedDict[int, tuple[int, bytes]] = OrderedDict()
         self._kept_bytes = 0
 
+    # What a subclass implements, and calls.
+
     @abstractmethod
     async def _fetch_range(self, start: int, end: int) -> bytes:
         """Fetch the bytes [start, end) of the file in one request.
@@ -242,6 +244,8 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
                 self.path,
             )
 
+    # The file's API: io's methods, each with its async counterpart.
+
     def readable(self) -> bool:
         self._check_open()
         return True
@@ -249,10 +253,6 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
     def seekable(self) -> bool:
         self._check_open()
         return True
-
-    def tell(self) -> int:
-        self._check_open()
-        return self._pos
 
     def read(self, size: int | None = -1) -> bytes:
         self._check_open()
@@ -265,6 +265,27 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         data = self.read(len(memoryview(buffer)))
         memoryview(buffer).cast("B")[: len(data)] = data
         return len(data)
+
+    async def _read(self, size: int = -1) -> bytes:
+        """Read up to ``size`` bytes, or to the end if negative, as ``read`` does."""
+        self._check_open()
+        await self._settle()
+        pos = self._pos
+        if size == 0 or pos >= self.size:
+            return b""
+        end = self.size if size < 0 else min(pos + size, self.size)
+        if not self._requests.queue and (data := self._from_kept(pos, end)) is not None:
+            self._advance(end)
+            return data
+        await self._fetch(pos, end)
+        try:
+            data = await self._collect(pos, end)
+        except Exception:
+            # The next read fetches again, rather than meeting the same failure.
+            await self._drop_all()
+            raise
+        self._advance(end)
+        return data
 
     def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
         # Only moves: the next read drops the blocks the seek left behind. So
@@ -287,26 +308,11 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         """Move to a position, as ``seek`` does."""
         return self.seek(offset, whence)
 
-    async def _read(self, size: int = -1) -> bytes:
-        """Read up to ``size`` bytes, or to the end if negative, as ``read`` does."""
+    def tell(self) -> int:
         self._check_open()
-        await self._settle()
-        pos = self._pos
-        if size == 0 or pos >= self.size:
-            return b""
-        end = self.size if size < 0 else min(pos + size, self.size)
-        if not self._requests.queue and (data := self._from_kept(pos, end)) is not None:
-            self._advance(end)
-            return data
-        await self._fetch(pos, end)
-        try:
-            data = await self._collect(pos, end)
-        except Exception:
-            # The next read fetches again, rather than meeting the same failure.
-            await self._drop_all()
-            raise
-        self._advance(end)
-        return data
+        return self._pos
+
+    # The reading underneath: blocks fetched ahead, kept, and dropped.
 
     async def _settle(self) -> None:
         """Drop the blocks the seeks since the last read left behind."""
@@ -520,6 +526,8 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         self._buffer = bytearray()
         self._multipart = False
 
+    # What a subclass implements: the storage's requests.
+
     @abstractmethod
     async def _upload_all(self, data: bytes) -> None:
         """Upload the whole file in one request."""
@@ -546,13 +554,11 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     async def _abort_multipart_upload(self) -> None:
         """Discard the parts uploaded, leaving no file."""
 
+    # The file's API: io's methods, each with its async counterpart.
+
     def writable(self) -> bool:
         self._check_open()
         return True
-
-    def tell(self) -> int:
-        self._check_open()
-        return self._pos
 
     def write(self, data: Any) -> int:
         self._check_open()
@@ -569,6 +575,12 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         self._pos += size
         await self._upload_buffer(closing=False)
         return size
+
+    def tell(self) -> int:
+        self._check_open()
+        return self._pos
+
+    # Finishing and aborting, for _AsyncFile.
 
     async def _finish(self) -> None:
         try:
@@ -590,6 +602,8 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         await super()._abort()
         if self._multipart:
             await self._abort_multipart_upload()
+
+    # The uploading underneath.
 
     def _raise_failed_upload(self) -> None:
         if (error := self._requests.error) is not None:
