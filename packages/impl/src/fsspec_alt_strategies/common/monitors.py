@@ -24,8 +24,8 @@ from __future__ import annotations
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-# _monitors is control's, beside the monitoring blocks setting it.
-from fsspec_alt_strategies_common.control import (
+# _monitors is the interface's monitor module's, beside the blocks setting it.
+from fsspec_alt_strategies_common.monitor import (
     CallCancelled,
     Monitor,
     OperationHandler,
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from typing import Self
 
-    from fsspec_alt_strategies_common.control import Call
+    from fsspec_alt_strategies_common.monitor import Call
 
 
 __all__ = ["Operation"]

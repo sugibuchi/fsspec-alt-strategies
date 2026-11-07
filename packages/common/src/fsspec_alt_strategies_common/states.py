@@ -8,14 +8,14 @@ some of them can count is None in the others: e.g. ``folders_listed`` of a
 `flat_find`, which lists keys, not folders. Each strategy's module exports its
 state class, so that it is imported from there.
 
-This module depends on `control`.
+This module depends on `monitor`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .control import State
+from .monitor import State
 
 __all__ = [
     "CpState",

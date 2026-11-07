@@ -5,7 +5,7 @@
 The strategies are copied into a project. This package is not: it is installed
 once, so that every copy in a project, of any version, shares one interface.
 
-- `control`: `State`, an operation's progress, `OperationHandler`, its control,
+- `monitor`: `State`, an operation's progress, `OperationHandler`, its control,
   and the monitors watching the operations behind a filesystem's fsspec
   methods.
 - `profile`: `StorageProfile`, what a storage does that fsspec leaves open.
@@ -17,7 +17,7 @@ block watches the calls of every copy.
 
 from __future__ import annotations
 
-from .control import (
+from .monitor import (
     Call,
     CallCancelled,
     Monitor,

@@ -14,7 +14,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | Path                            | Contents                                                       |
 |---------------------------------|----------------------------------------------------------------|
 | `packages/common/src/fsspec_alt_strategies_common/` | The interface, installed: one for all the copies in a project. |
-| `.../control.py`                | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
+| `.../monitor.py`                | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
 | `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
 | `.../states.py`                 | The states the strategies report, e.g. `FindState` of `tree_find` and `flat_find`. |
 | `packages/common/tests/`        | The interface's tests, which never import the strategies.      |
@@ -248,7 +248,7 @@ Or they subclass a family's abstract filesystem, `TreeFileSystem` in `tree/files
   root's as fsspec's does.
 - fsspec has no async `mv`, nor builds a sync one from `_mv`: each class wraps its `_mv` itself.
 
-Their callers see only fsspec's answers, not the `Operation` behind them. The monitors of `control.py` show it without
+Their callers see only fsspec's answers, not the `Operation` behind them. The monitors of `monitor.py` show it without
 changing fsspec's API. The filesystems run their operations with `common/monitors.py`, which tells the monitors.
 
 - A `Monitor` subclass overrides `started`, `yielded` and `ended`, each awaited where the operation runs.

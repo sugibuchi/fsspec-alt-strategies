@@ -12,7 +12,7 @@ from fsspec.callbacks import Callback
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
 from fsspec_alt_strategies.tree.filesystem import TreeFileSystem
-from fsspec_alt_strategies_common.control import (
+from fsspec_alt_strategies_common.monitor import (
     Call,
     CallCancelled,
     Monitor,

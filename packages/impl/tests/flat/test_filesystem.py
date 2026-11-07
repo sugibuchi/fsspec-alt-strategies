@@ -12,7 +12,7 @@ from fsspec.callbacks import Callback
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
 from fsspec_alt_strategies.flat.filesystem import FlatFileSystem
-from fsspec_alt_strategies_common.control import Call, Monitor, monitoring
+from fsspec_alt_strategies_common.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:

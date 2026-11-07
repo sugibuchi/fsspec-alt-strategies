@@ -29,7 +29,7 @@ A third-party library of alternative, filesystem-independent strategies for fssp
 features. It is a uv workspace of two packages, each built and published on its own:
 
 - `packages/common`, `fsspec_alt_strategies_common`: the interface the strategies share with their callers, in
-  `control.py`, `profile.py` and `states.py`. It is installed, never copied.
+  `monitor.py`, `profile.py` and `states.py`. It is installed, never copied.
 - `packages/impl`, `fsspec_alt_strategies`: the strategies, copied into the projects using them, and
   `fsspec_alt_strategies_testing`, the simulated filesystem.
 

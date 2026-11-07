@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import sync_wrapper
 
-from fsspec_alt_strategies_common.control import Call
+from fsspec_alt_strategies_common.monitor import Call
 
 from ..common.filesystem import _failed_folder, _FileSystem, _raise, _with
 from ..common.monitors import _collected, _watched

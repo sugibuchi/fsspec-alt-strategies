@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from fsspec_alt_strategies.common.monitors import Operation
-from fsspec_alt_strategies_common.control import State
+from fsspec_alt_strategies_common.monitor import State
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
