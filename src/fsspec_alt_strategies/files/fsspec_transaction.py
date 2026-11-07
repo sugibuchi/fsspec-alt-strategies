@@ -174,10 +174,9 @@ class TransactionFile(io.RawIOBase):
         self._file: Any = transaction.start_staging()
         # None while undecided, then "committed" or "discarded".
         self._outcome: str | None = None
-        # Whether closing finished the writing: a failed one is never committed.
-        self._finished = False
-        # Whether flush(force=True) finished it, or tried to, before closing.
-        self._forced = False
+        # "open" while reads and writes go to the staged file. Then "ended" by
+        # closing or a forced flush, or "failed" if that raised: never committed.
+        self._staging = "open"
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.path!r}>"
@@ -189,8 +188,8 @@ class TransactionFile(io.RawIOBase):
     def _method(self, name: str) -> Any:
         """The staged file's method, which a file-like object may lack."""
         self._check_open()
-        if self._forced:
-            # The staged file is finished, and may be closed.
+        if self._staging != "open":
+            # Force-flushed: the staged file is finished, and may be closed.
             raise ValueError(f"Force-flushed, can only close: {self.path}")
         method = getattr(self._file, name, None)
         if method is None:
@@ -200,8 +199,8 @@ class TransactionFile(io.RawIOBase):
     def _can(self, query: str, method: str) -> bool:
         # A file-like object lacking e.g. readable() can read if it has read().
         self._check_open()
-        if self._forced:
-            return False  # Finished: it can only close.
+        if self._staging != "open":
+            return False  # Force-flushed: it can only close.
         if (answer := getattr(self._file, query, None)) is not None:
             return answer()
         return hasattr(self._file, method)
@@ -254,21 +253,18 @@ class TransactionFile(io.RawIOBase):
         """
         if force:
             self._check_open()
-            if self._forced:
+            if self._staging != "open":
                 raise ValueError(
                     f"Force flush cannot be called more than once: {self.path}"
                 )
-            # Set first: a failed end is not tried again by closing. Open, the
-            # file is undecided: commit and discard close it.
-            self._forced = True
-            self.transaction.end_staging()
-            self._finished = True
+            # Open, the file is undecided: commit and discard close it.
+            self._end_staging()
             return
         # io.IOBase.close flushes after end_staging or discard closed the file,
         # or after a discard that failed: a decided file sends nothing.
         if (
             self.closed
-            or self._forced
+            or self._staging != "open"
             or self._outcome is not None
             or getattr(self._file, "closed", False)
         ):
@@ -281,11 +277,16 @@ class TransactionFile(io.RawIOBase):
         if self.closed:
             return
         try:
-            if self._outcome is None and not self._forced:
-                self.transaction.end_staging()
-                self._finished = True
+            if self._outcome is None and self._staging == "open":
+                self._end_staging()
         finally:
             super().close()
+
+    def _end_staging(self) -> None:
+        """End the staging, once: one that failed is not tried again."""
+        self._staging = "failed"
+        self.transaction.end_staging()
+        self._staging = "ended"
 
     def commit(self) -> None:
         """Make the writing visible, closing the file first if needed."""
@@ -294,7 +295,7 @@ class TransactionFile(io.RawIOBase):
         if self._outcome == "discarded":
             raise ValueError(f"Committing a discarded file: {self.path}")
         self.close()
-        if not self._finished:
+        if self._staging != "ended":
             raise ValueError(f"Committing a file whose writing failed: {self.path}")
         self._outcome = "committed"
         self.transaction.commit()
