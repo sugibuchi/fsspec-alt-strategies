@@ -365,6 +365,14 @@ A copy or move between two storages is the source's `_transfer`, so the source's
 - A move deletes each source file as soon as its copy succeeds, then the source folders left empty.
 - The call is the router's own, as a monitor sees it.
 
+A list of sources in several storages is copied or moved per storage, as a list in each:
+
+- Each root goes into the destination under its name, as a family's copy of a list places it.
+- Two roots of one name in different storages are checked by the router, as no inner filesystem sees both. The first
+  in path order goes, and each other raises FileExistsError.
+- A pattern matching in several storages is expanded first. Each storage's matches are placed from their own common
+  prefix.
+
 The rest of a router:
 
 - Its inner filesystems are async, on the router's loop. A sync one raises TypeError: wrap it, e.g. in a

@@ -420,6 +420,29 @@ async def test_copy_across_storages_streams(
     assert dst.stats.calls["write"] == 3
 
 
+@pytest.mark.parametrize("move", [False, True])
+async def test_a_list_across_storages_goes_into_the_destination(
+    router: _Router, move: bool
+) -> None:
+    router.tree.add_file("other/b/4.txt", b"4")
+    sources = ["lake/tree/data/a", "lake/flat/data/b", "lake/tree/other/b"]
+    with pytest.raises(FileExistsError) as info:
+        if move:
+            await router._mv(sources, "lake/plain/dest", recursive=True)
+        else:
+            await router._copy(sources, "lake/plain/dest", recursive=True)
+    # Each root under its name, a single one in its storage too. Of the two
+    # named "b", the first in path order goes, as tree_cp places a list.
+    assert info.value.args == ("lake/plain/dest/b",)
+    assert "'lake/tree/other/b'" in "".join(info.value.__notes__)
+    assert sorted(p for p in router.plain._file_data if p.startswith("dest/")) == [
+        "dest/a/1.txt",
+        "dest/a/2.txt",
+        "dest/b/3.txt",
+    ]
+    assert "other/b/4.txt" in router.tree._file_data
+
+
 class _ServerCopying(_Router):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

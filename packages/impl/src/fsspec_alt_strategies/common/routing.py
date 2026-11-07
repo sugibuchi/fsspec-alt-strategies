@@ -8,7 +8,7 @@ filesystem. It knows no family: each inner filesystem runs its own strategies,
 and a copy across two storages is the source's ``_transfer``, whatever its
 family.
 
-This module depends on `filesystem`, `operation` and `streams`.
+This module depends on `filesystem`, `operation`, `paths` and `streams`.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from .filesystem import (
     _raise,
 )
 from .operation import _collected
+from .paths import _trim
 from .streams import streaming_copy
 
 if TYPE_CHECKING:
@@ -354,12 +355,17 @@ class AsyncRoutingFileSystem(
         return {**entry, "name": self._outer(fs, entry["name"])}
 
     async def _each(
-        self, groups: list[_Group], run: Callable[[_Group], Awaitable[Any]], doing: str
+        self,
+        groups: list[_Group],
+        run: Callable[[_Group], Awaitable[Any]],
+        doing: str,
+        errors: Sequence[Exception] = (),
     ) -> None:
         """Run a call per group at once, raising their errors when all are done.
 
         No group is stopped by another's failure: a deletion or copy under
-        way finishes, as its outcome would otherwise be unknown.
+        way finishes, as its outcome would otherwise be unknown. ``errors``
+        are those found before, raised with the groups'.
         """
         outcomes = await asyncio.gather(*map(run, groups), return_exceptions=True)
         for outcome in outcomes:
@@ -367,7 +373,39 @@ class AsyncRoutingFileSystem(
                 outcome, Exception
             ):
                 raise outcome  # A cancellation, never swallowed.
-        _raise([o for o in outcomes if isinstance(o, Exception)], doing)
+        _raise([*errors, *(o for o in outcomes if isinstance(o, Exception))], doing)
+
+    def _placed(
+        self, paths: Sequence[str], destination: str, doing: str
+    ) -> tuple[list[str], list[Exception]]:
+        """The roots of a list copied or moved into ``destination``, each name once.
+
+        Each root goes to the destination under its name, whatever its
+        storage, as a family's copy of a list places it. Two roots of one name
+        would go to the same place: as there, the first in path order goes,
+        and each other is a FileExistsError. Roots in different storages are
+        checked here, as no inner filesystem sees them both. A pattern is
+        left to the filesystem expanding it.
+        """
+        placed: dict[str, str] = {}
+        errors: list[Exception] = []
+        skipped: set[str] = set()
+        base = _trim(_plain(self, destination))
+        for path in sorted(paths, key=lambda p: _trim(_plain(self, p))):
+            if has_magic(path):
+                continue
+            name = _trim(_plain(self, path)).rpartition("/")[2]
+            target = f"{base}/{name}" if base else name
+            if (other := placed.get(target)) is not None:
+                error = FileExistsError(target)
+                error.add_note(
+                    f"{doing} {path!r} to {target!r} skipped: {other!r} goes there too."
+                )
+                errors.append(error)
+                skipped.add(path)
+                continue
+            placed[target] = path
+        return [p for p in paths if p not in skipped], errors
 
     @staticmethod
     def _one(paths: list[str]) -> str | list[str]:
@@ -679,8 +717,9 @@ class AsyncRoutingFileSystem(
     ) -> None:
         """Copy, as fsspec's ``copy`` does: within a storage, or between two.
 
-        Sources in several storages are copied per storage, at once. Each
-        group is then placed as a copy of its own paths would be.
+        Sources in several storages are copied per storage, at once. A list
+        stays a list in each storage, so that each root goes into the
+        destination under its name, as `_placed` checks across storages.
         """
         if not isinstance(path2, str):
             # Pairs of paths: fsspec's, a _cp_file per pair.
@@ -690,16 +729,21 @@ class AsyncRoutingFileSystem(
             return
         fs2, inner2 = self._required(path2)
         callback = kwargs.get("callback")
+        listed = not isinstance(path1, str)
+        clashes: list[Exception] = []
+        if listed:
+            path1, clashes = self._placed(path1, path2, "Copying")
 
         async def copy(group: _Group) -> None:
             fs1, inner1, outer1 = group
-            sources = self._one(inner1)
+            sources = inner1 if listed else self._one(inner1)
+            outers = outer1 if listed else self._one(outer1)
             if same := self._same_storage(fs1, sources, fs2, inner2):
                 fs, p1, p2 = same
                 await self._on(
                     fs,
                     p1,
-                    self._one(outer1),
+                    outers,
                     fs._copy(
                         p1,
                         p2,
@@ -712,12 +756,12 @@ class AsyncRoutingFileSystem(
                 )
             elif recursive and maxdepth is None and hasattr(fs1, "_transfer"):
                 errors = await self._transferred(
-                    fs1, sources, fs2, inner2, self._one(outer1), path2, callback
+                    fs1, sources, fs2, inner2, outers, path2, callback
                 )
                 _raise(_copy_errors(errors, on_error), "Copying")
             else:
                 await super(AsyncRoutingFileSystem, self)._copy(
-                    self._one(outer1),
+                    outers,
                     path2,
                     recursive,
                     on_error,
@@ -726,7 +770,7 @@ class AsyncRoutingFileSystem(
                     **kwargs,
                 )
 
-        await self._each(await self._grouped(path1), copy, "Copying")
+        await self._each(await self._grouped(path1), copy, "Copying", clashes)
 
     async def _mv(
         self,
@@ -745,10 +789,15 @@ class AsyncRoutingFileSystem(
         if path1 == path2:
             return
         fs2, inner2 = self._required(path2)
+        listed = not isinstance(path1, str)
+        clashes: list[Exception] = []
+        if listed:
+            path1, clashes = self._placed(path1, path2, "Moving")
 
         async def mv(group: _Group) -> None:
             fs1, inner1, outer1 = group
-            sources, outer = self._one(inner1), self._one(outer1)
+            sources = inner1 if listed else self._one(inner1)
+            outer = outer1 if listed else self._one(outer1)
             if same := self._same_storage(fs1, sources, fs2, inner2):
                 fs, p1, p2 = same
                 own = getattr(fs, "_mv", None)
@@ -792,7 +841,7 @@ class AsyncRoutingFileSystem(
                 )
                 await self._rm(outer, recursive=recursive)
 
-        await self._each(await self._grouped(path1), mv, "Moving")
+        await self._each(await self._grouped(path1), mv, "Moving", clashes)
 
     async def _transferred(
         self,
