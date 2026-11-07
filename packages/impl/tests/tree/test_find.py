@@ -147,3 +147,14 @@ async def test_closing_stops_the_search() -> None:
             break  # The first file: other listings are now in flight.
     assert fs._in_flight == 0
     assert fs.stats.calls["list"] < 11
+
+
+async def test_cancel_before_iterating_sends_nothing(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    op = _find(any_fs, "data")
+    op.cancel()
+    assert await _collect(op) == ([], [])
+    assert any_fs.stats.calls == {}
+    assert op.cancelled()

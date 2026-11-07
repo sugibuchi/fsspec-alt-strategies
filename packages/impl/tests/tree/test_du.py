@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.common.operation import _collect
 from fsspec_alt_strategies.tree.du import DuState, tree_du
-
-if TYPE_CHECKING:
-    from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 
 def _du(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
@@ -65,3 +63,29 @@ async def test_cancel_counts_what_was_listed(any_fs: SimulatedFileSystem) -> Non
     # data, and data/2023 listed with it: only the README is counted.
     assert (op.state.size, op.state.files) == (1, 1)
     assert op.cancelled()
+
+
+async def test_cancel_before_iterating_sends_nothing(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    op = _du(any_fs, "data")
+    op.cancel()
+    assert await _collect(op) == ([], [])
+    assert any_fs.stats.calls == {}
+    assert op.cancelled()
+
+
+async def test_a_failed_listing_is_yielded_and_the_rest_counted() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _tree(fs)
+
+    async def ls(path: str, detail: bool = True, **kwargs: Any) -> Any:
+        if path == "data/2023":
+            raise PermissionError(path)
+        return await fs._ls(path, detail=detail, **kwargs)
+
+    op = _du(fs, "data", ls=ls)
+    _, errors = await _collect(op)
+    assert [type(e) for e in errors] == [PermissionError]
+    assert (op.state.errors, op.state.size) == (1, 201)

@@ -458,3 +458,48 @@ async def test_cancel_yields_the_moves_sent() -> None:
     assert len(moved) == fs.stats.calls["copy"] == 10
     assert await fs._exists("root")
     assert op.cancelled()
+
+
+async def test_a_target_failing_its_info_moves_file_by_file(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    hierarchical_fs.add_dir("moved")  # So that data goes to moved/data.
+
+    async def info(path: str, **kwargs: Any) -> Any:
+        if path == "moved/data":
+            raise PermissionError(path)
+        return await hierarchical_fs._info(path, **kwargs)
+
+    profile = StorageProfile(renames_folders=True)
+    op = _mv(
+        hierarchical_fs,
+        "data",
+        "moved",
+        info=info,
+        mv_file=hierarchical_fs._rename,
+        profile=profile,
+    )
+    _, errors = await _collect(op)
+    assert errors == []
+    # Not known free, the root is not moved whole.
+    assert op.state.roots_renamed == 0
+    assert op.state.files_moved == len(_FILES)
+    assert not await hierarchical_fs._exists("data")
+    assert await hierarchical_fs._exists("moved/data/2023/01/part-0.parquet")
+
+
+async def test_a_source_folder_found_already_gone_is_moved() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _tree(fs)
+
+    async def rm_folder(path: str) -> None:
+        await fs._rmdir(path)
+        if path == "data/2023/01":
+            raise FileNotFoundError(path)  # Deleted by another meanwhile.
+
+    moved, errors = await _collect(_mv(fs, "data", "moved", rm_folder=rm_folder))
+    assert errors == []
+    assert ("data/2023/01", "moved/2023/01") in moved
+    assert ("data", "moved") in moved
+    assert not await fs._exists("data")

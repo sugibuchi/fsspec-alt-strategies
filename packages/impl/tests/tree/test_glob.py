@@ -241,3 +241,18 @@ async def test_closing_stops_the_search() -> None:
 )
 def test_prefix_alive(segments: list[str], relative: list[str], alive: bool) -> None:
     assert _Prefix(segments).alive(relative) is alive
+
+
+async def test_cancel_starts_no_further_pattern_walk() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    fs.add_file("a/1.txt")
+    fs.add_file("b/1.txt")
+    op = _glob(fs, ["a/*.txt", "b/*.txt"])
+    found = []
+    async for entry in op:
+        found.append(entry["name"])
+        op.cancel()
+    # The walk of a/ was under way; that of b/ is never started.
+    assert found == ["a/1.txt"]
+    assert fs.stats.calls == {"list": 1}
+    assert op.cancelled()

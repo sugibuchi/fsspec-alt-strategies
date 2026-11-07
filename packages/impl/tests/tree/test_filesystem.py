@@ -436,3 +436,75 @@ def test_storage_profile_must_be_set(inner: SimulatedFileSystem) -> None:
 
     with pytest.raises(ValueError, match="storage_profile"):
         Unset(inner)
+
+
+def _copied(fs: SimulatedFileSystem) -> dict[str, bytes]:
+    return {p: f.data for p, f in fs._file_data.items()}
+
+
+def _twins() -> tuple[_Tree, SimulatedFileSystem, SimulatedFileSystem]:
+    """A TreeFileSystem on a storage, and a second storage with the same data."""
+    inner, reference = (
+        SimulatedFileSystem(hierarchical=True, asynchronous=True) for _ in range(2)
+    )
+    _tree(inner)
+    _tree(reference)
+    return _Tree(inner, asynchronous=True), inner, reference
+
+
+async def test_rm_with_maxdepth_is_fsspecs() -> None:
+    fs, inner, reference = _twins()
+    # fsspec's own sends its folders to _rm_file too, which refuses them here.
+    with pytest.raises(IsADirectoryError):
+        await fs._rm("data", recursive=True, maxdepth=2)
+    with pytest.raises(IsADirectoryError):
+        await AsyncFileSystem._rm(reference, "data", recursive=True, maxdepth=2)
+    assert _copied(inner) == _copied(reference)
+    assert await inner._exists("data/2023/01/part-0.parquet")
+
+
+async def test_copy_to_a_list_is_fsspecs() -> None:
+    fs, inner, reference = _twins()
+    sources = ["data/README.md", "data/2023/01/part-0.parquet"]
+    targets = ["one.md", "two.parquet"]
+    await fs._copy(sources, targets)
+    await AsyncFileSystem._copy(reference, sources, targets)
+    assert _copied(inner) == _copied(reference)
+    assert inner._file_data["one.md"].data == b"readme"
+
+
+@pytest.mark.parametrize(
+    ("path1", "path2"), [("data/README.md", "moved.md"), ("data/*.md", "moved/")]
+)
+async def test_a_non_recursive_mv_is_fsspecs(path1: str, path2: str) -> None:
+    fs, inner, _ = _twins()
+    await fs._mv(path1, path2)
+    # fsspec's own mv, which only its sync API has, on the same data.
+    reference = SimulatedFileSystem(hierarchical=True)
+    _tree(reference)
+    reference.mv(path1, path2)
+    assert _copied(inner) == _copied(reference)
+
+
+async def test_mv_onto_itself_sends_nothing(
+    fs: _Tree, inner: SimulatedFileSystem
+) -> None:
+    before = _copied(inner)
+    inner.reset_stats()
+    await fs._mv("data", "data", recursive=True)
+    assert inner.stats.calls == {}
+    assert _copied(inner) == before
+
+
+async def test_du_with_withdirs_is_fsspecs(
+    fs: _Tree, inner: SimulatedFileSystem
+) -> None:
+    for total in (True, False):
+        expected = await AsyncFileSystem._du(inner, "data", total=total, withdirs=True)
+        assert await fs._du("data", total=total, withdirs=True) == expected
+
+
+async def test_walk_of_an_empty_folder(fs: _Tree, inner: SimulatedFileSystem) -> None:
+    inner.add_dir("empty")
+    walked = [t async for t in fs._walk("empty")]
+    assert walked == [t async for t in AsyncFileSystem._walk(inner, "empty")]

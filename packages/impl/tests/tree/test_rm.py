@@ -346,3 +346,23 @@ async def test_cancelling_the_task_leaves_nothing_running() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
     assert fs._in_flight == 0
+
+
+async def test_a_file_found_already_gone_is_not_yielded() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _tree(fs)
+
+    async def rm_file(path: str) -> None:
+        await fs._rm_file(path)
+        if path == "data/README.md":
+            # Deleted by another meanwhile, as the storage tells it.
+            raise FileNotFoundError(path)
+
+    op = _rm(fs, "data", rm_file=rm_file)
+    deleted, errors = await _collect(op)
+    assert errors == []
+    assert "data/README.md" not in deleted
+    assert op.state.files_deleted == 4
+    # Its folder goes all the same.
+    assert deleted[-1] == "data"
+    assert not await fs._exists("data")

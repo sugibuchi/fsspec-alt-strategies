@@ -264,3 +264,22 @@ async def test_cancel_yields_the_copies_sent() -> None:
         op.cancel()
     assert len(copied) == fs.stats.calls["copy"] == 10
     assert op.cancelled()
+
+
+async def test_a_folder_failing_to_be_created_keeps_its_files() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _tree(fs)
+
+    async def makedirs(path: str, exist_ok: bool = False) -> None:
+        if path == "copied/2023/01":
+            raise PermissionError(path)
+        await fs._makedirs(path, exist_ok=exist_ok)
+
+    copied, errors = await _collect(_cp(fs, "data", "copied", makedirs=makedirs))
+    assert [type(e) for e in errors] == [PermissionError]
+    assert errors[0].__notes__ == ["Creating the folder 'copied/2023/01' failed."]
+    # The files waiting on the folder are not copied; the others are.
+    assert not any(source.startswith("data/2023/01/") for source, _ in copied)
+    assert not await fs._exists("copied/2023/01")
+    assert await fs._exists("copied/2023/02/part-0.parquet")
+    assert await fs._exists("copied/2024/01/part-0.parquet")
