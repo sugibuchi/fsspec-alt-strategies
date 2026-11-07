@@ -220,11 +220,6 @@ class LocallyBufferedFile(_AsyncFile, ABC):
     def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
         return self._ensure_loaded().seek(offset, whence)
 
-    async def _seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
-        """Move as ``seek`` does."""
-        self._check_not_forced()
-        return (await self._load()).seek(offset, whence)
-
     def tell(self) -> int:
         return self._ensure_loaded().tell()
 

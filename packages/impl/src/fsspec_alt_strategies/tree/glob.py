@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec_alt_strategies_common.states import GlobState
 
 from ..common.operation import Operation
-from ..common.paths import _trim
+from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _inside, _Search
 from .find import _find_listings
 
@@ -133,8 +133,7 @@ def tree_glob(
     ...         print(match["name"])
     data/sales/2024/part-0.parquet
     """
-    if maxdepth is not None and maxdepth < 1:
-        raise ValueError("maxdepth must be at least 1")
+    _check_maxdepth(maxdepth)
     literals: list[str] = []
     searches: list[_Search] = []
     for pattern in [path] if isinstance(path, str) else path:

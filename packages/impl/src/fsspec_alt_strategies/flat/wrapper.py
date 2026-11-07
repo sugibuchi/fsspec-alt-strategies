@@ -9,8 +9,16 @@ chosen for a filesystem.
 
 fsspec has no listing by prefix, which the flat strategies list with. A
 wrapper's ``_ils`` lists with the wrapped filesystem's ``find`` of the
-prefix's folder, which object stores answer in one paginated listing. A
-subclass may list by the prefix itself instead, e.g. with the storage's SDK.
+prefix's folder, which object stores answer in one paginated listing. That
+costs twice:
+
+- ``find`` returns the whole listing at once, so the strategies start only
+  once all of it has arrived, and it is held in memory, not streamed.
+- It lists the prefix's whole folder: for "data/2024-", all of "data/", the
+  keys not starting with the prefix then left out.
+
+A subclass overriding ``_ils`` with the storage's own listing by prefix, e.g.
+from its SDK, streams it page by page, and lists only the prefix.
 
 This module depends on `filesystem`, and `wrapper` of `common`.
 """

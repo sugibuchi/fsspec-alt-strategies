@@ -308,10 +308,6 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         self._pos = pos
         return pos
 
-    async def _seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
-        """Move to a position, as ``seek`` does."""
-        return self.seek(offset, whence)
-
     def tell(self) -> int:
         self._check_open()
         return self._pos

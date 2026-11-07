@@ -65,10 +65,10 @@ async def test_reads_as_bytesio(flat_fs: SimulatedFileSystem) -> None:
             op = rng.random()
             if op < 0.3:
                 pos = rng.randrange(len(data) + 10)
-                assert await f._seek(pos) == reference.seek(pos)
+                assert f.seek(pos) == reference.seek(pos)
             elif op < 0.35:
                 offset = -rng.randrange(1, 100)
-                assert await f._seek(offset, io.SEEK_END) == reference.seek(
+                assert f.seek(offset, io.SEEK_END) == reference.seek(
                     offset, io.SEEK_END
                 )
             elif op < 0.38:
@@ -113,7 +113,7 @@ async def test_scattered_reads_fetch_one_small_block_each(
     async with await _reader(flat_fs, data, kept_size=0) as f:
         for _ in range(50):
             pos = rng.randrange(len(data) - 100)
-            await f._seek(pos)
+            f.seek(pos)
             assert await f._read(100) == data[pos : pos + 100]
     assert all(end - start <= 2 * 4 * _KiB for start, end in f.fetched)
     assert _fetched_bytes(f) <= 50 * 2 * 4 * _KiB
@@ -129,7 +129,7 @@ async def test_seeking_to_where_it_is_keeps_the_run(
             pass
     async with await _reader(flat_fs, data) as seeking:
         while True:
-            await seeking._seek(seeking.tell())
+            seeking.seek(seeking.tell())
             if not await seeking._read(4 * _KiB):
                 break
     assert seeking.fetched == plain.fetched
@@ -179,15 +179,15 @@ async def _read_parquet_like(
     f: _Reader, data: bytes, layout: list[list[tuple[int, int]]], selected: list[int]
 ) -> None:
     """Read as a Parquet reader does: footer, metadata, then the selected columns."""
-    await f._seek(-8, io.SEEK_END)
+    f.seek(-8, io.SEEK_END)
     footer = await f._read(8)
     (metadata_length,) = struct.unpack("<I", footer[:4])
-    await f._seek(-8 - metadata_length, io.SEEK_END)
+    f.seek(-8 - metadata_length, io.SEEK_END)
     assert len(await f._read(metadata_length)) == metadata_length
     for group in layout:
         for column in selected:
             offset, length = group[column]
-            await f._seek(offset)
+            f.seek(offset)
             assert await f._read(length) == data[offset : offset + length]
 
 
@@ -217,12 +217,12 @@ async def test_kept_blocks_serve_reads_that_come_back(
 ) -> None:
     data = os.urandom(256 * _KiB)
     async with await _reader(flat_fs, data) as f:
-        await f._seek(100 * _KiB)
+        f.seek(100 * _KiB)
         await f._read(100)
-        await f._seek(0)
+        f.seek(0)
         await f._read(100)
         requests = len(f.fetched)
-        await f._seek(100 * _KiB + 50)
+        f.seek(100 * _KiB + 50)
         assert await f._read(100) == data[100 * _KiB + 50 : 100 * _KiB + 150]
         assert len(f.fetched) == requests
 
@@ -316,7 +316,7 @@ async def test_reads_one_version(conditional: bool) -> None:
         assert f.version == "v1"  # Set by the first response.
         store.replace(new)
         # Elsewhere, so that it fetches from the new version: never mixed.
-        await f._seek(200 * _KiB)
+        f.seek(200 * _KiB)
         with pytest.raises(OSError) as raised:
             await f._read(4 * _KiB)
         assert raised.value.errno == errno.ESTALE
