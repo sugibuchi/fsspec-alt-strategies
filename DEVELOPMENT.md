@@ -453,6 +453,8 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 - `files/` has abstract classes, by what the storage allows. A filesystem subclasses one, implements its requests,
   and returns it from `_open`. Their base classes are private: their names must not suggest fsspec's own.
   - `AdaptiveReadableFile` and `AdaptiveWritableFile` are for storages reading byte ranges and writing in parts.
+    The writer aborts its upload on any failure, and after an exception in its `with` block. A failed part raises
+    OSError, whether it fails while writing or closing.
   - `LocallyBufferedFile` is for storages transferring only whole files: one download, local reads and writes, and
     one upload if it changed. It never uploads after an exception in its `with` block.
 - Their requests are the storage's own. They never call fsspec's `_cat_file` or `_put_file`: many filesystems

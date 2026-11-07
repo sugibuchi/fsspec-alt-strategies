@@ -21,6 +21,7 @@ from fsspec_alt_strategies.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
 )
+from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 _KiB = 1024
@@ -439,8 +440,9 @@ async def test_a_failed_forced_flush_aborts_and_closing_sends_nothing(
     f = _Writer(flat_fs, "f.bin")
     f.fail_part = 1
     await f._write(os.urandom(40 * _KiB))
-    with pytest.raises(OSError, match="part failed"):
+    with pytest.raises(OSError, match="Failed to upload a part") as raised:
         await f._flush(force=True)
+    assert str(raised.value.__cause__) == "part failed"
     await f.aclose()  # Not tried again.
     assert f.requests == ["start", "abort"]
     assert not await flat_fs._exists("f.bin")
@@ -636,6 +638,74 @@ async def test_a_failed_abort_keeps_the_original_error(
         await f.aclose()
     # The error the caller acts on is the first one; the abort's is noted.
     assert any("abort failed" in note for note in raised.value.__notes__)
+
+
+async def test_a_failed_start_aborts_and_keeps_its_error(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    class FailedStart(_Writer):
+        async def _start_multipart_upload(self) -> None:
+            self.requests.append("start")  # A session the storage may keep.
+            raise OSError("start failed")
+
+        async def _abort_multipart_upload(self) -> None:
+            await super()._abort_multipart_upload()
+            raise OSError("abort failed")
+
+    f = FailedStart(flat_fs, "f.bin")
+    with pytest.raises(OSError, match="start failed") as raised:
+        async with f:
+            await f._write(os.urandom(40 * _KiB))
+    assert f.requests == ["start", "abort"]
+    assert any("abort failed" in note for note in raised.value.__notes__)
+    assert not await flat_fs._exists("f.bin")
+
+
+async def test_a_part_failing_while_closing_raises_as_earlier(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    f = _Writer(flat_fs, "f.bin")
+    f.fail_part = 3  # The last, sent by closing.
+    await f._write(os.urandom(40 * _KiB))
+    with pytest.raises(OSError, match="Failed to upload a part") as raised:
+        await f.aclose()
+    assert str(raised.value.__cause__) == "part failed"
+    assert f.requests == ["start", "abort"]
+
+
+@pytest.mark.parametrize("size", [300, 40 * _KiB])  # One upload, or parts.
+async def test_leaving_async_with_by_an_exception_uploads_nothing(
+    flat_fs: SimulatedFileSystem, size: int
+) -> None:
+    f = _Writer(flat_fs, "f.bin")
+    with pytest.raises(KeyError):
+        async with AsyncFileAdapter(f) as a:
+            await a.write(os.urandom(size))
+            raise KeyError("stop")
+    assert f.closed
+    assert f.requests == (["start", "abort"] if size > 300 else [])
+    assert not await flat_fs._exists("f.bin")
+
+
+@pytest.mark.parametrize("size", [300, 40 * _KiB])  # One upload, or parts.
+def test_leaving_with_by_an_exception_uploads_nothing(size: int) -> None:
+    fs = SimulatedFileSystem()  # Sync: its loop runs in a thread of its own.
+
+    async def open_file() -> _Writer:
+        return _Writer(fs, "f.bin")
+
+    f = asyncio.run_coroutine_threadsafe(open_file(), fs.loop).result()
+    with pytest.raises(KeyError), f:
+        f.write(os.urandom(size))
+        raise KeyError("stop")
+    assert f.closed
+    assert f.requests == (["start", "abort"] if size > 300 else [])
+    assert not fs.exists("f.bin")
+    data = os.urandom(size)
+    g = asyncio.run_coroutine_threadsafe(open_file(), fs.loop).result()
+    with g:
+        g.write(data)
+    assert fs.cat_file("f.bin") == data
 
 
 async def test_a_write_cancelled_between_parts_sends_none_twice(
