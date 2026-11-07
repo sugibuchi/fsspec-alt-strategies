@@ -29,7 +29,7 @@ from .profile import StorageProfile
 from .states import CpState, DuState, FindState, GlobState, MvState, RmState, WalkState
 
 try:
-    from ._version import __version__
+    from ._version import __version__ as __version__
 except ImportError:  # A source tree never built: no version file.
     __version__ = "0.0.0"
 
@@ -47,6 +47,5 @@ __all__ = [
     "State",
     "StorageProfile",
     "WalkState",
-    "__version__",
     "monitoring",
 ]
