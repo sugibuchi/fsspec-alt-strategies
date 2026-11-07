@@ -111,11 +111,72 @@ class _AsyncFile(io.RawIOBase):
         """
         await self._requests.cancel_all()
 
-    # What every file shares, built on those: flushing, closing, the garbage
-    # collector's abort, and waiting on the loop.
+    # What every file shares, built on those.
+    #
+    # Waiting on the loop, from another thread.
 
-    def __repr__(self) -> str:
-        return f"<{type(self).__name__} {self.path!r}>"
+    def _sync(self, coro: Coroutine[Any, Any, _T]) -> _T:
+        """Wait for ``coro`` to run on the loop, from another thread."""
+        if self._on_its_loop():
+            coro.close()  # Never awaited, without a warning.
+            raise RuntimeError(
+                f"Waiting on its own loop, which would never run: {self.path}"
+            )
+        if not self.loop.is_running() or sys.is_finalizing():
+            # During shutdown, the loop's daemon thread is frozen, yet its loop
+            # still looks running: waiting would hang, as on a stopped loop.
+            coro.close()
+            raise RuntimeError(f"Waiting on a loop that is not running: {self.path}")
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        try:
+            # In steps, so that Ctrl+C interrupts the wait, even on Windows.
+            while not concurrent.futures.wait([future], timeout=1).done:
+                pass
+            return future.result()
+        except BaseException:
+            # E.g. KeyboardInterrupt while waiting: the coroutine stops too.
+            future.cancel()
+            raise
+
+    def _on_its_loop(self) -> bool:
+        """Whether this runs on the file's loop, where nothing can wait for it."""
+        try:
+            return asyncio.get_running_loop() is self.loop
+        except RuntimeError:
+            return False
+
+    def _do_abort_soon(self) -> concurrent.futures.Future[None] | None:
+        """Close the file without waiting, scheduling `_abort` on the loop.
+
+        It works from any thread, the loop's own too, where nothing can wait
+        for the abort. The file sends nothing more, and keeps nothing written.
+        It returns the abort's future, or None if the loop is closed, where
+        nothing can run.
+        """
+        future = None
+        if not self.loop.is_closed():
+            coro = self._abort()
+            try:
+                future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+                _aborting.add(future)
+                future.add_done_callback(_aborting.discard)
+            except RuntimeError:
+                coro.close()  # The loop closed meanwhile.
+        io.RawIOBase.close(self)
+        return future
+
+    # The checks before an operation.
+
+    def _check_open(self) -> None:
+        if self.closed:
+            raise ValueError(f"I/O operation on closed file: {self.path}")
+
+    def _check_not_forced(self) -> None:
+        """Refuse a write once a forced flush finished the file, as fsspec's files do."""
+        if self._forced:
+            raise ValueError(f"Force-flushed, can only close: {self.path}")
+
+    # Flushing and closing, and the garbage collector's abort.
 
     def flush(self, force: bool = False) -> None:
         """Send nothing, or, if ``force``, finish the file as closing does.
@@ -196,70 +257,16 @@ class _AsyncFile(io.RawIOBase):
         finally:
             io.RawIOBase.close(self)
 
+    # The conventions of Python's file objects.
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} {self.path!r}>"
+
     async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
         await self.aclose()
-
-    def _sync(self, coro: Coroutine[Any, Any, _T]) -> _T:
-        """Wait for ``coro`` to run on the loop, from another thread."""
-        if self._on_its_loop():
-            coro.close()  # Never awaited, without a warning.
-            raise RuntimeError(
-                f"Waiting on its own loop, which would never run: {self.path}"
-            )
-        if not self.loop.is_running() or sys.is_finalizing():
-            # During shutdown, the loop's daemon thread is frozen, yet its loop
-            # still looks running: waiting would hang, as on a stopped loop.
-            coro.close()
-            raise RuntimeError(f"Waiting on a loop that is not running: {self.path}")
-        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        try:
-            # In steps, so that Ctrl+C interrupts the wait, even on Windows.
-            while not concurrent.futures.wait([future], timeout=1).done:
-                pass
-            return future.result()
-        except BaseException:
-            # E.g. KeyboardInterrupt while waiting: the coroutine stops too.
-            future.cancel()
-            raise
-
-    def _on_its_loop(self) -> bool:
-        """Whether this runs on the file's loop, where nothing can wait for it."""
-        try:
-            return asyncio.get_running_loop() is self.loop
-        except RuntimeError:
-            return False
-
-    def _do_abort_soon(self) -> concurrent.futures.Future[None] | None:
-        """Close the file without waiting, scheduling `_abort` on the loop.
-
-        It works from any thread, the loop's own too, where nothing can wait
-        for the abort. The file sends nothing more, and keeps nothing written.
-        It returns the abort's future, or None if the loop is closed, where
-        nothing can run.
-        """
-        future = None
-        if not self.loop.is_closed():
-            coro = self._abort()
-            try:
-                future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-                _aborting.add(future)
-                future.add_done_callback(_aborting.discard)
-            except RuntimeError:
-                coro.close()  # The loop closed meanwhile.
-        io.RawIOBase.close(self)
-        return future
-
-    def _check_open(self) -> None:
-        if self.closed:
-            raise ValueError(f"I/O operation on closed file: {self.path}")
-
-    def _check_not_forced(self) -> None:
-        """Refuse a write once a forced flush finished the file, as fsspec's files do."""
-        if self._forced:
-            raise ValueError(f"Force-flushed, can only close: {self.path}")
 
 
 @dataclass(eq=False)
