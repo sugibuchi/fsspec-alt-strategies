@@ -9,9 +9,9 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 from fsspec.callbacks import Callback
 
+from fsspec_alt_strategies.control import Call, CallCancelled, Monitor, monitoring
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
-from fsspec_alt_strategies.monitoring import Call, CallCancelled, Monitor, monitoring
 from fsspec_alt_strategies.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 

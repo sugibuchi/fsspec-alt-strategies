@@ -7,7 +7,7 @@ key under a prefix in one paginated request. A subclass implements the
 storage's primitives, that listing among them, and gets fsspec's recursive
 methods from the flat strategies.
 
-This module depends on `monitoring`, `walk`, `find`, `du`, `glob`, `rm`, `cp`,
+This module depends on `control`, `walk`, `find`, `du`, `glob`, `rm`, `cp`,
 `mv`, and `filesystem` of `common`.
 """
 
@@ -19,8 +19,9 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import sync_wrapper
 
 from ..common.filesystem import _failed_folder, _FileSystem, _raise
+from ..common.monitors import _collected
 from ..common.paths import _triples
-from ..monitoring import Call, _collected
+from ..control import Call
 from .cp import flat_cp
 from .du import flat_du
 from .find import flat_find

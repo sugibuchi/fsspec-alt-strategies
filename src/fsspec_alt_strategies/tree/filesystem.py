@@ -6,7 +6,7 @@
 folder per request. A subclass implements the storage's primitives, and gets
 fsspec's recursive methods from the tree strategies.
 
-This module depends on `monitoring`, `profile`, `walk`,`find`, `du`, `glob`,
+This module depends on `control`, `profile`, `walk`,`find`, `du`, `glob`,
 `rm`, `cp`, `mv`, and `filesystem` of `common`.
 """
 
@@ -19,7 +19,8 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import sync_wrapper
 
 from ..common.filesystem import _failed_folder, _FileSystem, _raise, _with
-from ..monitoring import Call, _collected, _watched
+from ..common.monitors import _collected, _watched
+from ..control import Call
 from .cp import tree_cp
 from .du import tree_du
 from .find import tree_find

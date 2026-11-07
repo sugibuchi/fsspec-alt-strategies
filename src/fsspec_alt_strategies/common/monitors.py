@@ -1,0 +1,83 @@
+# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+# SPDX-License-Identifier: Apache-2.0
+"""How the filesystem classes run an operation, as its monitors watch it.
+
+`_watched` and `_collected` run an operation for an fsspec call, telling the
+monitors of the `monitoring` blocks around it, and fsspec's ``callback=``.
+
+This module depends on `control`.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+# _monitors is control's, beside the monitoring blocks setting it.
+from ..control import CallCancelled, Monitor, _monitors
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from ..control import Call, Operation
+
+
+class _Counting(Monitor):
+    """fsspec's ``callback=``, told of each path done, as fsspec's ``put`` tells it.
+
+    The total is not known ahead, as the operation lists while it works, so the
+    callback's size stays as its caller set it.
+    """
+
+    def __init__(self, callback: Any) -> None:
+        self.callback = callback
+
+    async def yielded(self, call: Call, op: Operation[Any, Any], item: Any) -> None:
+        if not isinstance(item, Exception):
+            self.callback.relative_update(1)
+
+
+async def _watched(
+    operation: Operation[Any, Any], call: Call, callback: Any = None
+) -> AsyncGenerator[Any]:
+    """Run an operation for a call, yielding its items, as its monitors watch it.
+
+    The monitors are those of the `monitoring` blocks around the call, and
+    ``callback``, fsspec's, if given.
+    """
+    monitors = _monitors.get()
+    if callback is not None:
+        monitors = (*monitors, _Counting(callback))
+    error: BaseException | None = None
+    try:
+        async with operation:
+            for monitor in monitors:
+                await monitor.started(call, operation)
+            async for item in operation:
+                for monitor in monitors:
+                    await monitor.yielded(call, operation, item)
+                yield item
+        if operation.cancelled():
+            raise CallCancelled(call, operation.state)
+    except GeneratorExit:
+        # The caller stopped early, e.g. a walk's: no error of the call.
+        raise
+    except BaseException as e:
+        error = e
+        raise
+    finally:
+        for monitor in monitors:
+            await monitor.ended(call, operation, error)
+
+
+async def _collected(
+    operation: Operation[Any, Any], call: Call, callback: Any = None
+) -> tuple[list[Any], list[Exception]]:
+    """`collect` of an operation, as its monitors watch it."""
+    items: list[Any] = []
+    errors: list[Exception] = []
+    async for item in _watched(operation, call, callback):
+        if isinstance(item, Exception):
+            errors.append(item)
+        else:
+            items.append(item)
+    return items, errors

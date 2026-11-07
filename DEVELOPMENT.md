@@ -5,8 +5,7 @@
 | Path                            | Contents                                                       |
 |---------------------------------|----------------------------------------------------------------|
 | `src/fsspec_alt_strategies/`    | The package.                                                   |
-| `.../control.py`                | `Operation`, `State` and `collect`: the strategy API.          |
-| `.../monitoring.py`             | `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
+| `.../control.py`                | `Operation`, `State` and `collect`: the strategy API. `Monitor` and `monitoring`, watching the operations behind the filesystems' fsspec methods. |
 | `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
 | `.../tree/walk.py`              | `tree_walk`, the concurrent folder walk under the tree strategies.  |
 | `.../tree/find.py`              | `tree_find`, a find listing several folders at a time.              |
@@ -30,6 +29,7 @@
 | `.../flat/_jobs.py`             | The private engine's flat side: it feeds `common`'s with the keys of each root. |
 | `.../common/`                   | Private machinery the families share, so that none imports another. |
 | `.../common/filesystem.py`      | What the filesystem classes share: the two limits, and data moved through file objects. |
+| `.../common/monitors.py`        | How the filesystem classes run an operation, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
 | `.../common/operations.py`      | The types of the storage's operations, such as `ls` and `info`. |
@@ -230,8 +230,8 @@ Or they subclass a family's abstract filesystem, `TreeFileSystem` in `tree/files
   root's as fsspec's does.
 - fsspec has no async `mv`, nor builds a sync one from `_mv`: each class wraps its `_mv` itself.
 
-Their callers see only fsspec's answers, not the `Operation` behind them. `monitoring.py` shows it without changing
-fsspec's API:
+Their callers see only fsspec's answers, not the `Operation` behind them. The monitors of `control.py` show it without
+changing fsspec's API. The filesystems run their operations with `common/monitors.py`, which tells the monitors.
 
 - A `Monitor` subclass overrides `started`, `yielded` and `ended`, each awaited where the operation runs.
 - `with monitoring(monitor):`, or `async with`, sets a context variable. Every call within the block is watched,
