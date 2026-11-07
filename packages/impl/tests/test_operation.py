@@ -93,6 +93,18 @@ async def test_stopping_before_iterating_runs_nothing() -> None:
     assert sent == []
 
 
+async def test_its_repr_tells_its_status() -> None:
+    op = _counting(10, [])
+    assert repr(op) == "<Operation pending State(errors=0, current=None)>"
+    op.cancel()
+    assert repr(op).startswith("<Operation cancelling ")
+    await op.aclose()
+    assert repr(op).startswith("<Operation cancelled ")
+    op = _counting(0, [])
+    await _collect(op)
+    assert repr(op).startswith("<Operation done ")
+
+
 async def test_an_error_ending_it_is_raised() -> None:
     op = _counting(10, [], fail_at=3)
     with pytest.raises(RuntimeError, match="whole operation"):

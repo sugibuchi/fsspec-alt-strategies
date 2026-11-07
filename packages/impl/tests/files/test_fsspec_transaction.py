@@ -207,6 +207,24 @@ def test_adaptive_completes_the_upload_on_commit(fs: SimulatedFileSystem) -> Non
     assert fs.cat_file("f.bin") == _BIG
 
 
+def test_adaptive_aborts_the_upload_if_its_completion_fails(
+    fs: SimulatedFileSystem,
+) -> None:
+    file = _Parts(fs, "f.bin")
+
+    async def fail(parts: list[Any]) -> None:
+        raise OSError("completion failed")
+
+    file._complete_multipart_upload = fail  # type: ignore[method-assign]
+    f = TransactionFile(AdaptiveWritableTransaction(file))
+    f.write(_BIG)
+    f.close()
+    with pytest.raises(OSError, match="completion failed"):
+        f.commit()
+    assert file.aborted
+    assert not fs.exists("f.bin")
+
+
 def test_adaptive_uploads_a_small_file_on_commit(fs: SimulatedFileSystem) -> None:
     f = TransactionFile(AdaptiveWritableTransaction(_Parts(fs, "f.bin")))
     f.write(b"abc")

@@ -21,6 +21,7 @@ sync API, e.g. a storage SDK's own, running its blocking calls in a thread.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 from typing import TYPE_CHECKING, Any
 
@@ -217,8 +218,11 @@ class SyncFileAdapter:
             try:
                 return await asyncio.shield(call)
             except asyncio.CancelledError:
-                # The thread runs on, holding the file: release it only after.
-                await asyncio.wait([call])
+                # The thread runs on, holding the file: release it only after,
+                # however often the wait is cancelled. It raises after all.
+                while not call.done():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.wait([call])
                 if not call.cancelled():
                     call.exception()  # Retrieved, as the cancellation wins.
                 raise

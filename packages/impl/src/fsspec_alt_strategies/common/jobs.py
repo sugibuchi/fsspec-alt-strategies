@@ -300,11 +300,13 @@ class _Jobs(ABC):
         self.waiting.clear()
 
     async def start(self) -> None:
+        """Start the jobs waiting, while permits are free, but none once cancelled."""
         if self.op.cancelling():
             self.stopping()
         await self.jobs.start(self.run)
 
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
+        """Handle a job's task done, counting its errors, and return what to yield."""
         job = self.running.pop(task)
         self.current = job.source or job.destination
         try:

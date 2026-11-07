@@ -257,3 +257,22 @@ async def test_async_methods_and_the_concurrency_limit() -> None:
     await f._write(b"d")
     await f.aclose()
     assert await fs._cat_file("f.bin") == b"abcd"
+
+
+def test_reads_into_a_buffer(fs: SimulatedFileSystem) -> None:
+    with _Whole(fs, "data/f.bin", "rb") as f:
+        assert f.size is None  # Not downloaded yet.
+        assert f.seekable()
+        buffer = bytearray(4)
+        assert f.readinto(buffer) == 4
+        assert bytes(buffer) == b"0123"
+        assert f.readall() == b"456789"
+
+
+async def test_an_aload_that_fails_closes_the_file() -> None:
+    fs = SimulatedFileSystem(hierarchical=True)
+    f = _Whole(fs, "missing.bin", "rb")
+    f.loop = asyncio.get_running_loop()
+    with pytest.raises(FileNotFoundError):
+        await f.aload()
+    assert f.closed

@@ -607,6 +607,30 @@ async def test_failed_part_aborts_the_upload(flat_fs: SimulatedFileSystem) -> No
     assert not await flat_fs._exists("f.bin")
 
 
+async def test_a_write_cancelled_between_parts_sends_none_twice(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    go = asyncio.Event()
+
+    class Held(_Writer):
+        async def _upload_part(self, *args: Any) -> Any:
+            await go.wait()
+            return await super()._upload_part(*args)
+
+    data = os.urandom(40 * _KiB)
+    f = Held(flat_fs, "f.bin", concurrency_limit=asyncio.Semaphore(1))
+    writing = asyncio.create_task(f._write(data))
+    await asyncio.sleep(0.01)  # The first part is sent, the second waits.
+    assert len(f._requests.queue) == 1
+    writing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await writing
+    go.set()
+    await f.aclose()
+    # The part sent stays out of the buffer: the file is uploaded as written.
+    assert await flat_fs._cat_file("f.bin") == data
+
+
 def test_the_base_class_is_not_public() -> None:
     # The base class is machinery, and its name would suggest fsspec's own.
     assert adaptive.__all__ == ["AdaptiveReadableFile", "AdaptiveWritableFile"]
@@ -693,3 +717,15 @@ async def test_a_file_given_no_limit_runs_spread_requests_at_a_time(
 async def test_spread_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="spread"):
         await _reader(flat_fs, b"abc", spread=0)
+
+
+async def test_seek_refuses_what_io_refuses(flat_fs: SimulatedFileSystem) -> None:
+    async with await _reader(flat_fs, b"abcdef") as f:
+        assert f.seekable()
+        assert f.seek(2) == 2
+        assert f.seek(1, io.SEEK_CUR) == 3
+        with pytest.raises(ValueError, match="whence"):
+            f.seek(0, 3)
+        with pytest.raises(ValueError, match="Negative"):
+            f.seek(-1)
+        assert await f._read() == b"def"

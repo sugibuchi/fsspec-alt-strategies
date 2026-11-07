@@ -244,3 +244,22 @@ async def test_a_cancelled_call_frees_the_file_only_when_its_thread_ends() -> No
         await first
     # The first's read happened, in its thread: the second reads on from there.
     assert await second == b"45"
+
+
+async def test_a_call_cancelled_twice_still_waits_for_its_thread() -> None:
+    file = _Blocking(b"0123456789")
+    f = SyncFileAdapter(file)
+    first = asyncio.create_task(f.read(4))
+    await asyncio.to_thread(file.started.wait, 5)
+    first.cancel()
+    await asyncio.sleep(0.01)
+    first.cancel()  # Again, while it waits for its thread.
+    second = asyncio.create_task(f.read(2))
+    await asyncio.sleep(0.05)
+    assert not first.done()
+    assert not second.done()
+    assert len(file.threads) == 1  # Never two threads in the file at once.
+    file.go.set()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert await second == b"45"

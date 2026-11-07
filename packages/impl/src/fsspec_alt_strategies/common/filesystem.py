@@ -5,6 +5,8 @@
 `_StrategyFileSystem` holds the two concurrency limits, and moves data through
 file objects: its ``_cat_file``, ``_pipe_file``, ``_get_file`` and
 ``_put_file`` open the file with ``open_async``, which a subclass implements.
+The functions below it shape the answers and errors of fsspec's methods, as
+the families' classes give them.
 
 This module depends on nothing else in the package.
 """

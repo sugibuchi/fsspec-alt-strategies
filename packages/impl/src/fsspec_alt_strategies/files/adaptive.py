@@ -623,32 +623,35 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         block = self._block_size(len(buffer) if closing else self._pos)
         offset = self._pos - len(buffer)
         taken = 0
-        while taken < len(buffer):
-            remaining = len(buffer) - taken
-            if remaining - block >= self.min_block_size:
-                size = block
-            elif closing:
-                # The last part takes the rest, which would be too small alone.
-                size = remaining
-            else:
-                break
-            if not self._multipart:
-                await self._start_multipart_upload()
-                self._multipart = True
-            elif self.sequential:
-                # Waiting holds no permit: files sharing the limit go on.
-                await asyncio.wait([self._requests.queue[-1].task])
-                self._raise_failed_upload()
-            start = offset + taken
-            await self._requests.send(
-                start,
-                start + size,
-                self._upload_part,
-                bytes(buffer[taken : taken + size]),
-                start,
-                start + size,
-                len(self._requests.queue),
-                closing and size == remaining,
-            )
-            taken += size
-        del buffer[:taken]
+        try:
+            while taken < len(buffer):
+                remaining = len(buffer) - taken
+                if remaining - block >= self.min_block_size:
+                    size = block
+                elif closing:
+                    # The last part takes the rest, which would be too small alone.
+                    size = remaining
+                else:
+                    break
+                if not self._multipart:
+                    await self._start_multipart_upload()
+                    self._multipart = True
+                elif self.sequential:
+                    # Waiting holds no permit: files sharing the limit go on.
+                    await asyncio.wait([self._requests.queue[-1].task])
+                    self._raise_failed_upload()
+                start = offset + taken
+                await self._requests.send(
+                    start,
+                    start + size,
+                    self._upload_part,
+                    bytes(buffer[taken : taken + size]),
+                    start,
+                    start + size,
+                    len(self._requests.queue),
+                    closing and size == remaining,
+                )
+                taken += size
+        finally:
+            # Even if cancelled between parts: the parts sent are never sent again.
+            del buffer[:taken]

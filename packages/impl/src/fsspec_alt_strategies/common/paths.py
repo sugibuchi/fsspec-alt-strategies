@@ -19,6 +19,7 @@ def _trim(path: str) -> str:
 
 
 def _check_maxdepth(maxdepth: int | None) -> None:
+    """Raise ValueError for a ``maxdepth`` below 1, as fsspec's walk does."""
     if maxdepth is not None and maxdepth < 1:
         raise ValueError(f"maxdepth must be at least 1: {maxdepth}")
 
