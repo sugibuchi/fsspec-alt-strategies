@@ -39,6 +39,9 @@ class LocallyBufferedFile(_AsyncFile, ABC):
       file is new. Leaving a ``with`` block by an exception, or `discard`,
       uploads nothing: the file is written whole, or not at all. So does a
       file the garbage collector finds open.
+    - ``flush(force=True)`` uploads as closing does, as fsspec's files do.
+      The file may still be read, but writing raises ValueError, and closing
+      uploads nothing more.
     - ``max_size`` caps the file: downloading, writing or truncating beyond it
       raises OSError with ``errno.EFBIG``.
     - The download and the upload each hold the concurrency limit. Reads and
@@ -261,11 +264,13 @@ class LocallyBufferedFile(_AsyncFile, ABC):
 
     def write(self, data: Any) -> int:
         self._check_writable()
+        self._check_not_forced()
         return self._write_to(self._ensure_loaded(), data)
 
     async def _write(self, data: Any) -> int:
         """Write as ``write`` does."""
         self._check_writable()
+        self._check_not_forced()
         return self._write_to(await self._load(), data)
 
     def _write_to(self, buffer: IO[bytes], data: Any) -> int:
@@ -289,39 +294,44 @@ class LocallyBufferedFile(_AsyncFile, ABC):
 
     def truncate(self, size: int | None = None) -> int:
         self._check_writable()
+        self._check_not_forced()
         buffer = self._ensure_loaded()
         size = buffer.tell() if size is None else size
         _check_size(size, self.max_size, self.path)
         self._changed = True
         return buffer.truncate(size)
 
-    def flush(self, force: bool = False) -> None:
-        # The file is uploaded whole, on closing: even forced, nothing is
-        # shown before.
-        self._check_open()
-
     def discard(self) -> None:
         """Upload nothing on closing: the changes are lost."""
         self._discarded = True
 
-    async def _close(self) -> None:
+    async def _finish(self) -> None:
+        if not self._changed or self._discarded:
+            return
+        buffer = await self._load()
+        pos = buffer.tell()
+        buffer.seek(0)
         try:
-            if self._changed and not self._discarded:
-                buffer = await self._load()
-                buffer.seek(0)
-                async with self._requests.concurrency_limit:
-                    upload = self._create if self._kind == "x" else self._upload
-                    await upload(buffer)
+            async with self._requests.concurrency_limit:
+                upload = self._create if self._kind == "x" else self._upload
+                await upload(buffer)
         finally:
-            buffer, self._buffer = self._buffer, None
-            if buffer is not None:
-                buffer.close()
-            await super()._close()
+            # Force-flushed, the file may still be read.
+            buffer.seek(pos)
 
-    async def _abort(self) -> None:
+    def _release(self) -> None:
         buffer, self._buffer = self._buffer, None
         if buffer is not None:
             buffer.close()
+
+    async def _close(self) -> None:
+        try:
+            await super()._close()
+        finally:
+            self._release()
+
+    async def _abort(self) -> None:
+        self._release()
         await super()._abort()
 
     def __exit__(self, exc_type: object, *exc_info: object) -> None:

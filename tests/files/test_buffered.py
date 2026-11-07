@@ -69,6 +69,38 @@ def test_file_collected_unclosed_uploads_nothing(fs: SimulatedFileSystem) -> Non
     assert not fs.exists("new.bin")
 
 
+def test_a_forced_flush_uploads_as_closing_does(fs: SimulatedFileSystem) -> None:
+    f = _Whole(fs, "data/f.bin", "r+b")
+    f.seek(4)
+    f.write(b"ab")
+    f.flush()
+    assert fs.cat_file("data/f.bin") == b"0123456789"  # Unforced: nothing sent.
+    f.flush(force=True)
+    assert fs.cat_file("data/f.bin") == b"0123ab6789"
+    # As fsspec's files: it may still be read, but not written, nor forced again.
+    assert f.read(2) == b"67"
+    with pytest.raises(ValueError, match="only close"):
+        f.write(b"x")
+    with pytest.raises(ValueError, match="only close"):
+        f.truncate(0)
+    with pytest.raises(ValueError, match="more than once"):
+        f.flush(force=True)
+    fs.reset_stats()
+    f.close()
+    assert fs.stats.calls == {}  # Nothing more on closing.
+
+
+def test_a_file_force_flushed_but_never_closed_is_kept(
+    fs: SimulatedFileSystem,
+) -> None:
+    f = _Whole(fs, "new.bin", "wb")
+    f.write(b"hello")
+    f.flush(force=True)
+    del f  # Finished: nothing to abort, nor to warn of.
+    gc.collect()
+    assert fs.cat_file("new.bin") == b"hello"
+
+
 def test_waiting_on_a_loop_not_running_raises() -> None:
     loop = asyncio.new_event_loop()
     f = _Whole(cast("Any", SimpleNamespace(loop=loop)), "f.bin", "rb")

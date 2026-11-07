@@ -108,9 +108,12 @@ async def test_writes_in_parts(fs: SimulatedFileSystem) -> None:
         for i in range(0, len(data), 3 * _KiB):
             await f.write(data[i : i + 3 * _KiB])
         await f.flush()
+        assert not fs.exists("f.bin")  # Unforced, nothing is shown.
         await f.flush(force=True)
-        # The class chose: nothing is shown before closing.
-        assert not fs.exists("f.bin")
+        # Forced, the file is finished, as fsspec's files are.
+        assert fs.cat_file("f.bin") == data
+        with pytest.raises(ValueError, match="only close"):
+            await f.write(b"more")
         assert f.tell() == len(data)
         with pytest.raises(io.UnsupportedOperation):
             f.seek(0)

@@ -397,6 +397,55 @@ async def test_small_file_is_uploaded_in_one_request(
     assert await flat_fs._cat_file("f.bin") == b"x" * 300
 
 
+@pytest.mark.parametrize("size", [300, 40 * _KiB])  # One upload, or parts.
+async def test_a_forced_flush_finishes_the_upload(
+    flat_fs: SimulatedFileSystem, size: int
+) -> None:
+    data = os.urandom(size)
+    f = _Writer(flat_fs, "f.bin")
+    await f._write(data)
+    await f._flush()
+    assert not await flat_fs._exists("f.bin")  # Unforced: nothing shown.
+    await f._flush(force=True)
+    # Shown before closing, as fsspec's files do.
+    assert await flat_fs._cat_file("f.bin") == data
+    with pytest.raises(ValueError, match="only close"):
+        await f._write(b"more")
+    with pytest.raises(ValueError, match="more than once"):
+        await f._flush(force=True)
+    requests = list(f.requests)
+    await f.aclose()
+    assert f.requests == requests  # Nothing more on closing.
+
+
+async def test_a_failed_forced_flush_aborts_and_closing_sends_nothing(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    f = _Writer(flat_fs, "f.bin")
+    f.fail_part = 1
+    await f._write(os.urandom(40 * _KiB))
+    with pytest.raises(OSError, match="part failed"):
+        await f._flush(force=True)
+    await f.aclose()  # Not tried again.
+    assert f.requests == ["start", "abort"]
+    assert not await flat_fs._exists("f.bin")
+
+
+def test_a_forced_flush_waits_on_the_loop() -> None:
+    fs = SimulatedFileSystem()  # Sync: its loop runs in a thread of its own.
+
+    async def open_file() -> _Writer:
+        return _Writer(fs, "f.bin")
+
+    f = asyncio.run_coroutine_threadsafe(open_file(), fs.loop).result()
+    f.write(b"x" * 20 * _KiB)
+    f.flush(force=True)
+    assert fs.cat_file("f.bin") == b"x" * 20 * _KiB
+    del f  # Finished: nothing to abort, nor to warn of.
+    gc.collect()
+    assert fs.cat_file("f.bin") == b"x" * 20 * _KiB
+
+
 async def test_empty_file_is_created(flat_fs: SimulatedFileSystem) -> None:
     async with _Writer(flat_fs, "f.bin"):
         pass

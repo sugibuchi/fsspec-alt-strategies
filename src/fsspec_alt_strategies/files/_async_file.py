@@ -12,7 +12,6 @@ import concurrent.futures
 import io
 import sys
 import warnings
-from abc import abstractmethod
 from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -43,9 +42,10 @@ class _AsyncFile(io.RawIOBase):
     `io.UnsupportedOperation`. ``seek`` and ``tell`` have none: as in fsspec's
     async files, they must send no request on the loop.
 
-    ``flush`` is abstract, taking ``force`` as fsspec's files do: each class
-    decides what flushing sends, and whether the file shows what was written
-    before closing.
+    ``flush(force=True)`` finishes the file as closing does, as fsspec's files
+    do: what was written is then shown, e.g. the upload completed. The file
+    then allows no more writes, only reads if its mode has them, and closing,
+    which sends nothing more. A class says how it finishes in ``_finish``.
 
     A request holds the concurrency limit while it runs. Shared by files, the
     limit bounds their requests together, and so the memory these hold.
@@ -78,6 +78,9 @@ class _AsyncFile(io.RawIOBase):
         self.path = path
         self.loop = loop
         self._requests = _Requests(concurrency_limit)
+        # Whether flush(force=True) finished the file, or tried to: closing does
+        # not try again.
+        self._forced = False
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.path!r}>"
@@ -109,6 +112,11 @@ class _AsyncFile(io.RawIOBase):
         if self.closed:
             raise ValueError(f"I/O operation on closed file: {self.path}")
 
+    def _check_not_forced(self) -> None:
+        """Refuse a write once a forced flush finished the file, as fsspec's files do."""
+        if self._forced:
+            raise ValueError(f"Force-flushed, can only close: {self.path}")
+
     def _unsupported(self, operation: str) -> io.UnsupportedOperation:
         return io.UnsupportedOperation(f"{operation} on {self.path}")
 
@@ -120,22 +128,52 @@ class _AsyncFile(io.RawIOBase):
         """Write as ``write`` does."""
         raise self._unsupported("write")
 
-    @abstractmethod
     def flush(self, force: bool = False) -> None:
-        """Send what the writes so far allow.
+        """Send nothing, or, if ``force``, finish the file as closing does.
 
-        ``force`` marks the last flush, before closing, as in fsspec's files.
-        Whether the file then shows what was written, or only once closed, is
-        the class's choice.
+        Unforced, it sends nothing: what a file sends before closing, it sends
+        as the writes allow. So io's closing, which flushes, can call it on the
+        loop too.
+
+        Raises
+        ------
+        ValueError
+            If forced twice, as fsspec's files do.
         """
+        if force:
+            self._sync(self._flush(force=True))
+        else:
+            self._check_open()
 
     async def _flush(self, force: bool = False) -> None:
-        """Flush as ``flush`` does: a class whose flush sends requests overrides it."""
-        self.flush(force)
+        """Flush as ``flush`` does."""
+        self._check_open()
+        if not force:
+            return
+        if self._forced:
+            raise ValueError(
+                f"Force flush cannot be called more than once: {self.path}"
+            )
+        self._forced = True
+        await self._finish()
+
+    async def _finish(self) -> None:
+        """Send what shows the file as written, e.g. complete its upload.
+
+        Closing, or a forced flush, calls it once. A file only read sends
+        nothing.
+        """
+
+    def _release(self) -> None:
+        """Free what the file holds locally, e.g. a buffer, sending nothing."""
 
     async def _close(self) -> None:
-        """Finish the file's requests: what a subclass adds to closing."""
-        await self._requests.cancel_all()
+        """Finish the file, unless a forced flush did, and end its requests."""
+        try:
+            if not self._forced:
+                await self._finish()
+        finally:
+            await self._requests.cancel_all()
 
     async def aclose(self) -> None:
         """Close the file, finishing or cancelling its requests."""
@@ -162,6 +200,14 @@ class _AsyncFile(io.RawIOBase):
         if getattr(self, "loop", None) is None:
             # The constructor failed before the loop was set: no request was sent.
             io.RawIOBase.close(self)
+            return
+        if self._forced:
+            # A forced flush finished the file: nothing is left to undo, only
+            # what it holds locally to free.
+            try:
+                self._release()
+            finally:
+                io.RawIOBase.close(self)
             return
         warnings.warn(
             f"Unclosed file {self.path!r}, aborted: nothing written is kept",

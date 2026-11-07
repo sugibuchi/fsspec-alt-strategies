@@ -254,9 +254,6 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         self._check_open()
         return self._pos
 
-    def flush(self, force: bool = False) -> None:
-        self._check_open()  # Nothing to send: the file is only read.
-
     def read(self, size: int | None = -1) -> bytes:
         self._check_open()
         return self._sync(self._read(-1 if size is None else size))
@@ -433,9 +430,13 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
       flight together.
     - Every part but the last has at least ``min_block_size`` bytes, as storages
       such as S3 require. So ``flush`` uploads nothing.
+    - ``flush(force=True)`` finishes the file as closing does, as fsspec's
+      files do: the rest is uploaded, and the upload completed. Closing then
+      sends nothing more, and writing raises ValueError.
     - A part that fails stops the writes, and closing aborts the upload. So does
-      any failure or cancellation while closing, or the garbage collector
-      finding the file open: the file is written whole, or not at all.
+      any failure or cancellation while closing or force-flushing, or the
+      garbage collector finding the file open: the file is written whole, or
+      not at all.
 
     Some storages take parts only in order, one at a time, e.g. Google Cloud
     Storage's resumable uploads, where each part but the last is a multiple of
@@ -555,17 +556,13 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
 
     def write(self, data: Any) -> int:
         self._check_open()
+        self._check_not_forced()
         return self._sync(self._write(data))
-
-    def flush(self, force: bool = False) -> None:
-        # A part smaller than min_block_size can only be the last: parts are
-        # uploaded as they fill, and the rest on closing. Even forced, nothing
-        # is shown before closing completes the upload.
-        self._check_open()
 
     async def _write(self, data: Any) -> int:
         """Write bytes, as ``write`` does."""
         self._check_open()
+        self._check_not_forced()
         self._raise_failed_upload()
         size = len(memoryview(data).cast("B"))
         self._buffer += data
@@ -573,7 +570,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         await self._upload_buffer(closing=False)
         return size
 
-    async def _close(self) -> None:
+    async def _finish(self) -> None:
         try:
             self._raise_failed_upload()
             await self._upload_buffer(closing=True)
@@ -587,7 +584,6 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
             raise
         finally:
             self._buffer = bytearray()
-            await self._requests.cancel_all()
 
     async def _abort(self) -> None:
         self._buffer = bytearray()
