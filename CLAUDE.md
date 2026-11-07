@@ -71,8 +71,9 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
 - `fsspec_alt_strategies_common` holds only what callers use, and what every copy must share: one `OperationHandler`, one
   set of monitors, one `StorageProfile`. The machinery stays in the copied package, e.g. `common/operation.py`. The
   interface depends on nothing but fsspec and the standard library, and never imports the strategies.
-- `fsspec_alt_strategies_common/__init__.py` re-exports its public API. In `fsspec_alt_strategies`, no `__init__.py`
-  re-exports anything but `__version__`: users import from each module, so a copy can leave out modules it does not use.
+- `fsspec_alt_strategies_common/__init__.py` re-exports its public API. In `fsspec_alt_strategies`, the package's
+  `__init__.py` re-exports `monitored` only, and no other `__init__.py` re-exports anything: users import from each
+  module, so a copy can leave out modules it does not use.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
 - The library never chooses a strategy for the developer. Each strategy's docstring says what it assumes of the
   storage, and when it wins or loses.

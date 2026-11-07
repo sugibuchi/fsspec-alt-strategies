@@ -20,7 +20,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../wrapper.py`                | `known_implementations`: how each known filesystem class is wrapped, to be monitored. |
 | `packages/common/tests/`        | The interface's tests, which never import the strategies.      |
 | `packages/impl/src/fsspec_alt_strategies/` | The strategies, copied.                              |
-| `.../monitored.py`              | `monitored(fs)`: the filesystem if `Monitored`, else wrapped as its known implementation says. |
+| `.../monitor.py`                | `monitored(fs)`: the filesystem if `Monitored`, else wrapped as its known implementation says. |
 | `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
 | `.../tree/walk.py`              | `tree_walk`, the concurrent folder walk under the tree strategies.  |
 | `.../tree/find.py`              | `tree_find`, a find listing several folders at a time.              |
@@ -409,7 +409,8 @@ So the code stays easy to copy:
 - It depends on nothing but fsspec, the interface and the standard library.
 - Each file starts with its SPDX license header, which copies keep.
 - Each strategy depends on few shared modules, and its module docstring names them.
-- No `__init__.py` imports a module, so a copy may leave out those it does not use. Users import from the modules,
+- The package's `__init__.py` re-exports `monitored` only, which needs both families' wrappers. No other
+  `__init__.py` imports a module, so a copy may leave out those it does not use. Users import from the modules,
   e.g. `fsspec_alt_strategies.tree.find`. The interface's `__init__.py` re-exports its public API.
 
 `packages/impl/tests/test_copyable.py` checks the first three rules. It also imports a copy of the package under

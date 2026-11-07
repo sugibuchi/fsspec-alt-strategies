@@ -9,7 +9,7 @@ from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 
 from fsspec_alt_strategies.flat.wrapper import AsyncFlatWrapper
-from fsspec_alt_strategies.monitored import monitored
+from fsspec_alt_strategies.monitor import monitored
 from fsspec_alt_strategies.tree.wrapper import AsyncTreeWrapper, SyncTreeWrapper
 from fsspec_alt_strategies_common.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies_common.profile import StorageProfile
