@@ -12,7 +12,7 @@ from typing import IO, Any, cast
 import pytest
 
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
-from fsspec_alt_strategies.testing import SimulatedFileSystem
+from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 
 class _Whole(LocallyBufferedFile):

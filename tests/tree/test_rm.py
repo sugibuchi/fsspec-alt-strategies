@@ -10,8 +10,8 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.control import collect
-from fsspec_alt_strategies.testing import SimulatedFileSystem
 from fsspec_alt_strategies.tree.rm import RmState, tree_rm
+from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 _FILES = [
     "data/2023/01/part-0.parquet",

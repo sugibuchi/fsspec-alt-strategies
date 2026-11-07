@@ -17,7 +17,8 @@ Whether a whole subtree can be listed in one paginated request is set apart, by
 ``recursive_listing``. Some hierarchical storages have it, others list one folder
 per request.
 
-This module depends on nothing else in the package.
+It is a package of its own, apart from the strategies: copying them into
+another package leaves it out. It depends on fsspec alone.
 """
 
 from __future__ import annotations

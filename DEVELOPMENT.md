@@ -22,7 +22,7 @@
 | `.../files/fsspec_transaction.py` | Files written in a transaction, by strategy: a temporary path, a local buffer, or the storage's own. |
 | `.../files/fsspec_async.py`     | `AsyncFileAdapter`, giving the file objects the API of those `open_async` returns. |
 | `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
-| `.../testing.py`                | `SimulatedFileSystem`, for tests and benchmarks.               |
+| `src/fsspec_alt_strategies_testing/` | `SimulatedFileSystem`, for tests and benchmarks: a package apart, so that copies leave it out. |
 | `tests/`                        | The tests, in the package's layout, with the shared fixtures in `tests/conftest.py`. |
 | `.github/workflows/ci.yaml`     | Lint and tests, on pull requests and pushes to `main`.         |
 
@@ -49,7 +49,7 @@ uvx ruff format .                # format
 CI runs ruff and pytest on every supported Python version.
 
 - Tests run with pytest-asyncio in `auto` mode: an `async def` test needs no marker.
-- Tests run on `SimulatedFileSystem`, from the public `fsspec_alt_strategies.testing`. It counts the requests a real
+- Tests run on `SimulatedFileSystem`, from the public `fsspec_alt_strategies_testing`. It counts the requests a real
   storage would get, in `stats`, and can delay each by a latency and by its bytes over a bandwidth.
 - Its two modes are an object store, where folders are only prefixes, and a hierarchical namespace, with real
   folders. Test a strategy on both, with the fixture `any_fs`.

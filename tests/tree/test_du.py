@@ -12,7 +12,7 @@ from fsspec_alt_strategies.control import collect
 from fsspec_alt_strategies.tree.du import DuState, tree_du
 
 if TYPE_CHECKING:
-    from fsspec_alt_strategies.testing import SimulatedFileSystem
+    from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 
 def _tree(fs: SimulatedFileSystem) -> None:

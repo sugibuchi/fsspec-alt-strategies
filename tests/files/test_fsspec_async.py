@@ -15,7 +15,7 @@ from fsspec_alt_strategies.files.adaptive import (
 )
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
-from fsspec_alt_strategies.testing import SimulatedFileSystem
+from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 _KiB = 1024
 

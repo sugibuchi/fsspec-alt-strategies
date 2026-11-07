@@ -62,7 +62,9 @@ __version__ = "{version}"
 '''
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/fsspec_alt_strategies"]
+# The simulated filesystem is a package of its own, so that copies of the
+# strategies leave it out.
+packages = ["src/fsspec_alt_strategies", "src/fsspec_alt_strategies_testing"]
 
 [tool.hatch.build.targets.sdist]
 # Files for development only.
@@ -95,7 +97,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
-source = ["src/fsspec_alt_strategies"]
+source = ["src/fsspec_alt_strategies", "src/fsspec_alt_strategies_testing"]
 
 [tool.ruff]
 exclude = [

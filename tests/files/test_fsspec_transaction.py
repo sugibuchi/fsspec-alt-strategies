@@ -20,7 +20,7 @@ from fsspec_alt_strategies.files.fsspec_transaction import (
     TempPathTransaction,
     TransactionFile,
 )
-from fsspec_alt_strategies.testing import SimulatedFileSystem
+from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 _KiB = 1024
 

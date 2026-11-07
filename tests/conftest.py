@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fsspec_alt_strategies.testing import SimulatedFileSystem
+from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 
 @pytest.fixture

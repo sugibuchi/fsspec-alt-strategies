@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from fsspec_alt_strategies.testing import SimulatedFileSystem
 from fsspec_alt_strategies.tree.walk import WalkState, _listings, tree_walk
+from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

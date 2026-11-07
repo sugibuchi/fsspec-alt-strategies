@@ -58,6 +58,8 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
 - Async first: write the async version; a sync one only when asked.
 - Users copy the modules into their own package. So the package imports itself only with relative imports, and depends
   on nothing but fsspec and the standard library.
+- `SimulatedFileSystem` lives in its own top-level package, `fsspec_alt_strategies_testing`, so that copies of the
+  strategies leave it out. Never move it, or anything for tests only, into `fsspec_alt_strategies`.
 - Each file in `src/` starts with the SPDX license header, as copies must keep it. `tests/test_copyable.py` checks
   this and the import rules.
 - `_version.py` is written by hatch-vcs and git-ignored: never edit or commit it.

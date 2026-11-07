@@ -49,12 +49,13 @@ relative imports only and depend on nothing but fsspec, so a copy works under an
 
 ## Choosing with numbers
 
-`fsspec_alt_strategies.testing.SimulatedFileSystem` is an in-memory async filesystem. It counts the requests a real
+`fsspec_alt_strategies_testing.SimulatedFileSystem` is an in-memory async filesystem. It counts the requests a real
 storage would get, and delays each by a latency and a bandwidth you set. It models an object store, or a storage with a hierarchical
-namespace. Run a strategy and fsspec's default on it, then compare their requests and times.
+namespace. Run a strategy and fsspec's default on it, then compare their requests and times. It is a package of its
+own, installed along with the strategies, so a copy of them leaves it out.
 
 ```python
-from fsspec_alt_strategies.testing import SimulatedFileSystem
+from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 fs = SimulatedFileSystem(hierarchical=True, latency=0.02)
 fs.add_file("data/2024/01/a.parquet", b"...")

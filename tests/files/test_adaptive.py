@@ -21,7 +21,7 @@ from fsspec_alt_strategies.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
 )
-from fsspec_alt_strategies.testing import SimulatedFileSystem
+from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 _KiB = 1024
 
