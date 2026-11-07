@@ -23,7 +23,7 @@ from .paths import _trim
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from .operations import _Info
+    from .types import _Info
 
 
 class _Placing:

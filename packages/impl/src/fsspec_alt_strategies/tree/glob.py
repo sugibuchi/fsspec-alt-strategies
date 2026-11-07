@@ -15,7 +15,7 @@ pattern, as nothing below it can match.
 Several patterns are matched in one walk per tree: a folder is listed once if
 any of them can match in it, and each path is matched with all of them.
 
-This module depends on `find`, and `monitors`, `paths` and `patterns` of
+This module depends on `find`, and `operation`, `paths` and `patterns` of
 `common`.
 """
 
@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies_common.states import GlobState
 
-from ..common.monitors import Operation
+from ..common.operation import Operation
 from ..common.paths import _trim
 from ..common.patterns import _infos, _inside, _Search
 from .find import _find_listings
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, Sequence
 
-    from ..common.operations import _Info, _Ls
+    from ..common.types import _Info, _Ls
     from .walk import _Listing
 
 __all__ = ["GlobState", "tree_glob"]

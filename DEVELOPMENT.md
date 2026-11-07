@@ -45,10 +45,10 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../common/`                   | Private machinery the families share, so that none imports another. |
 | `.../common/filesystem.py`      | What the filesystem classes share: the two limits, and data moved through file objects. |
 | `.../common/wrapper.py`         | What the wrappers share: the calls to the filesystem wrapped, awaited or in threads. |
-| `.../common/monitors.py`        | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it. |
+| `.../common/operation.py`       | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
-| `.../common/operations.py`      | The types of the storage's operations, such as `ls` and `info`. |
+| `.../common/types.py`           | The types of the storage's operations, such as `ls` and `info`. |
 | `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
 | `.../common/patterns.py`        | Glob patterns, matched as fsspec's `_glob` matches them, by both globs. |
 | `.../files/`                    | Base classes for a filesystem's file objects, by what its storage allows. |
@@ -173,7 +173,7 @@ print(op.state.files_deleted)
 
 #### Operations
 
-An `Operation`, in `common/monitors.py`, does its work as it is iterated, a few requests ahead of the caller. Its
+An `Operation`, in `common/operation.py`, does its work as it is iterated, a few requests ahead of the caller. Its
 control is the interface's `OperationHandler`, which a `Monitor` is given, so that any copy's operations are
 stopped the same way.
 
@@ -249,7 +249,7 @@ Or they subclass a family's abstract filesystem, `TreeFileSystem` in `tree/files
 - fsspec has no async `mv`, nor builds a sync one from `_mv`: each class wraps its `_mv` itself.
 
 Their callers see only fsspec's answers, not the `Operation` behind them. The monitors of `monitor.py` show it without
-changing fsspec's API. The filesystems run their operations with `common/monitors.py`, which tells the monitors.
+changing fsspec's API. The filesystems run their operations with `common/operation.py`, which tells the monitors.
 
 - A `Monitor` subclass overrides `started`, `yielded` and `ended`, each awaited where the operation runs.
 - `with monitoring(monitor):`, or `async with`, sets a context variable. Every call within the block is watched,

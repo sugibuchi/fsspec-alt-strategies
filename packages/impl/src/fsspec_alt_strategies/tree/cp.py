@@ -6,7 +6,7 @@
 whole tree first, then copies each path. `tree_cp` copies each folder's files
 as soon as the folder is listed.
 
-This module depends on `_jobs`, and `jobs`, `monitors` and `placement` of
+This module depends on `_jobs`, and `jobs`, `operation` and `placement` of
 `common`.
 """
 
@@ -19,7 +19,7 @@ from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_common.states import CpState
 
 from ..common.jobs import _Job
-from ..common.monitors import Operation
+from ..common.operation import Operation
 from ..common.placement import _Placing
 from ._jobs import _expand, _TreeJobs
 
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
     from ..common.jobs import _Roots
-    from ..common.operations import _Info, _Ls, _Request
+    from ..common.types import _Info, _Ls, _Request
     from .walk import _Listing
 
 __all__ = ["CpState", "tree_cp"]

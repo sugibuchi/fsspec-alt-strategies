@@ -9,7 +9,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 from fsspec.utils import other_paths
 
-from fsspec_alt_strategies.common.monitors import _collect
+from fsspec_alt_strategies.common.operation import _collect
 from fsspec_alt_strategies.flat.cp import CpState, flat_cp
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 

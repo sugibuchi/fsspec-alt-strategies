@@ -7,7 +7,7 @@ folder per request. A subclass implements the storage's primitives, and gets
 fsspec's recursive methods from the tree strategies.
 
 This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm`, `walk`, and
-`filesystem` and `monitors` of `common`.
+`filesystem` and `operation` of `common`.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from fsspec.asyn import sync_wrapper
 from fsspec_alt_strategies_common.monitor import Call
 
 from ..common.filesystem import _failed_folder, _FileSystem, _raise, _with
-from ..common.monitors import _collected, _watched
+from ..common.operation import _collected, _watched
 from .cp import tree_cp
 from .du import tree_du
 from .find import tree_find

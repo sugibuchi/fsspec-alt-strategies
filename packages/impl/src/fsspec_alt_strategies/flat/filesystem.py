@@ -8,7 +8,7 @@ storage's primitives, that listing among them, and gets fsspec's recursive
 methods from the flat strategies.
 
 This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm`, `walk`, and
-`filesystem`, `monitors` and `paths` of `common`.
+`filesystem`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from fsspec.asyn import sync_wrapper
 from fsspec_alt_strategies_common.monitor import Call
 
 from ..common.filesystem import _failed_folder, _FileSystem, _raise
-from ..common.monitors import _collected
+from ..common.operation import _collected
 from ..common.paths import _triples
 from .cp import flat_cp
 from .du import flat_du

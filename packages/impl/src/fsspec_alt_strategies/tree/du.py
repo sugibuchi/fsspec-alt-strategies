@@ -6,7 +6,7 @@
 each file's size with a request of its own. `tree_du` adds up the sizes the
 listings already give.
 
-This module depends on `find`, and `monitors` and `paths` of `common`.
+This module depends on `find`, and `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies_common.states import DuState
 
-from ..common.monitors import Operation
+from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
 from .find import _find_listings
 
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator
 
-    from ..common.operations import _Info, _Ls
+    from ..common.types import _Info, _Ls
 
 __all__ = ["DuState", "tree_du"]
 

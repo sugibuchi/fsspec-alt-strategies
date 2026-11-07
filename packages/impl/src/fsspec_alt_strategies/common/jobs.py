@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 
-    from .monitors import Operation
+    from .operation import Operation
 
 _T = TypeVar("_T")
 

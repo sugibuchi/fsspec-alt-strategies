@@ -11,7 +11,7 @@ A glob pattern is expanded first, with `flat_glob`, as fsspec's
 ``_expand_path`` expands it: the keys under its matching folders are then
 listed.
 
-This module depends on `_keys`, `glob`, and `jobs` and `monitors` of `common`.
+This module depends on `_keys`, `glob`, and `jobs` and `operation` of `common`.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _Jobs, _roots_of
-from ..common.monitors import _collect
+from ..common.operation import _collect
 from ._keys import _close
 from .glob import flat_glob
 
@@ -29,8 +29,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.jobs import _Roots
-    from ..common.monitors import Operation
-    from ..common.operations import _Ils, _Info
+    from ..common.operation import Operation
+    from ..common.types import _Ils, _Info
 
 
 async def _expand(

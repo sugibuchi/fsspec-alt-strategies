@@ -13,9 +13,9 @@ can be pruned. On object stores, one recursive listing usually costs fewer
 requests: `fsspec.asyn.AsyncFileSystem._find` there.
 
 The tree strategies take the storage's operations as functions, such as
-``ls``, rather than a filesystem: see `common.operations`.
+``ls``, rather than a filesystem: see `common.types`.
 
-This module depends on `jobs`, `monitors` and `paths` of `common`.
+This module depends on `jobs`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -28,13 +28,13 @@ from typing import TYPE_CHECKING, Any, Literal
 from fsspec_alt_strategies_common.states import WalkState
 
 from ..common.jobs import _Queue
-from ..common.monitors import Operation
+from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Collection
 
-    from ..common.operations import _Ls
+    from ..common.types import _Ls
 
 __all__ = ["WalkState", "tree_walk"]
 

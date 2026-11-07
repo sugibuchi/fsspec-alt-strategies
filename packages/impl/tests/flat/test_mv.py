@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from fsspec_alt_strategies.common.monitors import _collect
+from fsspec_alt_strategies.common.operation import _collect
 from fsspec_alt_strategies.flat.mv import MvState, flat_mv
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem

@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.common.monitors import _collect
+from fsspec_alt_strategies.common.operation import _collect
 from fsspec_alt_strategies.tree.rm import RmState, tree_rm
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem

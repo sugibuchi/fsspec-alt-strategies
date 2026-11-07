@@ -1,4 +1,4 @@
-"""Tests of `common.monitors`: `Operation`, and its stopping as `OperationHandler` declares it."""
+"""Tests of `common.operation`: `Operation`, and its stopping as `OperationHandler` declares it."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from fsspec_alt_strategies.common.monitors import Operation
+from fsspec_alt_strategies.common.operation import Operation, _collect
 from fsspec_alt_strategies_common.monitor import State
 
 if TYPE_CHECKING:
@@ -99,3 +99,11 @@ async def test_an_error_ending_it_is_raised() -> None:
         async for _ in op:
             pass
     assert op.done() and not op.cancelled()
+
+
+async def test_collect_splits_items_and_errors() -> None:
+    op = _counting(7, [])
+    items, errors = await _collect(op)
+    assert items == [1, 2, 3, 4, 6]
+    assert [e.args for e in errors] == [(0,), (5,)]
+    assert op.done()

@@ -10,7 +10,7 @@ runs, and what its outcome is.
 A glob pattern is expanded first, as fsspec's ``_expand_path`` expands it:
 its matching folders are then walked at once.
 
-This module depends on `glob`, `walk`, and `jobs` and `monitors` of `common`.
+This module depends on `glob`, `walk`, and `jobs` and `operation` of `common`.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _Jobs, _roots_of
-from ..common.monitors import _collect
+from ..common.operation import _collect
 from .glob import tree_glob
 from .walk import _listings
 
@@ -28,8 +28,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.jobs import _Roots
-    from ..common.monitors import Operation
-    from ..common.operations import _Info, _Ls
+    from ..common.operation import Operation
+    from ..common.types import _Info, _Ls
     from .walk import _Listing
 
 

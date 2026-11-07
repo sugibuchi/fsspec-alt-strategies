@@ -6,7 +6,7 @@
 walks a tree one folder at a time, unless the filesystem lists whole trees.
 `tree_find` lists several folders at a time, as `tree_walk` does.
 
-This module depends on `walk`, and `monitors` and `paths` of `common`.
+This module depends on `walk`, and `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies_common.states import FindState
 
-from ..common.monitors import Operation
+from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from .walk import _Listing, _listings
 
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, Callable
 
-    from ..common.operations import _Info, _Ls
+    from ..common.types import _Info, _Ls
 
 __all__ = ["FindState", "tree_find"]
 

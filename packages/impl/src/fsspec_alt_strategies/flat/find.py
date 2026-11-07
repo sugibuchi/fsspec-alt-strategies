@@ -6,7 +6,7 @@
 same paths. fsspec's, and the object stores' own, gather every page of the
 listing before answering. `flat_find` yields each path as its page arrives.
 
-This module depends on `_keys`, and `monitors` and `paths` of `common`.
+This module depends on `_keys`, and `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies_common.states import FindState
 
-from ..common.monitors import Operation
+from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ._keys import _close, _folder, _folders
 
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, Callable
 
-    from ..common.operations import _Ils, _Info
+    from ..common.types import _Ils, _Info
 
 __all__ = ["FindState", "flat_find"]
 
