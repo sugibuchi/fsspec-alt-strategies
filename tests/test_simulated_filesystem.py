@@ -167,6 +167,24 @@ async def test_rm_keeps_to_batch_size(flat_fs: SimulatedFileSystem) -> None:
     assert flat_fs.stats.max_concurrency == 2
 
 
+async def test_ils_lists_a_raw_prefix_a_page_at_a_time() -> None:
+    fs = SimulatedFileSystem(page_size=2, asynchronous=True)
+    for name in ("data/2024-01.csv", "data/2024-02.csv", "data/2024-03.csv"):
+        fs.add_file(name)
+    fs.add_file("data/2025-01.csv")
+    listing = fs._ils("data/2024-")
+    assert (await anext(listing))["name"] == "data/2024-01.csv"
+    assert fs.stats.calls == {"list": 1}  # The next page only once needed.
+    names = [e["name"] async for e in listing]
+    assert names == ["data/2024-02.csv", "data/2024-03.csv"]
+    assert fs.stats.calls == {"list": 2}
+    # Exactly a page full asks for no other page.
+    fs.reset_stats()
+    assert len([e async for e in fs._ils("data/2024-0") if e]) == 3
+    assert [e async for e in fs._ils("missing")] == []
+    assert fs.stats.calls == {"list": 3}
+
+
 def test_sync_methods() -> None:
     # fsspec makes the sync methods from the async ones, run in its IO thread.
     fs = SimulatedFileSystem(hierarchical=True)

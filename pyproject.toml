@@ -92,6 +92,9 @@ cache-keys = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Test folders have no __init__.py, and share file names, e.g. tree/test_find.py
+# and flat/test_find.py: importlib imports each by its path.
+addopts = ["--import-mode=importlib"]
 # The library is async first: async tests need no marker.
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

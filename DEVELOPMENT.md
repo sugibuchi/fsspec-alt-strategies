@@ -15,6 +15,11 @@
 | `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks.        |
 | `.../tree/mv.py`                | `tree_mv`, a recursive move: a copy deleting as it goes.       |
 | `.../tree/_jobs.py`             | The private engine running a strategy's jobs, e.g. deletions, while the walk goes on. |
+| `.../flat/`                     | The strategies listing a flat namespace by key prefix, as object stores do. |
+| `.../flat/find.py`              | `flat_find`, a find streaming one listing of a prefix.          |
+| `.../flat/du.py`                | `flat_du`, the size of the files under a prefix, from the listing alone. |
+| `.../flat/glob.py`              | `flat_glob`, a glob listing only the keys starting as its pattern does. |
+| `.../flat/_keys.py`             | The private listing under them: a prefix's keys, and the folders they imply. |
 | `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
 | `.../files/`                    | Base classes for a filesystem's file objects, by what its storage allows. |
 | `.../files/adaptive.py`         | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts. |
@@ -230,6 +235,28 @@ methods and modules. The prefix keeps an import from shadowing them, and tells t
 - `topdown=False` yields a folder's entries only after those of all the folders below it.
 - `raise_on_error=True` raises a folder's error instead of yielding it. With filtering, it will implement fsspec's
   `on_error`.
+
+#### The flat strategies
+
+The strategies in `flat/` are the counterparts of `tree/` for flat namespaces, such as object stores. A flat storage
+lists every key under a prefix, at any depth, in one paginated request. They take that listing as `ils`, a function
+called as `ils(prefix)` and giving an async iterator of entries:
+
+- The prefix is raw text, e.g. `data/2024-`, not only a folder. So `flat_glob` lists only the keys starting as its
+  pattern does, before the first wildcard.
+- `ils` yields entries, not pages, so that its meaning stays simple. A strategy never sees the pages, and holds one at a
+  time.
+- The listing holds no permit of `concurrency_limit`: its pages come one after another. The other requests, such as an
+  `info`, hold one.
+- Folders are derived from the keys, as fsspec's filesystems derive them for object stores. A key ending with "/" is a
+  folder's marker.
+- An error of the listing ends the operation: there is no other listing to go on with.
+
+fsspec has no such listing, so `SimulatedFileSystem` has its own, `_ils`, counting a request per page. Test a flat
+strategy on `flat_fs`, against fsspec's own method on it.
+
+`flat_glob` matches with `tree_glob`'s compiled patterns, so the two never answer differently. The strategies changing a
+tree, such as a `flat_rm` deleting the keys in batches while the listing goes on, are still to come.
 
 #### Storage profiles
 

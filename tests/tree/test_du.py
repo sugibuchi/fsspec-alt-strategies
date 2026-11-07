@@ -11,15 +11,14 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec_alt_strategies.control import collect
 from fsspec_alt_strategies.tree.du import DuState, tree_du
 
+if TYPE_CHECKING:
+    from fsspec_alt_strategies_testing import SimulatedFileSystem
+
 
 def _du(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`tree_du` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {"ls": fs._ls, "info": fs._info}
     return tree_du(path, **{**operations, **kwargs})
-
-
-if TYPE_CHECKING:
-    from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 
 def _tree(fs: SimulatedFileSystem) -> None:

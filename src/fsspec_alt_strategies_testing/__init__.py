@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import AsyncIterator, Iterator
 
 __all__ = ["CallStats", "SimulatedFileSystem"]
 
@@ -278,6 +278,31 @@ class SimulatedFileSystem(AsyncFileSystem):
         if detail:
             return {n: self._entry(n) for n in names}
         return names
+
+    async def _ils(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
+        """List the files whose paths start with ``prefix``, as object stores do.
+
+        It is no fsspec method: the flat strategies take it as their ``ils``.
+        ``prefix`` is a raw string, e.g. "data/2024-" lists "data/2024-01.csv".
+        The files come in path order, a page per request: a page is asked for
+        only once the one before it is all taken.
+        """
+        after: str | None = None
+        while True:
+            await self._request("list")
+            # Asked for after the last path taken, as with S3's StartAfter, so
+            # that files written meanwhile show as a real listing shows them.
+            names = sorted(
+                p
+                for p in self._file_data
+                if p.startswith(prefix) and (after is None or p > after)
+            )
+            page = names[: self.page_size]
+            for name in page:
+                yield self._entry(name)
+            if len(names) <= self.page_size:
+                return
+            after = page[-1]
 
     async def _cat_file(
         self,

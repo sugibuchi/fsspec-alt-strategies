@@ -47,6 +47,9 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
 - The tree strategies, in `tree/`, walk with `tree.walk._listings`, which is private: never expose its `_Listing`.
   Two layers, by what a strategy sends: one that only reads builds on `tree.walk._scan`, which handles the root; one
   that changes the storage builds on `tree._jobs._Jobs`. Never write another loop or root handling.
+- The flat strategies, in `flat/`, list with `ils(prefix)`, an async iterator of entries, never pages: see
+  DEVELOPMENT.md's "The flat strategies". They build on `flat._keys._scan`, which derives folders from keys and handles
+  the root.
 - What a storage does that fsspec leaves open is declared, never detected, in `profile.StorageProfile`. A strategy
   takes `profile=`, unknown if None. Unknown must be correct on any storage; a
   field only saves requests. Add a field only when a strategy saves requests with it.
