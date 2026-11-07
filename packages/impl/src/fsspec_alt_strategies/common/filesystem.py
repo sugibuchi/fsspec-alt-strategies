@@ -71,6 +71,10 @@ class _FileSystem(AsyncFileSystem, metaclass=_AbstractFileSystemMeta):
         self.operation_limit = asyncio.Semaphore(operation_concurrency)
         self.io_limit = asyncio.Semaphore(io_concurrency)
 
+    def _unwrapped(self) -> AsyncFileSystem:
+        """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
+        return self
+
     def _plain(self, path: str | Sequence[str]) -> Any:
         """A path, or paths, without the protocol, keeping a trailing "/".
 

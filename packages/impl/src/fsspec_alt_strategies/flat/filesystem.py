@@ -186,7 +186,7 @@ class FlatFileSystem(_FileSystem):
                     maxdepth=maxdepth,
                     concurrency_limit=self.operation_limit,
                 ),
-                Call(self, "walk", path),
+                Call(self._unwrapped(), "walk", path),
             )
         except NotADirectoryError:
             # fsspec's walk of a file yields the file, under no name.
@@ -229,7 +229,7 @@ class FlatFileSystem(_FileSystem):
                 withdirs=withdirs,
                 concurrency_limit=self.operation_limit,
             ),
-            Call(self, "find", path),
+            Call(self._unwrapped(), "find", path),
         )
         found = {e["name"].rstrip("/"): e for e in entries}
         names = sorted(found)
@@ -247,7 +247,7 @@ class FlatFileSystem(_FileSystem):
             maxdepth=maxdepth,
             concurrency_limit=self.operation_limit,
         )
-        entries, _ = await _collected(op, Call(self, "du", path))
+        entries, _ = await _collected(op, Call(self._unwrapped(), "du", path))
         if total:
             return op.state.size
         return {e["name"]: e.get("size") or 0 for e in entries}
@@ -263,7 +263,7 @@ class FlatFileSystem(_FileSystem):
                 withdirs=kwargs.pop("withdirs", True),
                 concurrency_limit=self.operation_limit,
             ),
-            Call(self, "glob", path),
+            Call(self._unwrapped(), "glob", path),
         )
         found = {e["name"].rstrip("/"): e for e in entries}
         names = sorted(found)
@@ -289,7 +289,7 @@ class FlatFileSystem(_FileSystem):
                 batch_size=self.rm_batch_size,
                 concurrency_limit=self.operation_limit,
             ),
-            Call(self, "rm", path),
+            Call(self._unwrapped(), "rm", path),
             kwargs.get("callback"),
         )
         _raise(errors, "Deleting")
@@ -318,7 +318,7 @@ class FlatFileSystem(_FileSystem):
                 cp_file=self._cp_file,
                 concurrency_limit=self.operation_limit,
             ),
-            Call(self, "copy", path1, path2),
+            Call(self._unwrapped(), "copy", path1, path2),
             kwargs.get("callback"),
         )
         if on_error != "raise":
@@ -355,7 +355,7 @@ class FlatFileSystem(_FileSystem):
                 profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
             ),
-            Call(self, "mv", path1, path2),
+            Call(self._unwrapped(), "mv", path1, path2),
             kwargs.get("callback"),
         )
         _raise(errors, "Moving")

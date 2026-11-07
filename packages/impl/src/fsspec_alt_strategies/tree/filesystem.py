@@ -173,7 +173,9 @@ class TreeFileSystem(_FileSystem):
             on_error="raise" if on_error == "raise" else None,
             concurrency_limit=self.operation_limit,
         )
-        async with aclosing(_watched(walk, Call(self, "walk", path))) as items:
+        async with aclosing(
+            _watched(walk, Call(self._unwrapped(), "walk", path))
+        ) as items:
             try:
                 first = await anext(items)
             except StopAsyncIteration:
@@ -217,7 +219,7 @@ class TreeFileSystem(_FileSystem):
                 withdirs=withdirs,
                 concurrency_limit=self.operation_limit,
             ),
-            Call(self, "find", path),
+            Call(self._unwrapped(), "find", path),
         )
         found = {e["name"].rstrip("/"): e for e in entries}
         names = sorted(found)
@@ -237,7 +239,7 @@ class TreeFileSystem(_FileSystem):
             maxdepth=maxdepth,
             concurrency_limit=self.operation_limit,
         )
-        entries, _ = await _collected(op, Call(self, "du", path))
+        entries, _ = await _collected(op, Call(self._unwrapped(), "du", path))
         if total:
             return op.state.size
         return {e["name"]: e.get("size") or 0 for e in entries}
@@ -254,7 +256,7 @@ class TreeFileSystem(_FileSystem):
                 withdirs=withdirs,
                 concurrency_limit=self.operation_limit,
             ),
-            Call(self, "glob", path),
+            Call(self._unwrapped(), "glob", path),
         )
         found = {e["name"].rstrip("/"): e for e in entries}
         names = sorted(found)
@@ -281,7 +283,7 @@ class TreeFileSystem(_FileSystem):
                 profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
             ),
-            Call(self, "rm", path),
+            Call(self._unwrapped(), "rm", path),
             kwargs.get("callback"),
         )
         _raise(errors, "Deleting")
@@ -313,7 +315,7 @@ class TreeFileSystem(_FileSystem):
                 profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
             ),
-            Call(self, "copy", path1, path2),
+            Call(self._unwrapped(), "copy", path1, path2),
             kwargs.get("callback"),
         )
         if on_error != "raise":
@@ -349,7 +351,7 @@ class TreeFileSystem(_FileSystem):
                 profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
             ),
-            Call(self, "mv", path1, path2),
+            Call(self._unwrapped(), "mv", path1, path2),
             kwargs.get("callback"),
         )
         _raise(errors, "Moving")

@@ -57,6 +57,15 @@ class _FileSystemWrapper:
     def unstrip_protocol(self, name: str) -> str:
         return self.fs.unstrip_protocol(name)
 
+    def _unwrapped(self) -> Any:
+        """The filesystem wrapped, unwrapped too if a wrapper: a monitor's `Call` names it.
+
+        A wrapper is made on demand, and dropped after: the filesystem it wraps
+        is the one its callers know.
+        """
+        unwrap = getattr(self.fs, "_unwrapped", None)
+        return unwrap() if unwrap is not None else self.fs
+
 
 class _AsyncFileSystemWrapper(_FileSystemWrapper):
     """The primitives of an async filesystem, awaited on its loop."""

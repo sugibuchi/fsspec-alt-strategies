@@ -117,7 +117,8 @@ class Call:
     Attributes
     ----------
     fs : AbstractFileSystem
-        The filesystem called, e.g. to tell the storage of a call.
+        The filesystem called, e.g. to tell the storage of a call. A call to a
+        wrapper names the filesystem it wraps, which its callers know.
     method : str
         Its name, without the underscore of its async version, e.g. "copy".
     path : str or list of str

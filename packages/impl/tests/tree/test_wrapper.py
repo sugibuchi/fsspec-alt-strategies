@@ -22,9 +22,11 @@ _FILES = ["data/2023/01/a.txt", "data/2023/02/b.txt", "data/2024/c.txt", "data/d
 class _Calls(Monitor):
     def __init__(self) -> None:
         self.methods: list[str] = []
+        self.filesystems: list[Any] = []
 
     async def started(self, call: Call, state: Any, op: Any) -> None:
         self.methods.append(call.method)
+        self.filesystems.append(call.fs)
 
 
 def _simulated(**kwargs: Any) -> SimulatedFileSystem:
@@ -46,6 +48,17 @@ async def test_an_async_filesystem_answers_as_fsspec() -> None:
         await tree._rm("data", recursive=True)
     assert calls.methods == ["mv", "rm"]
     assert sorted(inner._file_data) == ["moved/01/a.txt", "moved/02/b.txt"]
+    # The monitor is told of the filesystem wrapped, not of the wrapper.
+    assert calls.filesystems == [inner, inner]
+
+
+async def test_a_monitor_is_told_of_the_filesystem_under_all_wrappers() -> None:
+    inner = _simulated(asynchronous=True)
+    tree = AsyncTreeWrapper(AsyncTreeWrapper(inner, **_LIMITS), **_LIMITS)
+    calls = _Calls()
+    with monitoring(calls):
+        await tree._find("data")
+    assert calls.filesystems == [inner]
 
 
 def test_an_async_filesystem_on_its_own_loop() -> None:
