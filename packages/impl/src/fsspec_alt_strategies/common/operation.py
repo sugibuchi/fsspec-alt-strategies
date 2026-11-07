@@ -228,10 +228,10 @@ async def _watched(
     try:
         async with operation:
             for monitor in monitors:
-                await monitor.started(call, operation, operation.state)
+                await monitor.started(call, operation.state, operation)
             async for item in operation:
                 for monitor in monitors:
-                    await monitor.yielded(call, operation, operation.state, item)
+                    await monitor.yielded(call, item, operation.state, operation)
                 yield item
         if operation.cancelled():
             raise CallCancelled(call, operation.state)
@@ -243,7 +243,7 @@ async def _watched(
         raise
     finally:
         for monitor in monitors:
-            await monitor.ended(call, operation, operation.state, error)
+            await monitor.ended(call, error, operation.state, operation)
 
 
 class _Counting(Monitor):
@@ -257,7 +257,7 @@ class _Counting(Monitor):
         self.callback = callback
 
     async def yielded(
-        self, call: Call, op: OperationHandler, state: State, item: Any
+        self, call: Call, item: Any, state: State, op: OperationHandler
     ) -> None:
         if not isinstance(item, Exception):
             self.callback.relative_update(1)

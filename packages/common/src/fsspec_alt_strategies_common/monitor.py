@@ -15,7 +15,7 @@ by running an operation to its end, so their callers see only the answer. A
 `Monitor` sees the operation itself, as it runs, within a `monitoring` block:
 
 >>> class Progress(Monitor):
-...     async def yielded(self, call, op, state, item):
+...     async def yielded(self, call, item, state, op):
 ...         print(call.method, state)
 >>> with monitoring(Progress()):
 ...     fs.copy("data", "backup", recursive=True)
@@ -156,10 +156,11 @@ class Monitor:
     """What watches the operations of the calls within a `monitoring` block.
 
     A subclass overrides the methods it needs: each does nothing here. Each is
-    given the call, the operation's handler, and its state at that moment. Each
-    is awaited where the operation runs, before it goes on: a slow monitor
-    slows the call, as a slow loop body slows an operation. A monitor raising
-    ends the call with its error.
+    given what happened, the call and e.g. the item yielded, then the
+    operation's state at that moment, then its handler, to act on it. Each is
+    awaited where the operation runs, before it goes on: a slow monitor slows
+    the call, as a slow loop body slows an operation. A monitor raising ends
+    the call with its error.
 
     To stop the call, a monitor calls ``op.cancel()``: the operation goes on
     with what is in flight, then the call raises `CallCancelled`.
@@ -174,16 +175,16 @@ class Monitor:
     Examples
     --------
     >>> class StopOnError(Monitor):
-    ...     async def yielded(self, call, op, state, item):
+    ...     async def yielded(self, call, item, state, op):
     ...         if isinstance(item, Exception):
     ...             op.cancel()
     """
 
-    async def started(self, call: Call, op: OperationHandler, state: State) -> None:
+    async def started(self, call: Call, state: State, op: OperationHandler) -> None:
         """Called before the operation sends its first request."""
 
     async def yielded(
-        self, call: Call, op: OperationHandler, state: State, item: Any
+        self, call: Call, item: Any, state: State, op: OperationHandler
     ) -> None:
         """Called with each item the operation yields, an error of a path too.
 
@@ -193,9 +194,9 @@ class Monitor:
     async def ended(
         self,
         call: Call,
-        op: OperationHandler,
-        state: State,
         error: BaseException | None,
+        state: State,
+        op: OperationHandler,
     ) -> None:
         """Called once the operation ended, however it did.
 

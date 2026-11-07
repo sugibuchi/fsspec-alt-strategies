@@ -23,7 +23,7 @@ class _Calls(Monitor):
     def __init__(self) -> None:
         self.methods: list[str] = []
 
-    async def started(self, call: Call, op: Any, state: Any) -> None:
+    async def started(self, call: Call, state: Any, op: Any) -> None:
         self.methods.append(call.method)
 
 
