@@ -13,7 +13,7 @@
 | `.../tree/glob.py`              | `tree_glob`, a glob listing only the folders it can match in.       |
 | `.../tree/rm.py`                | `tree_rm`, a recursive delete that deletes while it walks.          |
 | `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks.        |
-| `.../tree/mv.py`                | `tree_mv`, a recursive move: a `mv_file` per file, or a rename per root. |
+| `.../tree/mv.py`                | `tree_mv`, a recursive move: a `mv_file` per file, or per folder where it moves folders. |
 | `.../tree/filesystem.py`        | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies. |
 | `.../tree/_jobs.py`             | The private engine's tree side: it feeds `common`'s with the walk's listings. |
 | `.../flat/`                     | The strategies listing a flat namespace by key prefix, as object stores do. |
@@ -345,6 +345,7 @@ The fields, and the requests each saves:
 | `parents_required` | False: the `makedirs` of each folder with files, in `tree_cp` and `tree_mv`.       |
 | `implicit_folders` | True: those, and the `rm_folder` of each folder, in `tree_rm` and `tree_mv`.       |
 | `renames_files`    | True: the data copied by `flat_mv`, given both ways, as it moves each key by `mv_file`. |
+| `renames_folders`  | True: all requests in a folder moved whole by one `mv_file`, in `tree_mv`.         |
 
 A field may imply another: implicit folders need no parents made. A profile contradicting itself raises `ValueError`.
 
@@ -354,9 +355,10 @@ none. An example is a copy refused because the file exists: `tree_cp` then delet
 A storage with a native operation, such as a rename of a whole folder, has no field either. A strategy takes it as an
 operation instead, and falls back on its own way where it fails:
 
-- `tree_mv` takes `rename=`, and moves each root whole with it, onto a path that does not exist.
-- A root merging into an existing folder, or whose rename fails, is walked and moved file by file, as without it.
-- `TreeFileSystem` passes its `_rename`, which a subclass implements only if its storage has one.
+- `tree_mv` takes `mv_file`, e.g. a storage's rename. If it moves a folder too, the profile's `renames_folders` says
+  so, and each folder is first moved whole, onto a path that does not exist.
+- A folder merging into an existing one, or whose move fails, is walked and moved file by file, as when unknown.
+- A `TreeFileSystem` subclass overrides `_mv_file` with its rename, and declares `renames_folders`.
 
 ### Copied, not only installed
 

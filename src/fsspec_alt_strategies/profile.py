@@ -52,6 +52,11 @@ class StorageProfile:
         Whether moving a file is one request that copies no data, a rename,
         rather than a copy and a delete. Unknown by default, taken as False: a
         move copies, and deletes in batches where it can.
+    renames_folders : bool, optional
+        Whether ``mv_file`` moves a folder too, with all in it, in one request,
+        as a storage's rename does. Unknown by default, taken as False: a
+        folder's files are moved one by one, as ``mv_file`` is called on files
+        only.
 
     Raises
     ------
@@ -78,6 +83,7 @@ class StorageProfile:
     parents_required: bool | None = None
     implicit_folders: bool | None = None
     renames_files: bool | None = None
+    renames_folders: bool | None = None
 
     def __post_init__(self) -> None:
         if self.implicit_folders and self.parents_required:

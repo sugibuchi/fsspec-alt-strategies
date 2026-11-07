@@ -214,7 +214,12 @@ def _files(fs: SimulatedFileSystem) -> dict[str, bytes]:
     return {p: f.data for p, f in sorted(fs._file_data.items())}
 
 
-async def test_rename_moves_a_root_whole(hierarchical_fs: SimulatedFileSystem) -> None:
+def _renaming(fs: SimulatedFileSystem) -> dict[str, Any]:
+    """A storage's rename as mv_file, declared to move folders too."""
+    return {"mv_file": fs._rename, "profile": StorageProfile(renames_folders=True)}
+
+
+async def test_a_folder_moves_whole(hierarchical_fs: SimulatedFileSystem) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.add_dir("data/empty")
     expected = {
@@ -222,7 +227,7 @@ async def test_rename_moves_a_root_whole(hierarchical_fs: SimulatedFileSystem) -
         for p, data in _files(hierarchical_fs).items()
     }
     hierarchical_fs.reset_stats()
-    op = _mv(hierarchical_fs, "data", "moved", rename=hierarchical_fs._rename)
+    op = _mv(hierarchical_fs, "data", "moved", **_renaming(hierarchical_fs))
     assert await _collect(op) == ([("data", "moved")], [])
     # Where path2 goes, found free, then the rename: nothing is listed.
     assert hierarchical_fs.stats.calls == {"info": 1, "rename": 1}
@@ -231,7 +236,7 @@ async def test_rename_moves_a_root_whole(hierarchical_fs: SimulatedFileSystem) -
     assert await hierarchical_fs._isdir("moved/empty")
 
 
-async def test_rename_moves_each_root_of_a_list(
+async def test_each_folder_of_a_list_moves_whole(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
@@ -239,7 +244,7 @@ async def test_rename_moves_each_root_of_a_list(
         hierarchical_fs,
         ["data/2023", "data/README.md"],
         "archive",
-        rename=hierarchical_fs._rename,
+        **_renaming(hierarchical_fs),
     )
     moved, errors = await _collect(op)
     assert errors == []
@@ -247,7 +252,9 @@ async def test_rename_moves_each_root_of_a_list(
         ("data/2023", "archive/2023"),
         ("data/README.md", "archive/README.md"),
     ]
-    assert op.state.roots_renamed == 2
+    # The folder whole; the file by its own mv_file, as ever.
+    assert op.state.roots_renamed == 1
+    assert hierarchical_fs.stats.calls["rename"] == 2
     assert await hierarchical_fs._exists("archive/2023/01/part-0.parquet")
     assert await hierarchical_fs._exists("data/2024/01/part-0.parquet")
 
@@ -261,7 +268,7 @@ async def test_rename_moves_each_root_of_a_list(
         ("data/", "moved", None, "moved"),
     ],
 )
-async def test_rename_leaves_a_merge_to_the_walk(
+async def test_a_merge_moves_file_by_file(
     hierarchical_fs: SimulatedFileSystem,
     path1: str,
     path2: str,
@@ -271,11 +278,11 @@ async def test_rename_leaves_a_merge_to_the_walk(
     _tree(hierarchical_fs)
     if taken is not None:
         hierarchical_fs.add_file(taken, b"kept")
-    op = _mv(hierarchical_fs, path1, path2, rename=hierarchical_fs._rename)
+    op = _mv(hierarchical_fs, path1, path2, **_renaming(hierarchical_fs))
     _, errors = await _collect(op)
     assert errors == []
-    assert "rename" not in hierarchical_fs.stats.calls
     assert op.state.roots_renamed == 0
+    assert hierarchical_fs.stats.calls["rename"] == len(_FILES)
     for source in _FILES:
         target = place + source[len("data") :]
         assert hierarchical_fs._file_data[target].data == source.encode()
@@ -283,17 +290,29 @@ async def test_rename_leaves_a_merge_to_the_walk(
         assert hierarchical_fs._file_data[taken].data == b"kept"
 
 
-async def test_a_failed_rename_falls_back_to_the_walk(
+async def test_a_folder_failing_to_move_whole_moves_file_by_file(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)
-    # An object store renames nothing at once: its rename raises.
-    op = _mv(flat_fs, "data", "moved", rename=flat_fs._rename)
+    # Wrongly declared: fsspec's _mv_file copies a file, and fails on a folder.
+    profile = StorageProfile(renames_folders=True)
+    op = _mv(flat_fs, "data", "moved", profile=profile)
     _, errors = await _collect(op)
     assert errors == []
     assert op.state.roots_renamed == 0
     assert op.state.files_moved == len(_FILES)
     assert not await flat_fs._exists("data")
+
+
+async def test_unknown_no_folder_is_moved_whole(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    op = _mv(hierarchical_fs, "data", "moved", mv_file=hierarchical_fs._rename)
+    _, errors = await _collect(op)
+    assert errors == []
+    assert op.state.roots_renamed is None
+    assert hierarchical_fs.stats.calls["rename"] == len(_FILES)
 
 
 def test_implicit_folders_cannot_require_parents() -> None:

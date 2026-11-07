@@ -12,6 +12,7 @@ from fsspec.callbacks import Callback
 from fsspec_alt_strategies.control import Call, CallCancelled, Monitor, monitoring
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
 from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
@@ -232,9 +233,11 @@ async def test_recursive_rm_copy_and_mv(fs: _Tree, inner: SimulatedFileSystem) -
     assert not await inner._exists("moved")
 
 
-async def test_a_rename_moves_a_root_whole(inner: SimulatedFileSystem) -> None:
+async def test_a_rename_moves_a_folder_whole(inner: SimulatedFileSystem) -> None:
     class Renaming(_Tree):
-        async def _rename(self, path1: str, path2: str) -> None:
+        storage_profile = StorageProfile(renames_folders=True)
+
+        async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
             await self.inner._rename(path1, path2)
 
     renaming = Renaming(inner, asynchronous=True)

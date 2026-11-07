@@ -410,8 +410,9 @@ class SimulatedFileSystem(AsyncFileSystem):
         """Move a file, or a folder with all in it, in one request.
 
         It is no fsspec method: it is a hierarchical storage's own, as Azure Data
-        Lake Storage Gen2 renames a path. `tree_mv` takes it as its ``rename``.
-        It refuses a ``path2`` that exists, and an object store has none.
+        Lake Storage Gen2 renames a path. `tree_mv` takes it as its
+        ``mv_file``, with a profile's ``renames_folders=True``. It refuses a
+        ``path2`` that exists, and an object store has none.
         """
         path1, path2 = self._strip_protocol(path1), self._strip_protocol(path2)
         if not self.hierarchical:

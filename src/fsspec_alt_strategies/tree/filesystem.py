@@ -30,7 +30,7 @@ from .rm import tree_rm
 from .walk import tree_walk
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, Callable
 
     from ..profile import StorageProfile
 
@@ -67,12 +67,10 @@ class TreeFileSystem(_FileSystem):
     storage does. A subclass sets it for its storage.
 
     A recursive ``mv`` moves each file with ``_mv_file``, which is fsspec's
-    copy then delete. A subclass whose storage renames a file in one request
-    overrides it.
-
-    ``_rename`` is optional. A subclass whose storage moves a folder, with all
-    in it, in one request implements it: a recursive ``mv`` then moves each
-    root whole where it can, as `tree_mv` does with ``rename``.
+    copy then delete. A subclass whose storage renames a path in one request
+    overrides it. If its rename moves a folder too, with all in it, the
+    profile's ``renames_folders=True`` says so: a recursive ``mv`` then moves
+    each folder whole where it can.
 
     Parameters
     ----------
@@ -115,13 +113,6 @@ class TreeFileSystem(_FileSystem):
 
     storage_profile: StorageProfile | None = None
     """What the storage does, for the strategies. Unknown if None."""
-
-    _rename: Callable[[str, str], Awaitable[None]] | None = None
-    """Moves a folder, with all in it, or a file, in one request, if the storage can.
-
-    No fsspec method: a subclass defines it as ``async def _rename(self, path1,
-    path2)``, raising if it cannot move the path, and moving nothing then.
-    """
 
     # What a subclass implements: the storage's primitives, as fsspec names them.
 
@@ -354,7 +345,6 @@ class TreeFileSystem(_FileSystem):
                 mv_file=self._mv_file,
                 makedirs=self._makedirs,
                 rm_folder=self._rmdir,
-                rename=self._rename,
                 profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
             ),
