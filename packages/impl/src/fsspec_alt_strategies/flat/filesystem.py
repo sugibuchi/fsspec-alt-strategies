@@ -73,8 +73,8 @@ class FlatFileSystem(_StrategyFileSystem):
     - ``io_limit``, the reads and writes of data, by its files.
 
     ``storage_profile``, a `StorageProfile`, tells the strategies what the
-    storage does. With ``renames_files=True``, a recursive ``mv`` moves each
-    key by ``_mv_file``, which a subclass then overrides with its rename.
+    storage does. With ``renames_files=True``, a recursive ``mv``, or one of
+    a single file, moves each key by ``_mv_file``, which a subclass then overrides with its rename.
     Otherwise it copies each key, and deletes them in batches.
 
     Parameters
@@ -351,10 +351,16 @@ class FlatFileSystem(_StrategyFileSystem):
         maxdepth: int | None = None,
         **kwargs: Any,
     ) -> None:
-        """Move files, as fsspec's ``mv`` does: with `flat_mv` when recursive."""
+        """Move files, as fsspec's ``mv`` does: with `flat_mv` when recursive.
+
+        A single file goes by `flat_mv` too, recursive or not, so that it moves
+        by ``_mv_file`` where the profile's ``renames_files`` says it renames.
+        """
         if path1 == path2:
             return
-        if not recursive or maxdepth is not None:
+        if (not recursive or maxdepth is not None) and not await self._single_file(
+            path1
+        ):
             # fsspec's own: a copy, then the deletion of its sources.
             await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
             await self._rm(path1, recursive=recursive)

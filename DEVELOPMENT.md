@@ -253,6 +253,8 @@ Or they subclass a family's abstract filesystem, `TreeFileSystem` in `tree/files
   yielded empty by a walk, as fsspec's `walk` yields it, and `on_error` handles every folder's failure, not only the
   root's as fsspec's does.
 - fsspec has no async `mv`, nor builds a sync one from `_mv`: each class wraps its `_mv` itself.
+- A `mv` of a single file runs the family's move too, even when not recursive. fsspec's own copies and deletes it,
+  never calling `_mv_file`, so a storage's rename would be lost.
 
 Their callers see only fsspec's answers, not the `Operation` behind them. The monitors of `monitor.py` show it without
 changing fsspec's API. The filesystems run their operations with `common/operation.py`, which tells the monitors.

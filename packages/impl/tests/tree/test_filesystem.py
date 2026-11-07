@@ -257,6 +257,26 @@ async def test_a_rename_moves_a_folder_whole(inner: SimulatedFileSystem) -> None
     assert await inner._exists("moved/2024/01/part-0.parquet")
 
 
+@pytest.mark.parametrize("path2", ["moved.md", "data/2024/"])
+async def test_a_file_moves_by_mv_file_when_not_recursive(
+    inner: SimulatedFileSystem, path2: str
+) -> None:
+    class Renaming(_Tree):
+        async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
+            await self.inner._rename(path1, path2)
+
+    renaming = Renaming(inner, asynchronous=True)
+    inner.reset_stats()
+    await renaming._mv("data/README.md", path2)
+    # One rename, no copy or deletion: fsspec's own would copy, then delete.
+    assert inner.stats.calls.get("rename") == 1
+    assert "copy" not in inner.stats.calls
+    assert "delete" not in inner.stats.calls
+    target = "moved.md" if path2 == "moved.md" else "data/2024/README.md"
+    assert inner._file_data[target].data == b"readme"
+    assert not await inner._exists("data/README.md")
+
+
 async def test_failures_are_raised(fs: _Tree, inner: SimulatedFileSystem) -> None:
     async def refused(path: str, **kwargs: Any) -> None:
         if path == "data/README.md":

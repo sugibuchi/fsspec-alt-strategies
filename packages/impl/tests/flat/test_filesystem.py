@@ -183,6 +183,28 @@ async def test_recursive_rm_copy_and_mv(fs: _Flat, inner: SimulatedFileSystem) -
     assert inner.stats.calls["delete"] == 3
 
 
+@pytest.mark.parametrize("renames_files", [None, True])
+async def test_a_file_moves_as_the_profile_says_when_not_recursive(
+    inner: SimulatedFileSystem, renames_files: bool | None
+) -> None:
+    renamed: list[tuple[str, str]] = []
+
+    class Renaming(_Flat):
+        storage_profile = StorageProfile(renames_files=renames_files)
+
+        async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
+            renamed.append((path1, path2))
+            await self.inner._cp_file(path1, path2)
+            await self.inner._rm_file(path1)
+
+    fs = Renaming(inner, asynchronous=True)
+    inner.reset_stats()
+    await fs._mv("data/README.md", "moved.md")
+    assert renamed == ([("data/README.md", "moved.md")] if renames_files else [])
+    assert inner._file_data["moved.md"].data == b"x" * 10
+    assert "data/README.md" not in inner._file_data
+
+
 async def test_data_goes_through_the_files(
     fs: _Flat, inner: SimulatedFileSystem
 ) -> None:
