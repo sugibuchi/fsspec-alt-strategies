@@ -97,7 +97,10 @@ class AsyncRoutingFileSystem(
 
     One transaction is the router's: ``open`` passes ``autocommit`` on, and
     fsspec adds each file written to the router's transaction. Its commit, or
-    discard, is file by file: it is not atomic across storages.
+    discard, is file by file: it is not atomic across storages. ``open_async``
+    takes no part in it, as in fsspec, whose ``open_async`` knows no
+    transaction: its files are the inner filesystem's own, written as they
+    close.
 
     The router has no ``storage_profile``: each storage has its own,
     `storage_profile_of` tells it. Its only limit is ``transfer_limit``, the

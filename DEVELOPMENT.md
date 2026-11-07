@@ -370,6 +370,8 @@ The rest of a router:
   `transfer_concurrency`.
 - Its transaction is its own. `_open` passes `autocommit` on, and fsspec adds each file to the router's transaction.
   The commit goes file by file, so it is not atomic across storages.
+- `open_async` takes no part in the transaction, as fsspec's knows none. Its files are the inner filesystem's own,
+  written as they close.
 - Each call it passes on runs within `routing(self)`, so that a monitor's `Call.via` names it.
 
 A router of volumes might read as below. Its catalogs and schemas are above the storages. Each volume's filesystem

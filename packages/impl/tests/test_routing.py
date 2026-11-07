@@ -542,6 +542,17 @@ def test_one_transaction_across_storages(router: _Router, commit: bool) -> None:
     assert ("t.txt" in router.flat._file_data) is commit
 
 
+async def test_open_async_takes_no_part_in_the_transaction(router: _Router) -> None:
+    # As in fsspec, whose open_async knows no transaction: written on closing.
+    router.start_transaction()
+    async with await router.open_async("lake/tree/t.txt", "wb") as f:
+        await f.write(b"t")
+    assert router.tree._file_data["t.txt"].data == b"t"
+    assert not router.transaction.files
+    router.end_transaction()
+    assert router.tree._file_data["t.txt"].data == b"t"
+
+
 def test_close_closes_the_storages_made(router: _Router) -> None:
     router.backend("tree")
     router.backend("flat")
