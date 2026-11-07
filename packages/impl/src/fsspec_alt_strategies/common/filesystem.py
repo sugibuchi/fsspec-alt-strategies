@@ -34,7 +34,7 @@ from fsspec.callbacks import DEFAULT_CALLBACK
 from fsspec_alt_strategies_common.monitor import Monitored
 from fsspec_alt_strategies_common.profile import StorageProfile
 
-from .streams import _streaming
+from .streams import streaming_copy
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -248,7 +248,7 @@ class _StrategyFileSystem(
             raise TypeError(f"other must be an async filesystem: {other!r}")
         profile = getattr(other, "storage_profile", None)
         if copy_file is None:
-            copy_file = _streaming(
+            copy_file = streaming_copy(
                 self.open_async, other.open_async, block_size=self.transfer_size
             )
         return {

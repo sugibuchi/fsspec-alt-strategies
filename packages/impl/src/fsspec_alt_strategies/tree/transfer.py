@@ -107,7 +107,7 @@ def tree_transfer(
     copy_file : callable
         Copies a file from the source to the destination, called as
         ``copy_file(source, destination)``: e.g. one made by
-        ``common.streams._streaming`` from both ``open_async``.
+        ``common.streams.streaming_copy`` from both ``open_async``.
     dst_info : callable
         Describes a destination path, called as ``dst_info(path)``.
     dst_makedirs : callable
@@ -138,7 +138,7 @@ def tree_transfer(
     ...     "backup/",
     ...     ls=src._ls,
     ...     info=src._info,
-    ...     copy_file=_streaming(src.open_async, dst.open_async),
+    ...     copy_file=streaming_copy(src.open_async, dst.open_async),
     ...     dst_info=dst._info,
     ...     dst_makedirs=dst._makedirs,
     ...     dst_rm_file=dst._rm_file,

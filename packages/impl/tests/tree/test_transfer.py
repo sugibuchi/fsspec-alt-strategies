@@ -9,7 +9,7 @@ import pytest
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.common.operation import _collect
-from fsspec_alt_strategies.common.streams import _streaming
+from fsspec_alt_strategies.common.streams import streaming_copy
 from fsspec_alt_strategies.tree.transfer import CpState, tree_transfer
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
@@ -74,7 +74,7 @@ def _transfer(
         "profile": StorageProfile(),
         "ls": src._ls,
         "info": src._info,
-        "copy_file": _streaming(
+        "copy_file": streaming_copy(
             _opener(src, _Reader), _opener(dst, _Writer), block_size=4
         ),
         "dst_info": dst._info,
@@ -198,7 +198,7 @@ async def test_a_failure_is_yielded_and_the_rest_is_copied(
 ) -> None:
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     _tree(hierarchical_fs)
-    stream = _streaming(_opener(hierarchical_fs, _Reader), _opener(dst, _Writer))
+    stream = streaming_copy(_opener(hierarchical_fs, _Reader), _opener(dst, _Writer))
 
     async def copy_file(source: str, destination: str) -> None:
         if source == "data/README.md":
@@ -245,7 +245,7 @@ async def test_cancel_yields_the_copies_sent() -> None:
     assert op.cancelled()
 
 
-async def test_streaming_holds_one_block() -> None:
+async def teststreaming_copy_holds_one_block() -> None:
     src = SimulatedFileSystem(asynchronous=True)
     dst = SimulatedFileSystem(asynchronous=True)
     src.add_file("a", bytes(range(10)))
@@ -256,9 +256,11 @@ async def test_streaming_holds_one_block() -> None:
             blocks.append(len(data))
             await super().write(data)
 
-    copy_file = _streaming(_opener(src, _Reader), _opener(dst, _Noting), block_size=4)
+    copy_file = streaming_copy(
+        _opener(src, _Reader), _opener(dst, _Noting), block_size=4
+    )
     await copy_file("a", "b")
     assert blocks == [4, 4, 2]
     assert dst._file_data["b"].data == bytes(range(10))
     with pytest.raises(ValueError, match="block_size"):
-        _streaming(_opener(src, _Reader), _opener(dst, _Writer), block_size=0)
+        streaming_copy(_opener(src, _Reader), _opener(dst, _Writer), block_size=0)

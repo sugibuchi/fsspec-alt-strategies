@@ -9,7 +9,7 @@ import pytest
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.common.operation import _collect
-from fsspec_alt_strategies.common.streams import _streaming
+from fsspec_alt_strategies.common.streams import streaming_copy
 from fsspec_alt_strategies.flat.transfer import CpState, flat_transfer
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
@@ -74,7 +74,7 @@ def _transfer(
         "profile": StorageProfile(),
         "ils": src._ils,
         "info": src._info,
-        "copy_file": _streaming(
+        "copy_file": streaming_copy(
             _opener(src, _Reader), _opener(dst, _Writer), block_size=4
         ),
         "dst_info": dst._info,
@@ -236,7 +236,7 @@ async def test_failures_are_yielded_and_the_rest_is_copied(
 ) -> None:
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     _tree(flat_fs)
-    stream = _streaming(_opener(flat_fs, _Reader), _opener(dst, _Writer))
+    stream = streaming_copy(_opener(flat_fs, _Reader), _opener(dst, _Writer))
 
     async def copy_file(source: str, destination: str) -> None:
         if source == "data/README.md":

@@ -52,7 +52,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../common/operation.py`       | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
-| `.../common/streams.py`         | `_streaming`, a `copy_file` between two storages, a block at a time through their files. |
+| `.../common/streams.py`         | `streaming_copy`, a `copy_file` between two storages, a block at a time through their files. |
 | `.../common/types.py`           | The types of the storage's operations, such as `ls` and `info`. |
 | `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
 | `.../common/patterns.py`        | Glob patterns, matched as fsspec's `_glob` matches them, by both globs. |
