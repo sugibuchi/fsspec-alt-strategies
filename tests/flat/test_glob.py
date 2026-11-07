@@ -123,6 +123,18 @@ async def test_lists_only_the_keys_starting_as_the_pattern() -> None:
     assert fs.stats.calls["list"] == 6
 
 
+async def test_plain_paths_are_asked_for_concurrently() -> None:
+    fs = SimulatedFileSystem(latency=0.005, asynchronous=True)
+    paths = [f"data/{i:02}.csv" for i in range(20)]
+    for path in paths:
+        fs.add_file(path)
+    op = _glob(fs, paths, concurrency_limit=asyncio.Semaphore(4))
+    entries, _ = await collect(op)
+    assert sorted(e["name"] for e in entries) == paths
+    assert fs.stats.calls == {"info": 20}
+    assert fs.stats.max_concurrency == 4  # Not one after another.
+
+
 async def test_patterns_share_a_listing() -> None:
     fs = SimulatedFileSystem(asynchronous=True)
     _tree(fs)

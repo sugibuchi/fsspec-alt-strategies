@@ -163,6 +163,32 @@ async def test_lists_folders_concurrently_within_batch_size() -> None:
     assert fs.stats.max_concurrency == 4
 
 
+async def test_plain_paths_are_asked_for_concurrently() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
+    paths = [f"root/{i:02}.csv" for i in range(20)]
+    for path in paths:
+        fs.add_file(path)
+    op = _glob(fs, [*paths, "root/missing.csv"], concurrency_limit=asyncio.Semaphore(4))
+    entries, _ = await collect(op)
+    assert sorted(e["name"] for e in entries) == paths
+    assert fs.stats.calls == {"info": 21}
+    assert fs.stats.max_concurrency == 4  # Not one after another.
+
+
+async def test_cancel_asks_for_no_more_plain_paths() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
+    paths = [f"root/{i:02}.csv" for i in range(20)]
+    for path in paths:
+        fs.add_file(path)
+    op = _glob(fs, paths, concurrency_limit=asyncio.Semaphore(4))
+    async for _ in op:
+        op.cancel()
+    # The first 4, and those started before the first answer was yielded, at
+    # most 4 more: none after the cancel.
+    assert fs.stats.calls["info"] <= 8
+    assert op.cancelled()
+
+
 class _Forbidding(SimulatedFileSystem):
     """Refuses to list one folder, as a storage without permission would."""
 

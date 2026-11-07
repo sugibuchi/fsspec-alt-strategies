@@ -11,21 +11,22 @@ A ``**`` matches any number of segments, so only those before the first ``**``
 can rule a folder out. Without a ``**``, nor can a folder as deep as the
 pattern, as nothing below it can match.
 
-This module depends on `paths` and `states`.
+This module depends on `jobs`, `paths` and `states`.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import TYPE_CHECKING, Any
 
 from fsspec.utils import glob_translate
 
+from .jobs import _Queue
 from .paths import _trim
 from .states import GlobState
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncGenerator
 
     from ..control import Operation
@@ -41,25 +42,45 @@ async def _infos(
 ) -> AsyncGenerator[dict[str, Any]]:
     """The ``info`` of each pattern without wildcards that exists, noted in ``found``.
 
-    Each ``info`` holds a permit of ``concurrency_limit`` while it runs.
+    They run at once, each holding a permit of ``concurrency_limit``: a list of
+    plain paths may give many. The entries come as the answers arrive. Once the
+    operation is cancelled, no new ``info`` starts, but those running are
+    yielded.
     """
-    for path in dict.fromkeys(paths):
+    requests: _Queue[str] = _Queue(concurrency_limit)
+    requests.waiting.extend(dict.fromkeys(paths))
+
+    async def start() -> None:
         if op.cancelling():
-            return
-        try:
-            async with concurrency_limit:
-                entry = await info(path)
-        except FileNotFoundError:
-            continue
-        found.add(entry["name"].rstrip("/"))
-        state = op.state
-        op.state = GlobState(
-            errors=state.errors,
-            current=path,
-            folders_listed=state.folders_listed,
-            matched=state.matched + 1,
-        )
-        yield entry
+            requests.waiting.clear()
+        await requests.start(info)
+
+    try:
+        await start()
+        while pending := requests.pending():
+            done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            entries = []
+            for task in done:
+                if (path := requests.pop(task)) is None:
+                    continue
+                try:
+                    entries.append((path, task.result()))
+                except FileNotFoundError:
+                    continue
+            # Start the next before yielding, so that they run meanwhile.
+            await start()
+            for path, entry in entries:
+                found.add(entry["name"].rstrip("/"))
+                state = op.state
+                op.state = GlobState(
+                    errors=state.errors,
+                    current=path,
+                    folders_listed=state.folders_listed,
+                    matched=state.matched + 1,
+                )
+                yield entry
+    finally:
+        await requests.close()
 
 
 def _inside(path: str, folder: str) -> bool:
