@@ -21,7 +21,8 @@ class _Whole(LocallyBufferedFile):
     """A file of the simulated storage, downloaded and uploaded whole."""
 
     def __init__(self, inner: SimulatedFileSystem, path: str, mode: str, **kwargs: Any):
-        super().__init__(path, asyncio.get_running_loop(), mode, **kwargs)
+        loop = kwargs.pop("loop", None) or asyncio.get_running_loop()
+        super().__init__(path, loop, mode, **kwargs)
         self.inner = inner
 
     async def _download(self, target: IO[bytes]) -> None:
@@ -65,6 +66,16 @@ class _Tree(TreeFileSystem):
 
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
         await self.inner._makedirs(path, exist_ok=exist_ok)
+
+    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+        # The same file, for the sync API, on the filesystem's loop.
+        return _Whole(
+            self.inner,
+            self._strip_protocol(path),
+            mode,
+            loop=self.loop,
+            concurrency_limit=self.io_limit,
+        )
 
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         file = _Whole(
@@ -277,3 +288,11 @@ def test_the_sync_api_works() -> None:
 def test_concurrencies_must_be_positive(inner: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="io_concurrency"):
         _Tree(inner, io_concurrency=0)
+
+
+def test_a_subclass_missing_a_primitive_is_refused() -> None:
+    class Incomplete(_Tree):
+        _rmdir = TreeFileSystem._rmdir  # Still abstract, as if not written.
+
+    with pytest.raises(TypeError, match="_rmdir"):
+        Incomplete(SimulatedFileSystem(), asynchronous=True)

@@ -13,6 +13,7 @@ This module depends on `control`, `walk`, `find`, `du`, `glob`, `rm`, `cp`,
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import sync_wrapper
@@ -48,8 +49,8 @@ class FlatFileSystem(_FileSystem):
     A subclass implements the storage's primitives: ``_ils``, the listing by
     prefix, which fsspec has not, and ``_rm_files``, a deletion of several
     files in one request, with ``rm_batch_size``. It implements those fsspec
-    leaves abstract too: ``_ls``, for fsspec's own methods, ``_info`` and
-    ``_cp_file``. It implements ``open_async``, giving its files ``io_limit``
+    leaves abstract too: ``_ls``, for fsspec's own methods, ``_info``,
+    ``_rm_file`` and ``_cp_file``. It implements ``open_async``, giving its files ``io_limit``
     as their concurrency limit, and ``_open``. ``_cat_file``, ``_pipe_file``,
     ``_get_file`` and ``_put_file`` read and write through ``open_async``'s
     files.
@@ -88,11 +89,15 @@ class FlatFileSystem(_FileSystem):
     ...     async def _rm_files(self, paths): ...
     ...     async def _ls(self, path, detail=True, **kwargs): ...
     ...     async def _info(self, path, **kwargs): ...
+    ...     async def _rm_file(self, path, **kwargs): ...
     ...     async def _cp_file(self, path1, path2, **kwargs): ...
     ...
     ...     async def open_async(self, path, mode="rb", **kwargs):
     ...         file = MyFile(self, path, mode, concurrency_limit=self.io_limit)
     ...         return AsyncFileAdapter(file)
+    ...
+    ...     def _open(self, path, mode="rb", **kwargs):
+    ...         return MyFile(self, path, mode, concurrency_limit=self.io_limit)
     >>> fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
     """
 
@@ -105,20 +110,50 @@ class FlatFileSystem(_FileSystem):
         if not isinstance(size, int) or size < 1:
             raise ValueError(f"rm_batch_size must be set, to at least 1: {size}")
 
+    # What a subclass implements: the storage's primitives, the flat ones first.
+
+    @abstractmethod
     def _ils(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
         """List every key starting with ``prefix``, as an async iterator of entries.
 
         ``prefix`` is raw text, e.g. "data/2024-". The entries are as ``_ls``
         gives them, a key ending with "/" being a folder's marker, in any order.
         """
-        raise NotImplementedError
 
+    @abstractmethod
     async def _rm_files(self, paths: list[str]) -> None:
         """Delete several files in one request, e.g. with S3's DeleteObjects.
 
         A key missing is no error. It raises if any is not deleted.
         """
-        raise NotImplementedError
+
+    @abstractmethod
+    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+        """List a folder, as fsspec's own methods do: its entries, or their names."""
+
+    @abstractmethod
+    async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Describe a path, raising FileNotFoundError if there is none."""
+
+    @abstractmethod
+    async def _rm_file(self, path: str, **kwargs: Any) -> None:
+        """Delete a file, as fsspec's ``_rm`` does when not recursive."""
+
+    @abstractmethod
+    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
+        """Copy a file within the storage."""
+
+    @abstractmethod
+    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+        """Open a file whose methods are awaited, as fsspec's ``open_async`` does.
+
+        The file holds ``io_limit`` as its concurrency limit, e.g. an
+        `AsyncFileAdapter` of one of this package's file classes.
+        """
+
+    @abstractmethod
+    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+        """Open a file, as fsspec's ``_open`` does, for the sync ``open``."""
 
     async def _walk(
         self,

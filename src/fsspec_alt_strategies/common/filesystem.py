@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import os
+from abc import ABCMeta
 from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import AsyncFileSystem
@@ -24,7 +25,15 @@ if TYPE_CHECKING:
 _MiB = 1024 * 1024
 
 
-class _FileSystem(AsyncFileSystem):
+class _AbstractFileSystemMeta(type(AsyncFileSystem), ABCMeta):  # type: ignore[misc]
+    """fsspec's metaclass, which caches instances, with ABCMeta's abstract methods.
+
+    A filesystem class has fsspec's metaclass already. ABCMeta must join it, so
+    that a subclass missing an abstract method fails at once, when made.
+    """
+
+
+class _FileSystem(AsyncFileSystem, metaclass=_AbstractFileSystemMeta):
     """An async filesystem with two concurrency limits, moving data through files.
 
     ``operation_limit`` bounds the requests of the strategies, such as
@@ -32,6 +41,9 @@ class _FileSystem(AsyncFileSystem):
     data: ``open_async`` gives it to the files it opens, as their
     ``concurrency_limit``. Each is an `asyncio.Semaphore`, its own per
     instance.
+
+    Each family's class declares the abstract methods its subclasses implement,
+    so that a reader finds them all in one place.
     """
 
     transfer_size: int = 8 * _MiB

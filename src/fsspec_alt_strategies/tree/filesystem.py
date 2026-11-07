@@ -12,6 +12,7 @@ This module depends on `control`, `profile`, `walk`, `find`, `du`, `glob`,
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import sync_wrapper
@@ -96,11 +97,52 @@ class TreeFileSystem(_FileSystem):
     ...     async def open_async(self, path, mode="rb", **kwargs):
     ...         file = MyFile(self, path, mode, concurrency_limit=self.io_limit)
     ...         return AsyncFileAdapter(file)
+    ...
+    ...     def _open(self, path, mode="rb", **kwargs):
+    ...         return MyFile(self, path, mode, concurrency_limit=self.io_limit)
     >>> fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
     """
 
     storage_profile: StorageProfile | None = None
     """What the storage does, for the strategies. Unknown if None."""
+
+    # What a subclass implements: the storage's primitives, as fsspec names them.
+
+    @abstractmethod
+    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+        """List a folder: its entries, with ``detail``, else their names."""
+
+    @abstractmethod
+    async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Describe a path, raising FileNotFoundError if there is none."""
+
+    @abstractmethod
+    async def _rm_file(self, path: str, **kwargs: Any) -> None:
+        """Delete a file."""
+
+    @abstractmethod
+    async def _rmdir(self, path: str) -> None:
+        """Delete an empty folder."""
+
+    @abstractmethod
+    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
+        """Copy a file within the storage."""
+
+    @abstractmethod
+    async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
+        """Create a folder and its parents, raising FileExistsError unless ``exist_ok``."""
+
+    @abstractmethod
+    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+        """Open a file whose methods are awaited, as fsspec's ``open_async`` does.
+
+        The file holds ``io_limit`` as its concurrency limit, e.g. an
+        `AsyncFileAdapter` of one of this package's file classes.
+        """
+
+    @abstractmethod
+    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+        """Open a file, as fsspec's ``_open`` does, for the sync ``open``."""
 
     async def _walk(
         self,

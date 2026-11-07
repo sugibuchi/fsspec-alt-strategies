@@ -218,7 +218,8 @@ class MyFileSystem(AsyncFileSystem):
 Or they subclass a family's abstract filesystem, `TreeFileSystem` in `tree/filesystem.py` or `FlatFileSystem` in
 `flat/filesystem.py`, which overrides all of fsspec's recursive methods with the family's strategies:
 
-- The subclass implements the storage's primitives, e.g. `_ls`, `_info` and `_rm_file`, and `open_async`.
+- The subclass implements the storage's primitives, e.g. `_ls`, `_info` and `_rm_file`, and `open_async` and `_open`.
+  Each family's class declares them all as abstract methods, so a subclass missing one fails when instantiated.
 - It takes two required limits: `operation_concurrency`, for the strategies' requests, and `io_concurrency`, for the
   reads and writes of data. `open_async` gives the files it opens `io_limit`, as their concurrency limit.
 - `_cat_file`, `_pipe_file`, `_get_file` and `_put_file` go through `open_async`'s files, so data moves as the file

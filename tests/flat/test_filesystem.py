@@ -23,7 +23,8 @@ class _Whole(LocallyBufferedFile):
     def __init__(
         self, inner: SimulatedFileSystem, path: str, mode: str, **kwargs: Any
     ) -> None:
-        super().__init__(path, asyncio.get_running_loop(), mode, **kwargs)
+        loop = kwargs.pop("loop", None) or asyncio.get_running_loop()
+        super().__init__(path, loop, mode, **kwargs)
         self.inner = inner
 
     async def _download(self, target: IO[bytes]) -> None:
@@ -65,6 +66,16 @@ class _Flat(FlatFileSystem):
 
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         await self.inner._cp_file(path1, path2)
+
+    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+        # The same file, for the sync API, on the filesystem's loop.
+        return _Whole(
+            self.inner,
+            self._strip_protocol(path),
+            mode,
+            loop=self.loop,
+            concurrency_limit=self.io_limit,
+        )
 
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         file = _Whole(
@@ -174,8 +185,16 @@ async def test_data_goes_through_the_files(
 
 
 def test_rm_batch_size_must_be_set(inner: SimulatedFileSystem) -> None:
-    class Unset(FlatFileSystem):
-        cachable = False
+    class Unset(_Flat):
+        rm_batch_size = 0
 
     with pytest.raises(ValueError, match="rm_batch_size"):
-        Unset(operation_concurrency=1, io_concurrency=1)
+        Unset(inner)
+
+
+def test_a_subclass_missing_a_primitive_is_refused() -> None:
+    class Incomplete(_Flat):
+        _ils = FlatFileSystem._ils  # Still abstract, as if not written.
+
+    with pytest.raises(TypeError, match="_ils"):
+        Incomplete(SimulatedFileSystem(), asynchronous=True)
