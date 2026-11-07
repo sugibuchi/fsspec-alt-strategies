@@ -256,7 +256,7 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
 
     def read(self, size: int | None = -1) -> bytes:
         self._check_open()
-        return self._sync(self._read(-1 if size is None else size))
+        return self._sync(self._read, -1 if size is None else size)
 
     def readall(self) -> bytes:
         return self.read(-1)
@@ -557,7 +557,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     def write(self, data: Any) -> int:
         self._check_open()
         self._check_not_forced()
-        return self._sync(self._write(data))
+        return self._sync(self._write, data)
 
     async def _write(self, data: Any) -> int:
         """Write bytes, as ``write`` does."""

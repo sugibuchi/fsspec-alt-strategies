@@ -197,7 +197,7 @@ class LocallyBufferedFile(_AsyncFile, ABC):
         self._check_open()
         self._check_not_forced()  # The buffer is gone with the upload.
         if self._buffer is None:
-            self._sync(self._load())
+            self._sync(self._load)
         assert self._buffer is not None
         return self._buffer
 

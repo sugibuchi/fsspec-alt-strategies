@@ -8,7 +8,6 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import io
 import sys
 import warnings
@@ -16,8 +15,11 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from fsspec.asyn import sync
+
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Coroutine
+    import concurrent.futures
+    from collections.abc import Awaitable, Callable
     from typing import Self
 
 _MiB = 1024 * 1024
@@ -115,28 +117,20 @@ class _AsyncFile(io.RawIOBase):
     #
     # Waiting on the loop, from another thread.
 
-    def _sync(self, coro: Coroutine[Any, Any, _T]) -> _T:
-        """Wait for ``coro`` to run on the loop, from another thread."""
-        if self._on_its_loop():
-            coro.close()  # Never awaited, without a warning.
-            raise RuntimeError(
-                f"Waiting on its own loop, which would never run: {self.path}"
-            )
+    def _sync(
+        self, func: Callable[..., Awaitable[_T]], *args: Any, **kwargs: Any
+    ) -> _T:
+        """Run ``func`` on the loop and wait for it, from another thread.
+
+        It is fsspec's ``sync``, which raises NotImplementedError, a
+        RuntimeError, on the loop itself. But fsspec's waits forever on a loop
+        not running: this raises RuntimeError instead.
+        """
         if not self.loop.is_running() or sys.is_finalizing():
             # During shutdown, the loop's daemon thread is frozen, yet its loop
             # still looks running: waiting would hang, as on a stopped loop.
-            coro.close()
             raise RuntimeError(f"Waiting on a loop that is not running: {self.path}")
-        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        try:
-            # In steps, so that Ctrl+C interrupts the wait, even on Windows.
-            while not concurrent.futures.wait([future], timeout=1).done:
-                pass
-            return future.result()
-        except BaseException:
-            # E.g. KeyboardInterrupt while waiting: the coroutine stops too.
-            future.cancel()
-            raise
+        return sync(self.loop, func, *args, **kwargs)
 
     def _on_its_loop(self) -> bool:
         """Whether this runs on the file's loop, where nothing can wait for it."""
@@ -191,7 +185,7 @@ class _AsyncFile(io.RawIOBase):
             If forced twice, as fsspec's files do.
         """
         if force:
-            self._sync(self._flush(force=True))
+            self._sync(self._flush, force=True)
         else:
             self._check_open()
 
@@ -227,7 +221,7 @@ class _AsyncFile(io.RawIOBase):
             # The constructor failed before the loop was set: no request was sent.
             super().close()
             return
-        self._sync(self.aclose())
+        self._sync(self.aclose)
 
     def __del__(self) -> None:
         # Unlike io.IOBase, never closes: see the class docstring.
@@ -251,7 +245,7 @@ class _AsyncFile(io.RawIOBase):
             if self._on_its_loop():
                 self._do_abort_soon()
             elif self.loop.is_running() and not sys.is_finalizing():
-                self._sync(self._abort())
+                self._sync(self._abort)
             # Else nothing can undo the requests, e.g. at exit: they stay, as
             # if the process had died.
         finally:

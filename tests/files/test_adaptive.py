@@ -270,7 +270,8 @@ async def test_sync_methods_refuse_to_run_on_the_loop(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     async with await _reader(flat_fs, b"abc") as f:
-        with pytest.raises(RuntimeError, match="own loop"):
+        # fsspec's sync raises NotImplementedError, a RuntimeError.
+        with pytest.raises(RuntimeError, match="within a running loop"):
             f.read(1)
 
 
