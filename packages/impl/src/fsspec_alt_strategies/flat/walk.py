@@ -80,7 +80,8 @@ def flat_walk(
         The folder to start from, as ``ils`` takes paths.
     ils : callable
         Lists every key starting with a prefix, called as ``ils(prefix)``: an
-        async iterator of entries as fsspec's ``_ls`` gives them, in any order.
+        async iterator of entries as fsspec's ``_ls`` gives them, in any order,
+        each key once, as an object store lists it.
     info : callable
         Describes a path, called as ``info(path)``: e.g. the filesystem's
         ``_info``.

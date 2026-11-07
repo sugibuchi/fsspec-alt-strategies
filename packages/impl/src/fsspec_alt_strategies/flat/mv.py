@@ -99,7 +99,8 @@ def flat_mv(
     path2 : str
         Where to move it, as with `flat_cp`.
     ils, info : callable
-        The storage's operations, as with `flat_cp`.
+        The storage's operations, as with `flat_cp`: ``ils`` lists each key
+        once.
     mv_file : callable, optional
         Moves a file, called as ``mv_file(source, destination)``: e.g. the
         filesystem's ``_mv_file``.

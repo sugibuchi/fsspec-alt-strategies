@@ -150,6 +150,8 @@ class FlatFileSystem(_StrategyFileSystem):
 
         ``prefix`` is raw text, e.g. "data/2024-". The entries are as ``_ls``
         gives them, a key ending with "/" being a folder's marker, in any order.
+        Each key comes once, as an object store lists it: a key listed twice
+        is copied, moved, deleted or counted twice.
         """
 
     @abstractmethod

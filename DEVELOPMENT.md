@@ -325,6 +325,8 @@ called as `ils(prefix)` and giving an async iterator of entries:
   pattern does, before the first wildcard.
 - `ils` yields entries, not pages, so that its meaning stays simple. A strategy never sees the pages, and holds one at a
   time.
+- `ils` yields each key once, as object stores list them. Remembering every key listed, to drop repeats, would hold the
+  whole listing. A key listed twice is copied, moved, deleted or counted twice; only a batched `flat_mv` drops repeats.
 - The listing holds no permit of `concurrency_limit`: its pages come one after another. The other requests, such as an
   `info`, hold one.
 - Folders are derived from the keys, as fsspec's filesystems derive them for object stores. A key ending with "/" is a
