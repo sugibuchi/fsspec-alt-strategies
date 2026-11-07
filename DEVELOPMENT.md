@@ -15,6 +15,7 @@
 | `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks.        |
 | `.../tree/mv.py`                | `tree_mv`, a recursive move: a `mv_file` per file, or per folder where it moves folders. |
 | `.../tree/filesystem.py`        | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies. |
+| `.../tree/wrappers.py`          | `AsyncTreeWrapper` and `SyncTreeWrapper`: an existing filesystem, as a `TreeFileSystem`. |
 | `.../tree/_jobs.py`             | The private engine's tree side: it feeds `common`'s with the walk's listings. |
 | `.../flat/`                     | The strategies listing a flat namespace by key prefix, as object stores do. |
 | `.../flat/walk.py`              | `flat_walk`, a walk of one listing of a prefix, its folders derived from the keys. |
@@ -25,10 +26,12 @@
 | `.../flat/cp.py`                | `flat_cp`, a recursive copy that copies each key as it is listed. |
 | `.../flat/mv.py`                | `flat_mv`, a recursive move: a `mv_file` per key, or a copy per key and a deletion per batch. |
 | `.../flat/filesystem.py`        | `FlatFileSystem`, an abstract async filesystem whose recursive methods are the flat strategies. |
+| `.../flat/wrappers.py`          | `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `FlatFileSystem`. |
 | `.../flat/_keys.py`             | The private listing under them: a prefix's keys, and the folders they imply. |
 | `.../flat/_jobs.py`             | The private engine's flat side: it feeds `common`'s with the keys of each root. |
 | `.../common/`                   | Private machinery the families share, so that none imports another. |
 | `.../common/filesystem.py`      | What the filesystem classes share: the two limits, and data moved through file objects. |
+| `.../common/wrapping.py`        | What the wrappers share: the calls to the filesystem wrapped, awaited or in threads. |
 | `.../common/monitors.py`        | How an operation is run to its end, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
@@ -244,6 +247,16 @@ changing fsspec's API. The filesystems run their operations with `common/monitor
 
 The strategies themselves take no callbacks: their callers iterate the `Operation`. Monitors exist for the callers of
 fsspec's methods, who cannot.
+
+Or they wrap an existing filesystem as one, to use the strategies and monitors without writing a class:
+
+- `AsyncTreeWrapper` and `AsyncFlatWrapper` wrap an async filesystem. Its coroutines are awaited on its own loop, and
+  the wrapper runs on that loop too.
+- `SyncTreeWrapper` and `SyncFlatWrapper` wrap a sync one. Each of its calls runs in a thread, within the limits.
+- A wrapper is light and not cached: it is made on demand, e.g. to watch one call, and dropped after.
+- Its data methods, such as `_cat_file`, are the wrapped filesystem's own, under `io_limit`.
+- A flat wrapper lists a prefix with the wrapped `find` of its folder, and deletes a batch with its `rm`.
+- Nothing chooses a wrapper for a filesystem: the developer does.
 
 Choosing the class chooses the family: a developer wanting one strategy of another overrides that method, as above.
 
