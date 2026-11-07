@@ -347,7 +347,7 @@ async def test_a_monitor_cancelling_ends_the_call(
     monitor = _Recording(cancel_after=1)
     with monitoring(monitor), pytest.raises(CallCancelled) as raised:
         await fs._copy("data", "copied", recursive=True)
-    assert raised.value.call == Call("copy", "data", "copied")
+    assert raised.value.call == Call(fs, "copy", "data", "copied")
     assert monitor.events[-1] == ("ended", "copy", CallCancelled)
     # Only what was in flight was copied, not all five files.
     assert 0 < raised.value.state.files_copied < 5

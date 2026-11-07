@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from typing import Self
 
+    from fsspec.asyn import AsyncFileSystem
+
     from .control import Operation, State
 
 __all__ = ["Call", "CallCancelled", "Monitor", "monitoring"]
@@ -44,6 +46,8 @@ class Call:
 
     Attributes
     ----------
+    fs : AsyncFileSystem
+        The filesystem called, e.g. to tell the storage of a call.
     method : str
         Its name, without the underscore of its async version, e.g. "copy".
     path : str or list of str
@@ -52,6 +56,7 @@ class Call:
         The second path, for ``copy`` and ``mv``.
     """
 
+    fs: AsyncFileSystem
     method: str
     path: str | list[str]
     path2: str | list[str] | None = None
