@@ -20,6 +20,10 @@
 | `.../flat/du.py`                | `flat_du`, the size of the files under a prefix, from the listing alone. |
 | `.../flat/glob.py`              | `flat_glob`, a glob listing only the keys starting as its pattern does. |
 | `.../flat/_keys.py`             | The private listing under them: a prefix's keys, and the folders they imply. |
+| `.../common/`                   | Private machinery the families share, so that none imports another. |
+| `.../common/operations.py`      | The types of the storage's operations, such as `ls` and `info`. |
+| `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
+| `.../common/patterns.py`        | Glob patterns, matched as fsspec's `_glob` matches them, by both globs. |
 | `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
 | `.../files/`                    | Base classes for a filesystem's file objects, by what its storage allows. |
 | `.../files/adaptive.py`         | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts. |

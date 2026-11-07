@@ -6,7 +6,7 @@
 same paths. fsspec's, and the object stores' own, gather every page of the
 listing before answering. `flat_find` yields each path as its page arrives.
 
-This module depends on `control`, `_keys`, and `walk` of `tree`.
+This module depends on `control`, `_keys`, and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -15,15 +15,15 @@ from contextlib import aclosing
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from ..common.paths import _check_maxdepth
 from ..control import Operation, State
-from ..tree.walk import _check_maxdepth
 from ._keys import _scan
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator
 
-    from ..tree.walk import _Info
+    from ..common.operations import _Info
     from ._keys import _Ils
 
 __all__ = ["FlatFindState", "flat_find"]

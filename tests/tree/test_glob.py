@@ -8,8 +8,9 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.common.patterns import _Prefix
 from fsspec_alt_strategies.control import collect
-from fsspec_alt_strategies.tree.glob import GlobState, _Prefix, tree_glob
+from fsspec_alt_strategies.tree.glob import GlobState, tree_glob
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 

@@ -30,8 +30,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
     from typing import TypeAlias
 
+    from ..common.operations import _Info, _Ls
     from ..control import Operation
-    from .walk import _Info, _Listing, _Ls
+    from .walk import _Listing
 
     # For the strategies' signatures, as walk's _Ls is: none here takes one.
     _Request: TypeAlias = Callable[..., Awaitable[Any]]  # noqa: PYI047

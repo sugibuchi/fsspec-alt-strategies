@@ -12,11 +12,9 @@ can be pruned. On object stores, one recursive listing usually costs fewer
 requests: `fsspec.asyn.AsyncFileSystem._find` there.
 
 The tree strategies take the storage's operations as functions, such as
-``ls``, rather than a filesystem: e.g. a filesystem's ``_ls``. They call each
-as fsspec calls its own, and take paths as those functions do, without a
-protocol.
+``ls``, rather than a filesystem: see `common.operations`.
 
-This module depends on `control`.
+This module depends on `control`, and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -27,17 +25,13 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ..common.paths import _check_maxdepth, _trim
 from ..control import Operation, State
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Collection
-    from typing import TypeAlias
 
-    _Ls: TypeAlias = Callable[..., Awaitable[list[dict[str, Any]]]]
-    """Lists a folder, called as ``ls(path, detail=True)``, as fsspec's ``_ls``."""
-
-    _Info: TypeAlias = Callable[[str], Awaitable[dict[str, Any]]]
-    """Describes a path, called as ``info(path)``, as fsspec's ``_info``."""
+    from ..common.operations import _Info, _Ls
 
 __all__ = ["WalkState", "tree_walk"]
 
@@ -168,19 +162,6 @@ def tree_walk(
                     yield entry
 
     return Operation(run, WalkState())
-
-
-def _check_maxdepth(maxdepth: int | None) -> None:
-    if maxdepth is not None and maxdepth < 1:
-        raise ValueError(f"maxdepth must be at least 1: {maxdepth}")
-
-
-def _trim(path: str) -> str:
-    """A path without its trailing "/", as fsspec's ``_strip_protocol`` leaves it.
-
-    A storage's root stays as it is, e.g. "/" on a local filesystem.
-    """
-    return path.rstrip("/") or path
 
 
 class _Permits:

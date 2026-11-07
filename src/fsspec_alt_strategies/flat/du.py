@@ -6,7 +6,7 @@
 finds the files, then asks each file's size with a request of its own. `flat_du`
 adds up the sizes the listing already gives, page by page.
 
-This module depends on `control`, `_keys`, and `walk` of `tree`.
+This module depends on `control`, `_keys`, and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -15,15 +15,15 @@ from contextlib import aclosing
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from ..common.paths import _check_maxdepth
 from ..control import Operation, State
-from ..tree.walk import _check_maxdepth
 from ._keys import _scan
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator
 
-    from ..tree.walk import _Info
+    from ..common.operations import _Info
     from ._keys import _Ils
 
 __all__ = ["FlatDuState", "flat_du"]

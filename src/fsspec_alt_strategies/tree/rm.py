@@ -22,8 +22,9 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Sequence
 
+    from ..common.operations import _Info, _Ls
     from ._jobs import _Request
-    from .walk import _Info, _Listing, _Ls
+    from .walk import _Listing
 
 __all__ = ["RmState", "tree_rm"]
 

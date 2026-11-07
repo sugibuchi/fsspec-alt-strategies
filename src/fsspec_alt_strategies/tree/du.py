@@ -6,7 +6,7 @@
 each file's size with a request of its own. `tree_du` adds up the sizes the
 listings already give.
 
-This module depends on `control` and `walk`.
+This module depends on `control`, `walk`, and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -15,14 +15,15 @@ from contextlib import aclosing
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from ..common.paths import _check_maxdepth
 from ..control import Operation, State
-from .walk import _check_maxdepth, _scan
+from .walk import _scan
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator
 
-    from .walk import _Info, _Ls
+    from ..common.operations import _Info, _Ls
 
 __all__ = ["DuState", "tree_du"]
 

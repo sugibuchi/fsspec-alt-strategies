@@ -11,21 +11,21 @@ The listing, ``ils``, holds no permit of the concurrency limit: its pages come
 one after another, and the strategy never sees them. Only the other requests,
 such as an ``info``, hold one.
 
-This module depends on `walk` of `tree`.
+This module depends on `paths` of `common`.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..tree.walk import _trim
+from ..common.paths import _trim
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, AsyncIterator, Callable
     from typing import TypeAlias
 
-    from ..tree.walk import _Info
+    from ..common.operations import _Info
 
     _Ils: TypeAlias = Callable[[str], AsyncIterator[dict[str, Any]]]
     """Lists every key starting with a prefix, called as ``ils(prefix)``."""

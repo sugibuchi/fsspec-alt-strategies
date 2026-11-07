@@ -8,10 +8,10 @@ then filters them. A flat storage lists by any prefix, not only by folder: so
 `flat_glob` lists only the keys starting with the pattern's text before its
 first wildcard, e.g. ``data/2024-`` for ``data/2024-*.parquet``.
 
-The paths are matched as `tree_glob` matches them, with its own compiled
+The paths are matched as `tree_glob` matches them, with the same compiled
 patterns: the two never answer differently.
 
-This module depends on `control`, `_keys`, and `walk` and `glob` of `tree`.
+This module depends on `control`, `_keys`, and `paths` and `patterns` of `common`.
 """
 
 from __future__ import annotations
@@ -20,16 +20,16 @@ from dataclasses import dataclass
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
+from ..common.paths import _check_maxdepth, _trim
+from ..common.patterns import _infos, _Search
 from ..control import Operation, State
-from ..tree.glob import _infos, _Search
-from ..tree.walk import _check_maxdepth, _trim
 from ._keys import _close, _folder, _folders
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, Sequence
 
-    from ..tree.walk import _Info
+    from ..common.operations import _Info
     from ._keys import _Ils
 
 __all__ = ["FlatGlobState", "flat_glob"]
