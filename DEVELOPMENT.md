@@ -40,7 +40,7 @@
 | `.../files/adaptive.py`         | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts. |
 | `.../files/buffered.py`         | `LocallyBufferedFile`, for storages transferring only whole files. |
 | `.../files/fsspec_transaction.py` | Files written in a transaction, by strategy: a temporary path, a local buffer, or the storage's own. |
-| `.../files/fsspec_async.py`     | `AsyncFileAdapter`, giving the file objects the API of those `open_async` returns. |
+| `.../files/fsspec_async.py`     | `AsyncFileAdapter` and `SyncFileAdapter`, giving file objects the API of those `open_async` returns. |
 | `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
 | `src/fsspec_alt_strategies_testing/` | `SimulatedFileSystem`, for tests and benchmarks: a package apart, so that copies leave it out. |
 | `tests/`                        | The tests, in the package's layout, with the shared fixtures in `tests/conftest.py`. |
@@ -377,6 +377,9 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 - fsspec's `open_async` returns a file whose methods are awaited. `files/fsspec_async.py` has `AsyncFileAdapter`,
   giving our files that API, so that `open` and `open_async` share a filesystem's requests. Its methods await the
   files' async counterparts, such as `_read`, which `_AsyncFile` declares. The files keep only the sync API themselves.
+- `SyncFileAdapter`, in the same module, gives that API to any other sync file object, e.g. a storage SDK's own. It
+  runs the file's blocking calls in threads with `asyncio.to_thread`, one at a time. A cancelled call waits for its
+  thread, as a thread cannot be stopped.
 - They know nothing of fsspec's transactions. How a file stays invisible until commit depends on the storage, so
   `files/fsspec_transaction.py` holds it in a `FileTransaction`, an ABC with four steps: `start_staging()` opens
   the file written to, `end_staging()` ends the writing on closing, then `commit()`, or `discard()` instead. One

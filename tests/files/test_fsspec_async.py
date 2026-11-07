@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import io
 import os
-from typing import IO, Any
+import threading
+from typing import IO, TYPE_CHECKING, Any
 
 import pytest
 
@@ -14,8 +15,11 @@ from fsspec_alt_strategies.files.adaptive import (
     AdaptiveWritableFile,
 )
 from fsspec_alt_strategies.files.buffered import LocallyBufferedFile
-from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
+from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter, SyncFileAdapter
 from fsspec_alt_strategies_testing import SimulatedFileSystem
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _KiB = 1024
 
@@ -163,3 +167,80 @@ async def test_refuses_another_loop(fs: SimulatedFileSystem) -> None:
     with pytest.raises(RuntimeError, match="outside the loop"):
         await AsyncFileAdapter(file).write(b"x")
     file.close()
+
+
+async def test_a_sync_file_reads_and_writes_in_threads(tmp_path: Path) -> None:
+    data = os.urandom(10 * _KiB)
+    path = tmp_path / "f.bin"
+    async with SyncFileAdapter(open(path, "wb")) as f:  # noqa: ASYNC230
+        assert (f.path, f.mode, f.writable(), f.readable()) == (str(path), "wb", 1, 0)
+        assert await f.write(data) == len(data)
+        await f.flush()
+    assert f.closed
+    assert path.read_bytes() == data
+
+    reference = io.BytesIO(data)
+    f = SyncFileAdapter(open(path, "rb"))  # noqa: ASYNC230, SIM115
+    assert await f.read(10) == reference.read(10)
+    # Not awaited, as in fsspec's async files.
+    assert f.seek(-8, io.SEEK_END) == reference.seek(-8, io.SEEK_END)
+    assert f.tell() == f.loc == reference.tell()
+    assert await f.read(None) == reference.read()
+    await f.close()
+    assert f.closed
+
+
+class _Blocking(io.BytesIO):
+    """A file whose reads block until let go, recording the threads they run in."""
+
+    mode = "rb"
+
+    def __init__(self, data: bytes) -> None:
+        super().__init__(data)
+        self.go = threading.Event()
+        self.started = threading.Event()
+        self.threads: list[int] = []
+        self.flushes: list[bool] = []
+
+    def read(self, size: int | None = -1) -> bytes:
+        self.threads.append(threading.get_ident())
+        self.started.set()
+        self.go.wait(5)
+        return super().read(size)
+
+    def flush(self, force: bool = False) -> None:  # type: ignore[override]
+        self.flushes.append(force)
+
+
+async def test_a_sync_file_leaves_the_loop_free() -> None:
+    file = _Blocking(b"0123456789")
+    f = SyncFileAdapter(file)
+    reading = asyncio.create_task(f.read(4))
+    await asyncio.to_thread(file.started.wait, 5)
+    assert not reading.done()  # The loop runs on while the read blocks.
+    file.go.set()
+    assert await reading == b"0123"
+    assert file.threads != [threading.get_ident()]
+    # force reaches a file taking it, as fsspec's.
+    await f.flush()
+    await f.flush(force=True)
+    assert file.flushes == [False, True]
+
+
+async def test_a_cancelled_call_frees_the_file_only_when_its_thread_ends() -> None:
+    file = _Blocking(b"0123456789")
+    f = SyncFileAdapter(file)
+    first = asyncio.create_task(f.read(4))
+    await asyncio.to_thread(file.started.wait, 5)
+    first.cancel()
+    second = asyncio.create_task(f.read(2))
+    await asyncio.sleep(0.05)
+    # The first's thread holds the file still: neither has ended.
+    assert not first.done()
+    assert not second.done()
+    assert len(file.threads) == 1
+    file.go.set()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    # The first's read happened, in its thread: the second reads on from there.
+    assert await second == b"45"
