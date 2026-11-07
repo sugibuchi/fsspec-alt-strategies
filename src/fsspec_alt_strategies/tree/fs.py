@@ -1,0 +1,291 @@
+# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+# SPDX-License-Identifier: Apache-2.0
+"""An abstract async filesystem whose recursive methods are the tree strategies.
+
+`TreeFileSystem` is for storages with a hierarchical namespace, which list one
+folder per request. A subclass implements the storage's primitives, and gets
+fsspec's recursive methods from the tree strategies.
+
+This module depends on `control`, `profile`, `walk`, `find`, `du`, `glob`,
+`rm`, `cp`, `mv`, and `filesystem` of `common`.
+"""
+
+from __future__ import annotations
+
+from contextlib import aclosing
+from typing import TYPE_CHECKING, Any
+
+from fsspec.asyn import sync_wrapper
+
+from ..common.filesystem import _failed_root, _FileSystem, _raise, _triples
+from ..control import collect
+from .cp import tree_cp
+from .du import tree_du
+from .find import tree_find
+from .glob import tree_glob
+from .mv import tree_mv
+from .rm import tree_rm
+from .walk import _listings
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Callable
+
+    from ..profile import StorageProfile
+
+__all__ = ["TreeFileSystem"]
+
+
+class TreeFileSystem(_FileSystem):
+    """An abstract async filesystem, its recursive methods the tree strategies.
+
+    It suits storages with a hierarchical namespace, which list one folder per
+    request, such as Azure Data Lake Storage Gen2. It overrides fsspec's
+    ``_walk``, ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``mv``
+    when recursive, with `tree_walk`, `tree_find`, `tree_du`, `tree_glob`,
+    `tree_rm`, `tree_cp` and `tree_mv`. Their answers are fsspec's, and their
+    failures are raised, a single one as it is, several in an ExceptionGroup.
+    A folder that fails to list is left out, as fsspec's ``walk`` omits it.
+
+    A subclass implements the storage's primitives, which fsspec leaves
+    abstract: ``_ls``, ``_info``, ``_rm_file``, ``_rmdir``, ``_cp_file`` and
+    ``_makedirs``. It implements ``open_async`` too, giving its files
+    ``io_limit`` as their concurrency limit, and ``_open``. ``_cat_file``,
+    ``_pipe_file``, ``_get_file`` and ``_put_file`` read and write through
+    ``open_async``'s files.
+
+    Two limits bound its requests, each an `asyncio.Semaphore` of its own:
+
+    - ``operation_limit``, the strategies' requests, such as listings,
+      deletions and copies;
+    - ``io_limit``, the reads and writes of data, by its files.
+
+    ``storage_profile``, a `StorageProfile`, tells the strategies what the
+    storage does. A subclass sets it for its storage.
+
+    Parameters
+    ----------
+    operation_concurrency : int
+        The requests of the strategies at a time.
+    io_concurrency : int
+        The reads and writes of data at a time.
+    **kwargs
+        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
+
+    Raises
+    ------
+    ValueError
+        If a concurrency is less than 1.
+
+    See Also
+    --------
+    FlatFileSystem : The same, for flat storages, such as object stores.
+
+    Examples
+    --------
+    >>> class MyFileSystem(TreeFileSystem):
+    ...     protocol = "my"
+    ...
+    ...     async def _ls(self, path, detail=True, **kwargs): ...
+    ...     async def _info(self, path, **kwargs): ...
+    ...     async def _rm_file(self, path, **kwargs): ...
+    ...     async def _rmdir(self, path): ...
+    ...     async def _cp_file(self, path1, path2, **kwargs): ...
+    ...     async def _makedirs(self, path, exist_ok=False): ...
+    ...
+    ...     async def open_async(self, path, mode="rb", **kwargs):
+    ...         file = MyFile(self, path, mode, concurrency_limit=self.io_limit)
+    ...         return AsyncFileAdapter(file)
+    >>> fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
+    """
+
+    storage_profile: StorageProfile | None = None
+    """What the storage does, for the strategies. Unknown if None."""
+
+    async def _walk(
+        self,
+        path: str,
+        maxdepth: int | None = None,
+        topdown: bool = True,
+        on_error: str | Callable[[Exception], Any] = "omit",
+        **kwargs: Any,
+    ) -> AsyncGenerator[tuple[str, Any, Any]]:
+        detail = kwargs.pop("detail", False)
+        root = self._strip_protocol(path)
+        listings = _listings(
+            self._ls,
+            root,
+            maxdepth=maxdepth,
+            topdown=topdown,
+            raise_on_error=on_error == "raise",
+            concurrency_limit=self.operation_limit,
+        )
+        async with aclosing(listings):
+            try:
+                first = await anext(listings)
+            except StopAsyncIteration:
+                return
+            except NotADirectoryError:
+                # fsspec's walk of a file yields the file, under no name.
+                entry = await self._info(root)
+                yield (root, {}, {"": entry}) if detail else (root, [], [""])
+                return
+            except OSError as e:
+                yield _failed_root(root, e, on_error, detail)
+                return
+            listing = first
+            while True:
+                if listing.error is None:
+                    yield _triples(listing.folder, listing.entries, detail)
+                else:
+                    # A folder that fails is yielded empty, as fsspec's walk does.
+                    yield _failed_root(listing.folder, listing.error, on_error, detail)
+                try:
+                    listing = await anext(listings)
+                except StopAsyncIteration:
+                    return
+
+    async def _find(
+        self,
+        path: str,
+        maxdepth: int | None = None,
+        withdirs: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        detail = kwargs.pop("detail", False)
+        entries, _ = await collect(
+            tree_find(
+                self._strip_protocol(path),
+                ls=self._ls,
+                info=self._info,
+                maxdepth=maxdepth,
+                withdirs=withdirs,
+                concurrency_limit=self.operation_limit,
+            )
+        )
+        found = {e["name"].rstrip("/"): e for e in entries}
+        names = sorted(found)
+        return {n: found[n] for n in names} if detail else names
+
+    async def _du(
+        self, path: str, total: bool = True, maxdepth: int | None = None, **kwargs: Any
+    ) -> Any:
+        if kwargs.get("withdirs"):
+            return await super()._du(path, total=total, maxdepth=maxdepth, **kwargs)
+        op = tree_du(
+            self._strip_protocol(path),
+            ls=self._ls,
+            info=self._info,
+            maxdepth=maxdepth,
+            concurrency_limit=self.operation_limit,
+        )
+        entries, _ = await collect(op)
+        if total:
+            return op.state.size
+        return {e["name"]: e.get("size") or 0 for e in entries}
+
+    async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
+        detail = kwargs.pop("detail", False)
+        entries, _ = await collect(
+            tree_glob(
+                self._plain(path),
+                ls=self._ls,
+                info=self._info,
+                maxdepth=maxdepth,
+                withdirs=kwargs.pop("withdirs", True),
+                concurrency_limit=self.operation_limit,
+            )
+        )
+        found = {e["name"].rstrip("/"): e for e in entries}
+        names = sorted(found)
+        return {n: found[n] for n in names} if detail else names
+
+    async def _rm(
+        self,
+        path: str | list[str],
+        recursive: bool = False,
+        batch_size: int | None = None,
+        maxdepth: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if not recursive or maxdepth is not None:
+            await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
+            return
+        _, errors = await collect(
+            tree_rm(
+                self._plain(path),
+                ls=self._ls,
+                info=self._info,
+                rm_file=self._rm_file,
+                rm_folder=self._rmdir,
+                concurrency_limit=self.operation_limit,
+            )
+        )
+        _raise(errors, "Deleting")
+
+    async def _copy(
+        self,
+        path1: str | list[str],
+        path2: str | list[str],
+        recursive: bool = False,
+        on_error: str | None = None,
+        maxdepth: int | None = None,
+        batch_size: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if not recursive or maxdepth is not None or not isinstance(path2, str):
+            await super()._copy(
+                path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
+            )
+            return
+        _, errors = await collect(
+            tree_cp(
+                self._plain(path1),
+                self._plain(path2),
+                ls=self._ls,
+                info=self._info,
+                cp_file=self._cp_file,
+                makedirs=self._makedirs,
+                rm_file=self._rm_file,
+                profile=self.storage_profile,
+                concurrency_limit=self.operation_limit,
+            )
+        )
+        if on_error != "raise":
+            # As fsspec's recursive copy: a source gone meanwhile is no error.
+            errors = [e for e in errors if not isinstance(e, FileNotFoundError)]
+        _raise(errors, "Copying")
+
+    async def _mv(
+        self,
+        path1: str | list[str],
+        path2: str,
+        recursive: bool = False,
+        maxdepth: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Move files, as fsspec's ``mv`` does: with `tree_mv` when recursive."""
+        if path1 == path2:
+            return
+        if not recursive or maxdepth is not None:
+            # fsspec's own: a copy, then the deletion of its sources.
+            await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
+            await self._rm(path1, recursive=recursive)
+            return
+        _, errors = await collect(
+            tree_mv(
+                self._plain(path1),
+                self._plain(path2),
+                ls=self._ls,
+                info=self._info,
+                cp_file=self._cp_file,
+                makedirs=self._makedirs,
+                rm_file=self._rm_file,
+                rm_folder=self._rmdir,
+                profile=self.storage_profile,
+                concurrency_limit=self.operation_limit,
+            )
+        )
+        _raise(errors, "Moving")
+
+    # fsspec makes sync methods only from the async ones it knows: _mv is not.
+    mv = sync_wrapper(_mv)

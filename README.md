@@ -8,6 +8,8 @@ Alternative, filesystem-independent strategies for [fsspec](https://github.com/f
 >   and move;
 > - for flat namespaces, such as object stores, strategies streaming one listing of a key prefix: a walk, find, du, a glob
 >   listing only the keys starting as its pattern does, a delete in batches, and a copy and move;
+> - abstract async filesystems, one per family, whose recursive methods are its strategies, with two concurrency
+>   limits: one for file operations, one for reading and writing data;
 > - storage profiles, where a developer declares what a storage does, such as whether writes need the parent folder;
 > - abstract file classes that adapt their requests to how a file is read or written:
 >   - a reader that pins the version it reads, failing if the file changes meanwhile;
@@ -43,7 +45,8 @@ Each fsspec feature may have several strategies. You pick those that suit your s
 storage.
 
 - Call a strategy as a function, with its arguments and the storage's operations it uses, e.g. `ls=fs._ls`.
-- Subclass a provided base filesystem class, whose methods call the same functions.
+- Subclass a family's abstract filesystem, `TreeFileSystem` or `FlatFileSystem`, whose methods call the same functions.
+  You implement the storage's primitives, such as `_ls` and `open_async`.
 
 The package is on PyPI, but we recommend copying the modules you use into your own package, e.g. as
 `_contrib/strategy`. Your filesystem's behaviour then never changes with a release of this library. The modules use

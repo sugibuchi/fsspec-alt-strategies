@@ -14,6 +14,7 @@
 | `.../tree/rm.py`                | `tree_rm`, a recursive delete that deletes while it walks.          |
 | `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks.        |
 | `.../tree/mv.py`                | `tree_mv`, a recursive move: a copy deleting as it goes.       |
+| `.../tree/fs.py`                | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies. |
 | `.../tree/_jobs.py`             | The private engine's tree side: it feeds `common`'s with the walk's listings. |
 | `.../flat/`                     | The strategies listing a flat namespace by key prefix, as object stores do. |
 | `.../flat/walk.py`              | `flat_walk`, a walk of one listing of a prefix, its folders derived from the keys. |
@@ -23,9 +24,11 @@
 | `.../flat/rm.py`                | `flat_rm`, a recursive delete in batches, sent as the listing goes on. |
 | `.../flat/cp.py`                | `flat_cp`, a recursive copy that copies each key as it is listed. |
 | `.../flat/mv.py`                | `flat_mv`, a recursive move: a copy per key, then its deletion in a batch. |
+| `.../flat/fs.py`                | `FlatFileSystem`, an abstract async filesystem whose recursive methods are the flat strategies. |
 | `.../flat/_keys.py`             | The private listing under them: a prefix's keys, and the folders they imply. |
 | `.../flat/_jobs.py`             | The private engine's flat side: it feeds `common`'s with the keys of each root. |
 | `.../common/`                   | Private machinery the families share, so that none imports another. |
+| `.../common/filesystem.py`      | What the filesystem classes share: the two limits, and data moved through file objects. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
 | `.../common/operations.py`      | The types of the storage's operations, such as `ls` and `info`. |
@@ -211,6 +214,20 @@ class MyFileSystem(AsyncFileSystem):
 - The override can choose a strategy per instance, e.g. from the storage's settings.
 - fsspec makes the sync method, `rm`, from the async one, `_rm`. So sync callers get the strategy too.
 - The library adds no mixins or descriptors: there is no machinery to learn.
+
+Or they subclass a family's abstract filesystem, `TreeFileSystem` in `tree/fs.py` or `FlatFileSystem` in `flat/fs.py`,
+which overrides all of fsspec's recursive methods with the family's strategies:
+
+- The subclass implements the storage's primitives, e.g. `_ls`, `_info` and `_rm_file`, and `open_async`.
+- It takes two required limits: `operation_concurrency`, for the strategies' requests, and `io_concurrency`, for the
+  reads and writes of data. `open_async` gives the files it opens `io_limit`, as their concurrency limit.
+- `_cat_file`, `_pipe_file`, `_get_file` and `_put_file` go through `open_async`'s files, so data moves as the file
+  classes move it.
+- The failures of a strategy are raised: one as it is, several in an ExceptionGroup. A folder that fails to list is
+  left out of a walk, as fsspec's `walk` omits it.
+- fsspec has no async `mv`, nor builds a sync one from `_mv`: each class wraps its `_mv` itself.
+
+Choosing the class chooses the family: a developer wanting one strategy of another overrides that method, as above.
 
 #### The tree strategies
 
