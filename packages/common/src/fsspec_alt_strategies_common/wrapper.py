@@ -19,7 +19,7 @@ from typing import Literal, NotRequired, TypedDict
 
 from .profile import StorageProfile
 
-__all__ = ["DEFAULT_IMPLEMENTATION", "KnownImplementation", "known_implementations"]
+__all__ = ["KnownImplementation", "known_implementations"]
 
 KnownImplementation = TypedDict(
     "KnownImplementation",
@@ -37,20 +37,6 @@ KnownImplementation = TypedDict(
     },
 )
 """How a filesystem class is wrapped, as an entry of `known_implementations`."""
-
-DEFAULT_IMPLEMENTATION: KnownImplementation = {
-    "type": "tree",
-    "async": False,
-    "operation_concurrency": 1,
-    "io_concurrency": 1,
-    "storage_profile": StorageProfile(),
-}
-"""An entry right on any storage, though slow: a tree, one request at a time.
-
-A tree lists one folder per request, which any fsspec filesystem can. One
-request at a time suits a filesystem unsafe to call from several threads, and
-nothing is known of the storage. Its ``async`` must match the filesystem's.
-"""
 
 known_implementations: dict[str, KnownImplementation] = {
     "fsspec.implementations.local.LocalFileSystem": {
