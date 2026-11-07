@@ -58,7 +58,8 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
 - The strategies changing a storage, in any family, run on `common.jobs._Jobs`, fed by the family's source: listings
   for `tree`, keys for `flat`. A copy or move places its paths with `common.placement._Placing`.
 - A family of strategies, such as `tree/` or `flat/`, never imports another. What two share goes in `common/`, a
-  private module per concern, e.g. `common/patterns.py` for glob patterns.
+  private module per concern, e.g. `common/patterns.py` for glob patterns. A public module the families do not own,
+  e.g. `routing.py` and `streams.py`, sits at the package's top level, next to `monitor.py`.
 - The flat strategies, in `flat/`, list with `ils(prefix)`, an async iterator of entries, never pages: see
   DEVELOPMENT.md's "The flat strategies". Those that only read derive folders from keys with `flat._keys`.
   `flat.find._find_entries` handles the root as fsspec's `_find` does, and `flat_walk` as `tree_walk` does.

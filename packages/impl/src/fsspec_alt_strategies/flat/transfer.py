@@ -4,7 +4,7 @@
 
 `flat_transfer` is `flat_cp` between two storages. It lists the source's keys
 under a prefix, and copies each to the destination as soon as the listing
-gives it, by a ``copy_file`` given by the caller. `common.streams` has one
+gives it, by a ``copy_file`` given by the caller. `streams` has one
 streaming the data through the two storages' file objects.
 
 The destination may be flat or a tree: its profile says whether a folder must
@@ -120,7 +120,7 @@ def flat_transfer(
     copy_file : callable
         Copies a file from the source to the destination, called as
         ``copy_file(source, destination)``: e.g. one made by
-        ``common.streams.streaming_copy`` from both ``open_async``.
+        ``streams.streaming_copy`` from both ``open_async``.
     dst_info : callable
         Describes a destination path, called as ``dst_info(path)``.
     dst_makedirs : callable

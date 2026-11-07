@@ -11,8 +11,8 @@ the families' classes give them.
 Its ``_transfer``, a copy to another storage, each family implements with its
 strategy, given the destination's arguments by ``_destination``.
 
-This module depends on `streams`, and on `operation` and `types` for types
-only.
+This module depends on the package's `streams`, and on `operation` and
+`types` for types only.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from fsspec.callbacks import DEFAULT_CALLBACK
 from fsspec_alt_strategies_common.monitor import Monitored
 from fsspec_alt_strategies_common.profile import StorageProfile
 
-from .streams import streaming_copy
+from ..streams import streaming_copy
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
