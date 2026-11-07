@@ -478,6 +478,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     - ``sequential`` sends a part only once the one before it is uploaded.
       Waiting, it holds no permit of the concurrency limit, which files may
       share. ``spread`` of 1 then suits best: fewer, larger parts.
+    - A subclass may set ``sequential`` in ``_start_multipart_upload``, e.g.
+      where the storage chooses the kind of upload when it starts. It holds
+      for every part, as no part is sent before the upload starts.
     - Every part but the last has the size ``_block_size`` returns. A subclass
       overrides it to keep parts a multiple of 256 KiB, or any other rule.
     - The last part is the one given ``last``: with the file's size, as its

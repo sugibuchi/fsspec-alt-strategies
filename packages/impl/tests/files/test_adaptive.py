@@ -402,6 +402,24 @@ class _Writer(AdaptiveWritableFile):
         self.requests.append("abort")
 
 
+async def test_sequential_may_be_chosen_when_the_upload_starts(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    # As a storage choosing its kind of upload in its answer to the start.
+    class Chosen(_Writer):
+        async def _start_multipart_upload(self) -> None:
+            await super()._start_multipart_upload()
+            self.sequential = True
+
+    data = os.urandom(100 * _KiB)
+    async with Chosen(flat_fs, "f.bin") as f:
+        for i in range(0, len(data), 3 * _KiB):
+            await f._write(data[i : i + 3 * _KiB])
+    assert len(f.parts) > 2
+    assert f.max_in_flight == 1
+    assert await flat_fs._cat_file("f.bin") == data
+
+
 async def test_a_file_fitting_one_part_is_uploaded_in_one_request(
     flat_fs: SimulatedFileSystem,
 ) -> None:
