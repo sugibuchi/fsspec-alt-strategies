@@ -21,6 +21,7 @@ from __future__ import annotations
 from .monitor import (
     Call,
     CallCancelled,
+    LoggingMonitor,
     Monitor,
     Monitored,
     OperationHandler,
@@ -45,6 +46,7 @@ __all__ = [
     "FindState",
     "GlobState",
     "KnownImplementation",
+    "LoggingMonitor",
     "Monitor",
     "Monitored",
     "MvState",

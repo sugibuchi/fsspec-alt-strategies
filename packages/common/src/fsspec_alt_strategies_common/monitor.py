@@ -34,7 +34,9 @@ This module depends on nothing else in the package.
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -47,6 +49,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Call",
     "CallCancelled",
+    "LoggingMonitor",
     "Monitor",
     "Monitored",
     "OperationHandler",
@@ -219,6 +222,75 @@ class Monitor:
         or None if it ran to its end. The errors of single paths it yielded
         were given to ``yielded`` already.
         """
+
+
+class LoggingMonitor(Monitor):
+    """A monitor logging each operation's start, end and cancellation.
+
+    The library logs none of its routine work: this opts in. It logs at
+    ``level`` when an operation starts, with its method and paths, and when
+    it ends, with its final state and how it ended. Each item yielded, a
+    path's error too, is logged at DEBUG, as it may be one per file.
+
+    Parameters
+    ----------
+    logger : logging.Logger
+        Where to log.
+    level : int, default logging.INFO
+        The level of the start and end of each operation.
+
+    See Also
+    --------
+    monitoring : Where monitors watch.
+
+    Examples
+    --------
+    >>> logger = logging.getLogger("myapp.storage")
+    >>> with monitoring(LoggingMonitor(logger)):
+    ...     fs.rm("data/2024", recursive=True)
+    """
+
+    def __init__(self, logger: logging.Logger, level: int = logging.INFO) -> None:
+        self.logger = logger
+        self.level = level
+
+    @staticmethod
+    def _paths(call: Call) -> str:
+        if call.path2 is None:
+            return repr(call.path)
+        return f"{call.path!r} to {call.path2!r}"
+
+    async def started(self, call: Call, state: State, op: OperationHandler) -> None:
+        self.logger.log(self.level, "%s of %s started", call.method, self._paths(call))
+
+    async def yielded(
+        self, call: Call, item: Any, state: State, op: OperationHandler
+    ) -> None:
+        self.logger.debug("%s of %s yielded %r", call.method, self._paths(call), item)
+
+    async def ended(
+        self,
+        call: Call,
+        error: BaseException | None,
+        state: State,
+        op: OperationHandler,
+    ) -> None:
+        paths = self._paths(call)
+        if error is None:
+            how = "ended"
+        elif isinstance(error, (CallCancelled, asyncio.CancelledError)):
+            how = "was cancelled"
+        else:
+            how = f"failed with {error!r}"
+        self.logger.log(
+            self.level,
+            "%s of %s %s, %d errors: %r",
+            call.method,
+            paths,
+            how,
+            state.errors,
+            state,
+        )
 
 
 _monitors: contextvars.ContextVar[tuple[Monitor, ...]] = contextvars.ContextVar(

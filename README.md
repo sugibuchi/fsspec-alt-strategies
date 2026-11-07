@@ -81,6 +81,9 @@ with monitoring(Progress()):
     fs.rm("data/2024", recursive=True)
 ```
 
+The library logs none of its routine work. To log each operation's start and end, use `LoggingMonitor`:
+`with monitoring(LoggingMonitor(logging.getLogger("myapp"))):`. It logs each item yielded at DEBUG.
+
 The known filesystems are those in `known_implementations`, by class: the local filesystem, s3fs, gcsfs, adlfs,
 fsspec's memory, SFTP and HDFS filesystems. Each entry says its family, whether it is async, its concurrency limits
 and its profile. Pass your own table to `monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem the way

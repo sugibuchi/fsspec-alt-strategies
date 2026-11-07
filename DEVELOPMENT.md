@@ -522,6 +522,8 @@ The library tells its callers by what it returns and raises, not by logging.
 - A file collected while open, or a `TransactionFile` collected undecided, emits a `ResourceWarning`, as Python's
   own files do.
 - No exception is swallowed silently, and `CancelledError` never is.
+- A caller wanting a log of operations opts in with `LoggingMonitor`, a monitor of the common package. It logs each
+  operation's start and end, and each item yielded at DEBUG.
 
 ## Releases
 
