@@ -320,8 +320,8 @@ per request even on object stores. Its order differs, as a listing is in no orde
   batch as soon as the listing has given its keys. A batch that fails yields one error, noting its keys.
 - `flat_cp` copies each key as it is listed, placed as `tree_cp` places it. A folder's marker is not copied: flat
   storages need no folder for the files in it.
-- `flat_mv` moves each key by `mv_file`, or copies it and deletes the keys copied in batches. Which is given decides.
-  Object stores rename nothing, so batches win there. Cancelled, it still deletes the keys copied, so that no file is
+- `flat_mv` moves each key by `mv_file`, or copies it and deletes the keys copied in batches. Which is given decides,
+  and the profile's `renames_files` if both are. Unknown, batches are right on any storage. Cancelled, it still deletes the keys copied, so that no file is
   left in both places: its `stopping` keeps their batches, which the engine would otherwise drop.
 
 `SimulatedFileSystem` has `_rm_files` too, a batch deletion counting one request, as S3's DeleteObjects does.
@@ -344,10 +344,11 @@ The fields, and the requests each saves:
 |--------------------|------------------------------------------------------------------------------------|
 | `parents_required` | False: the `makedirs` of each folder with files, in `tree_cp` and `tree_mv`.       |
 | `implicit_folders` | True: those, and the `rm_folder` of each folder, in `tree_rm` and `tree_mv`.       |
+| `renames_files`    | True: the data copied by `flat_mv`, given both ways, as it moves each key by `mv_file`. |
 
 A field may imply another: implicit folders need no parents made. A profile contradicting itself raises `ValueError`.
 
-A fact gets a field only once a strategy saves requests with it. Facts that cost nothing to handle as they come have
+A fact gets a field only once a strategy saves requests, or data copied, with it. Facts that cost nothing to handle as they come have
 none. An example is a copy refused because the file exists: `tree_cp` then deletes the old file and copies again.
 
 A storage with a native operation, such as a rename of a whole folder, has no field either. A strategy takes it as an

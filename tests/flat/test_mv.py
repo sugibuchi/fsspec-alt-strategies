@@ -9,6 +9,7 @@ import pytest
 
 from fsspec_alt_strategies.common.monitors import _collect
 from fsspec_alt_strategies.flat.mv import MvState, flat_mv
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -190,13 +191,35 @@ async def test_mv_file_moves_markers_without_yielding_them() -> None:
     [
         {"mv_file": None, "cp_file": None},  # Neither way.
         {"mv_file": None, "batch_size": None},  # Batches, of no size.
-        {"mv_file": "given"},  # Both ways.
+        {"rm_files": None},  # Batches, of nothing to delete with, besides mv_file.
     ],
 )
-def test_one_way_to_move(
+def test_a_way_to_move_is_whole(
     flat_fs: SimulatedFileSystem, operations: dict[str, Any]
 ) -> None:
-    if operations.get("mv_file") == "given":
-        operations = {"mv_file": flat_fs._mv_file}
-    with pytest.raises(ValueError, match="mv_file"):
+    operations = {"mv_file": flat_fs._mv_file, **operations}
+    with pytest.raises(ValueError, match="cp_file, rm_files and batch_size"):
         _mv(flat_fs, "data", "moved", **operations)
+
+
+@pytest.mark.parametrize(
+    ("renames_files", "by_mv_file"), [(True, True), (False, False), (None, False)]
+)
+async def test_the_profile_chooses_between_both_ways(
+    flat_fs: SimulatedFileSystem, renames_files: bool | None, by_mv_file: bool
+) -> None:
+    _tree(flat_fs)
+    renamed: list[str] = []
+
+    async def mv_file(source: str, destination: str) -> None:
+        renamed.append(source)
+        await flat_fs._mv_file(source, destination)
+
+    profile = StorageProfile(renames_files=renames_files)
+    op = _mv(flat_fs, "data", "moved", mv_file=mv_file, profile=profile)
+    moved, errors = await _collect(op)
+    assert errors == []
+    assert len(moved) == len(_FILES)
+    # Unknown, a move copies, and deletes in batches: right on any storage.
+    assert bool(renamed) == by_mv_file
+    assert flat_fs.stats.calls["delete"] == (len(_FILES) if by_mv_file else 1)

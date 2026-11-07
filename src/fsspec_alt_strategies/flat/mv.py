@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from ..common.jobs import _Job
 from ..common.states import MvState
 from ..control import Operation
+from ..profile import StorageProfile
 from ._jobs import _keys_of
 from .cp import _Copy
 
@@ -41,6 +42,7 @@ def flat_mv(
     cp_file: _Request | None = None,
     rm_files: _Requests | None = None,
     batch_size: int | None = None,
+    profile: StorageProfile | None = None,
     concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, str], MvState]:
     """Move the keys under a prefix, each as soon as it is listed.
@@ -48,17 +50,23 @@ def flat_mv(
     It places the paths as fsspec's ``mv`` with ``recursive=True`` does, as
     `flat_cp` places them. Existing files are overwritten.
 
-    It moves each key in one of two ways, by the operations given:
+    It moves each key in one of two ways, by the operations given, and by the
+    profile if both are:
 
-    - ``mv_file`` alone: each key is moved by one ``mv_file`` as soon as the
+    - ``mv_file``: each key is moved by one ``mv_file`` as soon as the
       listing gives it, and yielded once moved. It wins on storages renaming a
-      key in one request.
+      key in one request, which copies no data.
     - ``cp_file``, ``rm_files`` and ``batch_size``: each key is copied by one
       ``cp_file`` as soon as the listing gives it. The keys copied are deleted
       in batches of ``batch_size``, each by one ``rm_files``, and the last,
       smaller batch once all is copied. A key is moved, and yielded, once its
       batch is deleted. It wins on object stores, which rename nothing, but
       delete many keys in one request.
+
+    Given both, it moves by ``mv_file`` only if the profile's
+    ``renames_files`` is True. Unknown, it copies and deletes in batches,
+    which is right on any storage: about one request per key either way,
+    but a rename copies no data.
 
     A folder's marker, a key ending with "/", is moved too, but not yielded. In
     batches, it is deleted without being copied, as `flat_cp` copies none.
@@ -93,13 +101,16 @@ def flat_mv(
         The storage's operations, as with `flat_cp`.
     mv_file : callable, optional
         Moves a file, called as ``mv_file(source, destination)``: e.g. the
-        filesystem's ``_mv_file``. Given, the three below are not.
+        filesystem's ``_mv_file``.
     cp_file : callable, optional
         Copies a file, as with `flat_cp`.
     rm_files : callable, optional
         Deletes several files in one request, as with `flat_rm`.
     batch_size : int, optional
-        The most keys of one ``rm_files``, e.g. 1000 on S3.
+        The most keys of one ``rm_files``, e.g. 1000 on S3. ``cp_file``,
+        ``rm_files`` and ``batch_size`` are given together, or not at all.
+    profile : StorageProfile, optional
+        What the storage does. Unknown if None.
     concurrency_limit : asyncio.Semaphore
         Held by each request but the listing while it runs. Share one to
         limit several operations, or files, together.
@@ -114,7 +125,8 @@ def flat_mv(
     ------
     ValueError
         If neither ``mv_file`` nor all of ``cp_file``, ``rm_files`` and
-        ``batch_size`` are given, or both, or ``batch_size`` is less than 1.
+        ``batch_size`` are given, only some of those three, or
+        ``batch_size`` is less than 1.
 
     See Also
     --------
@@ -137,17 +149,18 @@ def flat_mv(
     ...     if isinstance(moved, Exception):
     ...         print("failed:", moved)
     """
-    batched = (cp_file, rm_files, batch_size)
-    if mv_file is not None:
-        if any(o is not None for o in batched):
-            raise ValueError(
-                "mv_file moves each key: cp_file, rm_files and batch_size are not"
-                " taken with it"
-            )
-    elif any(o is None for o in batched):
+    batched = [o is not None for o in (cp_file, rm_files, batch_size)]
+    if any(batched) and not all(batched):
+        raise ValueError("cp_file, rm_files and batch_size are given together")
+    if mv_file is None and not all(batched):
         raise ValueError("Give mv_file, or all of cp_file, rm_files and batch_size")
-    elif batch_size is not None and batch_size < 1:
+    if batch_size is not None and batch_size < 1:
         raise ValueError(f"batch_size must be at least 1: {batch_size}")
+    # Both given, a rename wins only where the storage is known to rename.
+    if all(batched) and (profile or StorageProfile()).renames_files is not True:
+        mv_file = None
+    elif mv_file is not None:
+        cp_file = rm_files = batch_size = None
     return Operation(
         lambda op: _Move(
             path1,

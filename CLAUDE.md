@@ -56,7 +56,7 @@ features. DEVELOPMENT.md's Design section has the choices that shape the code: r
   `flat.find._find_entries` handles the root as fsspec's `_find` does, and `flat_walk` as `tree_walk` does.
 - What a storage does that fsspec leaves open is declared, never detected, in `profile.StorageProfile`. A strategy
   takes `profile=`, unknown if None. Unknown must be correct on any storage; a
-  field only saves requests. Add a field only when a strategy saves requests with it.
+  field only saves requests or data copied. Add a field only when a strategy saves either with it.
 - A strategy's name tells its family, e.g. `tree_rm` and `tree_glob`, never a bare `rm` or `glob`. Code using fsspec
   has those names already, as methods and modules.
 - Never swallow `CancelledError`.

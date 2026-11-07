@@ -4,19 +4,20 @@
 
 Storages answer the same request differently. Some create a file's missing
 parent folders, others raise FileNotFoundError. A strategy works on any of
-them, but sends fewer requests when it knows. `StorageProfile` tells it.
+them, but sends fewer requests, or copies less data, when it knows.
+`StorageProfile` tells it.
 
 A strategy taking a ``profile`` uses `StorageProfile()`, which knows nothing,
 if given None. A filesystem wrapping strategies may hold one for all its calls.
 
 The library never detects a storage's behaviour: the developer declares it. A
 field left None is unknown, and a strategy then takes the way that is right on
-any storage. So a profile only saves requests, and never changes the outcome,
-unless it is wrong.
+any storage. So a profile only saves requests or data copied, and never
+changes the outcome, unless it is wrong.
 
-A fact gets a field only once a strategy saves requests with it. Facts that
-cost nothing to handle as they come, such as a write refused because the file
-exists, have none.
+A fact gets a field only once a strategy saves requests or data copied with
+it. Facts that cost nothing to handle as they come, such as a write refused
+because the file exists, have none.
 
 This module depends on nothing else in the package.
 """
@@ -47,6 +48,10 @@ class StorageProfile:
         namespace. A folder then goes with its last file, and a file written
         creates its parents. Unknown by default, taken as False: a folder
         emptied is deleted.
+    renames_files : bool, optional
+        Whether moving a file is one request that copies no data, a rename,
+        rather than a copy and a delete. Unknown by default, taken as False: a
+        move copies, and deletes in batches where it can.
 
     Raises
     ------
@@ -72,6 +77,7 @@ class StorageProfile:
 
     parents_required: bool | None = None
     implicit_folders: bool | None = None
+    renames_files: bool | None = None
 
     def __post_init__(self) -> None:
         if self.implicit_folders and self.parents_required:

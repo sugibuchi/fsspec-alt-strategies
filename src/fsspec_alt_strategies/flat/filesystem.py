@@ -33,6 +33,8 @@ from .walk import flat_walk
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
+    from ..profile import StorageProfile
+
 __all__ = ["FlatFileSystem"]
 
 
@@ -51,8 +53,8 @@ class FlatFileSystem(_FileSystem):
     prefix, which fsspec has not, and ``_rm_files``, a deletion of several
     files in one request, with ``rm_batch_size``. It implements those fsspec
     leaves abstract too: ``_ls``, for fsspec's own methods, ``_info``,
-    ``_rm_file`` and ``_cp_file``. It implements ``open_async``, giving its files ``io_limit``
-    as their concurrency limit, and ``_open``. ``_cat_file``, ``_pipe_file``,
+    ``_rm_file`` and ``_cp_file``. It implements ``open_async``, giving its
+    files ``io_limit`` as their concurrency limit, and ``_open``. ``_cat_file``, ``_pipe_file``,
     ``_get_file`` and ``_put_file`` read and write through ``open_async``'s
     files.
 
@@ -61,6 +63,11 @@ class FlatFileSystem(_FileSystem):
     - ``operation_limit``, the strategies' requests, such as deletions and
       copies, but not their listings, which come one page after another;
     - ``io_limit``, the reads and writes of data, by its files.
+
+    ``storage_profile``, a `StorageProfile`, tells the strategies what the
+    storage does. With ``renames_files=True``, a recursive ``mv`` moves each
+    key by ``_mv_file``, which a subclass then overrides with its rename.
+    Otherwise it copies each key, and deletes them in batches.
 
     Parameters
     ----------
@@ -104,6 +111,9 @@ class FlatFileSystem(_FileSystem):
 
     rm_batch_size: int
     """The most keys ``_rm_files`` deletes in one request, e.g. 1000 on S3."""
+
+    storage_profile: StorageProfile | None = None
+    """What the storage does, for the strategies. Unknown if None."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -337,9 +347,11 @@ class FlatFileSystem(_FileSystem):
                 self._plain(path2),
                 ils=self._ils,
                 info=self._info,
+                mv_file=self._mv_file,
                 cp_file=self._cp_file,
                 rm_files=self._rm_files,
                 batch_size=self.rm_batch_size,
+                profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
             ),
             Call(self, "mv", path1, path2),
