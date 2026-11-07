@@ -223,6 +223,62 @@ def test_adaptive_aborts_the_upload_if_its_completion_fails(
         f.commit()
     assert file.aborted
     assert not fs.exists("f.bin")
+    f.discard()  # Its commit failed: undecided still.
+
+
+def test_adaptive_keeps_the_commit_error_if_the_abort_fails(
+    fs: SimulatedFileSystem,
+) -> None:
+    file = _Parts(fs, "f.bin")
+
+    async def fail(parts: list[Any]) -> None:
+        raise OSError("completion failed")
+
+    async def fail_abort() -> None:
+        raise OSError("abort failed")
+
+    file._complete_multipart_upload = fail  # type: ignore[method-assign]
+    file._abort_multipart_upload = fail_abort  # type: ignore[method-assign]
+    f = TransactionFile(AdaptiveWritableTransaction(file))
+    f.write(_BIG)
+    f.close()
+    with pytest.raises(OSError, match="completion failed") as raised:
+        f.commit()
+    assert any("abort failed" in note for note in raised.value.__notes__)
+    f.discard()
+
+
+def _failing_rename(fs: SimulatedFileSystem, path: str) -> TransactionFile:
+    def rename(source: str, destination: str) -> None:
+        raise OSError("rename failed")
+
+    t = TempPathTransaction(path, lambda p: _Parts(fs, p), rename, fs.rm_file)
+    return TransactionFile(t)
+
+
+def test_a_failed_commit_can_be_discarded(fs: SimulatedFileSystem) -> None:
+    f = _failing_rename(fs, "f.bin")
+    f.write(b"abc")
+    with pytest.raises(OSError, match="rename failed"):
+        f.commit()
+    # Not tried again: a transaction may have spent what it committed from.
+    with pytest.raises(ValueError, match="commit failed"):
+        f.commit()
+    f.discard()
+    assert fs.ls("", detail=False) == []  # Not even the temporary file.
+
+
+def test_a_failed_commit_left_undecided_is_discarded_when_collected(
+    fs: SimulatedFileSystem,
+) -> None:
+    f = _failing_rename(fs, "f.bin")
+    f.write(b"abc")
+    with pytest.raises(OSError, match="rename failed"):
+        f.commit()
+    with pytest.warns(ResourceWarning, match="Undecided"):
+        del f
+        gc.collect()
+    assert fs.ls("", detail=False) == []
 
 
 def test_adaptive_uploads_a_small_file_on_commit(fs: SimulatedFileSystem) -> None:

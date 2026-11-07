@@ -227,6 +227,20 @@ async def test_kept_blocks_serve_reads_that_come_back(
         assert len(f.fetched) == requests
 
 
+async def test_closing_releases_the_kept_blocks(flat_fs: SimulatedFileSystem) -> None:
+    data = os.urandom(256 * _KiB)
+    f = await _reader(flat_fs, data)
+    await f._read(4 * _KiB)
+    await f._read(64 * _KiB)  # A run: blocks are kept, and fetched ahead.
+    assert f._kept
+    await f.aclose()
+    # A closed file holds no data, even before it is collected.
+    assert not f._kept
+    assert f._kept_bytes == 0
+    assert not f._requests.queue
+    assert f._run == 0
+
+
 async def test_failed_fetch_raises_and_the_next_read_fetches_again(
     flat_fs: SimulatedFileSystem,
 ) -> None:
@@ -605,6 +619,23 @@ async def test_failed_part_aborts_the_upload(flat_fs: SimulatedFileSystem) -> No
             await f.aclose()
     assert f.requests[-1] == "abort"
     assert not await flat_fs._exists("f.bin")
+
+
+async def test_a_failed_abort_keeps_the_original_error(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    f = _Writer(flat_fs, "f.bin")
+    f.fail_part = 1
+
+    async def fail_abort() -> None:
+        raise OSError("abort failed")
+
+    f._abort_multipart_upload = fail_abort  # type: ignore[method-assign]
+    await f._write(os.urandom(40 * _KiB))
+    with pytest.raises(OSError, match="part") as raised:
+        await f.aclose()
+    # The error the caller acts on is the first one; the abort's is noted.
+    assert any("abort failed" in note for note in raised.value.__notes__)
 
 
 async def test_a_write_cancelled_between_parts_sends_none_twice(

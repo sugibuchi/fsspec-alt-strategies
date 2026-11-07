@@ -218,7 +218,8 @@ async def _watched(
     """Run an operation for a call, yielding its items, as its monitors watch it.
 
     The monitors are those of the `monitoring` blocks around the call, and
-    ``callback``, fsspec's, if given.
+    ``callback``, fsspec's, if given. They are told in order, so if one's
+    ``ended`` raises, the monitors after it are not told that the call ended.
     """
     monitors = current_monitors()
     if callback is not None:

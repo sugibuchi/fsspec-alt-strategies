@@ -174,7 +174,8 @@ class Monitor:
     operation's state at that moment, then its handler, to act on it. Each is
     awaited where the operation runs, before it goes on: a slow monitor slows
     the call, as a slow loop body slows an operation. A monitor raising ends
-    the call with its error.
+    the call with its error. If one's `ended` raises, the monitors after it
+    are not told that the call ended.
 
     To stop the call, a monitor calls ``op.cancel()``: the operation goes on
     with what is in flight, then the call raises `CallCancelled`.

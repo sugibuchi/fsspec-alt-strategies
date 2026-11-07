@@ -200,6 +200,9 @@ Its stopping follows `asyncio.Task`'s, so that it needs no learning:
 Cancelling the task iterating it, e.g. with `asyncio.timeout`, raises `CancelledError` as usual. The operation then
 cancels its requests and never swallows the error.
 
+A `CancelledError` raised by one of the operation's own requests, e.g. from an SDK, is no error of a path. It ends the
+whole operation, as any cancellation does, rather than being yielded.
+
 Strategies yield in the order the storage answers. A caller wanting fsspec's order sorts, as fsspec's `_find` and
 `_glob` do.
 

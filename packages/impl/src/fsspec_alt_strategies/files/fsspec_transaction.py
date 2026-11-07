@@ -150,8 +150,9 @@ class TransactionFile(io.RawIOBase):
     too, leaving the file open for nothing but closing, as fsspec's files do
     in a transaction. Leaving a ``with`` block by an exception discards.
 
-    The garbage collector discards a file neither committed nor discarded,
-    warning with a ResourceWarning. On a thread running an event loop, which
+    A commit that fails is not tried again: the file can then only be
+    discarded. The garbage collector discards a file neither committed nor
+    discarded, its commit failed or not, warning with a ResourceWarning. On a thread running an event loop, which
     must not wait, the discard runs on a thread of its own. A discard failing
     leaves what was staged, as if the process had died. So does the
     interpreter shutting down, when no discard is tried.
@@ -172,8 +173,9 @@ class TransactionFile(io.RawIOBase):
         self.transaction = transaction
         self.path = transaction.path
         self._file: Any = transaction.start_staging()
-        # None while undecided, then "committed" or "discarded".
-        self._outcome: Literal["committed", "discarded"] | None = None
+        # None while undecided, then "committed" or "discarded". A commit that
+        # raised leaves "commit failed": undecided still, but only discardable.
+        self._outcome: Literal["committed", "discarded", "commit failed"] | None = None
         # "open" while reads and writes go to the staged file. Then "ended" by
         # closing or a forced flush, or "failed" if that raised: never committed.
         self._staging: Literal["open", "ended", "failed"] = "open"
@@ -289,19 +291,35 @@ class TransactionFile(io.RawIOBase):
         self._staging = "ended"
 
     def commit(self) -> None:
-        """Make the writing visible, closing the file first if needed."""
+        """Make the writing visible, closing the file first if needed.
+
+        A commit that raised is not tried again: the file is then only
+        discarded, by `discard` or by the garbage collector.
+
+        Raises
+        ------
+        ValueError
+            If the file was discarded, or its writing or an earlier commit
+            failed.
+        """
         if self._outcome == "committed":
             return
         if self._outcome == "discarded":
             raise ValueError(f"Committing a discarded file: {self.path}")
+        if self._outcome == "commit failed":
+            # A transaction may have spent what it commits from, e.g. a buffer
+            # or an aborted upload: trying again could show a wrong file.
+            raise ValueError(f"Committing a file whose commit failed: {self.path}")
         self.close()
         if self._staging != "ended":
             raise ValueError(f"Committing a file whose writing failed: {self.path}")
-        self._outcome = "committed"
+        # Set before, so that a commit failing midway is never retried.
+        self._outcome = "commit failed"
         self.transaction.commit()
+        self._outcome = "committed"
 
     def discard(self) -> None:
-        """Lose the writing, whether the file is closed or not."""
+        """Lose the writing, whether the file is closed or not, or its commit failed."""
         if self._outcome == "discarded":
             return
         if self._outcome == "committed":
@@ -321,7 +339,8 @@ class TransactionFile(io.RawIOBase):
     def __del__(self) -> None:
         # Unlike io.IOBase, never just closes: that would finish the writing of
         # a file nobody commits.
-        if getattr(self, "_outcome", "unstaged") is not None:
+        # A file whose commit failed is undecided too: what it staged stays.
+        if getattr(self, "_outcome", "unstaged") not in (None, "commit failed"):
             return
         warnings.warn(
             f"Undecided file {self.path!r}, discarded",
@@ -584,8 +603,15 @@ class AdaptiveWritableTransaction(FileTransaction):
         try:
             if self._last is not None:
                 self.file._sync(self._last())
-        except BaseException:
-            self._abort_upload()
+        except BaseException as error:
+            try:
+                self._abort_upload()
+            except Exception as abort_error:
+                # The commit's error is what the caller acts on: the abort's
+                # failure only adds that parts may stay on the storage.
+                error.add_note(
+                    f"Aborting the upload of {self.path!r} failed: {abort_error!r}"
+                )
             raise
 
     def discard(self) -> None:

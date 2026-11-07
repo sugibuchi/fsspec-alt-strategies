@@ -312,6 +312,24 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         self._check_open()
         return self._pos
 
+    # Finishing and aborting, for _AsyncFile.
+    #
+    # A closed file holds no data, even while something still refers to it:
+    # its blocks may weigh up to kept_size, and their fetches are cancelled by
+    # closing anyway.
+
+    async def _finish(self) -> None:
+        self._release()
+
+    async def _abort(self) -> None:
+        self._release()
+        await super()._abort()
+
+    def _release(self) -> None:
+        self._kept.clear()
+        self._kept_bytes = 0
+        self._run = 0
+
     # The reading underneath: blocks fetched ahead, kept, and dropped.
 
     async def _settle(self) -> None:
@@ -591,10 +609,17 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
             if self._multipart:
                 parts = await asyncio.gather(*(r.task for r in self._requests.queue))
                 await self._complete_multipart_upload(list(parts))
-        except BaseException:
+        except BaseException as error:
             if self._multipart:
-                await self._requests.cancel_all()
-                await self._abort_multipart_upload()
+                try:
+                    await self._requests.cancel_all()
+                    await self._abort_multipart_upload()
+                except Exception as abort_error:
+                    # The first error is what the caller acts on: the abort's
+                    # failure only adds that parts may stay on the storage.
+                    error.add_note(
+                        f"Aborting the upload of {self.path!r} failed: {abort_error!r}"
+                    )
             raise
         finally:
             self._buffer = bytearray()
