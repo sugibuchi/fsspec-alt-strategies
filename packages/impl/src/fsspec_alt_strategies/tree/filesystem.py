@@ -39,7 +39,7 @@ from .rm import tree_rm
 from .walk import tree_walk
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator, Awaitable, Callable
 
     from fsspec_alt_strategies_common.profile import StorageProfile
 
@@ -64,7 +64,8 @@ class TreeFileSystem(_StrategyFileSystem):
     ``_makedirs``. It implements ``open_async`` too, giving its files
     ``io_limit`` as their concurrency limit, and ``_open``. ``_cat_file``,
     ``_pipe_file``, ``_get_file`` and ``_put_file`` read and write through
-    ``open_async``'s files.
+    ``open_async``'s files. It may implement ``_rm_tree`` too, a storage's
+    recursive delete of a folder, which a recursive ``rm`` then uses.
 
     Two limits bound its requests, each an `asyncio.Semaphore` of its own:
 
@@ -124,6 +125,15 @@ class TreeFileSystem(_StrategyFileSystem):
 
     storage_profile: StorageProfile
     """What the storage does, for the strategies: a subclass must set it."""
+
+    _rm_tree: Callable[[str], Awaitable[None]] | None = None
+    """Optional: deletes a folder with everything in it, in one request.
+
+    A subclass whose storage has a recursive delete defines it as
+    ``async def _rm_tree(self, path)``. A recursive ``rm`` then deletes each
+    folder root by it, and walks only the roots it fails on. Left None, every
+    folder is walked.
+    """
 
     def __init__(
         self,
@@ -298,6 +308,7 @@ class TreeFileSystem(_StrategyFileSystem):
                 info=self._info,
                 rm_file=self._rm_file,
                 rm_folder=self._rmdir,
+                rm_tree=self._rm_tree,
                 profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
             ),

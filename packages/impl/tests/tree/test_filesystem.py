@@ -277,6 +277,26 @@ async def test_a_file_moves_by_mv_file_when_not_recursive(
     assert not await inner._exists("data/README.md")
 
 
+async def test_rm_uses_a_recursive_delete_of_the_storage(
+    inner: SimulatedFileSystem,
+) -> None:
+    class Deleting(_Tree):
+        async def _rm_tree(self, path: str) -> None:
+            await self.inner._rm(path, recursive=True)
+
+    fs = Deleting(inner, asynchronous=True)
+    callback = Callback()
+    monitor = _Recording()
+    inner.reset_stats()
+    with monitoring(monitor):
+        await fs._rm("data", recursive=True, callback=callback)
+    assert inner.stats.calls == {"info": 1, "delete": 1}
+    assert not await inner._exists("data")
+    # Still an operation, watched as any: the root is its one path deleted.
+    assert ("yielded", "rm", "data") in monitor.events
+    assert callback.value == 1
+
+
 async def test_failures_are_raised(fs: _Tree, inner: SimulatedFileSystem) -> None:
     async def refused(path: str, **kwargs: Any) -> None:
         if path == "data/README.md":

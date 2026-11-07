@@ -162,7 +162,8 @@ print(op.state.files_deleted)
 - The storage's operations are functions, not a filesystem. Any coroutine function called as fsspec calls its own
   serves, e.g. `ls(path, detail=True)`, so one may come from a storage's SDK rather than a filesystem. It also leaves
   room for another kind of operation later, e.g. a listing yielding pages.
-- They are required: a strategy guesses nothing, e.g. which request deletes a folder.
+- They are required: a strategy guesses nothing, e.g. which request deletes a folder. Only a native operation that
+  saves requests is optional, e.g. `tree_rm`'s `rm_tree`: without it, the strategy does the work itself.
 - Paths come without a protocol, as the operations take them. The method wrapping a strategy strips it first.
 
 - `concurrency_limit` is an `asyncio.Semaphore`, of which each request holds a permit while it runs. Shared, it limits
@@ -413,6 +414,10 @@ operation instead, and falls back on its own way where it fails:
   so, and each folder is first moved whole, onto a path that does not exist.
 - A folder merging into an existing one, or whose move fails, is walked and moved file by file, as when unknown.
 - A `TreeFileSystem` subclass overrides `_mv_file` with its rename, and declares `renames_folders`.
+- `tree_rm` takes `rm_tree`, optional, a storage's recursive delete of a folder. Each folder root is first deleted
+  whole by it, and a root it fails on is walked, as without it.
+- A `TreeFileSystem` subclass defines `_rm_tree(path)` with its recursive delete. Its `rm` stays an `Operation`,
+  watched by the monitors and `callback=`, which overriding `_rm` would lose.
 
 ### Copied, not only installed
 
