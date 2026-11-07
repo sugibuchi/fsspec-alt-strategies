@@ -384,8 +384,10 @@ So the code stays easy to copy:
 - It depends on nothing but fsspec and the standard library.
 - Each file starts with its SPDX license header, which copies keep.
 - Each strategy depends on few shared modules, and its module docstring names them.
-- No `__init__.py` imports the modules, so a copy may leave out those it does not use. Users import from the modules,
-  e.g. `fsspec_alt_strategies.tree.find`.
+- The package's `__init__.py` re-exports only the shared interface: `control`'s classes and `StorageProfile`. Those
+  modules depend on nothing else, and every copy keeps them, as the strategies use them.
+- No other `__init__.py` imports a module, so a copy may leave out those it does not use. Users import the rest from
+  the modules, e.g. `fsspec_alt_strategies.tree.find`.
 
 `tests/test_copyable.py` checks the first three rules. It also imports a copy of the package under another name.
 
