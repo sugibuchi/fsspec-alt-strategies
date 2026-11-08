@@ -6,10 +6,7 @@ data methods the wrappers pass on, and the helpers shaping fsspec's answers.
 
 from __future__ import annotations
 
-import asyncio
 import io
-import threading
-import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -92,67 +89,6 @@ async def test_a_sync_wrapper_passes_data_methods_on(tmp_path: Path) -> None:
     assert sorted(inner.ls("/w", detail=False)) == ["/w/a", "/w/b", "/w/d", "/w/e"]
     assert tree.unstrip_protocol("/w/d") == "memory:///w/d"
     assert tree.io_limit._value == 1
-
-
-async def test_blocking_calls_run_on_bounded_threads() -> None:
-    fs = SyncTreeWrapper(MemoryFileSystem(), asynchronous=True, **_LIMITS)
-    lock = threading.Lock()
-    running = peak = 0
-    threads: set[str] = set()
-
-    def call(value: int) -> int:
-        nonlocal running, peak
-        with lock:
-            running += 1
-            peak = max(peak, running)
-            threads.add(threading.current_thread().name)
-        time.sleep(0.02)
-        with lock:
-            running -= 1
-        if value < 0:
-            raise ValueError(value)
-        return value
-
-    results = await asyncio.gather(*(fs._blocking(call, i) for i in range(10)))
-    assert results == list(range(10))
-    # Two threads: the two operations allowed at once.
-    assert peak == 2
-    assert len(threads) == 2
-    assert all(name.startswith("SyncTreeWrapper") for name in threads)
-    with pytest.raises(ValueError, match="-1"):
-        await fs._blocking(call, -1)
-
-
-async def test_close_shuts_the_threads_down() -> None:
-    fs = SyncTreeWrapper(MemoryFileSystem(), asynchronous=True, **_LIMITS)
-    fs.close()  # Nothing to shut down yet.
-    assert await fs._blocking(threading.current_thread) is not threading.main_thread()
-    executor = fs._executor
-    assert executor is not None
-    fs.close()
-    assert fs._executor is None
-    with pytest.raises(RuntimeError, match="shutdown"):
-        executor.submit(int)
-    # A call after closing gets new threads.
-    assert await fs._blocking(int, "4") == 4
-    fs.close()
-
-
-async def test_a_cancelled_blocking_call_is_not_swallowed() -> None:
-    fs = SyncTreeWrapper(MemoryFileSystem(), asynchronous=True, **_LIMITS)
-    started, release = threading.Event(), threading.Event()
-
-    def call() -> None:
-        started.set()
-        release.wait(5)
-
-    task = asyncio.create_task(fs._blocking(call))
-    await asyncio.to_thread(started.wait, 5)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    release.set()  # The thread ran on: it ends only now.
-    fs.close()
 
 
 class _Unseekable(io.BytesIO):

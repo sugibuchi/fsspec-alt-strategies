@@ -14,15 +14,12 @@ This module depends on `types`, for types only.
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import functools
 import io
 import os
-import weakref
 from abc import ABCMeta
-from concurrent.futures import ThreadPoolExecutor
 from glob import has_magic
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import AsyncFileSystem
 from fsspec.callbacks import DEFAULT_CALLBACK
@@ -38,7 +35,6 @@ if TYPE_CHECKING:
 
 
 _MiB = 1024 * 1024
-T = TypeVar("T")
 
 
 class _AbstractFileSystemMeta(type(AsyncFileSystem), ABCMeta):  # type: ignore[misc]
@@ -95,69 +91,6 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         self.io_concurrency = io_concurrency
         self.operation_limit = asyncio.Semaphore(operation_concurrency)
         self.io_limit = asyncio.Semaphore(io_concurrency)
-
-        self._executor: ThreadPoolExecutor | None = None
-
-    async def _blocking(
-        self, func: Callable[..., T], /, *args: Any, **kwargs: Any
-    ) -> T:
-        """Run a blocking call, e.g. of a storage's sync SDK, in a thread.
-
-        It is the way to back the primitives, such as ``_ls``, with an SDK
-        whose calls block: ``return await self._blocking(client.list, path)``.
-        The loop then keeps running the other requests.
-
-        The threads are the filesystem's own, not the loop's default executor,
-        which other code shares. They are made when first needed. There are
-        ``operation_concurrency`` of them, as many as ``operation_limit`` lets
-        run at once. A call beyond them, e.g. of the files' transfers holding
-        ``io_limit``, waits for a thread.
-
-        ``close()`` shuts them down, as does collecting the filesystem. Neither
-        waits for the calls running.
-
-        Cancelling the call raises `asyncio.CancelledError` in the caller at
-        once, but the thread runs on to the end of ``func``: a thread cannot be
-        stopped. A request may then still change the storage after its
-        cancellation.
-
-        Parameters
-        ----------
-        func : callable
-            The blocking function.
-        *args, **kwargs
-            Its arguments.
-
-        Returns
-        -------
-        object
-            What ``func`` returns. What it raises is raised.
-        """
-        if self._executor is None:
-            self._executor = ThreadPoolExecutor(
-                self.operation_concurrency,
-                thread_name_prefix=type(self).__name__,
-            )
-            # Shut down when the filesystem is collected, without keeping it
-            # alive: the callback holds the executor only.
-            weakref.finalize(
-                self, self._executor.shutdown, wait=False, cancel_futures=True
-            )
-        loop = asyncio.get_running_loop()
-        call = functools.partial(func, *args, **kwargs)
-        # The context goes with the call, as asyncio.to_thread passes it.
-        context = contextvars.copy_context()
-        return await loop.run_in_executor(self._executor, context.run, call)
-
-    def close(self) -> None:
-        """Shut down the threads of `_blocking`, without waiting for their calls.
-
-        The calls not started yet are cancelled. A call after closing makes new
-        threads.
-        """
-        executor, self._executor = self._executor, None
-        if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""

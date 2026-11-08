@@ -103,7 +103,6 @@ class _Files:
 
     def close(self) -> None:
         _Files.closed += 1
-        super().close()  # type: ignore[misc]
 
 
 class _Plain(SimulatedFileSystem):

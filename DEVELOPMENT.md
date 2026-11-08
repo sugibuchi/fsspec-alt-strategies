@@ -253,10 +253,6 @@ Or they subclass a family's abstract filesystem, `TreeFileSystem` in `tree/files
   Each family's class declares them all as abstract methods, so a subclass missing one fails when instantiated.
 - It takes two required limits: `operation_concurrency`, for the strategies' requests, and `io_concurrency`, for the
   reads and writes of data. `open_async` gives the files it opens `io_limit`, as their concurrency limit.
-- A storage whose SDK blocks backs the primitives with `_blocking`, e.g. `return await self._blocking(client.list,
-  path)`. It runs the call on the filesystem's own threads, as many as its two limits allow at once.
-  - They are made when first needed. `close()` shuts them down without waiting, as does collecting the filesystem.
-  - A cancelled call raises `CancelledError` at once, but its thread runs to the end, as a thread cannot be stopped.
 - `_cat_file`, `_pipe_file`, `_get_file` and `_put_file` go through `open_async`'s files, so data moves as the file
   classes move it.
 - The failures of a strategy are raised: one as it is, several in an ExceptionGroup. A folder that fails to list is
