@@ -41,7 +41,7 @@ which add fsspec's file features to an existing file-like object, e.g. an SDK's 
 ### Filesystem router
 
 `AsyncRoutingFileSystem`, in `router.py`, spans several storages, e.g. a cloud's volumes. It routes each path to the
-storage holding it, and copies or moves between storages with the source's strategy.
+storage holding it, and copies or moves files between different storages.
 
 ## Installation
 
