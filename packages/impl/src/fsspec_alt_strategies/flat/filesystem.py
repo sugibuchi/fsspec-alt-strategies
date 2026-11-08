@@ -23,11 +23,11 @@ from fsspec_alt_strategies_common.monitor import Call
 
 from ..common.filesystem import (
     _answer,
+    _BaseFileSystem,
     _copy_errors,
     _du_answer,
     _failed_folder,
     _raise,
-    _StrategyFileSystem,
 )
 from ..common.operation import _collected
 from ..common.paths import _triples
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 __all__ = ["FlatFileSystem"]
 
 
-class FlatFileSystem(_StrategyFileSystem):
+class FlatFileSystem(_BaseFileSystem):
     """An abstract async filesystem, its recursive methods the flat strategies.
 
     It suits flat storages, such as object stores, which list every key under a

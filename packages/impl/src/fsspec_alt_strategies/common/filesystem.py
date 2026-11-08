@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """What the filesystem classes of the families share, e.g. `TreeFileSystem`'s.
 
-`_StrategyFileSystem` holds the two concurrency limits, and moves data through
+`_BaseFileSystem` holds the two concurrency limits, and moves data through
 file objects: its ``_cat_file``, ``_pipe_file``, ``_get_file`` and
 ``_put_file`` open the file with ``open_async``, which a subclass implements.
 The functions below it shape the answers and errors of fsspec's methods, as
@@ -49,9 +49,7 @@ class _AbstractFileSystemMeta(type(AsyncFileSystem), ABCMeta):  # type: ignore[m
     """
 
 
-class _StrategyFileSystem(
-    AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemMeta
-):
+class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemMeta):
     """An async filesystem with two concurrency limits, moving data through files.
 
     ``operation_limit`` bounds the requests of the strategies, such as

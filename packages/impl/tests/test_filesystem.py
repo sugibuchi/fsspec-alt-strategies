@@ -16,10 +16,10 @@ import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
 from fsspec_alt_strategies.common.filesystem import (
+    _BaseFileSystem,
     _copy_errors,
     _failed_folder,
     _raise,
-    _StrategyFileSystem,
 )
 from fsspec_alt_strategies.files.fsspec_async import SyncFileAdapter
 from fsspec_alt_strategies.flat.wrapper import AsyncFlatWrapper
@@ -189,7 +189,7 @@ class _Streaming(SyncTreeWrapper):
 async def test_a_range_of_an_unseekable_file_skips_its_start() -> None:
     fs = _Streaming(b"0123456789")
     fs.transfer_size = 3
-    cat = _StrategyFileSystem._cat_file
+    cat = _BaseFileSystem._cat_file
     assert await cat(fs, "f", start=7, end=9) == b"78"
     # Read and dropped in chunks no bigger than a transfer.
     assert fs.opened[-1].reads == [3, 3, 1, 2]
@@ -202,8 +202,8 @@ async def test_a_range_of_an_unseekable_file_skips_its_start() -> None:
 async def test_a_local_folder_is_no_transfer(tmp_path: Path) -> None:
     # Both return before opening a file: fsspec makes local folders itself.
     tree = SyncTreeWrapper(MemoryFileSystem(), asynchronous=True, **_LIMITS)
-    assert await _StrategyFileSystem._get_file(tree, "/w/a", str(tmp_path)) is None
-    assert await _StrategyFileSystem._put_file(tree, str(tmp_path), "/w/a") is None
+    assert await _BaseFileSystem._get_file(tree, "/w/a", str(tmp_path)) is None
+    assert await _BaseFileSystem._put_file(tree, str(tmp_path), "/w/a") is None
 
 
 def test_plain_paths_keep_a_trailing_slash() -> None:
