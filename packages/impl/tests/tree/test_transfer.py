@@ -1,4 +1,4 @@
-﻿"""Tests of `tree_transfer`, copying a tree between two storages."""
+"""Tests of `tree_transfer`, copying a tree between two storages."""
 
 from __future__ import annotations
 

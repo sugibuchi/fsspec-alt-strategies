@@ -1,4 +1,4 @@
-﻿"""Tests of `flat_transfer`, copying the keys under a prefix between two storages."""
+"""Tests of `flat_transfer`, copying the keys under a prefix between two storages."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import pytest
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.common.operation import _collect
-from fsspec_alt_strategies.flat.transfer import CpState, flat_transfer
 from fsspec_alt_strategies.common.streams import streaming_copy
+from fsspec_alt_strategies.flat.transfer import CpState, flat_transfer
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 

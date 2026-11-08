@@ -1,4 +1,4 @@
-﻿# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
 """A filesystem routing each path to the filesystem of its storage.
 

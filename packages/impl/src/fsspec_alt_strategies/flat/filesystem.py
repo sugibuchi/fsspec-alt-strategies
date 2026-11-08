@@ -1,4 +1,4 @@
-﻿# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
 """An abstract async filesystem whose recursive methods are the flat strategies.
 

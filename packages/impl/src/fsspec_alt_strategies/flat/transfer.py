@@ -1,4 +1,4 @@
-﻿# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
 """A recursive copy from one storage to another, copying the keys as it lists them.
 
