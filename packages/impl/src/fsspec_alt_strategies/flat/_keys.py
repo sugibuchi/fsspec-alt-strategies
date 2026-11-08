@@ -37,6 +37,18 @@ def _folders(name: str) -> list[str]:
     return ["/".join(parts[:i]) for i in range(1, len(parts) + name.endswith("/"))]
 
 
+def _new(folders: list[str], before: list[str]) -> list[str]:
+    """The folders of a key not seen yet, given those of the key listed before.
+
+    The keys come in order, so those in a folder come together: a folder seen
+    before is one of the key before's, which the two keys start with.
+    """
+    shared = 0
+    while shared < min(len(folders), len(before)) and folders[shared] == before[shared]:
+        shared += 1
+    return folders[shared:]
+
+
 async def _close(entries: AsyncIterator[dict[str, Any]]) -> None:
     """Close a listing left early, if it can be: an async generator can."""
     if (aclose := getattr(entries, "aclose", None)) is not None:

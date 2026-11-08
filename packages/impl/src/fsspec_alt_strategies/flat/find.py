@@ -18,7 +18,7 @@ from fsspec_alt_strategies_common.states import FindState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
-from ._keys import _close, _folder, _folders
+from ._keys import _close, _folder, _folders, _new
 
 if TYPE_CHECKING:
     import asyncio
@@ -154,7 +154,9 @@ async def _find_entries(
     root = _trim(path)
     prefix = f"{root}/" if root else ""
     under = False
-    seen: set[str] = set()
+
+    # The folders of the key listed last.
+    before: list[str] = []
 
     entries = ils(prefix)
     try:
@@ -162,11 +164,11 @@ async def _find_entries(
             under = True
             name = entry["name"]
             if withdirs:
-                for folder in _folders(name[len(prefix) :]):
-                    full = prefix + folder
-                    if full not in seen and _within(folder, maxdepth):
-                        seen.add(full)
-                        yield _folder(full)
+                folders = _folders(name[len(prefix) :])
+                for folder in _new(folders, before):
+                    if _within(folder, maxdepth):
+                        yield _folder(prefix + folder)
+                before = folders
             if not name.endswith("/") and _within(name[len(prefix) :], maxdepth):
                 yield entry
             if stopping is not None and stopping():

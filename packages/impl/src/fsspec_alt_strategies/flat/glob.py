@@ -25,7 +25,7 @@ from fsspec_alt_strategies_common.states import GlobState
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _Search
-from ._keys import _close, _folder, _folders
+from ._keys import _close, _folder, _folders, _new
 
 if TYPE_CHECKING:
     import asyncio
@@ -170,18 +170,18 @@ async def _matches(
     found: set[str],
 ) -> AsyncGenerator[dict[str, Any]]:
     """The matches of patterns in one listing, noted in ``found``."""
-    seen: set[str] = set()
+    # The folders of the key listed last.
+    before: list[str] = []
+
     entries = ils(prefix)
     try:
         async for entry in entries:
             name = entry["name"]
-            candidates = []
 
             # The folders the key implies, each once, then the key itself.
-            for folder in _folders(name):
-                if folder not in seen:
-                    seen.add(folder)
-                    candidates.append(_folder(folder))
+            folders = _folders(name)
+            candidates = [_folder(f) for f in _new(folders, before)]
+            before = folders
             if not name.endswith("/"):
                 candidates.append(entry)
 
