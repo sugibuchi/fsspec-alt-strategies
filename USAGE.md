@@ -32,8 +32,11 @@ the operation.
 
 ### Async file object
 
-The file objects in `files/` adapt their buffering to how a file is used. `AsyncFileAdapter` gives a sync file the
-API of the files `open_async()` opens, and fsspec's transactions work with any file object.
+The file objects in `files/` adapt their buffering to how a file is used. The module also provides adapters,
+which add fsspec's file features to an existing file-like object, e.g. an SDK's own:
+
+- `AsyncFileAdapter` gives a sync file the API of the files `open_async()` opens;
+- the transactions of `fsspec_transaction.py` make its writes take effect only when fsspec's transaction commits.
 
 ### Filesystem router
 
