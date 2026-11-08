@@ -65,6 +65,15 @@ import each other relatively, so a copy works under any name. Keep their license
 
 It is also on PyPI, as `fsspec-alt-strategies-impl`, to try it before copying.
 
+Its command line copies it, with its `cli` extra. Run it from your project, with the folder to copy into:
+
+```bash
+uv run --with "fsspec-alt-strategies-impl[cli]" fsspec-alt-strategies-impl copy src/mypkg/_contrib/strategy
+```
+
+It copies the package as installed, so the copy keeps its version in `__version__`. It replaces a previous copy, and
+refuses any other folder that is not empty. Delete the modules you do not use afterwards.
+
 ### The modules to copy for each feature
 
 | Feature                         | Modules to copy                                                            |

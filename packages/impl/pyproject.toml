@@ -34,6 +34,13 @@ dependencies = [
     "fsspec-alt-strategies",
 ]
 
+[project.optional-dependencies]
+# The command line, copying the strategies into another package.
+cli = ["click>=8.1"]
+
+[project.scripts]
+fsspec-alt-strategies-impl = "fsspec_alt_strategies_impl_cli:main"
+
 [project.urls]
 Homepage = "https://github.com/sugibuchi/fsspec-alt-strategies"
 Source = "https://github.com/sugibuchi/fsspec-alt-strategies"
@@ -73,9 +80,13 @@ __version__ = "{version}"
 '''
 
 [tool.hatch.build.targets.wheel]
-# The simulated filesystem is a package of its own, so that copies of the
-# strategies leave it out.
-packages = ["src/fsspec_alt_strategies_impl", "src/fsspec_alt_strategies_impl_testing"]
+# The simulated filesystem and the command line are packages of their own, so
+# that copies of the strategies leave them out.
+packages = [
+    "src/fsspec_alt_strategies_impl",
+    "src/fsspec_alt_strategies_impl_testing",
+    "src/fsspec_alt_strategies_impl_cli",
+]
 
 [tool.uv]
 # Rebuild the package when its git commit or tags change, as its version

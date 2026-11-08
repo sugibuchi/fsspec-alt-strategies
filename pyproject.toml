@@ -15,7 +15,7 @@ fsspec-alt-strategies = { workspace = true }
 
 [dependency-groups]
 dev = [
-    "fsspec-alt-strategies-impl",
+    "fsspec-alt-strategies-impl[cli]",
     "fsspec-alt-strategies",
     "pre-commit>=4.0",
     "pytest>=9.1.1",
@@ -37,6 +37,7 @@ source = [
     "packages/common/src/fsspec_alt_strategies",
     "packages/impl/src/fsspec_alt_strategies_impl",
     "packages/impl/src/fsspec_alt_strategies_impl_testing",
+    "packages/impl/src/fsspec_alt_strategies_impl_cli",
 ]
 
 [tool.ruff]

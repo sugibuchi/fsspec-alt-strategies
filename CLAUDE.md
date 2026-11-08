@@ -31,7 +31,8 @@ features. It is a uv workspace of two packages, each built and published on its 
 - `packages/common`, `fsspec_alt_strategies`: the interface the strategies share with their callers, in
   `monitor.py`, `profile.py` and `states.py`. It is installed, never copied.
 - `packages/impl`, `fsspec_alt_strategies_impl`: the strategies, copied into the projects using them, and
-  `fsspec_alt_strategies_impl_testing`, the simulated filesystem.
+  `fsspec_alt_strategies_impl_testing`, the simulated filesystem, and `fsspec_alt_strategies_impl_cli`, the click
+  command line copying the package, with the `cli` extra. Neither is copied, and only the CLI may use click.
 
 The workspace root holds the tooling: ruff, pytest and coverage settings, CI, and the docs. DEVELOPMENT.md's Design section has the choices that shape the code: read it before adding a strategy.
 

@@ -19,6 +19,7 @@ ruff, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
 | `.../wrapper.py`, `.../monitor.py`                      | Wrappers of existing filesystems, and `monitored()`                        |
 | `.../router.py`                                         | `AsyncRoutingFileSystem`, spanning several storages                        |
 | `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem`, apart so that copies leave it out                   |
+| `packages/impl/src/fsspec_alt_strategies_impl_cli/`     | The command line copying the strategies, with the `cli` extra              |
 | `packages/*/tests/`                                     | Each package's tests                                                       |
 | `packages/*/hatch_build.py`                             | Gives each package the root README.md as its PyPI readme                   |
 | `.github/workflows/`                                    | CI, CodeQL, and one release workflow per package                           |
