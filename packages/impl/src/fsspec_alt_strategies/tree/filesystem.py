@@ -217,6 +217,7 @@ class TreeFileSystem(_BaseFileSystem):
             on_error="raise" if on_error == "raise" else None,
             concurrency_limit=self.operation_limit,
         )
+
         async with aclosing(
             _with_monitors(walk, Call(self._unwrapped(), "walk", path))
         ) as items:
@@ -232,6 +233,7 @@ class TreeFileSystem(_BaseFileSystem):
             except OSError as e:
                 yield _failed_folder(root, e, on_error, detail)
                 return
+
             item = first
             while True:
                 if isinstance(item, Exception):
@@ -241,6 +243,7 @@ class TreeFileSystem(_BaseFileSystem):
                     if not detail:
                         dirs, files = list(dirs), list(files)
                     yield folder, dirs, files
+
                 try:
                     item = await anext(items)
                 except StopAsyncIteration:
@@ -265,6 +268,7 @@ class TreeFileSystem(_BaseFileSystem):
             ),
             Call(self._unwrapped(), "find", path),
         )
+
         return _answer(entries, detail)
 
     async def _du(
@@ -274,6 +278,7 @@ class TreeFileSystem(_BaseFileSystem):
             return await super()._du(
                 path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
             )
+
         op = tree_du(
             self._strip_protocol(path),
             ls=_with(self._ls, kwargs),
@@ -284,6 +289,7 @@ class TreeFileSystem(_BaseFileSystem):
         entries, _ = await _collect_with_monitors(
             op, Call(self._unwrapped(), "du", path)
         )
+
         return _du_answer(op.state.size, entries, total)
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
@@ -300,6 +306,7 @@ class TreeFileSystem(_BaseFileSystem):
             ),
             Call(self._unwrapped(), "glob", path),
         )
+
         return _answer(entries, detail)
 
     async def _rm(
@@ -313,6 +320,7 @@ class TreeFileSystem(_BaseFileSystem):
         if not recursive or maxdepth is not None:
             await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
             return
+
         _, errors = await _collect_with_monitors(
             tree_rm(
                 self._strip_only_protocol(path),
@@ -327,6 +335,7 @@ class TreeFileSystem(_BaseFileSystem):
             Call(self._unwrapped(), "rm", path),
             kwargs.get("callback"),
         )
+
         _raise(errors, "Deleting")
 
     async def _copy(
@@ -344,6 +353,7 @@ class TreeFileSystem(_BaseFileSystem):
                 path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
             )
             return
+
         _, errors = await _collect_with_monitors(
             tree_cp(
                 self._strip_only_protocol(path1),
@@ -359,6 +369,7 @@ class TreeFileSystem(_BaseFileSystem):
             Call(self._unwrapped(), "copy", path1, path2),
             kwargs.get("callback"),
         )
+
         _raise(_copy_errors(errors, on_error), "Copying")
 
     async def _mv(
@@ -376,6 +387,7 @@ class TreeFileSystem(_BaseFileSystem):
         """
         if path1 == path2:
             return
+
         if (not recursive or maxdepth is not None) and not await self._single_file(
             path1
         ):
@@ -383,6 +395,7 @@ class TreeFileSystem(_BaseFileSystem):
             await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
             await self._rm(path1, recursive=recursive)
             return
+
         _, errors = await _collect_with_monitors(
             tree_mv(
                 self._strip_only_protocol(path1),
@@ -398,6 +411,7 @@ class TreeFileSystem(_BaseFileSystem):
             Call(self._unwrapped(), "mv", path1, path2),
             kwargs.get("callback"),
         )
+
         _raise(errors, "Moving")
 
     # fsspec makes sync methods only from the async ones it knows: _mv and _rmdir are

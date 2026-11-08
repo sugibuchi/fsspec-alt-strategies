@@ -87,6 +87,7 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
             storage_profile=storage_profile,
             **kwargs,
         )
+
         # Optional, as on a TreeFileSystem: left None, rm walks every folder.
         rm_tree = getattr(fs, "_rm_tree", None)
         if rm_tree is not None:

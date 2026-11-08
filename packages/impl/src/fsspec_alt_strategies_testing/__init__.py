@@ -146,7 +146,9 @@ class SimulatedFileSystem(AsyncFileSystem):
             raise ValueError(f"page_size must be positive: {page_size}")
         if bandwidth is not None and bandwidth <= 0:
             raise ValueError(f"bandwidth must be positive: {bandwidth}")
+
         super().__init__(**kwargs)
+
         self.hierarchical = hierarchical
         self.recursive_listing = recursive_listing
         self.latency = latency
@@ -154,6 +156,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         self.page_size = page_size
         self.parents_required = parents_required and hierarchical
         self.overwrite = overwrite
+
         self.stats = CallStats()
         self._in_flight = 0
         self._file_data: dict[str, _File] = {}
@@ -211,6 +214,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         seconds = self.latency
         if self.bandwidth is not None:
             seconds += size / self.bandwidth
+
         for _ in range(count):
             self.stats.calls[kind] += 1
             self.stats.transferred[kind] += size
@@ -244,12 +248,14 @@ class SimulatedFileSystem(AsyncFileSystem):
         path = self._strip_protocol(path)
         children = self._folders.get(path)
         await self._request("list", self._pages(len(children)) if children else 1)
+
         if path in self._file_data:
             entries = [self._entry(path)]
         elif path in self._folders:
             entries = [self._entry(c) for c in sorted(self._folders[path])]
         else:
             raise FileNotFoundError(path)
+
         return entries if detail else [e["name"] for e in entries]
 
     async def _find(
@@ -264,9 +270,11 @@ class SimulatedFileSystem(AsyncFileSystem):
             return await super()._find(
                 path, maxdepth=maxdepth, withdirs=withdirs, **kwargs
             )
+
         path = self._strip_protocol(path)
         detail = kwargs.pop("detail", False)
         await self._request("list", self._pages(len(self._listing(path))))
+
         names = self._listing(path)
         if withdirs and path in self._folders:
             # Object stores list only files, but their folders follow from the
@@ -275,6 +283,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         elif not withdirs:
             names = [n for n in names if n in self._file_data]
         names.sort()
+
         if detail:
             return {n: self._entry(n) for n in names}
         return names
@@ -288,6 +297,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         only once the one before it is all taken.
         """
         after: str | None = None
+
         while True:
             await self._request("list")
             # Asked for after the last path taken, as with S3's StartAfter, so
@@ -300,6 +310,7 @@ class SimulatedFileSystem(AsyncFileSystem):
             page = names[: self.page_size]
             for name in page:
                 yield self._entry(name)
+
             if len(names) <= self.page_size:
                 return
             after = page[-1]
@@ -358,6 +369,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         **kwargs: Any,
     ) -> None:
         batch_size = batch_size or self.batch_size
+
         if self.hierarchical:
             if maxdepth is not None:
                 raise NotImplementedError(
@@ -372,6 +384,7 @@ class SimulatedFileSystem(AsyncFileSystem):
                 path, recursive=recursive, maxdepth=maxdepth
             )
             coros = [self._rm_file(p) for p in paths if p in self._file_data]
+
         await _run_coros_in_chunks(coros, batch_size=batch_size, nofiles=True)
 
     async def _rm_path(self, path: str, recursive: bool) -> None:
@@ -391,11 +404,13 @@ class SimulatedFileSystem(AsyncFileSystem):
         path = self._strip_protocol(path)
         if not self.hierarchical:
             return  # No request: there is no folder to delete.
+
         await self._request("delete")
         if self._folder(path):
             raise OSError(errno.ENOTEMPTY, "Folder not empty", path)
         if not path:
             raise PermissionError("The root folder cannot be deleted.")
+
         del self._folders[path]
         self._detach(path)
 
@@ -410,6 +425,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         path1, path2 = self._strip_protocol(path1), self._strip_protocol(path2)
         if not self.hierarchical:
             raise NotImplementedError("An object store renames nothing at once.")
+
         await self._request("rename")
         if path1 not in self._file_data and path1 not in self._folders:
             raise FileNotFoundError(path1)
@@ -419,17 +435,21 @@ class SimulatedFileSystem(AsyncFileSystem):
             raise OSError(errno.EINVAL, "Cannot move a folder into itself", path2)
         if self.parents_required and _parent_of(path2) not in self._folders:
             raise FileNotFoundError(_parent_of(path2))
+
         if path1 in self._file_data:
             file = self._file_data[path1]
             self._unlink(path1)
             self._write(path2, file.data, file.mtime)
             return
+
         # Parents first, so that each folder is made before what is in it.
         paths = [path1, *self._descendants(path1)]
         files = {p: self._file_data[p] for p in paths if p in self._file_data}
         folders = [p for p in paths if p in self._folders]
+
         self._drop(path1)
         self._detach(path1)
+
         for folder in folders:
             self._make_dirs(path2 + folder[len(path1) :])
         for path, file in files.items():
@@ -441,17 +461,20 @@ class SimulatedFileSystem(AsyncFileSystem):
         path = self._strip_protocol(path)
         if not self.hierarchical:
             return  # No request: a folder appears with its first file.
+
         await self._request("mkdir")
         if path in self._folders or path in self._file_data:
             raise FileExistsError(path)
         if not create_parents and _parent_of(path) not in self._folders:
             raise FileNotFoundError(_parent_of(path))
+
         self._make_dirs(path)
 
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
         path = self._strip_protocol(path)
         if not self.hierarchical:
             return  # No request: a folder appears with its first file.
+
         await self._request("mkdir")
         if path in self._folders and not exist_ok:
             raise FileExistsError(path)
@@ -496,6 +519,7 @@ class SimulatedFileSystem(AsyncFileSystem):
             return [path]
         if path not in self._folders:
             return []
+
         # A hierarchical storage lists its folders too; an object store only keys.
         return [
             p
@@ -515,6 +539,7 @@ class SimulatedFileSystem(AsyncFileSystem):
             return
         if path in self._file_data:
             raise NotADirectoryError(path)
+
         parent = _parent_of(path)
         self._make_dirs(parent)
         self._folders[path] = set()
@@ -523,6 +548,7 @@ class SimulatedFileSystem(AsyncFileSystem):
     def _write(self, path: str, data: bytes, mtime: float | None = None) -> None:
         if path in self._folders:
             raise IsADirectoryError(path)
+
         parent = _parent_of(path)
         self._make_dirs(parent)
         self._file_data[path] = _File(

@@ -107,6 +107,7 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
         **kwargs: Any,
     ) -> None:
         self.rm_batch_size = rm_batch_size
+
         super().__init__(
             fs,
             operation_concurrency=operation_concurrency,
@@ -195,6 +196,7 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
         **kwargs: Any,
     ) -> None:
         self.rm_batch_size = rm_batch_size
+
         super().__init__(
             fs,
             operation_concurrency=operation_concurrency,

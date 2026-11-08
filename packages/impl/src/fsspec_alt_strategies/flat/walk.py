@@ -136,6 +136,7 @@ def flat_walk(
             concurrency_limit=concurrency_limit,
             stopping=op.cancelling,
         )
+
         async with aclosing(entries):
             async for entry in entries:
                 op.state = WalkState(current=entry["name"], found=op.state.found + 1)
@@ -160,10 +161,13 @@ async def _entries(
     prefix = f"{root}/" if root else ""
     under = False
     seen: set[str] = set()
+
     # The folders whose contents descend left out.
     pruned: set[str] = set()
+
     # Bottom up, the folders, held until the listing ends.
     held: list[dict[str, Any]] = []
+
     keys = ils(prefix)
     try:
         async for key in keys:
@@ -178,12 +182,14 @@ async def _entries(
                 return
     finally:
         await _close(keys)
+
     if not under and root:
         # Nothing under it: a file, or missing, as tree_walk raises for them.
         async with concurrency_limit:
             entry = await info(root)
         if entry["type"] != "directory":
             raise NotADirectoryError(root)
+
     # The deepest first, so that each folder comes after all in it.
     for entry in sorted(held, key=lambda e: e["name"].count("/"), reverse=True):
         yield entry
@@ -205,14 +211,17 @@ def _found(
     """
     if not relative:
         return []  # The root's own marker.
+
     found = []
     for folder in _folders(relative):
         full = prefix + folder
         if full in pruned:
             return found
+
         depth = folder.count("/") + 1
         if maxdepth is not None and depth > maxdepth:
             return found
+
         if full not in seen:
             seen.add(full)
             entry = _folder(full)
@@ -220,6 +229,7 @@ def _found(
             if descend is not None and not descend(entry):
                 pruned.add(full)
                 return found
+
     depth = relative.count("/") + 1
     if not relative.endswith("/") and (maxdepth is None or depth <= maxdepth):
         found.append(key)

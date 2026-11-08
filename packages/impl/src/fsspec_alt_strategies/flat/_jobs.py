@@ -64,6 +64,7 @@ class _FlatJobs(_Jobs):
         op: Operation[Any, Any],
     ) -> None:
         super().__init__(concurrency_limit, op)
+
         self.ils = ils
         self.info = info
 
@@ -103,8 +104,10 @@ class _FlatJobs(_Jobs):
                         return
             finally:
                 await _close(entries)
+
             if under or not folder:
                 continue
+
             async with self.concurrency_limit:
                 entry = await self.info(folder)
             if entry["type"] != "directory":

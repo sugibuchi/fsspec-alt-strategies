@@ -121,6 +121,7 @@ def flat_glob(
     data/2024-01.parquet
     """
     _check_maxdepth(maxdepth)
+
     literals: list[str] = []
     searches: list[tuple[str, _Search]] = []
     for pattern in [path] if isinstance(path, str) else path:
@@ -138,6 +139,7 @@ def flat_glob(
         found: set[str] = set()
         async for entry in _infos(info, literals, concurrency_limit, op, found):
             yield entry
+
         for prefix, group in _listings(searches):
             if op.cancelling():
                 return
@@ -174,6 +176,7 @@ async def _matches(
         async for entry in entries:
             name = entry["name"]
             candidates = []
+
             # The folders the key implies, each once, then the key itself.
             for folder in _folders(name):
                 if folder not in seen:
@@ -181,6 +184,7 @@ async def _matches(
                     candidates.append(_folder(folder))
             if not name.endswith("/"):
                 candidates.append(entry)
+
             for candidate in candidates:
                 matched = candidate["name"]
                 if matched in found or not any(s.matched(candidate) for s in searches):
@@ -192,6 +196,7 @@ async def _matches(
                     matched=op.state.matched + 1,
                 )
                 yield candidate
+
             if op.cancelling():
                 return
     finally:

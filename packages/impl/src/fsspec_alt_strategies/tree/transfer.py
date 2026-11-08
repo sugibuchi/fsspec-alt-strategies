@@ -196,6 +196,7 @@ class _CrossCopy(_Transfer):
                 entry = await self.destination_info(destination)
                 if entry["type"] == "directory":
                     raise
+
                 await self.dst_rm_file(destination)
                 await self.copy_file(source, destination)
         except Exception as e:

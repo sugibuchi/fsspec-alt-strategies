@@ -110,6 +110,7 @@ def flat_du(
             concurrency_limit=concurrency_limit,
             stopping=op.cancelling,
         )
+
         async with aclosing(steps):
             async for entry in steps:
                 op.state = DuState(

@@ -121,12 +121,14 @@ class Operation(OperationHandler, Generic[T, S]):
     async def __anext__(self) -> T | Exception:
         if self._done:
             raise StopAsyncIteration
+
         if self._steps is None:
             if self._cancel_requests:
                 # As a task cancelled before it runs: nothing is sent.
                 self._done = True
                 raise StopAsyncIteration
             self._steps = self._run(self)
+
         try:
             return await anext(self._steps)
         except BaseException:
@@ -172,6 +174,7 @@ class Operation(OperationHandler, Generic[T, S]):
         """
         if self._done:
             return
+
         self._cancel_requests += 1
         try:
             if self._steps is not None:
@@ -198,15 +201,18 @@ async def _with_monitors(
     monitors = current_monitors()
     if callback is not None:
         monitors = (*monitors, _Counting(callback))
+
     error: BaseException | None = None
     try:
         async with operation:
             for monitor in monitors:
                 await monitor.started(call, operation.state, operation)
+
             async for item in operation:
                 for monitor in monitors:
                     await monitor.yielded(call, item, operation.state, operation)
                 yield item
+
         if operation.cancelled():
             raise CallCancelled(call, operation.state)
     except GeneratorExit:
@@ -230,12 +236,14 @@ async def _collect_with_errors(
     """
     found: list[Any] = []
     errors: list[Exception] = []
+
     async with aclosing(items):
         async for item in items:
             if isinstance(item, Exception):
                 errors.append(item)
             else:
                 found.append(item)
+
     return found, errors
 
 

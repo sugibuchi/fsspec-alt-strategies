@@ -153,10 +153,13 @@ class _Copy(_Placing, _FlatJobs):
         op: Operation[Any, Any],
     ) -> None:
         super().__init__(ils, info, concurrency_limit, op)
+
         self.path1 = path1
         self.path2 = path2
         self.cp_file = cp_file
+
         self._placing()
+
         self.files_found = 0
         self.files_done = 0
 

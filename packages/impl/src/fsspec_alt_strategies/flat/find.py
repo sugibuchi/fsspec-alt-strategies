@@ -118,6 +118,7 @@ def flat_find(
             concurrency_limit=concurrency_limit,
             stopping=op.cancelling,
         )
+
         async with aclosing(steps):
             async for entry in steps:
                 op.state = FindState(current=entry["name"], found=op.state.found + 1)
@@ -154,6 +155,7 @@ async def _find_entries(
     prefix = f"{root}/" if root else ""
     under = False
     seen: set[str] = set()
+
     entries = ils(prefix)
     try:
         async for entry in entries:
@@ -171,13 +173,16 @@ async def _find_entries(
                 return
     finally:
         await _close(entries)
+
     if not root or (under and not withdirs):
         return
+
     try:
         async with concurrency_limit:
             entry = await info(root)
     except FileNotFoundError:
         return
+
     # A folder is found itself only with withdirs. A file is found itself only
     # when nothing is under it, as fsspec's _find tells them apart.
     is_folder = entry["type"] == "directory"

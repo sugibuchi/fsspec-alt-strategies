@@ -309,6 +309,7 @@ class LoggingMonitor(Monitor):
             how = "was cancelled"
         else:
             how = f"failed with {error!r}"
+
         self.logger.log(
             self.level,
             "%s of %s %s, %d errors: %r",

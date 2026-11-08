@@ -127,6 +127,7 @@ def flat_rm(
     """
     if batch_size < 1:
         raise ValueError(f"batch_size must be at least 1: {batch_size}")
+
     return Operation(
         lambda op: _Deletion(
             path,
@@ -156,9 +157,11 @@ class _Deletion(_FlatJobs):
         op: Operation[str, RmState],
     ) -> None:
         super().__init__(ils, info, concurrency_limit, op)
+
         self.path = path
         self.rm_files = rm_files
         self.batch_size = batch_size
+
         self.batch: list[str] = []
         self.files_found = 0
         self.files_deleted = 0

@@ -125,10 +125,12 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         """
         if not isinstance(path, str) or has_magic(path) or path.endswith("/"):
             return False
+
         try:
             entry = await self._info(self._strip_protocol(path))
         except FileNotFoundError:
             return False
+
         return entry["type"] != "directory"
 
     async def _cat_file(
@@ -140,6 +142,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
             if start is not None:
                 position = start if start >= 0 else max(0, f.size + start)
                 await _skip(f, position, self.transfer_size)
+
             if end is not None:
                 if end < 0:
                     end = f.size + end
@@ -162,10 +165,12 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     ) -> None:
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
             return  # A folder, which fsspec's get makes itself.
+
         f = await self.open_async(rpath, "rb", **kwargs)
         async with f:
             # The bytes, as fsspec's own filesystems tell them to the callback.
             callback.set_size(f.size)
+
             # Local writes are short next to a storage's requests, as in fsspec's
             # own filesystems.
             with open(lpath, "wb") as local:  # noqa: ASYNC230
@@ -183,6 +188,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     ) -> None:
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
             return  # A folder: a storage needs none for the files put in it.
+
         f = await self.open_async(rpath, "xb" if mode == "create" else "wb", **kwargs)
         async with f:
             with open(lpath, "rb") as local:  # noqa: ASYNC230
@@ -213,6 +219,7 @@ async def _skip(f: Any, start: int, chunk_size: int) -> None:
             return
     except (io.UnsupportedOperation, OSError):
         pass
+
     skipped = 0
     while skipped < start:
         chunk = await f.read(min(chunk_size, start - skipped))

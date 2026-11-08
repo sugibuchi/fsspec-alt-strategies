@@ -143,6 +143,7 @@ class FlatFileSystem(_BaseFileSystem):
             io_concurrency=io_concurrency,
             **kwargs,
         )
+
         size = getattr(self, "rm_batch_size", None)
         if not isinstance(size, int) or size < 1:
             raise ValueError(f"rm_batch_size must be set, to at least 1: {size}")
@@ -212,6 +213,7 @@ class FlatFileSystem(_BaseFileSystem):
     ) -> AsyncGenerator[tuple[str, Any, Any]]:
         detail = kwargs.pop("detail", False)
         root = self._strip_protocol(path)
+
         try:
             entries, _ = await _collect_with_monitors(
                 flat_walk(
@@ -231,6 +233,7 @@ class FlatFileSystem(_BaseFileSystem):
         except OSError as e:
             yield _failed_folder(root, e, on_error, detail)
             return
+
         # Each folder's entries, the folders as deep as fsspec's walk lists.
         start = len(root) + 1 if root else 0
         folders: dict[str, list[dict[str, Any]]] = {root: []}
@@ -239,10 +242,12 @@ class FlatFileSystem(_BaseFileSystem):
             depth = name[start:].count("/") + 1
             if entry["type"] == "directory" and (maxdepth is None or depth < maxdepth):
                 folders.setdefault(name, [])
+
         for entry in entries:
             parent = entry["name"].rstrip("/").rpartition("/")[0]
             if parent in folders:
                 folders[parent].append(entry)
+
         order = sorted(folders, key=lambda f: f.count("/"), reverse=not topdown)
         for folder in order:
             yield _triples(folder, folders[folder], detail)
@@ -275,6 +280,7 @@ class FlatFileSystem(_BaseFileSystem):
             return await super()._du(
                 path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
             )
+
         op = flat_du(
             self._strip_protocol(path),
             ils=self._ils,
@@ -282,6 +288,7 @@ class FlatFileSystem(_BaseFileSystem):
             maxdepth=maxdepth,
             concurrency_limit=self.operation_limit,
         )
+
         entries, _ = await _collect_with_monitors(
             op, Call(self._unwrapped(), "du", path)
         )
@@ -313,6 +320,7 @@ class FlatFileSystem(_BaseFileSystem):
         if not recursive or maxdepth is not None:
             await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
             return
+
         _, errors = await _collect_with_monitors(
             flat_rm(
                 self._strip_only_protocol(path),
@@ -342,6 +350,7 @@ class FlatFileSystem(_BaseFileSystem):
                 path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
             )
             return
+
         _, errors = await _collect_with_monitors(
             flat_cp(
                 self._strip_only_protocol(path1),
@@ -371,6 +380,7 @@ class FlatFileSystem(_BaseFileSystem):
         """
         if path1 == path2:
             return
+
         if (not recursive or maxdepth is not None) and not await self._single_file(
             path1
         ):
@@ -378,6 +388,7 @@ class FlatFileSystem(_BaseFileSystem):
             await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
             await self._rm(path1, recursive=recursive)
             return
+
         _, errors = await _collect_with_monitors(
             flat_mv(
                 self._strip_only_protocol(path1),

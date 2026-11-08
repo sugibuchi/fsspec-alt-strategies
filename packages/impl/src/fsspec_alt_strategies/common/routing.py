@@ -235,7 +235,9 @@ class AsyncRoutingFileSystem(
             raise ValueError(
                 f"transfer_concurrency must be at least 1: {transfer_concurrency}"
             )
+
         super().__init__(*args, **kwargs)
+
         self.transfer_concurrency = transfer_concurrency
         self.transfer_limit = asyncio.Semaphore(transfer_concurrency)
         self._backends: dict[Hashable, AsyncFileSystem] = {}
@@ -294,9 +296,11 @@ class AsyncRoutingFileSystem(
         """
         if path in ("", self.root_marker):
             return {"name": path, "size": 0, "type": "directory"}
+
         for entry in await self._roots(self._parent(path)):
             if entry["name"].rstrip("/") == path:
                 return entry
+
         raise FileNotFoundError(path)
 
     def _same_storage(
@@ -414,14 +418,17 @@ class AsyncRoutingFileSystem(
         target = self._route(plain)
         if target is None:
             return None
+
         fs, inner = target
         if not getattr(fs, "async_impl", False):
             raise TypeError(
                 f"{fs!r} is not async: a router passes its calls on to async "
                 "filesystems only. Wrap it, e.g. in a SyncTreeWrapper."
             )
+
         if plain.endswith("/") and inner and not inner.endswith("/"):
             return fs, f"{inner}/"
+
         return target
 
     def _required(self, path: str) -> tuple[AsyncFileSystem, str]:
@@ -431,16 +438,19 @@ class AsyncRoutingFileSystem(
             raise PermissionError(
                 f"{path!r} is above the storages of {self!r}: it can only be listed."
             )
+
         return target
 
     def _pattern_target(self, path: str) -> tuple[AsyncFileSystem, str] | None:
         """``_target`` of a path or glob pattern, if all it matches is in one storage."""
         if not has_magic(path):
             return self._target(path)
+
         literal = path[: min(path.find(c) % (len(path) + 1) for c in "*?[")]
         base = self._target(literal.rpartition("/")[0])
         if base is None:
             return None
+
         whole = self._target(path)
         return whole if whole is not None and whole[0] is base[0] else None
 
@@ -496,6 +506,7 @@ class AsyncRoutingFileSystem(
                     add(await self._arequired(match), match)
             else:
                 await self._arequired(p)  # Raises, above the storages.
+
         return list(groups.values())
 
     def _note(
@@ -547,6 +558,7 @@ class AsyncRoutingFileSystem(
                 outcome, Exception
             ):
                 raise outcome  # A cancellation, never swallowed.
+
         _raise([*errors, *(o for o in outcomes if isinstance(o, Exception))], doing)
 
     def _placed(
@@ -565,9 +577,11 @@ class AsyncRoutingFileSystem(
         errors: list[Exception] = []
         skipped: set[str] = set()
         base = _trim(_strip_only_protocol(self, destination))
+
         for path in sorted(paths, key=lambda p: _trim(_strip_only_protocol(self, p))):
             if has_magic(path):
                 continue
+
             name = _trim(_strip_only_protocol(self, path)).rpartition("/")[2]
             target = f"{base}/{name}" if base else name
             if (other := placed.get(target)) is not None:
@@ -578,7 +592,9 @@ class AsyncRoutingFileSystem(
                 errors.append(error)
                 skipped.add(path)
                 continue
+
             placed[target] = path
+
         return [p for p in paths if p not in skipped], errors
 
     @staticmethod
@@ -593,6 +609,7 @@ class AsyncRoutingFileSystem(
         if target is not None:
             fs, inner = target
             return self._entry(fs, await self._on(fs, inner, path, fs._info(inner)))
+
         return await self._root_info(self._strip_protocol(path))
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
@@ -605,6 +622,7 @@ class AsyncRoutingFileSystem(
                 fs, inner, path, fs._ls(inner, detail=True, **kwargs)
             )
             entries = [self._entry(fs, e) for e in listed]
+
         return entries if detail else [e["name"] for e in entries]
 
     async def _cat_file(
@@ -617,6 +635,7 @@ class AsyncRoutingFileSystem(
             pipe_file = AbstractFileSystem.pipe_file
             await self._in_transaction(path, pipe_file, path, value, **kwargs)
             return
+
         await self._forward(path, "_pipe_file", value, **kwargs)
 
     async def _get_file(self, rpath: str, lpath: str, **kwargs: Any) -> None:
@@ -626,6 +645,7 @@ class AsyncRoutingFileSystem(
         if self._intrans:
             await self._in_transaction(rpath, _put_file, lpath, rpath, **kwargs)
             return
+
         fs, inner = await self._arequired(rpath)
         await self._on(fs, inner, rpath, fs._put_file(lpath, inner, **kwargs))
 
@@ -658,6 +678,7 @@ class AsyncRoutingFileSystem(
             if exist_ok:
                 return
             raise FileExistsError(path)
+
         await self._forward(path, "_makedirs", exist_ok=exist_ok)
 
     async def _exists(self, path: str, **kwargs: Any) -> bool:
@@ -665,8 +686,10 @@ class AsyncRoutingFileSystem(
             target = await self._atarget(path)
         except FileNotFoundError:
             return False
+
         if target is None:
             return await super()._exists(path, **kwargs)
+
         fs, inner = target
         return await self._on(fs, inner, path, fs._exists(inner, **kwargs))
 
@@ -675,8 +698,10 @@ class AsyncRoutingFileSystem(
             target = await self._atarget(path)
         except FileNotFoundError:
             return False
+
         if target is None:
             return await super()._isdir(path)
+
         fs, inner = target
         return await self._on(fs, inner, path, fs._isdir(inner))
 
@@ -685,14 +710,17 @@ class AsyncRoutingFileSystem(
             target = await self._atarget(path)
         except FileNotFoundError:
             return False
+
         if target is None:
             return False  # Above the storages, all are folders.
+
         fs, inner = target
         return await self._on(fs, inner, path, fs._isfile(inner))
 
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         fs1, inner1 = await self._arequired(path1)
         fs2, inner2 = await self._arequired(path2)
+
         if same := self._same_storage(fs1, inner1, fs2, inner2):
             fs, p1, p2 = same
             await self._on(fs, p1, path1, fs._cp_file(p1, p2, **kwargs))
@@ -706,6 +734,7 @@ class AsyncRoutingFileSystem(
     async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         fs1, inner1 = await self._arequired(path1)
         fs2, inner2 = await self._arequired(path2)
+
         if same := self._same_storage(fs1, inner1, fs2, inner2):
             fs, p1, p2 = same
             await self._on(fs, p1, path1, fs._mv_file(p1, p2, **kwargs))
@@ -751,10 +780,12 @@ class AsyncRoutingFileSystem(
 
     def invalidate_cache(self, path: str | None = None) -> None:
         super().invalidate_cache(path)
+
         if path is None:
             for fs in self._backends.values():
                 fs.invalidate_cache()
             return
+
         target = self._sync_target(path)
         if target is not None:
             target[0].invalidate_cache(target[1])
@@ -770,9 +801,11 @@ class AsyncRoutingFileSystem(
             async for item in super()._walk(path, maxdepth=maxdepth, **kwargs):
                 yield item
             return
+
         fs, inner = target
         detail = kwargs.get("detail", False)
         walk = fs._walk(inner, maxdepth=maxdepth, **kwargs)
+
         async with aclosing(walk):
             while True:
                 # A step at a time, as the generator runs in its caller's context.
@@ -784,9 +817,11 @@ class AsyncRoutingFileSystem(
                     except Exception as e:
                         self._note(e, fs, inner, path)
                         raise
+
                 if detail:
                     dirs = {k: self._entry(fs, v) for k, v in dirs.items()}
                     files = {k: self._entry(fs, v) for k, v in files.items()}
+
                 yield self._outer(fs, root), dirs, files
 
     async def _find(
@@ -802,6 +837,7 @@ class AsyncRoutingFileSystem(
             return await super()._find(
                 path, maxdepth=maxdepth, withdirs=withdirs, detail=detail, **kwargs
             )
+
         fs, inner = target
         found = await self._on(
             fs,
@@ -811,6 +847,7 @@ class AsyncRoutingFileSystem(
                 inner, maxdepth=maxdepth, withdirs=withdirs, detail=True, **kwargs
             ),
         )
+
         return self._found(fs, found, detail)
 
     def _found(self, fs: AsyncFileSystem, found: dict[str, Any], detail: bool) -> Any:
@@ -825,10 +862,12 @@ class AsyncRoutingFileSystem(
         target = await self._atarget(path)
         if target is None:
             return await super()._du(path, total=total, maxdepth=maxdepth, **kwargs)
+
         fs, inner = target
         sizes = await self._on(
             fs, inner, path, fs._du(inner, total=total, maxdepth=maxdepth, **kwargs)
         )
+
         return sizes if total else {self._outer(fs, n): s for n, s in sizes.items()}
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
@@ -837,10 +876,12 @@ class AsyncRoutingFileSystem(
         if target is None:
             # fsspec's glob, finding from the literal prefix over _roots.
             return await super()._glob(path, maxdepth=maxdepth, detail=detail, **kwargs)
+
         fs, inner = target
         found = await self._on(
             fs, inner, path, fs._glob(inner, maxdepth=maxdepth, detail=True, **kwargs)
         )
+
         return self._found(fs, found, detail)
 
     async def _expand_path(
@@ -855,10 +896,12 @@ class AsyncRoutingFileSystem(
             if isinstance(path, str)
             else None
         )
+
         if target is None:
             return await super()._expand_path(
                 path, recursive=recursive, maxdepth=maxdepth, **kwargs
             )
+
         fs, inner = target
         expanded = await self._on(
             fs,
@@ -866,6 +909,7 @@ class AsyncRoutingFileSystem(
             path,
             fs._expand_path(inner, recursive=recursive, maxdepth=maxdepth, **kwargs),
         )
+
         return sorted(self._outer(fs, p) for p in expanded)
 
     async def _rm(
@@ -917,6 +961,7 @@ class AsyncRoutingFileSystem(
                 path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
             )
             return
+
         fs2, inner2 = await self._arequired(path2)
         callback = kwargs.get("callback")
         listed = not isinstance(path1, str)
@@ -928,6 +973,7 @@ class AsyncRoutingFileSystem(
             fs1, inner1, outer1 = group
             sources = inner1 if listed else self._one(inner1)
             outers = outer1 if listed else self._one(outer1)
+
             if same := self._same_storage(fs1, sources, fs2, inner2):
                 fs, p1, p2 = same
                 await self._on(
@@ -986,6 +1032,7 @@ class AsyncRoutingFileSystem(
         """
         if path1 == path2:
             return
+
         fs2, inner2 = await self._arequired(path2)
         listed = not isinstance(path1, str)
         clashes: list[Exception] = []
@@ -996,6 +1043,7 @@ class AsyncRoutingFileSystem(
             fs1, inner1, outer1 = group
             sources = inner1 if listed else self._one(inner1)
             outer = outer1 if listed else self._one(outer1)
+
             if same := self._same_storage(fs1, sources, fs2, inner2):
                 fs, p1, p2 = same
                 own = getattr(fs, "_mv", None)
@@ -1007,6 +1055,7 @@ class AsyncRoutingFileSystem(
                         own(p1, p2, recursive=recursive, maxdepth=maxdepth, **kwargs),
                     )
                     return
+
                 # A plain fsspec filesystem has no async mv: its sync one's way.
                 await self._on(
                     fs,
@@ -1040,6 +1089,7 @@ class AsyncRoutingFileSystem(
                     delete=True,
                 )
                 _raise(errors, "Moving")
+
                 # The folders left, now empty, as a move leaves none. A flat
                 # storage's went with their files: none is found.
                 with suppress(FileNotFoundError):
@@ -1076,6 +1126,7 @@ class AsyncRoutingFileSystem(
             error.add_note(
                 f"Through {self!r}, from {fs1!r} as {path1!r} to {fs2!r} as {path2!r}."
             )
+
         return errors
 
     def _copy_file(
@@ -1101,6 +1152,7 @@ class AsyncRoutingFileSystem(
                 async with self.transfer_limit:
                     if not await self._server_copy(fs1, path1, fs2, path2):
                         await stream(path1, path2)
+
                 if delete:
                     await fs1._rm_file(path1)
 
@@ -1131,6 +1183,7 @@ def _put_file(
     """
     if os.path.isdir(lpath):
         return
+
     with open(lpath, "rb") as local:
         callback.set_size(os.fstat(local.fileno()).st_size)
         with fs.open(rpath, "xb" if mode == "create" else "wb", **kwargs) as f:

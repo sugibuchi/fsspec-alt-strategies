@@ -160,11 +160,13 @@ def flat_mv(
         raise ValueError("Give mv_file, or all of cp_file, rm_files and batch_size")
     if batch_size is not None and batch_size < 1:
         raise ValueError(f"batch_size must be at least 1: {batch_size}")
+
     # Both given, a rename wins only where the storage is known to rename.
     if all(batched) and profile.renames_files is not True:
         mv_file = None
     elif mv_file is not None:
         cp_file = rm_files = batch_size = None
+
     if mv_file is not None:
         return Operation(
             lambda op: _Rename(
@@ -178,6 +180,7 @@ def flat_mv(
             ).outcomes(),
             MvState(),
         )
+
     return Operation(
         lambda op: _Move(
             path1,
@@ -252,13 +255,16 @@ class _Move(_Copy):
         **kwargs: Any,
     ) -> None:
         super().__init__(path1, path2, **kwargs)
+
         self.rm_files = rm_files
         self.batch_size = batch_size
+
         # The keys to delete. Each key moving, from its listing to its
         # deletion, has where it is copied, None for a marker: listed again,
         # it is skipped.
         self.batch: list[str] = []
         self.copied: dict[str, str | None] = {}
+
         # The copies queued or running, and whether the listing has ended: the
         # last batch goes once both say all is copied.
         self.copying = 0
@@ -280,6 +286,7 @@ class _Move(_Copy):
             self.copied[name] = None
             self.delete_later(name)  # A folder's marker: deleted only.
             return
+
         self.copied[name] = self.target(name)
         self.copying += 1
         super().add(entry)
@@ -307,6 +314,7 @@ class _Move(_Copy):
             self.copying -= 1
             self.delete_later(job.source)
             return []
+
         moved = []
         for path in job.paths:
             if (destination := self.copied.pop(path)) is not None:
@@ -320,8 +328,10 @@ class _Move(_Copy):
             self.copied.pop(job.source)
             self.send_if_ready()
             return super().failed(job, error)
+
         for path in job.paths:
             self.copied.pop(path)
+
         error.add_note(
             f"Deleting {_keys_of(job.paths)} failed, once copied: they are in both"
             " places."
@@ -337,6 +347,7 @@ class _Move(_Copy):
         """Send the batch if full, or if nothing more can join it."""
         if not self.batch:
             return
+
         done = (self.listed or self.op.cancelling()) and self.copying == 0
         if len(self.batch) >= self.batch_size or done:
             paths, self.batch = tuple(self.batch), []

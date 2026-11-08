@@ -207,17 +207,22 @@ class _CrossCopy(_Copy):
         **kwargs: Any,
     ) -> None:
         super().__init__(path1, path2, cp_file=copy_file, **kwargs)
+
         # The destination is another storage's: placed by its own info, and a
         # path may go to the same path, or under it.
         self._placing(dst_info, same_storage=False)
+
         self.makedirs = dst_makedirs
         self.dst_rm_file = dst_rm_file
+
         # Unknown, folders are made first. Implicit folders need none.
         self.parents_required = (
             profile.parents_required is not False and not profile.implicit_folders
         )
+
         # The destination folders made, or tried: their keys need not wait.
         self.made: set[str] = set()
+
         # The copies waiting for their destination folder, by that folder.
         self.after_mkdir: dict[str, list[_Job]] = {}
 
@@ -227,6 +232,7 @@ class _CrossCopy(_Copy):
             # A folder's marker: a tree destination keeps the folder.
             self.queue(self.target(name.rstrip("/")), [], always=True)
             return
+
         self.files_found += 1
         target = self.target(name)
         self.queue(target.rpartition("/")[0], [_Job("copy", name, target)])
@@ -236,6 +242,7 @@ class _CrossCopy(_Copy):
         if not folder or folder in self.made or not (always or self.parents_required):
             self.waiting.extend(copies)
             return
+
         if folder not in self.after_mkdir:
             self.waiting.append(_Job("mkdir", "", folder))
         self.after_mkdir.setdefault(folder, []).extend(copies)
@@ -271,6 +278,7 @@ class _CrossCopy(_Copy):
                 entry = await self.destination_info(destination)
                 if entry["type"] == "directory":
                     raise
+
                 await self.dst_rm_file(destination)
                 await self.cp_file(source, destination)
         except Exception as e:
