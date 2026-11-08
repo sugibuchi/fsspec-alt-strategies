@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+﻿# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
 """A filesystem routing each path to the filesystem of its storage.
 
@@ -8,8 +8,8 @@ filesystem. It knows no family: each inner filesystem runs its own strategies,
 and a copy across two storages is the source's ``_transfer``, whatever its
 family.
 
-This module depends on `streams`, and on `common`: `filesystem`, `operation`,
-`paths` and `types`.
+This module depends on `common`: `filesystem`, `operation`, `paths`, `streams`
+and `types`.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from .common.filesystem import (
 )
 from .common.operation import _collected
 from .common.paths import _trim
-from .streams import streaming_copy
+from .common.streams import streaming_copy
 
 if TYPE_CHECKING:
     from collections.abc import (

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+﻿# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
 """An abstract async filesystem whose recursive methods are the tree strategies.
 
@@ -7,8 +7,8 @@ folder per request. A subclass implements the storage's primitives, and gets
 fsspec's recursive methods from the tree strategies.
 
 This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm`, `transfer`,
-`walk`, the package's `streams`, and
-`filesystem` and `operation` of `common`.
+`walk`, and
+`filesystem`, `operation` and `streams` of `common`.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from ..common.filesystem import (
     _with,
 )
 from ..common.operation import _collected, _watched
-from ..streams import streaming_copy
+from ..common.streams import streaming_copy
 from .cp import tree_cp
 from .du import tree_du
 from .find import tree_find

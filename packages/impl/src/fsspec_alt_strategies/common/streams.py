@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+﻿# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
 """A file's data streamed from one storage to another, a block at a time.
 
@@ -6,7 +6,7 @@
 as `tree_transfer`'s or `flat_transfer`'s, from the two storages'
 ``open_async``.
 
-This module depends on `common.types`, for types only.
+This module depends on `types`, for types only.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from .common.types import _Request
+    from .types import _Request
 
 __all__ = ["streaming_copy"]
 

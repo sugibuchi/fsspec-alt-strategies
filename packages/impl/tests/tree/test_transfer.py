@@ -1,4 +1,4 @@
-"""Tests of `tree_transfer`, copying a tree between two storages."""
+﻿"""Tests of `tree_transfer`, copying a tree between two storages."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.common.operation import _collect
-from fsspec_alt_strategies.streams import streaming_copy
+from fsspec_alt_strategies.common.streams import streaming_copy
 from fsspec_alt_strategies.tree.transfer import CpState, tree_transfer
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem

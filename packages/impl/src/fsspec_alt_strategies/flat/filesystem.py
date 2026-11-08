@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
+﻿# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
 """An abstract async filesystem whose recursive methods are the flat strategies.
 
@@ -8,8 +8,8 @@ storage's primitives, that listing among them, and gets fsspec's recursive
 methods from the flat strategies.
 
 This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm`, `transfer`,
-`walk`, the package's `streams`, and
-`filesystem`, `operation` and `paths` of `common`.
+`walk`, and
+`filesystem`, `operation`, `paths` and `streams` of `common`.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from ..common.filesystem import (
 )
 from ..common.operation import _collected
 from ..common.paths import _triples
-from ..streams import streaming_copy
+from ..common.streams import streaming_copy
 from .cp import flat_cp
 from .du import flat_du
 from .find import flat_find
