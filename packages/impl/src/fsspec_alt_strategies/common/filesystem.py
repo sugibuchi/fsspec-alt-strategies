@@ -9,10 +9,9 @@ The functions below it shape the answers and errors of fsspec's methods, as
 the families' classes give them.
 
 Its ``_transfer``, a copy to another storage, each family implements with its
-strategy, given the destination's arguments by ``_destination``.
+strategy.
 
-This module depends on the package's `streams`, and on `operation` and
-`types` for types only.
+This module depends on `operation` and `types`, for types only.
 """
 
 from __future__ import annotations
@@ -33,8 +32,6 @@ from fsspec.callbacks import DEFAULT_CALLBACK
 
 from fsspec_alt_strategies_common.monitor import Monitored
 from fsspec_alt_strategies_common.profile import StorageProfile
-
-from ..streams import streaming_copy
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -239,29 +236,6 @@ class _StrategyFileSystem(
         ...         if isinstance(copied, Exception):
         ...             print("failed:", copied)
         """
-
-    def _destination(
-        self, other: AsyncFileSystem, copy_file: _Request | None
-    ) -> dict[str, Any]:
-        """The arguments of a transfer to ``other`` the families share: all but the source's."""
-        if not getattr(other, "async_impl", False):
-            raise TypeError(f"other must be an async filesystem: {other!r}")
-        profile = getattr(other, "storage_profile", None)
-        if copy_file is None:
-            copy_file = streaming_copy(
-                self.open_async, other.open_async, block_size=self.transfer_size
-            )
-        return {
-            "copy_file": copy_file,
-            "dst_info": other._info,
-            "dst_makedirs": other._makedirs,
-            "dst_rm_file": other._rm_file,
-            # Not declared, the destination is unknown: the way right on any.
-            "profile": profile
-            if isinstance(profile, StorageProfile)
-            else StorageProfile(),
-            "concurrency_limit": self.operation_limit,
-        }
 
     async def _single_file(self, path: str | Sequence[str]) -> bool:
         """Whether ``path`` names one existing file, with no pattern.

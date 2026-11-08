@@ -8,7 +8,7 @@ storage's primitives, that listing among them, and gets fsspec's recursive
 methods from the flat strategies.
 
 This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm`, `transfer`,
-`walk`, and
+`walk`, the package's `streams`, and
 `filesystem`, `operation` and `paths` of `common`.
 """
 
@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import sync
 
 from fsspec_alt_strategies_common.monitor import Call
+from fsspec_alt_strategies_common.profile import StorageProfile
 
 from ..common.filesystem import (
     _answer,
@@ -32,6 +33,7 @@ from ..common.filesystem import (
 )
 from ..common.operation import _collected
 from ..common.paths import _triples
+from ..streams import streaming_copy
 from .cp import flat_cp
 from .du import flat_du
 from .find import flat_find
@@ -46,7 +48,6 @@ if TYPE_CHECKING:
 
     from fsspec.asyn import AsyncFileSystem
 
-    from fsspec_alt_strategies_common.profile import StorageProfile
     from fsspec_alt_strategies_common.states import CpState
 
     from ..common.operation import Operation
@@ -407,12 +408,26 @@ class FlatFileSystem(_StrategyFileSystem):
         copy_file: _Request | None = None,
     ) -> Operation[tuple[str, str], CpState]:
         """Copy to ``other`` with `flat_transfer`, as `_StrategyFileSystem` says."""
+        if not getattr(other, "async_impl", False):
+            raise TypeError(f"other must be an async filesystem: {other!r}")
+        profile = getattr(other, "storage_profile", None)
         return flat_transfer(
             self._plain(path1),
             _plain(other, path2),
             ils=self._ils,
             info=self._info,
-            **self._destination(other, copy_file),
+            copy_file=copy_file
+            or streaming_copy(
+                self.open_async, other.open_async, block_size=self.transfer_size
+            ),
+            dst_info=other._info,
+            dst_makedirs=other._makedirs,
+            dst_rm_file=other._rm_file,
+            # Not declared, the destination is unknown: the way right on any.
+            profile=profile
+            if isinstance(profile, StorageProfile)
+            else StorageProfile(),
+            concurrency_limit=self.operation_limit,
         )
 
     # fsspec makes sync methods only from the async ones it knows: _mv is not. It awaits
