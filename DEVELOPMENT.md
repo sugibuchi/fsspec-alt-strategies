@@ -11,58 +11,214 @@ The repository is a uv workspace of two packages, each built and published on it
 
 The root holds the tooling: the ruff, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
 
-| Path                                                    | Contents                                                                                                                                                                                                                                                                                                   |
-|---------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `packages/common/src/fsspec_alt_strategies/`            | The interface, installed: one for all the copies in a project.                                                                                                                                                                                                                                             |
-| `.../monitor.py`                                        | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitored`, `Call`, `CallCancelled`, `Monitor`, `monitoring` and `current_monitors`: watching the operations behind the filesystems' fsspec methods. `routing` and `current_routers`: the routers a call came through. |
-| `.../profile.py`                                        | `StorageProfile`, what a storage does that fsspec's API leaves open.                                                                                                                                                                                                                                       |
-| `.../states.py`                                         | The states the strategies report, e.g. `FindState` of `tree_find` and `flat_find`.                                                                                                                                                                                                                         |
-| `.../wrapper.py`                                        | `KnownImplementation` and `known_implementations`: how each known filesystem class is wrapped, to be monitored.                                                                                                                                                                                            |
-| `packages/common/tests/`                                | The interface's tests, which never import the strategies.                                                                                                                                                                                                                                                  |
-| `packages/impl/src/fsspec_alt_strategies_impl/`         | The strategies, copied.                                                                                                                                                                                                                                                                                    |
-| `.../monitor.py`                                        | `monitored(fs)`: the filesystem if `Monitored`, else wrapped as its known implementation says.                                                                                                                                                                                                             |
-| `.../wrapper.py`                                        | `AsyncTreeWrapper`, `SyncTreeWrapper`, `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `TreeFileSystem` or a `FlatFileSystem`.                                                                                                                                                      |
-| `.../router.py`                                         | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. Between two storages, it copies a file a block at a time through their files.                                                                                                                  |
-| `.../common/sync_client.py`                             | `SyncClientSupport`, a mixin running a sync client's blocking calls in a filesystem's own threads, as the sync wrappers do. |
-| `.../tree/`                                             | The strategies walking a folder tree, a folder per listing.                                                                                                                                                                                                                                                |
-| `.../tree/walk.py`                                      | `tree_walk`, the concurrent folder walk under the tree strategies.                                                                                                                                                                                                                                         |
-| `.../tree/find.py`                                      | `tree_find`, a find listing several folders at a time.                                                                                                                                                                                                                                                     |
-| `.../tree/du.py`                                        | `tree_du`, a tree's size from its listings alone.                                                                                                                                                                                                                                                          |
-| `.../tree/glob.py`                                      | `tree_glob`, a glob listing only the folders it can match in.                                                                                                                                                                                                                                              |
-| `.../tree/rm.py`                                        | `tree_rm`, a recursive delete that deletes while it walks.                                                                                                                                                                                                                                                 |
-| `.../tree/cp.py`                                        | `tree_cp`, a recursive copy that copies while it walks, within a storage or to another.                                                                                                                                                                                                                    |
-| `.../tree/mv.py`                                        | `tree_mv`, a recursive move: a `mv_file` per file, or per folder where it moves folders.                                                                                                                                                                                                                   |
-| `.../tree/filesystem.py`                                | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies.                                                                                                                                                                                                            |
-| `.../tree/_jobs.py`                                     | The private engine's tree side: it feeds `common`'s with the walk's listings.                                                                                                                                                                                                                              |
-| `.../flat/`                                             | The strategies listing a flat namespace by key prefix, as object stores do.                                                                                                                                                                                                                                |
-| `.../flat/walk.py`                                      | `flat_walk`, a walk of one listing of a prefix, its folders derived from the keys.                                                                                                                                                                                                                         |
-| `.../flat/find.py`                                      | `flat_find`, a find streaming one listing of a prefix.                                                                                                                                                                                                                                                     |
-| `.../flat/du.py`                                        | `flat_du`, the size of the files under a prefix, from the listing alone.                                                                                                                                                                                                                                   |
-| `.../flat/glob.py`                                      | `flat_glob`, a glob listing only the keys starting as its pattern does.                                                                                                                                                                                                                                    |
-| `.../flat/rm.py`                                        | `flat_rm`, a recursive delete in batches, sent as the listing goes on.                                                                                                                                                                                                                                     |
-| `.../flat/cp.py`                                        | `flat_cp`, a recursive copy that copies each key as it is listed, within a storage or to another.                                                                                                                                                                                                          |
-| `.../flat/mv.py`                                        | `flat_mv`, a recursive move: a `mv_file` per key, or a copy per key and a deletion per batch.                                                                                                                                                                                                              |
-| `.../flat/filesystem.py`                                | `FlatFileSystem`, an abstract async filesystem whose recursive methods are the flat strategies.                                                                                                                                                                                                            |
-| `.../flat/_keys.py`                                     | The private listing under them: a prefix's keys, and the folders they imply.                                                                                                                                                                                                                               |
-| `.../flat/_jobs.py`                                     | The private engine's flat side: it feeds `common`'s with the keys of each root.                                                                                                                                                                                                                            |
-| `.../common/`                                           | Private machinery the families share, so that none imports another.                                                                                                                                                                                                                                        |
-| `.../common/filesystem.py`                              | What the filesystem classes share: the two limits, and data moved through file objects.                                                                                                                                                                                                                    |
-| `.../common/operation.py`                               | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it.                                                                                                                                                  |
-| `.../common/jobs.py`                                    | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too.                                                                                                                                 |
-| `.../common/placement.py`                               | Where a copy or move puts each path, as fsspec's `copy` does.                                                                                                                                                                                                                                              |
-| `.../common/types.py`                                   | The types of the storage's operations, such as `ils` and `info`.                                                                                                                                                                                                                                           |
-| `.../common/paths.py`                                   | Paths and depths, as the strategies take them.                                                                                                                                                                                                                                                             |
-| `.../common/patterns.py`                                | Glob patterns, matched as fsspec's `_glob` matches them, by both globs.                                                                                                                                                                                                                                    |
-| `.../files/`                                            | Base classes for a filesystem's file objects, by what its storage allows.                                                                                                                                                                                                                                  |
-| `.../files/adaptive.py`                                 | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts.                                                                                                                                                                                                                    |
-| `.../files/fsspec_transaction.py`                       | Files written in a transaction, by strategy: a temporary path, a local buffer, or the storage's own.                                                                                                                                                                                                       |
-| `.../files/fsspec_async.py`                             | `AsyncFileAdapter` and `SyncFileAdapter`, giving file objects the API of those `open_async` returns.                                                                                                                                                                                                       |
-| `.../files/_async_file.py`                              | The private machinery under them: the loop, the concurrency limit, the requests.                                                                                                                                                                                                                           |
-| `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem`, for tests and benchmarks: a package apart, so that copies leave it out.                                                                                                                                                                                                             |
-| `packages/impl/tests/`                                  | The strategies' tests, in the package's layout, with the shared fixtures in `conftest.py`.                                                                                                                                                                                                                 |
-| `.github/workflows/ci.yaml`                             | Lint of the code and the workflows, and tests with coverage, on pull requests and pushes to `main`.                                                                                                                                                                                                        |
-| `.github/workflows/release-interface.yaml`              | The interface's release: on a version tag, to the GitHub release and PyPI.                                                                                                                                                                                                                                 |
-| `.github/workflows/release-impl.yaml`                   | The strategies' release, once the interface's has succeeded for the same tag.                                                                                                                                                                                                                              |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Path                                                    |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Contents                                                                                                                                                                                                                                                                                                   |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |---------------------------------------------------------|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `packages/common/src/fsspec_alt_strategies/`            |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The interface, installed: one for all the copies in a project.                                                                                                                                                                                                                                             |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../monitor.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitored`, `Call`, `CallCancelled`, `Monitor`, `monitoring` and `current_monitors`: watching the operations behind the filesystems' fsspec methods. `routing` and `current_routers`: the routers a call came through. |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../profile.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `StorageProfile`, what a storage does that fsspec's API leaves open.                                                                                                                                                                                                                                       |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../states.py`                                         |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The states the strategies report, e.g. `FindState` of `tree_find` and `flat_find`.                                                                                                                                                                                                                         |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../wrapper.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `KnownImplementation` and `known_implementations`: how each known filesystem class is wrapped, to be monitored.                                                                                                                                                                                            |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `packages/common/tests/`                                |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The interface's tests, which never import the strategies.                                                                                                                                                                                                                                                  |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `packages/impl/src/fsspec_alt_strategies_impl/`         |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The strategies, copied.                                                                                                                                                                                                                                                                                    |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../monitor.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `monitored(fs)`: the filesystem if `Monitored`, else wrapped as its known implementation says.                                                                                                                                                                                                             |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../wrapper.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `AsyncTreeWrapper`, `SyncTreeWrapper`, `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `TreeFileSystem` or a `FlatFileSystem`.                                                                                                                                                      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../router.py`                                         |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. Between two storages, it copies a file a block at a time through their files.                                                                                                                  |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../common/sync_client.py`                             |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `SyncClientSupport`, a mixin running a sync client's blocking calls in a filesystem's own threads, as the sync wrappers do. |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../tree/`                                             |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The strategies walking a folder tree, a folder per listing.                                                                                                                                                                                                                                                |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../tree/walk.py`                                      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `tree_walk`, the concurrent folder walk under the tree strategies.                                                                                                                                                                                                                                         |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../tree/find.py`                                      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `tree_find`, a find listing several folders at a time.                                                                                                                                                                                                                                                     |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../tree/du.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `tree_du`, a tree's size from its listings alone.                                                                                                                                                                                                                                                          |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../tree/glob.py`                                      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `tree_glob`, a glob listing only the folders it can match in.                                                                                                                                                                                                                                              |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../tree/rm.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `tree_rm`, a recursive delete that deletes while it walks.                                                                                                                                                                                                                                                 |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../tree/cp.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `tree_cp`, a recursive copy that copies while it walks, within a storage or to another.                                                                                                                                                                                                                    |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../tree/mv.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `tree_mv`, a recursive move: a `mv_file` per file, or per folder where it moves folders.                                                                                                                                                                                                                   |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../tree/filesystem.py`                                |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies.                                                                                                                                                                                                            |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../tree/_jobs.py`                                     |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The private engine's tree side: it feeds `common`'s with the walk's listings.                                                                                                                                                                                                                              |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../flat/`                                             |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The strategies listing a flat namespace by key prefix, as object stores do.                                                                                                                                                                                                                                |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../flat/walk.py`                                      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `flat_walk`, a walk of one listing of a prefix, its folders derived from the keys.                                                                                                                                                                                                                         |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../flat/find.py`                                      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `flat_find`, a find streaming one listing of a prefix.                                                                                                                                                                                                                                                     |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../flat/du.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `flat_du`, the size of the files under a prefix, from the listing alone.                                                                                                                                                                                                                                   |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../flat/glob.py`                                      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `flat_glob`, a glob listing only the keys starting as its pattern does.                                                                                                                                                                                                                                    |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../flat/rm.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `flat_rm`, a recursive delete in batches, sent as the listing goes on.                                                                                                                                                                                                                                     |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../flat/cp.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `flat_cp`, a recursive copy that copies each key as it is listed, within a storage or to another.                                                                                                                                                                                                          |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../flat/mv.py`                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `flat_mv`, a recursive move: a `mv_file` per key, or a copy per key and a deletion per batch.                                                                                                                                                                                                              |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../flat/filesystem.py`                                |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `FlatFileSystem`, an abstract async filesystem whose recursive methods are the flat strategies.                                                                                                                                                                                                            |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../flat/_keys.py`                                     |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The private listing under them: a prefix's keys, and the folders they imply.                                                                                                                                                                                                                               |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../flat/_jobs.py`                                     |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The private engine's flat side: it feeds `common`'s with the keys of each root.                                                                                                                                                                                                                            |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../common/`                                           |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Private machinery the families share, so that none imports another.                                                                                                                                                                                                                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../common/filesystem.py`                              |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | What the filesystem classes share: the two limits, and data moved through file objects.                                                                                                                                                                                                                    |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../common/operation.py`                               |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it.                                                                                                                                                  |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../common/jobs.py`                                    |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too.                                                                                                                                 |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../common/placement.py`                               |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Where a copy or move puts each path, as fsspec's `copy` does.                                                                                                                                                                                                                                              |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../common/types.py`                                   |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The types of the storage's operations, such as `ils` and `info`.                                                                                                                                                                                                                                           |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../common/paths.py`                                   |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Paths and depths, as the strategies take them.                                                                                                                                                                                                                                                             |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../common/patterns.py`                                |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Glob patterns, matched as fsspec's `_glob` matches them, by both globs.                                                                                                                                                                                                                                    |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../files/`                                            |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Base classes for a filesystem's file objects, by what its storage allows.                                                                                                                                                                                                                                  |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../files/adaptive.py`                                 |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts.                                                                                                                                                                                                                    |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../files/fsspec_transaction.py`                       |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Files written in a transaction, by strategy: a temporary path, a local buffer, or the storage's own.                                                                                                                                                                                                       |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../files/fsspec_async.py`                             |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `AsyncFileAdapter` and `SyncFileAdapter`, giving file objects the API of those `open_async` returns.                                                                                                                                                                                                       |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.../files/_async_file.py`                              |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The private machinery under them: the loop, the concurrency limit, the requests.                                                                                                                                                                                                                           |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `packages/impl/src/fsspec_alt_strategies_impl_testing/` |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `SimulatedFileSystem`, for tests and benchmarks: a package apart, so that copies leave it out.                                                                                                                                                                                                             |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `packages/impl/tests/`                                  |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The strategies' tests, in the package's layout, with the shared fixtures in `conftest.py`.                                                                                                                                                                                                                 |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.github/workflows/ci.yaml`                             |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Lint of the code and the workflows, and tests with coverage, on pull requests and pushes to `main`.                                                                                                                                                                                                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.github/workflows/release-interface.yaml`              |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The interface's release: on a version tag, to the GitHub release and PyPI.                                                                                                                                                                                                                                 |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `.github/workflows/release-impl.yaml`                   |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | The strategies' release, once the interface's has succeeded for the same tag.                                                                                                                                                                                                                              |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
 
 The interface depends on fsspec alone, and the strategies on fsspec and the interface. Both take their version from
 the git tag, through hatch-vcs.
@@ -448,10 +604,26 @@ at most 1000 entries, as `ils` yields them, so that a folder of hundreds of thou
 
 The strategies come in two layers, by what they send:
 
-| Strategies                          | They send                                           | They build on    |
-|-------------------------------------|-----------------------------------------------------|------------------|
-| `tree_find`, `tree_du`, `tree_glob` | Listings, and at most one `info` for the root       | `_find_listings` |
-| `tree_rm`, `tree_cp`, `tree_mv`     | Requests changing the storage, besides the listings | `_TreeJobs`      |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Strategies                          |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | They send                                           |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | They build on    |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |-------------------------------------|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |-----------------------------------------------------|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |------------------|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `tree_find`, `tree_du`, `tree_glob` |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Listings, and at most one `info` for the root       |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `_find_listings` |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `tree_rm`, `tree_cp`, `tree_mv`     |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Requests changing the storage, besides the listings |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `_TreeJobs`      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
 
 A copy or move within one storage is the special case of one between two. `tree_cp` and `tree_mv` take the source's
 `ils` and `info`, the destination's operations with a `dst_` prefix, and the request copying or moving one file. Within
@@ -561,13 +733,34 @@ requests.
 
 The fields, and the requests each saves:
 
-| Field              | Saves                                                                                                          |
-|--------------------|----------------------------------------------------------------------------------------------------------------|
-| `fs_type`          | "tree" or "flat": the router's copy or move from the storage, by that family's strategy, rather than fsspec's. |
-| `parents_required` | False: the `makedirs` of each folder with files, in `tree_cp`, `tree_mv`, `flat_cp` and `flat_mv`.             |
-| `implicit_folders` | True: those, and the `rm_folder` of each folder, in `tree_rm` and `tree_mv`.                                   |
-| `renames_files`    | True: the data copied by `flat_mv`, given both ways, as it moves each key by `mv_file`.                        |
-| `renames_folders`  | True: all requests in a folder moved whole by one `mv_file`, in `tree_mv`.                                     |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Field              |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Saves                                                                                                          |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |--------------------|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |----------------------------------------------------------------------------------------------------------------|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `fs_type`          |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | "tree" or "flat": the router's copy or move from the storage, by that family's strategy, rather than fsspec's. |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `parents_required` |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | False: the `makedirs` of each folder with files, in `tree_cp`, `tree_mv`, `flat_cp` and `flat_mv`.             |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `implicit_folders` |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | True: those, and the `rm_folder` of each folder, in `tree_rm` and `tree_mv`.                                   |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `renames_files`    |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | True: the data copied by `flat_mv`, given both ways, as it moves each key by `mv_file`.                        |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `renames_folders`  |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | True: all requests in a folder moved whole by one `mv_file`, in `tree_mv`.                                     |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
 
 A field may imply another: implicit folders need no parents made. A profile contradicting itself raises `ValueError`.
 
@@ -703,9 +896,25 @@ project:
 
 Each PyPI project needs a trusted publisher, once, before the first release:
 
-| PyPI project                 | Workflow                 | Environment |
-|------------------------------|--------------------------|-------------|
-| `fsspec-alt-strategies`      | `release-interface.yaml` | `pypi`      |
-| `fsspec-alt-strategies-impl` | `release-impl.yaml`      | `pypi`      |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | PyPI project                 |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Workflow                 |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | Environment |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |------------------------------|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |--------------------------|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |-------------|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `fsspec-alt-strategies`      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `release-interface.yaml` |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `pypi`      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
+|
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `fsspec-alt-strategies-impl` |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `release-impl.yaml`      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. | `pypi`      |
+| `.github/workflows/codeql.yaml` | CodeQL's security scan of the Python code and the workflows: on pull requests, pushes to `main`, and weekly. |
 
 The repository needs the `pypi` environment, and the secret `CODECOV_TOKEN` for the coverage uploaded by `ci.yaml`.
