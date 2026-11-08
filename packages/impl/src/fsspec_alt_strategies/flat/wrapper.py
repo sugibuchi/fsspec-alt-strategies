@@ -63,10 +63,12 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
     rm_batch_size : int
         The most keys the wrapped ``_rm`` deletes in one request, e.g. 1000 on
         S3.
-    operation_concurrency : int
+    operation_concurrency : int or asyncio.Semaphore
         The requests of the strategies at a time.
-    io_concurrency : int
+        A semaphore is used as it is, shared with what else holds it.
+    io_concurrency : int or asyncio.Semaphore
         The data methods' calls at a time, such as ``_cat_file``.
+        A semaphore is used as it is, shared with what else holds it.
     storage_profile : StorageProfile
         What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
@@ -99,8 +101,8 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
         fs: AsyncFileSystem,
         *,
         rm_batch_size: int,
-        operation_concurrency: int,
-        io_concurrency: int,
+        operation_concurrency: int | asyncio.Semaphore,
+        io_concurrency: int | asyncio.Semaphore,
         storage_profile: StorageProfile,
         **kwargs: Any,
     ) -> None:
@@ -150,10 +152,12 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
         The filesystem to wrap.
     rm_batch_size : int
         The most keys the wrapped ``rm`` is given at once.
-    operation_concurrency : int
+    operation_concurrency : int or asyncio.Semaphore
         The requests of the strategies at a time, each in a thread.
-    io_concurrency : int
+        A semaphore is used as it is, shared with what else holds it.
+    io_concurrency : int or asyncio.Semaphore
         The data methods' calls at a time, such as ``_cat_file``.
+        A semaphore is used as it is, shared with what else holds it.
     storage_profile : StorageProfile
         What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
@@ -185,8 +189,8 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
         fs: AbstractFileSystem,
         *,
         rm_batch_size: int,
-        operation_concurrency: int,
-        io_concurrency: int,
+        operation_concurrency: int | asyncio.Semaphore,
+        io_concurrency: int | asyncio.Semaphore,
         storage_profile: StorageProfile,
         **kwargs: Any,
     ) -> None:

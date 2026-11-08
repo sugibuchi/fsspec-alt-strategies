@@ -40,6 +40,7 @@ from .rm import flat_rm
 from .walk import flat_walk
 
 if TYPE_CHECKING:
+    import asyncio
     from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
     from fsspec_alt_strategies_common.profile import StorageProfile
@@ -81,10 +82,12 @@ class FlatFileSystem(_BaseFileSystem):
 
     Parameters
     ----------
-    operation_concurrency : int
+    operation_concurrency : int or asyncio.Semaphore
         The requests of the strategies at a time.
-    io_concurrency : int
+        A semaphore is used as it is, shared with what else holds it.
+    io_concurrency : int or asyncio.Semaphore
         The reads and writes of data at a time.
+        A semaphore is used as it is, shared with what else holds it.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
@@ -130,8 +133,8 @@ class FlatFileSystem(_BaseFileSystem):
     def __init__(
         self,
         *args: Any,
-        operation_concurrency: int,
-        io_concurrency: int,
+        operation_concurrency: int | asyncio.Semaphore,
+        io_concurrency: int | asyncio.Semaphore,
         **kwargs: Any,
     ) -> None:
         super().__init__(

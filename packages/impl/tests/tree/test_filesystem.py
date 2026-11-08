@@ -367,6 +367,20 @@ async def test_operations_keep_to_their_limit() -> None:
     assert inner.stats.max_concurrency == 3
 
 
+async def test_filesystems_share_a_semaphore_given() -> None:
+    inner = SimulatedFileSystem(hierarchical=True, latency=0.002, asynchronous=True)
+    for i in range(10):
+        inner.add_file(f"a/{i}/file")
+        inner.add_file(f"b/{i}/file")
+    limit = asyncio.Semaphore(3)
+    fs1 = _Tree(inner, operation_concurrency=limit, asynchronous=True)
+    fs2 = _Tree(inner, operation_concurrency=limit, asynchronous=True)
+    assert fs1.operation_limit is fs2.operation_limit is limit
+    await asyncio.gather(fs1._find("a"), fs2._find("b"))
+    # Both together keep to the one limit.
+    assert inner.stats.max_concurrency == 3
+
+
 def test_the_sync_api_works() -> None:
     inner = SimulatedFileSystem(hierarchical=True)  # Sync, on fsspec's loop.
     _tree(inner)

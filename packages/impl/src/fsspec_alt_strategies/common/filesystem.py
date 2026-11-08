@@ -37,6 +37,15 @@ if TYPE_CHECKING:
 _MiB = 1024 * 1024
 
 
+def _limit(name: str, value: int | asyncio.Semaphore) -> asyncio.Semaphore:
+    """The semaphore of a concurrency: the one given, shared, or a new one."""
+    if isinstance(value, asyncio.Semaphore):
+        return value
+    if value < 1:
+        raise ValueError(f"{name} must be at least 1: {value}")
+    return asyncio.Semaphore(value)
+
+
 class _AbstractFileSystemMeta(type(AsyncFileSystem), ABCMeta):  # type: ignore[misc]
     """fsspec's metaclass, which caches instances, with ABCMeta's abstract methods.
 
@@ -51,8 +60,9 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     ``operation_limit`` bounds the requests of the strategies, such as
     listings, deletions and copies. ``io_limit`` bounds the reads and writes of
     data: ``open_async`` gives it to the files it opens, as their
-    ``concurrency_limit``. Each is an `asyncio.Semaphore`, its own per
-    instance.
+    ``concurrency_limit``. Each is an `asyncio.Semaphore`: the one given as
+    the concurrency, so that several filesystems share it, or else a new one,
+    of the number given.
 
     ``storage_profile``, a class field, tells the strategies what the storage
     does. A subclass must set it: one whose storage is unknown says so, with
@@ -68,16 +78,12 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     def __init__(
         self,
         *args: Any,
-        operation_concurrency: int,
-        io_concurrency: int,
+        operation_concurrency: int | asyncio.Semaphore,
+        io_concurrency: int | asyncio.Semaphore,
         **kwargs: Any,
     ) -> None:
-        if operation_concurrency < 1:
-            raise ValueError(
-                f"operation_concurrency must be at least 1: {operation_concurrency}"
-            )
-        if io_concurrency < 1:
-            raise ValueError(f"io_concurrency must be at least 1: {io_concurrency}")
+        operation_limit = _limit("operation_concurrency", operation_concurrency)
+        io_limit = _limit("io_concurrency", io_concurrency)
 
         super().__init__(*args, **kwargs)
 
@@ -89,8 +95,8 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         self.operation_concurrency = operation_concurrency
         self.io_concurrency = io_concurrency
-        self.operation_limit = asyncio.Semaphore(operation_concurrency)
-        self.io_limit = asyncio.Semaphore(io_concurrency)
+        self.operation_limit = operation_limit
+        self.io_limit = io_limit
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
