@@ -82,16 +82,20 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
             )
         if io_concurrency < 1:
             raise ValueError(f"io_concurrency must be at least 1: {io_concurrency}")
+
         super().__init__(*args, **kwargs)
-        self.operation_concurrency = operation_concurrency
-        self.io_concurrency = io_concurrency
+
         profile = getattr(self, "storage_profile", None)
         if not isinstance(profile, StorageProfile):
             raise ValueError(
                 f"storage_profile must be set, to a StorageProfile: {profile!r}"
             )
+
+        self.operation_concurrency = operation_concurrency
+        self.io_concurrency = io_concurrency
         self.operation_limit = asyncio.Semaphore(operation_concurrency)
         self.io_limit = asyncio.Semaphore(io_concurrency)
+
         self._executor: ThreadPoolExecutor | None = None
 
     async def _blocking(
