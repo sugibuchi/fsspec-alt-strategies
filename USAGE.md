@@ -35,7 +35,7 @@ the operation.
 The file objects in `files/` adapt their buffering to how a file is used. The module also provides adapters,
 which add fsspec's file features to an existing file-like object, e.g. an SDK's own:
 
-- `AsyncFileAdapter` gives a sync file the API of the files `open_async()` opens;
+- `SyncFileAdapter` gives a sync file, such as an SDK's handle, the API of the files `open_async()` opens;
 - the transactions of `fsspec_transaction.py` make its writes take effect only when fsspec's transaction commits.
 
 ### Filesystem router
@@ -81,40 +81,25 @@ wrappers.
 
 ## Usage
 
-### Watch an existing filesystem
+### File tree operation strategies
 
-`monitored()` wraps a filesystem it knows as the family that suits it. A `Monitor` then sees each operation behind
-fsspec's methods:
+#### Functions
+
+A strategy is a plain function, taking the storage's operations it uses:
 
 ```python
-import fsspec
-from fsspec_alt_strategies_impl import monitored
-from fsspec_alt_strategies import Monitor, monitoring
+import asyncio
+from fsspec_alt_strategies_impl.tree.find import tree_find
 
-
-class Progress(Monitor):
-    async def yielded(self, call, item, state, op):
-        if isinstance(item, Exception):
-            op.cancel()  # Stop at the first failure: the call raises CallCancelled.
-        print(call.method, state)
-
-
-fs = monitored(fsspec.filesystem("file"))
-with monitoring(Progress()):
-    fs.rm("data/2024", recursive=True)
+find = tree_find("data", ils=fs._ils, info=fs._info, concurrency_limit=asyncio.Semaphore(32))
+async with find as op:
+    async for entry in op:
+        if isinstance(entry, Exception):
+            print("failed:", entry)
+print(op.state.found)
 ```
 
-The library logs none of its routine work. To log each operation's start and end, use `LoggingMonitor`:
-`with monitoring(LoggingMonitor(logging.getLogger("myapp"))):`. It logs each item yielded at DEBUG.
-
-The known filesystems are those in `known_implementations`, by class: the local filesystem, s3fs, gcsfs, adlfs,
-fsspec's memory, SFTP and HDFS filesystems. Each entry says its family, whether it is async, its concurrency limits
-and its profile. Pass your own table to `monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem the way
-right on every storage: as a tree, one request at a time, with nothing known of the storage.
-
-A wrapper is light and not cached: make one when you need it, and drop it after.
-
-### Subclass a family's filesystem
+#### Abstract filesystem classes
 
 `TreeFileSystem` and `FlatFileSystem` are abstract async filesystems whose recursive methods are the strategies. You
 implement the storage's primitives, and declare its profile:
@@ -136,23 +121,26 @@ class MyFileSystem(TreeFileSystem):
 fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
 ```
 
-### Call a strategy
+#### Wrappers
 
-A strategy is a plain function, taking the storage's operations it uses:
+`monitored()` wraps a filesystem it knows as the family that suits it:
 
 ```python
-import asyncio
-from fsspec_alt_strategies_impl.tree.find import tree_find
+import fsspec
+from fsspec_alt_strategies_impl import monitored
 
-find = tree_find("data", ils=fs._ils, info=fs._info, concurrency_limit=asyncio.Semaphore(32))
-async with find as op:
-    async for entry in op:
-        if isinstance(entry, Exception):
-            print("failed:", entry)
-print(op.state.found)
+fs = monitored(fsspec.filesystem("file"))
+fs.rm("data/2024", recursive=True)  # Runs tree_rm.
 ```
 
-### Choosing
+The known filesystems are those in `known_implementations`, by class: the local filesystem, s3fs, gcsfs, adlfs,
+fsspec's memory, SFTP and HDFS filesystems. Each entry says its family, whether it is async, its concurrency limits
+and its profile. Pass your own table to `monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem the way
+right on every storage: as a tree, one request at a time, with nothing known of the storage.
+
+A wrapper is light and not cached: make one when you need it, and drop it after.
+
+#### Choosing
 
 None of these is right for every storage, and the library never picks one for you.
 
@@ -163,17 +151,14 @@ None of these is right for every storage, and the library never picks one for yo
 - **The concurrency limits** are yours to set. A filesystem unsafe to call from several threads, such as SFTP, needs
   them at 1.
 
-### Costs to know
+#### Costs to know
 
 - A flat wrapper lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix. That listing
   is held in memory, and covers the prefix's whole folder. A subclass overriding `_iexpand` with the storage's own listing
   by prefix streams it instead.
-- A monitor is awaited where the operation runs, so a slow monitor slows the call. For a sync call, it runs on
-  fsspec's own loop, in its thread.
 - `known_implementations` is shared by every copy in a project. Change it with care, or pass your own table.
-- Only the calls a strategy runs are watched. A call fsspec answers itself, e.g. a copy that is not recursive, is not.
 
-### Choosing with numbers
+#### Choosing with numbers
 
 `fsspec_alt_strategies_impl_testing.SimulatedFileSystem` is an in-memory async filesystem. It counts the requests a real
 storage would get, and delays each by a latency and a bandwidth you set. It models an object store, or a storage with a
@@ -188,3 +173,66 @@ fs.add_file("data/2024/01/a.parquet", b"...")
 fs.rm("data", recursive=True)
 print(fs.stats.calls)  # Counter({'delete': 1})
 ```
+
+### Monitor
+
+A `Monitor` sees each operation behind fsspec's methods, on a filesystem running the strategies:
+
+```python
+from fsspec_alt_strategies import Monitor, monitoring
+
+
+class Progress(Monitor):
+    async def yielded(self, call, item, state, op):
+        if isinstance(item, Exception):
+            op.cancel()  # Stop at the first failure: the call raises CallCancelled.
+        print(call.method, state)
+
+
+with monitoring(Progress()):
+    fs.rm("data/2024", recursive=True)
+```
+
+The library logs none of its routine work. To log each operation's start and end, use `LoggingMonitor`:
+`with monitoring(LoggingMonitor(logging.getLogger("myapp"))):`. It logs each item yielded at DEBUG.
+
+- A monitor is awaited where the operation runs, so a slow monitor slows the call. For a sync call, it runs on
+  fsspec's own loop, in its thread.
+- Only the calls a strategy runs are watched. A call fsspec answers itself, e.g. a copy that is not recursive, is not.
+
+### Async file object
+
+An adaptive file implements the storage's requests, and leaves the buffering to the file. A readable one implements
+`_fetch_range`. A writable one implements `_upload_all`, for a small file, and the multipart upload's requests:
+`_start_multipart_upload`, `_upload_part`, `_complete_multipart_upload` and `_abort_multipart_upload`.
+
+A filesystem's `open_async` returns its own files through `AsyncFileAdapter`. It returns a sync file, such as an
+SDK's handle, through `SyncFileAdapter`:
+
+```python
+import functools
+from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
+
+
+async def open_async(self, path, mode="rb", **kwargs):
+    size = (await self._info(path))["size"] if "r" in mode else None
+    opener = functools.partial(self.client.open, path, mode)
+    return await SyncFileAdapter.open(opener, mode=mode, size=size)
+```
+
+A `TransactionFile` holds a file's writes back until fsspec's transaction commits. Its `FileTransaction` says how:
+
+- `TempPathTransaction` writes to a temporary path, renamed on commit;
+- `LocalBufferTransaction` writes to a local buffer, written to the file on commit;
+- `AdaptiveWritableTransaction` holds back an adaptive file's last request, sent on commit.
+
+### Filesystem router
+
+`AsyncRoutingFileSystem` is abstract. A subclass implements three methods:
+
+- `_route(path)` gives the inner filesystem and its path, or None for a path above every storage;
+- `_outer(fs, path)` gives the router's path of an inner one;
+- `_roots(path)` lists a folder above the storages.
+
+`transfer_concurrency` bounds the copies and moves between storages at a time. Override `_cross_fs_cp_file` or
+`_cross_fs_mv_file` for a storage with a faster way, such as a server-side copy.
