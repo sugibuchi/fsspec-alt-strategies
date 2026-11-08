@@ -7,9 +7,15 @@ How to get the library's features, and how to use them. See the
 
 ### File tree operation strategies
 
-The strategies walk, find, glob, measure, delete, copy and move file trees. `tree/` holds those for storages listing
-one folder per request, and `flat/` those for object stores listing a key prefix in one paginated request. They come
-in three forms:
+The strategies walk, find, glob, measure, delete, copy and move file trees. They come in two families, by how a
+storage lists its files:
+
+- the `tree` family, in `tree/`, for storages listing one folder per request, such as Azure Data Lake Storage Gen2,
+  SFTP or HDFS;
+- the `flat` family, in `flat/`, for object stores listing every key under a prefix in one paginated request, such
+  as S3.
+
+Each family has the same strategies, named after it, e.g. `tree_rm` and `flat_rm`. They come in three forms:
 
 - **Functions**, such as `tree_rm` or `flat_find`, for built-in, specific strategies: you call one with the storage's
   operations it uses.
