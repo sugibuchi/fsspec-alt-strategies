@@ -15,6 +15,7 @@ This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm`,
 from __future__ import annotations
 
 from abc import abstractmethod
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import sync
@@ -29,8 +30,7 @@ from ..common.filesystem import (
     _failed_folder,
     _raise,
 )
-from ..common.operation import _collect_with_monitors
-from ..common.paths import _triples
+from ..common.operation import _collect_with_monitors, _with_monitors
 from .cp import flat_cp
 from .du import flat_du
 from .find import flat_find
@@ -57,8 +57,7 @@ class FlatFileSystem(_BaseFileSystem):
     ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``_mv`` when
     recursive, with `flat_walk`, `flat_find`, `flat_du`, `flat_glob`, `flat_rm`,
     `flat_cp` and `flat_mv`. Their answers are fsspec's, and their failures are
-    raised, a single one as it is, several in an ExceptionGroup. ``_walk``
-    holds the whole listing, to answer folder by folder, as fsspec's does.
+    raised, a single one as it is, several in an ExceptionGroup.
 
     A subclass implements the storage's primitives: ``_ils``, the listing by
     prefix, which fsspec has not, and ``_rm_files``, a deletion of several
@@ -155,9 +154,10 @@ class FlatFileSystem(_BaseFileSystem):
         """List every key starting with ``prefix``, as an async iterator of entries.
 
         ``prefix`` is raw text, e.g. "data/2024-". The entries are as ``_ls``
-        gives them, a key ending with "/" being a folder's marker, in any order.
-        Each key comes once, as an object store lists it: a key listed twice
-        is copied, moved, deleted or counted twice.
+        gives them, a key ending with "/" being a folder's marker. They come in
+        order of their names, as object stores list them: `flat_walk` counts
+        on it to know when a folder is done. Each key comes once: a key listed
+        twice is copied, moved, deleted or counted twice.
         """
 
     @abstractmethod
@@ -213,42 +213,32 @@ class FlatFileSystem(_BaseFileSystem):
     ) -> AsyncGenerator[tuple[str, Any, Any]]:
         detail = kwargs.pop("detail", False)
         root = self._strip_protocol(path)
+        walk = flat_walk(
+            root,
+            ils=self._ils,
+            info=self._info,
+            maxdepth=maxdepth,
+            topdown=topdown,
+            concurrency_limit=self.operation_limit,
+        )
 
-        try:
-            entries, _ = await _collect_with_monitors(
-                flat_walk(
-                    root,
-                    ils=self._ils,
-                    info=self._info,
-                    maxdepth=maxdepth,
-                    concurrency_limit=self.operation_limit,
-                ),
-                Call(self._unwrapped(), "walk", path),
-            )
-        except NotADirectoryError:
-            # fsspec's walk of a file yields the file, under no name.
-            entry = await self._info(root)
-            yield (root, {}, {"": entry}) if detail else (root, [], [""])
-            return
-        except OSError as e:
-            yield _failed_folder(root, e, on_error, detail)
-            return
-
-        # Each folder's entries, the folders as deep as fsspec's walk lists. The
-        # walk is top-down, so a folder comes before what is in it.
-        start = len(root) + 1 if root else 0
-        folders: dict[str, list[dict[str, Any]]] = {root: []}
-        for entry in entries:
-            name = entry["name"].rstrip("/")
-            folders[name.rpartition("/")[0]].append(entry)
-
-            depth = name[start:].count("/") + 1
-            if entry["type"] == "directory" and (maxdepth is None or depth < maxdepth):
-                folders.setdefault(name, [])
-
-        order = sorted(folders, key=lambda f: f.count("/"), reverse=not topdown)
-        for folder in order:
-            yield _triples(folder, folders[folder], detail)
+        async with aclosing(
+            _with_monitors(walk, Call(self._unwrapped(), "walk", path))
+        ) as folders:
+            try:
+                async for item in folders:
+                    folder, dirs, files = item
+                    if not detail:
+                        dirs, files = list(dirs), list(files)
+                    yield folder, dirs, files
+            except NotADirectoryError:
+                # fsspec's walk of a file yields the file, under no name.
+                entry = await self._info(root)
+                yield (root, {}, {"": entry}) if detail else (root, [], [""])
+            except OSError as e:
+                # The listing's error ends the walk: fsspec's on_error handles
+                # it as a failure to list the root.
+                yield _failed_folder(root, e, on_error, detail)
 
     async def _find(
         self,

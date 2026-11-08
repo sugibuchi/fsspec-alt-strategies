@@ -114,7 +114,7 @@ def flat_transfer(
     ils : callable
         Lists every source key starting with a prefix, called as
         ``ils(prefix)``: an async iterator of entries as fsspec's ``_ls``
-        gives them, in any order, each key once.
+        gives them, in order of their names, each key once.
     info : callable
         Describes a source path, called as ``info(path)``.
     copy_file : callable

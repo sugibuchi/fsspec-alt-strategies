@@ -271,8 +271,8 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
         await fs._rm("data", recursive=True, callback=callback)
     assert monitor.calls == ["walk", "rm"]
     assert callback.value == len(_FILES)
-    # The walk's entries, then the files deleted.
-    assert monitor.items == len(_FILES) + 6 + len(_FILES)
+    # The walk's folders, then the files deleted.
+    assert monitor.items == 7 + len(_FILES)
 
 
 def test_a_subclass_missing_a_primitive_is_refused() -> None:

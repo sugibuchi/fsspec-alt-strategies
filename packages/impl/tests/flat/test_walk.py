@@ -44,11 +44,11 @@ async def test_finds_what_tree_walk_finds(
     flat_fs: SimulatedFileSystem, path: str, kwargs: dict[str, Any], topdown: bool
 ) -> None:
     _tree(flat_fs)
-    entries, errors = await _collect_with_errors(
+    folders, errors = await _collect_with_errors(
         _walk(flat_fs, path, topdown=topdown, **kwargs)
     )
     assert errors == []
-    folders, _ = await _collect_with_errors(
+    expected, _ = await _collect_with_errors(
         tree_walk(
             path,
             ls=flat_fs._ls,
@@ -57,12 +57,8 @@ async def test_finds_what_tree_walk_finds(
             **kwargs,
         )
     )
-    # tree_walk yields each folder's entries together: all of them, here.
-    expected = [
-        e for _, dirs, files in folders for e in [*dirs.values(), *files.values()]
-    ]
-    key = lambda e: e["name"]  # noqa: E731
-    assert sorted(entries, key=key) == sorted(expected, key=key)
+    key = lambda f: f[0]  # noqa: E731
+    assert sorted(folders, key=key) == sorted(expected, key=key)
 
 
 def _before(names: list[str], first: str, then: str) -> bool:
@@ -70,26 +66,37 @@ def _before(names: list[str], first: str, then: str) -> bool:
 
 
 @pytest.mark.parametrize("topdown", [True, False])
-async def test_folders_come_before_or_after_all_in_them(
+async def test_folders_come_before_or_after_those_below_them(
     flat_fs: SimulatedFileSystem, topdown: bool
 ) -> None:
     _tree(flat_fs)
-    entries, _ = await _collect_with_errors(_walk(flat_fs, "data", topdown=topdown))
-    names = [e["name"] for e in entries]
-    for folder in (e["name"] for e in entries if e["type"] == "directory"):
-        for inside in (n for n in names if n.startswith(folder + "/")):
-            assert _before(names, folder, inside) is topdown
+    folders, _ = await _collect_with_errors(_walk(flat_fs, "data", topdown=topdown))
+    names = [f[0] for f in folders]
+    for folder in names:
+        for below in (n for n in names if n.startswith(folder + "/")):
+            assert _before(names, folder, below) is topdown
 
 
 async def test_requests() -> None:
     fs = SimulatedFileSystem(page_size=2, asynchronous=True)
     _tree(fs)
     op = _walk(fs, "data")
-    entries, _ = await _collect_with_errors(op)
+    folders, _ = await _collect_with_errors(op)
     # 5 keys, 2 a page: no listing per folder, and no info.
     assert fs.stats.calls == {"list": 3}
-    assert len(entries) == 5 + 6  # The files, and data's 6 folders.
+    assert len(folders) == 7  # data and its 6 folders.
     assert op.state == WalkState(current=op.state.current, found=11)
+
+
+async def test_bottom_up_yields_each_folder_once_the_listing_passes_it() -> None:
+    fs = SimulatedFileSystem(page_size=1, asynchronous=True)
+    _tree(fs)
+    seen = []
+    async for folder, _, _ in _walk(fs, "data", topdown=False):
+        seen.append((folder, fs.stats.calls["list"]))
+    # data/2023/01 is done once the second key, data/2023/02's, is listed.
+    assert seen[0] == ("data/2023/01", 2)
+    assert seen[-1] == ("data", 5)
 
 
 @pytest.mark.parametrize(
@@ -104,23 +111,19 @@ async def test_a_root_not_a_folder_raises(
         await _collect_with_errors(_walk(flat_fs, path))
 
 
-@pytest.mark.parametrize("topdown", [True, False])
-async def test_cancel_takes_no_more_from_the_listing(topdown: bool) -> None:
+async def test_cancel_takes_no_more_from_the_listing() -> None:
     fs = SimulatedFileSystem(page_size=1, asynchronous=True)
     _tree(fs)
-    op = _walk(fs, "data", topdown=topdown)
+    op = _walk(fs, "data", topdown=False)
     names = []
-    async for entry in op:
-        names.append(entry["name"])
+    async for folder, _, _ in op:
+        names.append(folder)
         op.cancel()
     assert op.cancelled()
-    assert fs.stats.calls == {"list": 1}
-    # Bottom up, only the first key's file: its folders were not known done.
-    assert names == (
-        ["data/2023", "data/2023/01", "data/2023/01/part-0.parquet"]
-        if topdown
-        else ["data/2023/01/part-0.parquet"]
-    )
+    # Cancelled once the second key closed the first folder: the folders still
+    # open are left out.
+    assert fs.stats.calls == {"list": 2}
+    assert names == ["data/2023/01"]
 
 
 def test_maxdepth_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
@@ -139,6 +142,6 @@ async def test_the_roots_own_marker_is_not_yielded(
         async for entry in flat_fs._ils(prefix):
             yield entry
 
-    entries, errors = await _collect_with_errors(_walk(flat_fs, "data", ils=ils))
+    folders, errors = await _collect_with_errors(_walk(flat_fs, "data", ils=ils))
     assert errors == []
-    assert entries == without
+    assert folders == without

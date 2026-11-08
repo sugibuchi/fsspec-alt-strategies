@@ -87,8 +87,8 @@ def flat_cp(
         Where to copy it, as above.
     ils : callable
         Lists every key starting with a prefix, called as ``ils(prefix)``: an
-        async iterator of entries as fsspec's ``_ls`` gives them, in any order,
-        each key once, as an object store lists it.
+        async iterator of entries as fsspec's ``_ls`` gives them, in order of
+        their names, each key once, as an object store lists them.
     info : callable
         Describes a path, called as ``info(path)``: e.g. the filesystem's
         ``_info``.

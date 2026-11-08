@@ -481,6 +481,8 @@ called as `ils(prefix)` and giving an async iterator of entries:
   pattern does, before the first wildcard.
 - `ils` yields entries, not pages, so that its meaning stays simple. A strategy never sees the pages, and holds one at a
   time.
+- `ils` yields the keys in order of their names, as object stores list them. So the keys under a folder come together,
+  and a strategy knows a folder is done once the listing has passed them.
 - `ils` yields each key once, as object stores list them. Remembering every key listed, to drop repeats, would hold the
   whole listing. A key listed twice is copied, moved, deleted or counted twice; only a batched `flat_mv` drops repeats.
 - The listing holds no permit of `concurrency_limit`: its pages come one after another. The other requests, such as an
@@ -494,13 +496,14 @@ strategy on `flat_fs`, against fsspec's own method on it.
 
 `flat_glob` matches with `tree_glob`'s compiled patterns, so the two never answer differently.
 
-`flat_walk` yields what `tree_walk` yields, from one listing rather than one per folder: fsspec's `walk` lists a folder
-per request even on object stores. Its order differs, as a listing is in no order of folders:
+`flat_walk` yields what `tree_walk` yields, `(path, dirs, files)` per folder, from one listing rather than one per
+folder: fsspec's `walk` lists a folder per request even on object stores. It holds the folders the listing is in, from
+the root down to the last key's, and yields each once the listing has passed its keys:
 
-- Top down, each folder comes before what is in it, but its files may come after its subfolders'.
-- Bottom up, the files come as listed, and the folders once the listing ends, the deepest first. Only then is a folder
-  known to be done, and only the folders' names wait, never the listing.
-- `maxdepth` and `descend` leave paths out, but save no request: the listing gives all the keys anyway.
+- Bottom up, each folder comes as soon as it is done, after those below it.
+- Top down, a folder must come before those below it, but the root is done only once the listing ends. So all the
+  folders come then, held until it does.
+- `maxdepth` and `descend` leave folders out, but save no request: the listing gives all the keys anyway.
 
 `flat_rm`, `flat_cp`, `flat_transfer` and `flat_mv` run on the same engine as the tree's, `_Jobs`, fed by `_FlatJobs` in
 `flat/_jobs.py` with the keys under each root:
