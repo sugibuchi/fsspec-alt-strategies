@@ -63,14 +63,13 @@ class TreeFileSystem(_BaseFileSystem):
     fsspec's applies it to the root only, as its walk recurses without it.
 
     A subclass implements the storage's primitives, which fsspec leaves
-    abstract: ``_ls``, ``_info``, ``_rm_file``, ``_rmdir``, ``_cp_file`` and
-    ``_makedirs``. It implements ``open_async`` too, giving its files
+    abstract: ``_info``, ``_rm_file``, ``_rmdir``, ``_cp_file`` and
+    ``_makedirs``, and ``_ils``, a folder's listing as an async iterator,
+    which ``_ls`` lists with. It implements ``open_async`` too, giving its files
     ``io_limit`` as their concurrency limit, and ``_open``. ``_cat_file``,
     ``_pipe_file``, ``_get_file`` and ``_put_file`` read and write through
     ``open_async``'s files. It may implement ``_rm_tree`` too, a storage's
-    recursive delete of a folder, which a recursive ``rm`` then uses. The
-    strategies list with ``_ils``, which yields ``_ls``'s entries unless a
-    subclass streams a folder's pages.
+    recursive delete of a folder, which a recursive ``rm`` then uses.
 
     Two limits bound its requests, each an `asyncio.Semaphore` of its own:
 
@@ -114,7 +113,7 @@ class TreeFileSystem(_BaseFileSystem):
     ...     protocol = "my"
     ...     storage_profile = StorageProfile()  # Unknown.
     ...
-    ...     async def _ls(self, path, detail=True, **kwargs): ...
+    ...     async def _ils(self, path, **kwargs): ...
     ...     async def _info(self, path, **kwargs): ...
     ...     async def _rm_file(self, path, **kwargs): ...
     ...     async def _rmdir(self, path): ...
@@ -159,18 +158,18 @@ class TreeFileSystem(_BaseFileSystem):
     # What a subclass implements: the storage's primitives, as fsspec names them.
 
     @abstractmethod
-    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
-        """List a folder: its entries, with ``detail``, else their names."""
+    def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        """List a folder, as an async iterator of its entries, as the strategies list.
 
-    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
-        """List a folder as an async iterator of its entries, as the strategies list.
-
-        Here, it yields ``_ls``'s entries, all listed at once. A subclass whose
-        storage lists a folder in pages overrides it, yielding each page's
-        entries as it comes. A file yields itself, as fsspec's ``_ls`` lists it.
+        The entries are as fsspec's ``_ls`` gives them with ``detail``: a
+        storage listing a folder in pages yields each page's as it comes. A
+        file yields itself, as fsspec's ``_ls`` lists it.
         """
-        for entry in await self._ls(path, detail=True, **kwargs):
-            yield entry
+
+    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+        """List a folder, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names."""
+        entries = [entry async for entry in self._ils(path, **kwargs)]
+        return entries if detail else [e["name"] for e in entries]
 
     @abstractmethod
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:

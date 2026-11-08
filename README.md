@@ -109,7 +109,7 @@ class MyFileSystem(TreeFileSystem):
     protocol = "my"
     storage_profile = StorageProfile()  # Nothing known: right on any storage.
 
-    async def _ls(self, path, detail=True, **kwargs): ...
+    async def _ils(self, path, **kwargs): ...  # A folder's entries, as they come.
     async def _info(self, path, **kwargs): ...
     # ... and the other primitives each class declares abstract.
 

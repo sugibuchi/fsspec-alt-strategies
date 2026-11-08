@@ -306,6 +306,11 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
         if rm_tree is not None:
             self._rm_tree = rm_tree
 
+    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        # fsspec has no listing in pages: the wrapped one's _ls, all at once.
+        for entry in await self._ls(path, detail=True, **kwargs):
+            yield entry
+
 
 class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
     """A sync filesystem, as a `TreeFileSystem`: its recursive methods the tree strategies.
@@ -369,6 +374,11 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
             storage_profile=replace(storage_profile, fs_type="tree"),
             **kwargs,
         )
+
+    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        # fsspec has no listing in pages: the wrapped one's ls, all at once.
+        for entry in await self._ls(path, detail=True, **kwargs):
+            yield entry
 
 
 class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):

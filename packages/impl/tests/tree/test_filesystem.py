@@ -25,6 +25,7 @@ from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
 
@@ -95,9 +96,10 @@ class _Tree(TreeFileSystem):
         # The extra keyword arguments each listing was given, e.g. refresh=True.
         self.ls_kwargs: list[dict[str, Any]] = []
 
-    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         self.ls_kwargs.append(kwargs)
-        return await self.inner._ls(path, detail=detail)
+        for entry in await self.inner._ls(path, detail=True):
+            yield entry
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         return await self.inner._info(path)

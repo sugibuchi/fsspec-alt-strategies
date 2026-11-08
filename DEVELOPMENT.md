@@ -160,8 +160,8 @@ print(op.state.files_deleted)
 - The storage's operations are functions, not a filesystem. Any coroutine function called as fsspec calls its own
   serves, e.g. `info(path)`, so one may come from a storage's SDK rather than a filesystem.
 - A listing is an async iterator of entries, as fsspec's `_ls` gives them: `ils(path)` for a folder in `tree/`,
-  `ils(prefix)` for keys in `flat/`. So a storage listing in pages streams them. `TreeFileSystem._ils` yields its
-  `_ls`'s entries, unless a subclass streams its pages.
+  `ils(prefix)` for keys in `flat/`. So a storage listing in pages streams them. A `TreeFileSystem` subclass
+  implements `_ils`, and its `_ls` lists with it.
 - They are required: a strategy guesses nothing, e.g. which request deletes a folder. Only a native operation that
   saves requests is optional, e.g. `tree_rm`'s `rm_tree`: without it, the strategy does the work itself.
 - Paths come without a protocol, as the operations take them. The method wrapping a strategy strips it first.
@@ -246,7 +246,7 @@ class MyFileSystem(AsyncFileSystem):
 Or they subclass a family's abstract filesystem, `TreeFileSystem` in `tree/filesystem.py` or `FlatFileSystem` in
 `flat/filesystem.py`, which overrides all of fsspec's recursive methods with the family's strategies:
 
-- The subclass implements the storage's primitives, e.g. `_ls`, `_info` and `_rm_file`, and `open_async` and `_open`.
+- The subclass implements the storage's primitives, e.g. `_ils`, `_info` and `_rm_file`, and `open_async` and `_open`.
   Each family's class declares them all as abstract methods, so a subclass missing one fails when instantiated.
 - It takes two required limits: `operation_concurrency`, for the strategies' requests, and `io_concurrency`, for the
   reads and writes of data. `open_async` gives the files it opens `io_limit`, as their concurrency limit.
