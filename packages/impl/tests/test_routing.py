@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
 import pickle
 from contextlib import nullcontext
@@ -350,42 +349,6 @@ async def test_a_sync_filesystem_is_refused(router: _Router) -> None:
         await router._info("lake/memory/x")
 
 
-class _Preparing(_Router):
-    """A router whose routing needs a request first, e.g. a setting."""
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.ready = False
-        self.prepared: list[str] = []
-
-    async def _prepare_route(self, path: str) -> None:
-        self.prepared.append(path)
-        await asyncio.sleep(0)  # The request.
-        self.ready = True
-
-    def _route(self, path: str) -> tuple[AsyncFileSystem, str] | None:
-        assert self.ready
-        return super()._route(path)
-
-
-async def test_routing_awaits_its_preparation() -> None:
-    router = _Preparing()
-    router.tree.add_file("a/1.txt", b"1")
-    assert await router._find("routed://lake/tree/a") == ["lake/tree/a/1.txt"]
-    assert router.prepared == ["lake/tree/a"]
-    router.ready = False
-    await router._rm(["lake/tree/a/1.txt"])
-    assert not router.tree._file_data
-
-
-def test_a_sync_method_awaits_the_preparation_too() -> None:
-    router = _Preparing(asynchronous=False)
-    router.tree.add_file("a/1.txt", b"1")
-    with router.open("lake/tree/a/1.txt", "rb"):
-        pass
-    assert router.prepared == ["lake/tree/a/1.txt"]
-
-
 def test_a_storages_profile(router: _Router) -> None:
     assert router.storage_profile_of("lake/flat/x").implicit_folders is True
     assert router.storage_profile_of("lake/tree/x") == StorageProfile()
@@ -536,6 +499,11 @@ async def test_copy_within_a_storage_is_its_own(router: _Router) -> None:
     assert {p for p in router.tree._file_data if p.startswith("copied/")} == {
         p.replace("data", "copied", 1) for p in _FILES
     }
+    await router._cp_file("lake/tree/data/a/1.txt", "lake/tree/one.txt")
+    await router._mv_file("lake/tree/one.txt", "lake/tree/two.txt")
+    assert router.tree.stats.calls["copy"] == 5  # The move copies too.
+    assert router.tree._file_data["two.txt"].data == b"data/a/1.txt"
+    assert "one.txt" not in router.tree._file_data
 
 
 @pytest.mark.parametrize(
@@ -615,56 +583,6 @@ async def test_copy_from_a_plain_storage_is_fsspecs(router: _Router) -> None:
 async def test_copy_of_a_file_across_storages(router: _Router) -> None:
     await router._cp_file("lake/tree/data/a/1.txt", "lake/flat/one.txt")
     assert router.flat._file_data["one.txt"].data == b"data/a/1.txt"
-
-
-class _Shared(_Router):
-    """Also "lake/shared/<path>": another filesystem of the tree's storage.
-
-    Its inner paths are the tree's, under "shared/".
-    """
-
-    def __init__(self, same: bool, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.same = same
-        self.makers["shared"] = lambda: _Tree(
-            self.tree, storage_profile=StorageProfile(), **_OPTIONS
-        )
-
-    def _route(self, path: str) -> tuple[AsyncFileSystem, str] | None:
-        target = super()._route(path)
-        if target is not None and self.names[id(target[0])] == "shared":
-            return target[0], f"shared/{target[1]}" if target[1] else "shared"
-        return target
-
-    def _outer(self, fs: AsyncFileSystem, path: str) -> str:
-        if self.names[id(fs)] == "shared":
-            return f"lake/{path}"
-        return super()._outer(fs, path)
-
-    def _same_storage(
-        self, fs1: AsyncFileSystem, path1: Any, fs2: AsyncFileSystem, path2: str
-    ) -> Any:
-        if self.same and fs1.fs is fs2.fs:  # type: ignore[attr-defined]
-            return fs2, path1, path2  # One namespace: fs2 takes fs1's paths.
-        return super()._same_storage(fs1, path1, fs2, path2)
-
-
-@pytest.mark.parametrize("same", [True, False])
-async def test_same_storage_names_the_filesystem_and_its_paths(same: bool) -> None:
-    router = _Shared(same)
-    for path in _FILES:
-        router.tree.add_file(path, path.encode())
-    shared = router.backend("shared")
-    await router._copy("lake/tree/data", "lake/shared/copied", recursive=True)
-    assert {p for p in router.tree._file_data if p.startswith("shared/")} == {
-        p.replace("data", "shared/copied", 1) for p in _FILES
-    }
-    # Native: one storage copy per file. Otherwise, streamed.
-    assert router.tree.stats.calls.get("copy", 0) == (3 if same else 0)
-    assert router.tree.stats.calls.get("read", 0) == (0 if same else 3)
-    await router._mv_file("lake/shared/copied/a/1.txt", "lake/tree/one.txt")
-    assert "one.txt" in router.tree._file_data
-    assert shared is router.backend("shared")
 
 
 @pytest.mark.parametrize("source", ["tree", "flat"])

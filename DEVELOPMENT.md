@@ -324,19 +324,8 @@ A subclass implements three methods:
 
 It may override these hooks:
 
-- `_prepare_route(path)`, a coroutine, is awaited before `_route`. A subclass whose routing needs a request, e.g. a
-  setting of the service, makes it there and keeps the answer, as `_route` is sync. By default, it does nothing.
-  - A sync method of a sync router awaits it on the loop. One of an asynchronous router cannot, e.g. `open`: `_route`
-    then routes with what it has.
-
 - `_root_info(path)`, a coroutine, describes a path above the storages for `_info`. By default, the root is a bare
   folder entry, and any other path its entry in `_roots` of its parent.
-- `_same_storage(fs1, path1, fs2, path2)` names the one filesystem copying or moving between two storages' paths
-  itself. It returns that filesystem and both paths as its own, or None for a transfer. By default, it returns
-  `(fs1, path1, path2)` only when `fs1 is fs2`.
-  - Two filesystems may differ yet share a storage, e.g. through one client. The subclass then maps the other's path
-    to the one it returns, as no namespace is assumed shared.
-  - `path1` may be a list, of one call's sources. The paths it returns keep their shape.
 - `_server_copy(fs1, path1, fs2, path2)` copies a file across without the data passing through the router. It returns
   False where it cannot, and the file is streamed instead. It raises on any other failure.
 - `_transfer(fs1, path1, fs2, path2, *, copy_file)` returns the strategy copying between two storages, not yet started.
@@ -348,6 +337,7 @@ It may override these hooks:
 
 How it passes calls on:
 
+- `_route` is sync, as sync methods route too. Every method, sync or async, calls it directly.
 - The primitives, such as `_info`, `_cat_file` and `_open`, call the inner filesystem's own, under its inner path.
 - The recursive methods, such as `_find`, `_glob`, `_rm` and `_copy`, call the inner one's own too, so that its
   strategies run.
@@ -361,7 +351,8 @@ How it passes calls on:
 - fsspec makes no sync `mv` or `rmdir`, so the router has its own, as the families' classes do.
 - `test_routing.py` fails on any fsspec method the router neither passes on nor lists as inherited on purpose.
 
-A recursive copy or move between two storages runs the strategy `_transfer` returns:
+A copy or move whose two paths route to the same inner filesystem, `fs1 is fs2`, is that filesystem's own. A
+recursive copy or move between two storages runs the strategy `_transfer` returns:
 
 - Its `copy_file` tries `_server_copy`, then `streaming_copy`, under the router's `transfer_limit`.
 - Where `_transfer` returns None, the copy is fsspec's own, a `_cp_file` per file.
@@ -393,7 +384,7 @@ The rest of a router:
 - Each call it passes on runs within `routing(self)`, so that a monitor's `Call.via` names it.
 
 A router of volumes might read as below. Its catalogs and schemas are above the storages. Each volume's filesystem
-takes full paths, so that one volume's filesystem can copy to another's paths:
+takes full paths:
 
 ```python
 class VolumesFileSystem(AsyncRoutingFileSystem):
@@ -413,9 +404,6 @@ class VolumesFileSystem(AsyncRoutingFileSystem):
         names = await self.client.list_children(path)  # Catalogs, or schemas.
         return [{"name": n, "type": "directory", "size": 0} for n in names]
 
-    def _same_storage(self, fs1, path1, fs2, path2):
-        # One API copies between volumes. Their paths are full, so fs1 takes path2 as it is.
-        return (fs1, path1, path2) if fs1.workspace == fs2.workspace else None
 ```
 
 A router of an account's containers, each with its own client, might route on the first segment. Its server copy is
