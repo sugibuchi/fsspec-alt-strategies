@@ -37,15 +37,6 @@ if TYPE_CHECKING:
 _MiB = 1024 * 1024
 
 
-def _limit(name: str, value: int | asyncio.Semaphore) -> asyncio.Semaphore:
-    """The semaphore of a concurrency: the one given, shared, or a new one."""
-    if isinstance(value, asyncio.Semaphore):
-        return value
-    if value < 1:
-        raise ValueError(f"{name} must be at least 1: {value}")
-    return asyncio.Semaphore(value)
-
-
 class _AbstractFileSystemMeta(type(AsyncFileSystem), ABCMeta):  # type: ignore[misc]
     """fsspec's metaclass, which caches instances, with ABCMeta's abstract methods.
 
@@ -82,8 +73,22 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         io_concurrency: int | asyncio.Semaphore,
         **kwargs: Any,
     ) -> None:
-        operation_limit = _limit("operation_concurrency", operation_concurrency)
-        io_limit = _limit("io_concurrency", io_concurrency)
+        # A semaphore given is shared. A number makes a new one.
+        if isinstance(operation_concurrency, asyncio.Semaphore):
+            operation_limit = operation_concurrency
+        elif operation_concurrency < 1:
+            raise ValueError(
+                f"operation_concurrency must be at least 1: {operation_concurrency}"
+            )
+        else:
+            operation_limit = asyncio.Semaphore(operation_concurrency)
+
+        if isinstance(io_concurrency, asyncio.Semaphore):
+            io_limit = io_concurrency
+        elif io_concurrency < 1:
+            raise ValueError(f"io_concurrency must be at least 1: {io_concurrency}")
+        else:
+            io_limit = asyncio.Semaphore(io_concurrency)
 
         super().__init__(*args, **kwargs)
 
