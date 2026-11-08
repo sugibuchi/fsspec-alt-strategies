@@ -4,7 +4,8 @@
 
 `flat_cp` is an alternative to fsspec's recursive ``copy`` for flat storages.
 fsspec's lists every key first, then copies them. `flat_cp` copies each key as
-soon as the listing gives it.
+soon as the listing gives it. The destination may be another storage, flat or
+a tree: within one, it is the same storage's operations given twice.
 
 This module depends on `_jobs`, and `jobs`, `operation` and `placement` of
 `common`.
@@ -25,6 +26,8 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import Awaitable, Sequence
 
+    from fsspec_alt_strategies_common.profile import StorageProfile
+
     from ..common.jobs import _Roots
     from ..common.types import _Ils, _Info, _Request
 
@@ -38,6 +41,11 @@ def flat_cp(
     ils: _Ils,
     info: _Info,
     cp_file: _Request,
+    dst_info: _Info,
+    dst_makedirs: _Request,
+    dst_rm_file: _Request,
+    same_storage: bool,
+    profile: StorageProfile,
     concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, str], CpState]:
     """Copy the keys under a prefix, copying as the listing goes on.
@@ -50,9 +58,20 @@ def flat_cp(
     its name, as ``cp -r`` does. Existing files are overwritten.
 
     The keys are listed as `flat_find` lists them, and each is copied by one
-    ``cp_file`` as soon as the listing gives it. A folder's marker, a key
-    ending with "/", is not copied, as fsspec's ``copy`` copies no folder:
-    flat storages need none for the files in it.
+    ``cp_file`` as soon as the listing gives it.
+
+    The destination is described by the ``dst_`` operations and ``profile``,
+    and may be flat or a tree. Within one storage, they are the source's own,
+    and ``same_storage`` is True: a path copied onto itself, or under itself,
+    is refused. Between two, ``cp_file`` copies from one to the other, e.g. one
+    made by ``common.routing.streaming_copy``, and every byte goes through the
+    caller. A path may then go to the same path, or under it.
+
+    Unless the profile says it needs none, a folder is made at the destination
+    before the first key copied into it, by one ``dst_makedirs``. A folder's
+    marker, a key ending with "/", is no file to copy: its folder is made at
+    the destination instead, so that a tree keeps it even when empty, unless
+    the destination's folders are implicit.
 
     The copies run concurrently, so the destination's keys are created in
     another order than the source's. A storage listing in creation order
@@ -60,23 +79,35 @@ def flat_cp(
 
     Unlike fsspec's ``copy``, it keeps going past a failure, and reports each.
     A copy cancelled or failed leaves what was copied so far: it deletes
-    nothing.
+    nothing. A folder failing to be made is reported, and the keys into it
+    are still copied, each reporting its own failure.
 
     It wins over fsspec's ``copy`` on large prefixes of flat storages: the
-    copies start after the first page of the listing, not after the last. It
-    loses on storages with a hierarchical namespace, whose folders a listing
-    by prefix does not see: `tree_cp` suits those.
+    copies start after the first page of the listing, not after the last.
+    Between two storages, it wins over fsspec's way too, a ``get`` to local
+    files then a ``put``: the data needs no local disk. It loses on sources
+    with a hierarchical namespace, whose folders a listing by prefix does not
+    see: `tree_cp` suits those.
 
     Once cancelled, it takes nothing more from the listing, and starts no new
     copy, but yields the outcomes of those sent. Closed, it waits for those
     without yielding them. Iterating it raises FileNotFoundError if ``path1``
     does not exist, or matches nothing, and ValueError if ``path2`` is inside
-    it.
+    it within one storage.
 
-    Requests: one ``info`` for ``path2``, unless it ends with "/" or ``path1``
-    is a pattern or a list. The pages of one ``ils`` per folder copied, one
-    after another, and one ``cp_file`` per key, as ``concurrency_limit``
-    allows. Patterns, or a list, add the requests of their `flat_glob`.
+    Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
+    ``path1`` is a pattern or a list. Patterns, or a list, add the requests
+    of their `flat_glob`. The pages of one ``ils`` per folder copied, one
+    after another, one ``cp_file`` per key, and one ``dst_makedirs`` per
+    destination folder with keys or a marker. A destination refusing to
+    overwrite costs a ``dst_info``, a ``dst_rm_file`` and a ``cp_file`` more
+    per file it refused. Each request but the listing holds a permit of
+    ``concurrency_limit`` while it runs, a ``cp_file`` between two storages
+    too.
+
+    The profile's ``parents_required=False``, or ``implicit_folders=True``,
+    saves the ``dst_makedirs`` of each folder with keys, as their copies
+    create it. ``implicit_folders=True`` saves those of the markers too.
 
     Parameters
     ----------
@@ -93,11 +124,24 @@ def flat_cp(
         Describes a path, called as ``info(path)``: e.g. the filesystem's
         ``_info``.
     cp_file : callable
-        Copies a file, called as ``cp_file(source, destination)``: e.g. the
-        filesystem's ``_cp_file``.
+        Copies a file to the destination, called as
+        ``cp_file(source, destination)``: e.g. the filesystem's ``_cp_file``.
+    dst_info : callable
+        Describes a destination path, called as ``dst_info(path)``.
+    dst_makedirs : callable
+        Creates a destination folder and its parents, called as
+        ``dst_makedirs(path, exist_ok=True)``. On a flat destination, it may
+        do nothing.
+    dst_rm_file : callable
+        Deletes a destination file, called as ``dst_rm_file(path)``. Only a
+        storage refusing to overwrite needs it.
+    same_storage : bool
+        Whether the destination is the source's storage.
+    profile : StorageProfile
+        What the destination does: ``StorageProfile()`` if it is unknown.
     concurrency_limit : asyncio.Semaphore
-        Held by each ``cp_file`` and ``info`` while it runs. The listing holds
-        none. Share one to limit several operations, or files, together.
+        Held by each request but the listing while it runs, on either
+        storage. Share one to limit several operations, or files, together.
 
     Returns
     -------
@@ -118,6 +162,11 @@ def flat_cp(
     ...     ils=my_ils,
     ...     info=fs._info,
     ...     cp_file=fs._cp_file,
+    ...     dst_info=fs._info,
+    ...     dst_makedirs=fs._makedirs,
+    ...     dst_rm_file=fs._rm_file,
+    ...     same_storage=True,
+    ...     profile=StorageProfile(),
     ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
     >>> async for copied in cp:
@@ -131,6 +180,11 @@ def flat_cp(
             ils=ils,
             info=info,
             cp_file=cp_file,
+            destination_info=dst_info,
+            makedirs=dst_makedirs,
+            rm_file=dst_rm_file,
+            same_storage=same_storage,
+            profile=profile,
             concurrency_limit=concurrency_limit,
             op=op,
         ).outcomes(),
@@ -139,7 +193,12 @@ def flat_cp(
 
 
 class _Copy(_Placing, _FlatJobs):
-    """The jobs of one `flat_cp`: a copy per key."""
+    """The jobs of one `flat_cp`: a folder made where needed, a copy per key.
+
+    A key's copy waits for its destination folder, when the destination needs
+    it. The keys of one folder come apart in the listing, so the folders made
+    are remembered, and each is made once.
+    """
 
     def __init__(
         self,
@@ -149,6 +208,11 @@ class _Copy(_Placing, _FlatJobs):
         ils: _Ils,
         info: _Info,
         cp_file: _Request,
+        destination_info: _Info,
+        makedirs: _Request,
+        rm_file: _Request,
+        same_storage: bool,
+        profile: StorageProfile,
         concurrency_limit: asyncio.Semaphore,
         op: Operation[Any, Any],
     ) -> None:
@@ -158,10 +222,26 @@ class _Copy(_Placing, _FlatJobs):
         self.path2 = path2
         self.cp_file = cp_file
 
-        self._placing()
+        # ils and info are the source's. destination_info, makedirs, rm_file
+        # and the profile are the destination's.
+        self.makedirs = makedirs
+        self.rm_file = rm_file
+        self._placing(destination_info, same_storage=same_storage)
+
+        # Unknown, folders are made first. Implicit folders need none.
+        self.implicit_folders = bool(profile.implicit_folders)
+        self.parents_required = (
+            profile.parents_required is not False and not self.implicit_folders
+        )
 
         self.files_found = 0
         self.files_done = 0
+
+        # The destination folders made, or tried: their keys need not wait.
+        self.made: set[str] = set()
+
+        # The copies waiting for their destination folder, by that folder.
+        self.after_mkdir: dict[str, list[_Job]] = {}
 
     def state(self) -> CpState:
         return CpState(
@@ -177,25 +257,63 @@ class _Copy(_Placing, _FlatJobs):
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
         if name.endswith("/"):
-            return  # A folder's marker: no folder is copied.
+            # A folder's marker: a tree destination keeps the folder.
+            if not self.implicit_folders:
+                self.queue(self.target(name.rstrip("/")), [], always=True)
+            return
+
         self.files_found += 1
-        self.waiting.append(_Job("copy", name, self.target(name)))
+        target = self.target(name)
+        self.queue(target.rpartition("/")[0], [_Job("copy", name, target)])
+
+    def queue(self, folder: str, copies: list[_Job], *, always: bool = False) -> None:
+        """Queue copies into a destination folder, made first if needed."""
+        if not folder or folder in self.made or not (always or self.parents_required):
+            self.waiting.extend(copies)
+            return
+
+        if folder not in self.after_mkdir:
+            self.waiting.append(_Job("mkdir", "", folder))
+        self.after_mkdir.setdefault(folder, []).extend(copies)
 
     def run(self, job: _Job) -> Awaitable[Any]:
+        if job.kind == "mkdir":
+            return self.makedirs(job.destination, exist_ok=True)
         return self.copy_file(job.source, job.destination)
 
     def done(self, job: _Job) -> list[Any]:
+        if job.kind == "mkdir":
+            self.made.add(job.destination)
+            self.waiting.extend(self.after_mkdir.pop(job.destination))
+            return []
+
         self.files_done += 1
         return [(job.source, job.destination)]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
-        # Noted where it happened, in copy_file.
+        if job.kind == "mkdir":
+            # The copies still go: each then reports its own failure, if any.
+            self.made.add(job.destination)
+            self.waiting.extend(self.after_mkdir.pop(job.destination))
+            error.add_note(f"Creating the folder {job.destination!r} failed.")
+
+        # A key's error is noted where it happened, in copy_file.
         return [error]
 
     async def copy_file(self, source: str, destination: str) -> None:
         """Copy a key, noting its paths on an error."""
         try:
-            await self.cp_file(source, destination)
+            try:
+                await self.cp_file(source, destination)
+            except FileExistsError:
+                # The destination refuses to overwrite. A folder there is no
+                # file to replace. The job holds its permit already.
+                entry = await self.destination_info(destination)
+                if entry["type"] == "directory":
+                    raise
+
+                await self.rm_file(destination)
+                await self.cp_file(source, destination)
         except Exception as e:
             # Yielded among paths, the error must tell its paths itself.
             e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")

@@ -22,8 +22,10 @@ def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
         "ls": fs._ls,
         "info": fs._info,
         "mv_file": fs._mv_file,
-        "makedirs": fs._makedirs,
         "rm_folder": fs._rmdir,
+        "dst_info": fs._info,
+        "dst_makedirs": fs._makedirs,
+        "same_storage": True,
     }
     return tree_mv(path1, path2, **{**operations, **kwargs})
 
@@ -189,7 +191,7 @@ async def test_implicit_folders_save_the_folder_requests(
         sent.append(f"mkdir {path}")
         await flat_fs._makedirs(path, exist_ok=exist_ok)
 
-    unknown = _mv(flat_fs, "data", "moved", rm_folder=rm_folder, makedirs=makedirs)
+    unknown = _mv(flat_fs, "data", "moved", rm_folder=rm_folder, dst_makedirs=makedirs)
     moved_unknown, _ = await _collect_with_errors(unknown)
     assert sent  # Unknown, each folder is made, then deleted.
 
@@ -200,7 +202,7 @@ async def test_implicit_folders_save_the_folder_requests(
         "moved",
         "data",
         rm_folder=rm_folder,
-        makedirs=makedirs,
+        dst_makedirs=makedirs,
         profile=profile,
     )
     moved, errors = await _collect_with_errors(op)
@@ -478,7 +480,7 @@ async def test_a_target_failing_its_info_moves_file_by_file(
         hierarchical_fs,
         "data",
         "moved",
-        info=info,
+        dst_info=info,
         mv_file=hierarchical_fs._rename,
         profile=profile,
     )
@@ -507,3 +509,30 @@ async def test_a_source_folder_found_already_gone_is_moved() -> None:
     assert ("data/2023/01", "moved/2023/01") in moved
     assert ("data", "moved") in moved
     assert not await fs._exists("data")
+
+
+async def test_moves_to_another_storage(hierarchical_fs: SimulatedFileSystem) -> None:
+    _tree(hierarchical_fs)
+    dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+
+    async def mv_file(source: str, destination: str) -> None:
+        await dst._pipe_file(destination, hierarchical_fs._file_data[source].data)
+        await hierarchical_fs._rm_file(source)
+
+    op = _mv(
+        hierarchical_fs,
+        "data",
+        "moved",
+        mv_file=mv_file,
+        dst_info=dst._info,
+        dst_makedirs=dst._makedirs,
+        same_storage=False,
+        # The destination's: it says nothing of how the source renames.
+        profile=StorageProfile(renames_folders=True),
+    )
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert sorted(dst._file_data) == sorted("moved" + p[len("data") :] for p in _FILES)
+    assert not any(p.startswith("data/") for p in hierarchical_fs._file_data)
+    assert not await hierarchical_fs._exists("data")
+    assert op.state.roots_renamed is None

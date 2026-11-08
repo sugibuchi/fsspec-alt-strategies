@@ -104,7 +104,7 @@ def streaming_copy(
 
     See Also
     --------
-    tree_transfer, flat_transfer : The copies taking it.
+    tree_cp, flat_cp : The copies taking it, between two storages.
 
     Examples
     --------
@@ -161,7 +161,7 @@ class AsyncRoutingFileSystem(
 
     A copy or move between two paths of one storage is the inner filesystem's
     own: both paths route to the same inner filesystem. Between two storages, it is
-    the strategy ``_transfer`` returns, e.g. `tree_transfer`, given a
+    the strategy ``_transfer`` returns, e.g. `tree_cp`, given a
     ``copy_file`` trying ``_server_copy``, then streaming the data. Where it
     returns None, as it does unless overridden, it is fsspec's own copy, a
     file at a time. A move between two storages deletes each source file once its
@@ -313,10 +313,11 @@ class AsyncRoutingFileSystem(
         """The recursive copy of ``path1`` in ``fs1`` to ``path2`` in ``fs2``, or None.
 
         The router knows no family, so the strategy is the subclass's to pick,
-        as it knows its inner filesystems: e.g. `tree_transfer` between two
-        `TreeFileSystem`s, given ``fs1``'s ``_ls`` and ``_info``, ``fs2``'s
-        ``_info``, ``_makedirs`` and ``_rm_file``, its profile from
-        `storage_profile_of`, and ``copy_file``. ``copy_file`` holds a permit
+        as it knows its inner filesystems: e.g. `tree_cp` from a
+        `TreeFileSystem`, given ``fs1``'s ``_ls`` and ``_info``, ``fs2``'s
+        ``_info``, ``_makedirs`` and ``_rm_file``, ``same_storage=False``, its
+        profile from `storage_profile_of`, and ``copy_file`` as its
+        ``cp_file``. ``copy_file`` holds a permit
         of ``transfer_limit``, so the strategy's ``concurrency_limit`` must be
         another semaphore, e.g. ``fs1.operation_limit``.
 

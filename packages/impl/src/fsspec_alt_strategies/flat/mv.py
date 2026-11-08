@@ -43,6 +43,10 @@ def flat_mv(
     cp_file: _Request | None = None,
     rm_files: _Requests | None = None,
     batch_size: int | None = None,
+    dst_info: _Info,
+    dst_makedirs: _Request,
+    dst_rm_file: _Request,
+    same_storage: bool,
     profile: StorageProfile,
     concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, str], MvState]:
@@ -64,13 +68,19 @@ def flat_mv(
       batch is deleted. It wins on object stores, which rename nothing, but
       delete many keys in one request.
 
-    Given both, it moves by ``mv_file`` only if the profile's
-    ``renames_files`` is True. Unknown, it copies and deletes in batches,
-    which is right on any storage: about one request per key either way,
-    but a rename copies no data.
+    Given both, it moves by ``mv_file`` only within one storage whose
+    profile's ``renames_files`` is True. Unknown, it copies and deletes in
+    batches, which is right on any storage: about one request per key either
+    way, but a rename copies no data.
+
+    The destination is described by the ``dst_`` operations and ``profile``,
+    as with `flat_cp`. Between two storages, ``same_storage`` is False, and
+    ``cp_file`` copies to the other storage. ``mv_file`` then copies, and
+    deletes the source key. ``rm_files`` always deletes the source's.
 
     A folder's marker, a key ending with "/", is moved too, but not yielded. In
-    batches, it is deleted without being copied, as `flat_cp` copies none.
+    batches, it is deleted without being copied, as `flat_cp` copies none: its
+    folder is made at the destination instead, as `flat_cp` makes it.
 
     Unlike fsspec's ``mv``, it keeps going past a failure, and reports each. A
     key that failed to move, or to copy, stays where it was. If a batch fails
@@ -107,12 +117,14 @@ def flat_mv(
     cp_file : callable, optional
         Copies a file, as with `flat_cp`.
     rm_files : callable, optional
-        Deletes several files in one request, as with `flat_rm`.
+        Deletes several source files in one request, as with `flat_rm`.
     batch_size : int, optional
         The most keys of one ``rm_files``, e.g. 1000 on S3. ``cp_file``,
         ``rm_files`` and ``batch_size`` are given together, or not at all.
+    dst_info, dst_makedirs, dst_rm_file, same_storage : callable or bool
+        The destination's, as with `flat_cp`.
     profile : StorageProfile
-        What the storage does: ``StorageProfile()`` if it is unknown. Its
+        What the destination does: ``StorageProfile()`` if it is unknown. Its
         ``renames_files`` chooses the way when both are given.
     concurrency_limit : asyncio.Semaphore
         Held by each request but the listing while it runs. Share one to
@@ -146,6 +158,10 @@ def flat_mv(
     ...     cp_file=fs._cp_file,
     ...     rm_files=my_rm_files,
     ...     batch_size=1000,
+    ...     dst_info=fs._info,
+    ...     dst_makedirs=fs._makedirs,
+    ...     dst_rm_file=fs._rm_file,
+    ...     same_storage=True,
     ...     profile=StorageProfile(),
     ...     concurrency_limit=asyncio.Semaphore(32),
     ... )
@@ -162,10 +178,19 @@ def flat_mv(
         raise ValueError(f"batch_size must be at least 1: {batch_size}")
 
     # Both given, a rename wins only where the storage is known to rename.
-    if all(batched) and profile.renames_files is not True:
+    renames = same_storage and profile.renames_files is True
+    if all(batched) and not renames:
         mv_file = None
     elif mv_file is not None:
         cp_file = rm_files = batch_size = None
+
+    destination = {
+        "destination_info": dst_info,
+        "makedirs": dst_makedirs,
+        "rm_file": dst_rm_file,
+        "same_storage": same_storage,
+        "profile": profile,
+    }
 
     if mv_file is not None:
         return Operation(
@@ -177,6 +202,7 @@ def flat_mv(
                 mv_file=mv_file,
                 concurrency_limit=concurrency_limit,
                 op=op,
+                **destination,
             ).outcomes(),
             MvState(),
         )
@@ -192,6 +218,7 @@ def flat_mv(
             batch_size=batch_size,  # type: ignore[arg-type]
             concurrency_limit=concurrency_limit,
             op=op,
+            **destination,
         ).outcomes(),
         MvState(),
     )
@@ -283,8 +310,10 @@ class _Move(_Copy):
         if name in self.copied:
             return
         if name.endswith("/"):
+            # A folder's marker: deleted, its folder made as flat_cp makes it.
             self.copied[name] = None
-            self.delete_later(name)  # A folder's marker: deleted only.
+            self.delete_later(name)
+            super().add(entry)
             return
 
         self.copied[name] = self.target(name)
@@ -310,6 +339,8 @@ class _Move(_Copy):
         return super().run(job)
 
     def done(self, job: _Job) -> list[Any]:
+        if job.kind == "mkdir":
+            return super().done(job)
         if job.kind == "copy":
             self.copying -= 1
             self.delete_later(job.source)
@@ -323,6 +354,8 @@ class _Move(_Copy):
         return moved
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
+        if job.kind == "mkdir":
+            return super().failed(job, error)
         if job.kind == "copy":
             self.copying -= 1
             self.copied.pop(job.source)

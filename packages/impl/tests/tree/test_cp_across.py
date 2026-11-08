@@ -1,4 +1,4 @@
-"""Tests of `flat_transfer`, copying the keys under a prefix between two storages."""
+"""Tests of `tree_cp` between two storages, copying a tree between two storages."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.common.operation import _collect_with_errors
 from fsspec_alt_strategies.common.routing import streaming_copy
-from fsspec_alt_strategies.flat.transfer import CpState, flat_transfer
+from fsspec_alt_strategies.tree.cp import CpState, tree_cp
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
@@ -61,27 +61,28 @@ def _opener(fs: SimulatedFileSystem, kind: type[Any]) -> Any:
     return open_async
 
 
-def _transfer(
+def _across(
     src: SimulatedFileSystem,
     dst: SimulatedFileSystem,
     path1: Any,
     path2: str,
     **kwargs: Any,
 ) -> Any:
-    """`flat_transfer` between two filesystems, streaming each file."""
+    """`tree_cp` between two filesystems, streaming each file."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
         "profile": StorageProfile(),
-        "ils": src._ils,
+        "ls": src._ls,
         "info": src._info,
-        "copy_file": streaming_copy(
+        "cp_file": streaming_copy(
             _opener(src, _Reader), _opener(dst, _Writer), block_size=4
         ),
         "dst_info": dst._info,
         "dst_makedirs": dst._makedirs,
         "dst_rm_file": dst._rm_file,
+        "same_storage": False,
     }
-    return flat_transfer(path1, path2, **{**operations, **kwargs})
+    return tree_cp(path1, path2, **{**operations, **kwargs})
 
 
 _FILES = [
@@ -109,39 +110,35 @@ def _tree(fs: SimulatedFileSystem, prefix: str = "") -> None:
     ],
 )
 async def test_places_as_fsspec(
-    flat_fs: SimulatedFileSystem,
-    any_fs: SimulatedFileSystem,
-    path1: str,
-    path2: str,
-    dst_dirs: list[str],
+    any_fs: SimulatedFileSystem, path1: str, path2: str, dst_dirs: list[str]
 ) -> None:
-    # From an object store, to each kind of destination.
-    src, dst = flat_fs, any_fs
-    _tree(src, "bucket/")
+    dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _tree(any_fs, "bucket/")
     for folder in dst_dirs:
-        dst.add_file(f"bucket/{folder}/old", b"")
+        dst.add_dir(f"bucket/{folder}")
     path1, path2 = f"bucket/{path1}", f"bucket/{path2}"
     root = path1.rstrip("/")
-    files = sorted(p for p in src._file_data if p.startswith(root + "/"))
+    files = sorted(p for p in any_fs._file_data if p.startswith(root + "/"))
     paths = [root, *files] if files else [root]
     exists = (bool(dst_dirs) or path2.endswith("/")) and not path1.endswith("/")
     expected = dict(zip(paths, other_paths(paths, path2, exists=exists), strict=True))
-    data = {p: src._file_data[p].data for p in paths if p in src._file_data}
+    data = {p: any_fs._file_data[p].data for p in paths if p in any_fs._file_data}
 
-    copied, errors = await _collect_with_errors(_transfer(src, dst, path1, path2))
+    copied, errors = await _collect_with_errors(_across(any_fs, dst, path1, path2))
     assert errors == []
     assert sorted(copied) == sorted((p, expected[p]) for p in data)
     for source, content in data.items():
         assert dst._file_data[expected[source]].data == content
+    assert set(any_fs._file_data) == {f"bucket/{p}" for p in _FILES}
 
 
-async def test_patterns_and_lists_place_as_flat_cp(
-    flat_fs: SimulatedFileSystem,
+async def test_patterns_and_lists_place_as_tree_cp(
+    any_fs: SimulatedFileSystem,
 ) -> None:
-    dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    _tree(flat_fs)
+    dst = SimulatedFileSystem(asynchronous=True)
+    _tree(any_fs)
     copied, errors = await _collect_with_errors(
-        _transfer(flat_fs, dst, "data/*/01", "copied")
+        _across(any_fs, dst, "data/*/01", "copied")
     )
     assert errors == []
     assert sorted(copied) == [
@@ -149,85 +146,49 @@ async def test_patterns_and_lists_place_as_flat_cp(
         ("data/2024/01/part-0.parquet", "copied/2024/01/part-0.parquet"),
     ]
     copied, errors = await _collect_with_errors(
-        _transfer(flat_fs, dst, ["data/2023/01", "data/2024/01"], "listed")
+        _across(any_fs, dst, ["data/2023/01", "data/2024/01"], "listed")
     )
     # Two roots of one name: the first is copied, the other reported.
     assert copied == [("data/2023/01/part-0.parquet", "listed/01/part-0.parquet")]
     assert [type(e) for e in errors] == [FileExistsError]
 
 
-async def test_requests_to_a_tree(flat_fs: SimulatedFileSystem) -> None:
+async def test_requests_on_each_side(hierarchical_fs: SimulatedFileSystem) -> None:
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    _tree(flat_fs)
-    op = _transfer(flat_fs, dst, "data", "copied")
+    _tree(hierarchical_fs)
+    hierarchical_fs.add_dir("data/empty")
+    op = _across(hierarchical_fs, dst, "data", "copied")
     copied, _ = await _collect_with_errors(op)
     assert len(copied) == 4
     assert op.state == CpState(current=op.state.current, files_found=4, files_copied=4)
-    # One listing, and the reads in blocks of 4 bytes: 27 or 14 bytes each.
-    assert flat_fs.stats.calls == {"list": 1, "read": 3 * 7 + 4}
-    # A folder made once for each folder with keys, however its keys come.
-    assert dst.stats.calls == {"info": 1, "mkdir": 4, "write": 4}
+    # The source is listed and read, in blocks of 4 bytes: 27 or 14 bytes each.
+    assert hierarchical_fs.stats.calls == {"list": 7, "read": 3 * 7 + 4}
+    # The destination is asked where "copied" is, and written a request a file.
+    assert dst.stats.calls == {"info": 1, "mkdir": 5, "write": 4}
 
 
-async def test_requests_to_an_object_store(flat_fs: SimulatedFileSystem) -> None:
+async def test_a_flat_destination_needs_no_folders(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
     dst = SimulatedFileSystem(asynchronous=True)
-    _tree(flat_fs)
+    _tree(hierarchical_fs)
     profile = StorageProfile(implicit_folders=True)
     _, errors = await _collect_with_errors(
-        _transfer(flat_fs, dst, "data", "copied/", profile=profile)
+        _across(hierarchical_fs, dst, "data", "copied/", profile=profile)
     )
     assert errors == []
     assert dst.stats.calls == {"write": 4}
     assert dst._file_data["copied/data/README.md"].data == b"data/README.md"
 
 
-async def test_a_marker_makes_its_folder() -> None:
-    keys = {"data/": b"", "data/empty/": b"", "data/a.txt": b"a"}
-    dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    written: list[tuple[str, str]] = []
-
-    async def ils(prefix: str) -> Any:
-        for name, data in keys.items():
-            if name.startswith(prefix):
-                yield {"name": name, "size": len(data), "type": "file"}
-
-    async def info(path: str) -> dict[str, Any]:
-        raise FileNotFoundError(path)
-
-    async def copy_file(source: str, destination: str) -> None:
-        written.append((source, destination))
-        await dst._pipe_file(destination, keys[source])
-
-    profile = StorageProfile(parents_required=False)
-    copied, errors = await _collect_with_errors(
-        flat_transfer(
-            "data",
-            "copied",
-            ils=ils,
-            info=info,
-            copy_file=copy_file,
-            dst_info=dst._info,
-            dst_makedirs=dst._makedirs,
-            dst_rm_file=dst._rm_file,
-            profile=profile,
-            concurrency_limit=asyncio.Semaphore(4),
-        )
-    )
-    assert errors == []
-    assert copied == written == [("data/a.txt", "copied/a.txt")]
-    assert "copied/empty" in dst._folders
-    # The markers' folders only: the key's needs none, by the profile.
-    assert dst.stats.calls == {"info": 1, "mkdir": 2, "write": 1}
-
-
 async def test_a_destination_refusing_to_overwrite(
-    flat_fs: SimulatedFileSystem,
+    hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     dst = SimulatedFileSystem(hierarchical=True, overwrite=False, asynchronous=True)
-    _tree(flat_fs)
+    _tree(hierarchical_fs)
     dst.add_file("target.md", b"old")
     _, errors = await _collect_with_errors(
-        _transfer(flat_fs, dst, "data/README.md", "target.md")
+        _across(hierarchical_fs, dst, "data/README.md", "target.md")
     )
     assert errors == []
     assert dst._file_data["target.md"].data == b"data/README.md"
@@ -235,60 +196,74 @@ async def test_a_destination_refusing_to_overwrite(
     assert dst.stats.calls == {"info": 2, "write": 2, "delete": 1}
 
 
-async def test_failures_are_yielded_and_the_rest_is_copied(
-    flat_fs: SimulatedFileSystem,
+async def test_a_failure_is_yielded_and_the_rest_is_copied(
+    hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    _tree(flat_fs)
-    stream = streaming_copy(_opener(flat_fs, _Reader), _opener(dst, _Writer))
+    _tree(hierarchical_fs)
+    stream = streaming_copy(_opener(hierarchical_fs, _Reader), _opener(dst, _Writer))
 
     async def copy_file(source: str, destination: str) -> None:
         if source == "data/README.md":
             raise PermissionError(source)
         await stream(source, destination)
 
-    async def makedirs(path: str, exist_ok: bool = False) -> None:
-        if path == "copied/2023/02":
-            raise PermissionError(path)
-        await dst._makedirs(path, exist_ok=exist_ok)
-
     copied, errors = await _collect_with_errors(
-        _transfer(
-            flat_fs, dst, "data", "copied", copy_file=copy_file, dst_makedirs=makedirs
-        )
+        _across(hierarchical_fs, dst, "data", "copied", cp_file=copy_file)
     )
-    assert sorted(e.__notes__[0] for e in errors) == [
-        "Copying 'data/README.md' to 'copied/README.md' failed.",
-        "Creating the folder 'copied/2023/02' failed.",
+    assert [type(e) for e in errors] == [PermissionError]
+    assert errors[0].__notes__ == [
+        "Copying 'data/README.md' to 'copied/README.md' failed."
     ]
-    # The folder failed, but its key is still copied, as the storage allows.
     assert len(copied) == 3
     assert "copied/README.md" not in dst._file_data
 
 
-async def test_a_missing_source_raises(flat_fs: SimulatedFileSystem) -> None:
+async def test_a_missing_source_raises(any_fs: SimulatedFileSystem) -> None:
     dst = SimulatedFileSystem(asynchronous=True)
     with pytest.raises(FileNotFoundError):
-        await _collect_with_errors(_transfer(flat_fs, dst, "missing", "copied"))
+        await _collect_with_errors(_across(any_fs, dst, "missing", "copied"))
     assert dst.stats.calls == {"info": 1}
 
 
 async def test_cancel_yields_the_copies_sent() -> None:
-    src = SimulatedFileSystem(latency=0.01, asynchronous=True)
+    src = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
     dst = SimulatedFileSystem(asynchronous=True)
     for i in range(10):
         src.add_file(f"root/file-{i}", b"x")
-    op = _transfer(
+    profile = StorageProfile(implicit_folders=True)
+    op = _across(
         src,
         dst,
         "root",
         "copied",
-        profile=StorageProfile(implicit_folders=True),
-        concurrency_limit=asyncio.Semaphore(3),
+        profile=profile,
+        concurrency_limit=asyncio.Semaphore(10),
     )
     copied = []
     async for pair in op:
         copied.append(pair)
         op.cancel()
-    assert len(copied) == dst.stats.calls["write"] == 3
+    assert len(copied) == dst.stats.calls["write"] == 10
     assert op.cancelled()
+
+
+async def teststreaming_copy_holds_one_block() -> None:
+    src = SimulatedFileSystem(asynchronous=True)
+    dst = SimulatedFileSystem(asynchronous=True)
+    src.add_file("a", bytes(range(10)))
+    blocks: list[int] = []
+
+    class _Noting(_Writer):
+        async def write(self, data: bytes) -> None:
+            blocks.append(len(data))
+            await super().write(data)
+
+    copy_file = streaming_copy(
+        _opener(src, _Reader), _opener(dst, _Noting), block_size=4
+    )
+    await copy_file("a", "b")
+    assert blocks == [4, 4, 2]
+    assert dst._file_data["b"].data == bytes(range(10))
+    with pytest.raises(ValueError, match="block_size"):
+        streaming_copy(_opener(src, _Reader), _opener(dst, _Writer), block_size=0)

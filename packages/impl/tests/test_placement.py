@@ -22,7 +22,7 @@ class _Copy(_Placing):
         self.path1 = path1
         self.path2 = path2
         self.roots = roots
-        self._placing()
+        self._placing(self.info, same_storage=True)
 
     async def info(self, path: str) -> dict[str, Any]:
         raise FileNotFoundError(path)

@@ -13,11 +13,11 @@ from fsspec.implementations.memory import MemoryFileSystem
 from fsspec.spec import AbstractFileSystem
 
 from fsspec_alt_strategies.common.routing import AsyncRoutingFileSystem
+from fsspec_alt_strategies.flat.cp import flat_cp
 from fsspec_alt_strategies.flat.filesystem import FlatFileSystem
-from fsspec_alt_strategies.flat.transfer import flat_transfer
 from fsspec_alt_strategies.flat.wrapper import AsyncFlatWrapper
+from fsspec_alt_strategies.tree.cp import tree_cp
 from fsspec_alt_strategies.tree.filesystem import TreeFileSystem
-from fsspec_alt_strategies.tree.transfer import tree_transfer
 from fsspec_alt_strategies.tree.wrapper import AsyncTreeWrapper
 from fsspec_alt_strategies_common.monitor import Monitor, monitoring
 from fsspec_alt_strategies_common.profile import StorageProfile
@@ -188,9 +188,9 @@ class _Router(AsyncRoutingFileSystem):
     ) -> Any:
         # The plain storage has no strategy: fsspec's own copy, the default.
         if isinstance(fs1, TreeFileSystem):
-            strategy, listing = tree_transfer, {"ls": fs1._ls}
+            strategy, listing = tree_cp, {"ls": fs1._ls}
         elif isinstance(fs1, FlatFileSystem):
-            strategy, listing = flat_transfer, {"ils": fs1._ils}
+            strategy, listing = flat_cp, {"ils": fs1._ils}
         else:
             return None
         profile = getattr(fs2, "storage_profile", None) or StorageProfile()
@@ -199,10 +199,11 @@ class _Router(AsyncRoutingFileSystem):
             path2,
             **listing,
             info=fs1._info,
-            copy_file=copy_file,
+            cp_file=copy_file,
             dst_info=fs2._info,
             dst_makedirs=fs2._makedirs,
             dst_rm_file=fs2._rm_file,
+            same_storage=False,
             profile=profile,
             concurrency_limit=fs1.operation_limit,
         )

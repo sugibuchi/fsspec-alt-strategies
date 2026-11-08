@@ -23,8 +23,10 @@ def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
         "ls": fs._ls,
         "info": fs._info,
         "cp_file": fs._cp_file,
-        "makedirs": fs._makedirs,
-        "rm_file": fs._rm_file,
+        "dst_info": fs._info,
+        "dst_makedirs": fs._makedirs,
+        "dst_rm_file": fs._rm_file,
+        "same_storage": True,
     }
     return tree_cp(path1, path2, **{**operations, **kwargs})
 
@@ -234,7 +236,7 @@ async def test_a_folder_refusing_a_copy_is_not_deleted() -> None:
         deleted.append(path)
 
     copied, errors = await _collect_with_errors(
-        _cp(fs, "data/README.md", "target/", cp_file=cp_file, rm_file=rm_file)
+        _cp(fs, "data/README.md", "target/", cp_file=cp_file, dst_rm_file=rm_file)
     )
     assert copied == []
     assert [type(e) for e in errors] == [FileExistsError]
@@ -297,7 +299,7 @@ async def test_a_folder_failing_to_be_created_keeps_its_files() -> None:
         await fs._makedirs(path, exist_ok=exist_ok)
 
     copied, errors = await _collect_with_errors(
-        _cp(fs, "data", "copied", makedirs=makedirs)
+        _cp(fs, "data", "copied", dst_makedirs=makedirs)
     )
     assert [type(e) for e in errors] == [PermissionError]
     assert errors[0].__notes__ == ["Creating the folder 'copied/2023/01' failed."]

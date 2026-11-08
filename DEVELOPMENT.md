@@ -27,8 +27,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../tree/du.py`                | `tree_du`, a tree's size from its listings alone.                   |
 | `.../tree/glob.py`              | `tree_glob`, a glob listing only the folders it can match in.       |
 | `.../tree/rm.py`                | `tree_rm`, a recursive delete that deletes while it walks.          |
-| `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks.        |
-| `.../tree/transfer.py`          | `tree_transfer`, `tree_cp` between two storages, each file by a `copy_file` the caller gives. |
+| `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks, within a storage or to another. |
 | `.../tree/mv.py`                | `tree_mv`, a recursive move: a `mv_file` per file, or per folder where it moves folders. |
 | `.../tree/filesystem.py`        | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies. |
 | `.../tree/wrapper.py`           | `AsyncTreeWrapper` and `SyncTreeWrapper`: an existing filesystem, as a `TreeFileSystem`. |
@@ -39,8 +38,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../flat/du.py`                | `flat_du`, the size of the files under a prefix, from the listing alone. |
 | `.../flat/glob.py`              | `flat_glob`, a glob listing only the keys starting as its pattern does. |
 | `.../flat/rm.py`                | `flat_rm`, a recursive delete in batches, sent as the listing goes on. |
-| `.../flat/cp.py`                | `flat_cp`, a recursive copy that copies each key as it is listed. |
-| `.../flat/transfer.py`          | `flat_transfer`, `flat_cp` between two storages, each key by a `copy_file` the caller gives. |
+| `.../flat/cp.py`                | `flat_cp`, a recursive copy that copies each key as it is listed, within a storage or to another. |
 | `.../flat/mv.py`                | `flat_mv`, a recursive move: a `mv_file` per key, or a copy per key and a deletion per batch. |
 | `.../flat/filesystem.py`        | `FlatFileSystem`, an abstract async filesystem whose recursive methods are the flat strategies. |
 | `.../flat/wrapper.py`           | `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `FlatFileSystem`. |
@@ -438,11 +436,18 @@ come in two layers, by what they send:
 | Strategies | They send | They build on |
 |---|---|---|
 | `tree_find`, `tree_du`, `tree_glob` | Listings, and at most one `info` for the root | `_find_listings` |
-| `tree_rm`, `tree_cp`, `tree_mv`, `tree_transfer` | Requests changing the storage, besides the listings | `_TreeJobs` |
+| `tree_rm`, `tree_cp`, `tree_mv` | Requests changing the storage, besides the listings | `_TreeJobs` |
 
-`tree_transfer` copies between two storages. It takes the source's `ls` and `info`, the destination's operations
-with a `dst_` prefix, and a `copy_file` moving one file across. Its profile is the destination's. It shares `tree_cp`'s
-jobs: `_Placing` asks the destination's `info`, and refuses no path into itself, as the storages are apart.
+A copy or move within one storage is the special case of one between two. `tree_cp` and `tree_mv` take the source's
+`ls` and `info`, the destination's operations with a `dst_` prefix, and the request copying or moving one file. Within
+one storage, the same filesystem's operations are given twice, with `same_storage=True`:
+
+- `_Placing` asks the destination's `info`, and refuses a path into itself only within one storage.
+- The profile is the destination's. Only within one storage does it tell how the source renames, or deletes its
+  folders: `tree_mv` moves folders whole only then.
+- Between two storages, the request per file is the caller's, e.g. `common.routing.streaming_copy`'s. For a move, it
+  deletes the source file once copied.
+- `same_storage` is given, never detected: comparing the operations cannot tell whether two filesystems are one storage.
 
 `tree_walk` is `_listings` itself, made public. It raises for a missing or file root, as fsspec's `walk` does.
 
@@ -505,18 +510,17 @@ the root down to the last key's, and yields each once the listing has passed its
   folders come then, held until it does.
 - `maxdepth` and `descend` leave folders out, but save no request: the listing gives all the keys anyway.
 
-`flat_rm`, `flat_cp`, `flat_transfer` and `flat_mv` run on the same engine as the tree's, `_Jobs`, fed by `_FlatJobs` in
+`flat_rm`, `flat_cp` and `flat_mv` run on the same engine as the tree's, `_Jobs`, fed by `_FlatJobs` in
 `flat/_jobs.py` with the keys under each root:
 
 - Object stores delete many keys per request. So `flat_rm` takes `rm_files(paths)` and a `batch_size`, and sends each
   batch as soon as the listing has given its keys. A batch that fails yields one error, noting its keys.
-- `flat_cp` copies each key as it is listed, placed as `tree_cp` places it. A folder's marker is not copied: flat
-  storages need no folder for the files in it.
-- `flat_transfer` is `flat_cp` between two storages, taking its operations as `tree_transfer` does. The destination
-  may be a tree, so it makes each destination folder once, before its first key, unless the profile says no folder is
-  needed. A folder's marker makes its folder, so that a tree keeps it even when empty.
+- `flat_cp` copies each key as it is listed, placed as `tree_cp` places it, taking the destination's operations as
+  `tree_cp` does. The destination may be a tree, so it makes each destination folder once, before its first key,
+  unless the profile says no folder is needed. A folder's marker is no file to copy: it makes its folder, so that a tree
+  keeps it even when empty, unless the destination's folders are implicit.
 - `flat_mv` moves each key by `mv_file`, or copies it and deletes the keys copied in batches. Which is given decides,
-  and the profile's `renames_files` if both are. Unknown, batches are right on any storage. Cancelled, it still deletes the keys copied, so that no file is
+  and the profile's `renames_files` if both are, within one storage. Unknown, batches are right on any storage. Cancelled, it still deletes the keys copied, so that no file is
   left in both places: its `stopping` keeps their batches, which the engine would otherwise drop.
 
 `SimulatedFileSystem` has `_rm_files` too, a batch deletion counting one request, as S3's DeleteObjects does.

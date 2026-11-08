@@ -12,6 +12,14 @@ from fsspec_alt_strategies.flat.mv import MvState, flat_mv
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
+# A flat storage's: its folders are implicit, and none is made.
+_FLAT = StorageProfile(implicit_folders=True)
+
+
+async def _nothing(*args: Any, **kwargs: Any) -> None:
+    pass
+
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
@@ -20,7 +28,11 @@ def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
     """`flat_mv` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
-        "profile": StorageProfile(),
+        "profile": _FLAT,
+        "dst_info": fs._info,
+        "dst_makedirs": fs._makedirs,
+        "dst_rm_file": fs._rm_file,
+        "same_storage": True,
         "ils": fs._ils,
         "info": fs._info,
         "cp_file": fs._cp_file,
@@ -185,7 +197,11 @@ async def test_mv_file_moves_markers_without_yielding_them() -> None:
         ils=ils,
         info=info,
         mv_file=mv_file,
-        profile=StorageProfile(),
+        dst_info=info,
+        dst_makedirs=_nothing,
+        dst_rm_file=_nothing,
+        same_storage=True,
+        profile=_FLAT,
         concurrency_limit=asyncio.Semaphore(4),
     )
     assert await _collect_with_errors(op) == ([("data/a.txt", "moved/a.txt")], [])
@@ -266,7 +282,11 @@ async def test_batches_delete_markers_without_copying_them() -> None:
         cp_file=cp_file,
         rm_files=rm_files,
         batch_size=10,
-        profile=StorageProfile(),
+        dst_info=info,
+        dst_makedirs=_nothing,
+        dst_rm_file=_nothing,
+        same_storage=True,
+        profile=_FLAT,
         concurrency_limit=asyncio.Semaphore(4),
     )
     assert await _collect_with_errors(op) == ([("data/a.txt", "moved/a.txt")], [])
@@ -307,7 +327,11 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
         cp_file=cp_file,
         rm_files=rm_files,
         batch_size=10,
-        profile=StorageProfile(),
+        dst_info=info,
+        dst_makedirs=_nothing,
+        dst_rm_file=_nothing,
+        same_storage=True,
+        profile=_FLAT,
         concurrency_limit=asyncio.Semaphore(4),
     )
     moved, errors = await _collect_with_errors(op)
@@ -319,3 +343,28 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
     assert sorted(copied) == ["data/a.txt", "data/b.txt"]
     assert deleted == [["data/a.txt", "data/b.txt"]]
     assert op.state == MvState(current=op.state.current, files_found=2, files_moved=2)
+
+
+async def test_moves_to_another_storage(flat_fs: SimulatedFileSystem) -> None:
+    _tree(flat_fs)
+    dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+
+    async def cp_file(source: str, destination: str) -> None:
+        await dst._pipe_file(destination, flat_fs._file_data[source].data)
+
+    op = _mv(
+        flat_fs,
+        "data",
+        "moved",
+        cp_file=cp_file,
+        dst_info=dst._info,
+        dst_makedirs=dst._makedirs,
+        dst_rm_file=dst._rm_file,
+        same_storage=False,
+        profile=StorageProfile(),
+    )
+    moved, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert sorted(moved) == [(p, "moved" + p[len("data") :]) for p in _FILES]
+    assert sorted(dst._file_data) == [d for _, d in sorted(moved)]
+    assert sorted(flat_fs._file_data) == ["other.txt"]

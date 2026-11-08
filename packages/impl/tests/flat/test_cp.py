@@ -11,7 +11,15 @@ from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.common.operation import _collect_with_errors
 from fsspec_alt_strategies.flat.cp import CpState, flat_cp
+from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
+
+# A flat storage's: its folders are implicit, and none is made.
+_FLAT = StorageProfile(implicit_folders=True)
+
+
+async def _nothing(*args: Any, **kwargs: Any) -> None:
+    pass
 
 
 def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
@@ -21,6 +29,11 @@ def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
         "ils": fs._ils,
         "info": fs._info,
         "cp_file": fs._cp_file,
+        "dst_info": fs._info,
+        "dst_makedirs": fs._makedirs,
+        "dst_rm_file": fs._rm_file,
+        "same_storage": True,
+        "profile": _FLAT,
     }
     return flat_cp(path1, path2, **{**operations, **kwargs})
 
@@ -155,6 +168,11 @@ async def test_markers_are_not_copied() -> None:
         ils=ils,
         info=info,
         cp_file=cp_file,
+        dst_info=info,
+        dst_makedirs=_nothing,
+        dst_rm_file=_nothing,
+        same_storage=True,
+        profile=_FLAT,
         concurrency_limit=asyncio.Semaphore(4),
     )
     assert await _collect_with_errors(op) == ([("data/a.txt", "copied/a.txt")], [])
