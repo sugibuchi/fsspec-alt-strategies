@@ -10,7 +10,7 @@ import threading
 from fsspec.implementations.memory import MemoryFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.sync_client import SyncClientSupport
+from fsspec_alt_strategies_impl.common.sync_client import SyncClientSupport
 from fsspec_alt_strategies_impl.wrapper import SyncTreeWrapper
 
 
