@@ -478,3 +478,78 @@ async def test_a_large_folder_is_deleted_while_it_is_listed() -> None:
     # The first deletions started after the first part, not the whole listing.
     assert listed_at_first_deletion[0] < 2500
     assert not await fs._exists("data")
+
+
+async def _fsspec_deletes(
+    fs: SimulatedFileSystem, path: Any, maxdepth: int
+) -> set[str]:
+    """The files fsspec's ``_rm`` deletes with ``maxdepth``: those it expands to."""
+    expanded = await AsyncFileSystem._expand_path(
+        fs, path, recursive=True, maxdepth=maxdepth
+    )
+    fs.reset_stats()
+    return {p for p in expanded if p in fs._file_data}
+
+
+@pytest.mark.parametrize("maxdepth", [1, 2, 3])
+@pytest.mark.parametrize(
+    "path", ["data", "data/*", "data/20*/*", ["data/2023", "data/README.md"]]
+)
+async def test_maxdepth_deletes_the_files_fsspecs_rm_does(
+    any_fs: SimulatedFileSystem, path: Any, maxdepth: int
+) -> None:
+    _tree(any_fs)
+    expected = set(any_fs._file_data) - await _fsspec_deletes(any_fs, path, maxdepth)
+    # A folder at the limit with files in it fails to be deleted, as fsspec's
+    # deletion of it does: the files are what to compare.
+    await _collect_with_errors(_rm(any_fs, path, maxdepth=maxdepth))
+    assert set(any_fs._file_data) == expected
+
+
+async def test_maxdepth_deletes_the_folders_at_the_limit_if_empty(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    hierarchical_fs.add_dir("data/2024/empty")
+    seen: list[str] = []
+
+    async def rm_tree(path: str) -> None:
+        seen.append(path)
+
+    op = _rm(hierarchical_fs, "data", maxdepth=2, rm_tree=rm_tree)
+    deleted, errors = await _collect_with_errors(op)
+    # rm_tree would delete what is deeper too: it is never sent.
+    assert seen == []
+    assert sorted(deleted) == ["data/2024/empty", "data/README.md"]
+    # The four folders at the limit holding files, and data above them, stay.
+    assert sorted(e.filename for e in errors) == [
+        "data/2023/01",
+        "data/2023/02",
+        "data/2024/01",
+        "data/2024/02",
+    ]
+    # data, then its two folders, are listed: those at the limit are not.
+    assert hierarchical_fs.stats.calls == {"list": 3, "delete": 6}
+    assert await hierarchical_fs._exists("data/2023/01/part-0.parquet")
+    assert op.state == RmState(
+        errors=4,
+        current=op.state.current,
+        files_found=1,
+        files_deleted=1,
+        folders_deleted=1,
+    )
+
+
+async def test_maxdepth_deep_enough_deletes_everything(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    deleted, errors = await _collect_with_errors(_rm(any_fs, "data", maxdepth=3))
+    assert errors == []
+    assert set(_FILES) <= set(deleted)
+    assert not await any_fs._exists("data")
+
+
+async def test_maxdepth_below_1_is_refused(any_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="maxdepth"):
+        _rm(any_fs, "data", maxdepth=0)

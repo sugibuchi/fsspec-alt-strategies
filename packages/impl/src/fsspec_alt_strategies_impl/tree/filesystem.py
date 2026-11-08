@@ -329,7 +329,7 @@ class TreeFileSystem(_BaseFileSystem):
         maxdepth: int | None = None,
         **kwargs: Any,
     ) -> None:
-        if not recursive or maxdepth is not None:
+        if not recursive:
             await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
             return
 
@@ -342,6 +342,7 @@ class TreeFileSystem(_BaseFileSystem):
                 rm_folder=self._rmdir,
                 rm_tree=self._rm_tree,
                 profile=self.storage_profile,
+                maxdepth=maxdepth,
                 concurrency_limit=self.operation_limit,
             ),
             Call(self._unwrapped(), "rm", path),
@@ -360,7 +361,7 @@ class TreeFileSystem(_BaseFileSystem):
         batch_size: int | None = None,
         **kwargs: Any,
     ) -> None:
-        if not recursive or maxdepth is not None or not isinstance(path2, str):
+        if not recursive or not isinstance(path2, str):
             await super()._copy(
                 path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
             )
@@ -376,6 +377,7 @@ class TreeFileSystem(_BaseFileSystem):
                 makedirs=self._makedirs,
                 rm_file=self._rm_file,
                 profile=self.storage_profile,
+                maxdepth=maxdepth,
                 concurrency_limit=self.operation_limit,
             ),
             Call(self._unwrapped(), "copy", path1, path2),
@@ -400,9 +402,7 @@ class TreeFileSystem(_BaseFileSystem):
         if path1 == path2:
             return
 
-        if (not recursive or maxdepth is not None) and not await self._single_file(
-            path1
-        ):
+        if not recursive and not await self._single_file(path1):
             # fsspec's own: a copy, then the deletion of its sources.
             await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
             await self._rm(path1, recursive=recursive)
@@ -418,6 +418,7 @@ class TreeFileSystem(_BaseFileSystem):
                 makedirs=self._makedirs,
                 rm_folder=self._rmdir,
                 profile=self.storage_profile,
+                maxdepth=maxdepth,
                 concurrency_limit=self.operation_limit,
             ),
             Call(self._unwrapped(), "mv", path1, path2),

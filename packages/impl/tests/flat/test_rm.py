@@ -184,3 +184,48 @@ async def test_cancel_sends_no_new_batch() -> None:
 def test_batch_size_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="batch_size"):
         _rm(flat_fs, "data", batch_size=0)
+
+
+@pytest.mark.parametrize("maxdepth", [1, 2, 3])
+@pytest.mark.parametrize(
+    "path", ["data", "data/*", "data/20*/*", ["data/2023", "data/README.md"]]
+)
+async def test_maxdepth_deletes_what_fsspecs_rm_does(
+    flat_fs: SimulatedFileSystem, path: Any, maxdepth: int
+) -> None:
+    _tree(flat_fs)
+    expanded = await AsyncFileSystem._expand_path(
+        flat_fs, path, recursive=True, maxdepth=maxdepth
+    )
+    files = sorted(p for p in expanded if p in flat_fs._file_data)
+    flat_fs.reset_stats()
+
+    deleted, errors = await _collect_with_errors(_rm(flat_fs, path, maxdepth=maxdepth))
+    assert errors == []
+    assert sorted(deleted) == files
+    assert not set(files) & set(flat_fs._file_data)
+
+
+async def test_maxdepth_requests(flat_fs: SimulatedFileSystem) -> None:
+    _tree(flat_fs)
+    op = _rm(flat_fs, "data", maxdepth=1)
+    deleted, _ = await _collect_with_errors(op)
+    assert deleted == ["data/README.md"]
+    # The prefix lists every key under it: those deeper are left out.
+    assert flat_fs.stats.calls == {"list": 1, "delete": 1}
+    assert op.state == RmState(current=op.state.current, files_found=1, files_deleted=1)
+
+
+async def test_maxdepth_1_of_a_pattern_lists_no_folder_matched(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    deleted, _ = await _collect_with_errors(_rm(flat_fs, "data/*", maxdepth=1))
+    # fsspec's _expand_path takes the matches only: the folders are not expanded.
+    assert deleted == ["data/README.md"]
+    assert await flat_fs._exists("data/2023/01/part-0.parquet")
+
+
+async def test_maxdepth_below_1_is_refused(flat_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="maxdepth"):
+        _rm(flat_fs, "data", maxdepth=0)

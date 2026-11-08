@@ -178,3 +178,54 @@ async def test_markers_are_not_copied() -> None:
     assert await _collect_with_errors(op) == ([("data/a.txt", "copied/a.txt")], [])
     assert copied == [("data/a.txt", "copied/a.txt")]
     assert op.state.files_found == 1
+
+
+def _shallow(fs: SimulatedFileSystem) -> None:
+    """A tree with files at each level, so that fsspec places by the root."""
+    for path in ["a.txt", "b.txt", "2023/x.txt", "2023/01/y.txt", "2023/01/02/z.txt"]:
+        fs.add_file(f"bucket/data/{path}", path.encode())
+    fs.add_file("bucket/archive/old.txt")
+
+
+@pytest.mark.parametrize("maxdepth", [1, 2])
+@pytest.mark.parametrize(
+    ("path1", "path2"),
+    [("data", "copied"), ("data", "archive"), ("data/*", "copied")],
+)
+async def test_maxdepth_copies_as_fsspec(
+    flat_fs: SimulatedFileSystem, path1: str, path2: str, maxdepth: int
+) -> None:
+    reference = SimulatedFileSystem(asynchronous=True)
+    _shallow(flat_fs)
+    _shallow(reference)
+    path1, path2 = f"bucket/{path1}", f"bucket/{path2}"
+    await AsyncFileSystem._copy(
+        reference, path1, path2, recursive=True, maxdepth=maxdepth
+    )
+
+    _, errors = await _collect_with_errors(
+        _cp(flat_fs, path1, path2, maxdepth=maxdepth)
+    )
+    assert errors == []
+    assert {p: f.data for p, f in flat_fs._file_data.items()} == {
+        p: f.data for p, f in reference._file_data.items()
+    }
+
+
+async def test_maxdepth_requests(flat_fs: SimulatedFileSystem) -> None:
+    _shallow(flat_fs)
+    op = _cp(flat_fs, "bucket/data", "bucket/copied/", maxdepth=2)
+    copied, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert sorted(source for source, _ in copied) == [
+        "bucket/data/2023/x.txt",
+        "bucket/data/a.txt",
+        "bucket/data/b.txt",
+    ]
+    # One listing of every key under the prefix, and a copy per key kept.
+    assert flat_fs.stats.calls == {"list": 1, "copy": 3}
+
+
+async def test_maxdepth_below_1_is_refused(flat_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="maxdepth"):
+        _cp(flat_fs, "data", "copied", maxdepth=0)

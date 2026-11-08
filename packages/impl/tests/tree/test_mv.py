@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from fsspec.asyn import AsyncFileSystem
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.profile import StorageProfile
@@ -536,3 +537,86 @@ async def test_moves_to_another_storage(hierarchical_fs: SimulatedFileSystem) ->
     assert not any(p.startswith("data/") for p in hierarchical_fs._file_data)
     assert not await hierarchical_fs._exists("data")
     assert op.state.roots_renamed is None
+
+
+def _shallow(fs: SimulatedFileSystem) -> None:
+    """A tree with files at each level, so that fsspec places by the root."""
+    for path in ["a.txt", "b.txt", "2023/x.txt", "2023/01/y.txt"]:
+        fs.add_file(f"bucket/data/{path}", path.encode())
+    fs.add_file("bucket/archive/old.txt")
+
+
+@pytest.mark.parametrize("maxdepth", [1, 2])
+@pytest.mark.parametrize(
+    ("path1", "path2"),
+    [("data", "moved"), ("data", "archive"), ("data/*", "moved")],
+)
+@pytest.mark.parametrize("renames_folders", [False, True])
+async def test_maxdepth_moves_what_fsspecs_copy_copies(
+    hierarchical_fs: SimulatedFileSystem,
+    path1: str,
+    path2: str,
+    maxdepth: int,
+    renames_folders: bool,
+) -> None:
+    fs = hierarchical_fs
+    reference = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _shallow(fs)
+    _shallow(reference)
+    path1, path2 = f"bucket/{path1}", f"bucket/{path2}"
+    expanded = await AsyncFileSystem._expand_path(
+        reference, path1, recursive=True, maxdepth=maxdepth
+    )
+    await AsyncFileSystem._copy(
+        reference, path1, path2, recursive=True, maxdepth=maxdepth
+    )
+    # fsspec's mv then deletes the whole source tree, deeper files too: this
+    # deletes only what was copied.
+    for path in expanded:
+        if path in reference._file_data:
+            await reference._rm_file(path)
+
+    kwargs: dict[str, Any] = {}
+    if renames_folders:
+        kwargs = {
+            "mv_file": fs._rename,
+            "profile": StorageProfile(renames_folders=True),
+        }
+    _, errors = await _collect_with_errors(
+        _mv(fs, path1, path2, maxdepth=maxdepth, **kwargs)
+    )
+    assert errors == []
+    assert _files(fs) == _files(reference)
+    # A folder keeping a file deeper than maxdepth stays where it was.
+    assert await fs._exists("bucket/data/2023/01/y.txt")
+
+
+async def test_maxdepth_keeps_the_folders_not_emptied(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _shallow(hierarchical_fs)
+    hierarchical_fs.add_dir("bucket/data/empty")
+    op = _mv(hierarchical_fs, "bucket/data", "bucket/moved", maxdepth=2)
+    moved, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert sorted(source for source, _ in moved) == [
+        "bucket/data/2023/x.txt",
+        "bucket/data/a.txt",
+        "bucket/data/b.txt",
+    ]
+    hierarchical_fs.stats.calls.pop("info")
+    # No folder is deleted: 2023 keeps 01, data keeps 2023 and the empty one,
+    # which is not made at the destination, as fsspec's copy makes none.
+    assert hierarchical_fs.stats.calls == {
+        "list": 3,
+        "mkdir": 2,
+        "copy": 3,
+        "delete": 3,
+    }
+    assert await hierarchical_fs._exists("bucket/data/empty")
+    assert not await hierarchical_fs._exists("bucket/moved/empty")
+
+
+async def test_maxdepth_below_1_is_refused(any_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="maxdepth"):
+        _mv(any_fs, "data", "moved", maxdepth=0)

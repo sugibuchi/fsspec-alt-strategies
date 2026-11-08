@@ -541,14 +541,37 @@ def _twins() -> tuple[_Tree, SimulatedFileSystem, SimulatedFileSystem]:
     return _Tree(inner, asynchronous=True), inner, reference
 
 
-async def test_rm_with_maxdepth_is_fsspecs() -> None:
+@pytest.mark.parametrize("maxdepth", [1, 2])
+async def test_rm_with_maxdepth_deletes_the_files_fsspecs_does(maxdepth: int) -> None:
     fs, inner, reference = _twins()
-    # fsspec's own sends its folders to _rm_file too, which refuses them here.
+    # The folders at the limit hold files, so deleting them fails, as fsspec's
+    # own fails: it sends its folders to _rm_file, which refuses them here.
+    with pytest.raises((OSError, ExceptionGroup)):
+        await fs._rm("data", recursive=True, maxdepth=maxdepth)
     with pytest.raises(IsADirectoryError):
-        await fs._rm("data", recursive=True, maxdepth=2)
-    with pytest.raises(IsADirectoryError):
-        await AsyncFileSystem._rm(reference, "data", recursive=True, maxdepth=2)
+        await AsyncFileSystem._rm(reference, "data", recursive=True, maxdepth=maxdepth)
     assert _copied(inner) == _copied(reference)
+    assert await inner._exists("data/2023/01/part-0.parquet")
+    assert not await inner._exists("data/README.md")
+
+
+async def test_copy_with_maxdepth_is_fsspecs() -> None:
+    fs, inner, reference = _twins()
+    inner.add_file("data/2023/top.txt")
+    reference.add_file("data/2023/top.txt")
+    await fs._copy("data", "copied", recursive=True, maxdepth=2)
+    await AsyncFileSystem._copy(reference, "data", "copied", recursive=True, maxdepth=2)
+    assert _copied(inner) == _copied(reference)
+    assert not await inner._exists("copied/2023/01")
+
+
+async def test_mv_with_maxdepth_moves_only_what_it_copies() -> None:
+    fs, inner, _ = _twins()
+    await fs._mv("data", "moved", recursive=True, maxdepth=1)
+    assert sorted(p for p in inner._file_data if p.startswith("moved")) == [
+        "moved/README.md"
+    ]
+    # fsspec's own deletes the whole source: the files deeper are kept here.
     assert await inner._exists("data/2023/01/part-0.parquet")
 
 

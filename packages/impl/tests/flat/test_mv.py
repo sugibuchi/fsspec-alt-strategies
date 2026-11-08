@@ -6,6 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
@@ -368,3 +369,52 @@ async def test_moves_to_another_storage(flat_fs: SimulatedFileSystem) -> None:
     assert sorted(moved) == [(p, "moved" + p[len("data") :]) for p in _FILES]
     assert sorted(dst._file_data) == [d for _, d in sorted(moved)]
     assert sorted(flat_fs._file_data) == ["other.txt"]
+
+
+def _shallow(fs: SimulatedFileSystem) -> None:
+    """A tree with files at each level, so that fsspec places by the root."""
+    for path in ["a.txt", "b.txt", "2023/x.txt", "2023/01/y.txt"]:
+        fs.add_file(f"bucket/data/{path}", path.encode())
+    fs.add_file("bucket/archive/old.txt")
+
+
+@pytest.mark.parametrize("maxdepth", [1, 2])
+@pytest.mark.parametrize(
+    ("path1", "path2"),
+    [("data", "moved"), ("data", "archive"), ("data/*", "moved")],
+)
+@pytest.mark.parametrize("by", ["copies", "renames"])
+async def test_maxdepth_moves_what_fsspecs_copy_copies(
+    flat_fs: SimulatedFileSystem, path1: str, path2: str, maxdepth: int, by: str
+) -> None:
+    reference = SimulatedFileSystem(asynchronous=True)
+    _shallow(flat_fs)
+    _shallow(reference)
+    path1, path2 = f"bucket/{path1}", f"bucket/{path2}"
+    expanded = await AsyncFileSystem._expand_path(
+        reference, path1, recursive=True, maxdepth=maxdepth
+    )
+    await AsyncFileSystem._copy(
+        reference, path1, path2, recursive=True, maxdepth=maxdepth
+    )
+    # fsspec's mv then deletes the whole source prefix, deeper keys too: this
+    # deletes only what was copied.
+    await reference._rm_files([p for p in expanded if p in reference._file_data])
+
+    kwargs: dict[str, Any] = {}
+    if by == "renames":
+        kwargs = {"mv_file": flat_fs._mv_file, "cp_file": None, "rm_files": None}
+        kwargs["batch_size"] = None
+    _, errors = await _collect_with_errors(
+        _mv(flat_fs, path1, path2, maxdepth=maxdepth, **kwargs)
+    )
+    assert errors == []
+    assert {p: f.data for p, f in flat_fs._file_data.items()} == {
+        p: f.data for p, f in reference._file_data.items()
+    }
+    assert await flat_fs._exists("bucket/data/2023/01/y.txt")
+
+
+async def test_maxdepth_below_1_is_refused(flat_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="maxdepth"):
+        _mv(flat_fs, "data", "moved", maxdepth=0)

@@ -308,3 +308,56 @@ async def test_a_folder_failing_to_be_created_keeps_its_files() -> None:
     assert not await fs._exists("copied/2023/01")
     assert await fs._exists("copied/2023/02/part-0.parquet")
     assert await fs._exists("copied/2024/01/part-0.parquet")
+
+
+def _shallow(fs: SimulatedFileSystem) -> None:
+    """A tree with files at each level, so that fsspec places by the root."""
+    for path in ["a.txt", "b.txt", "2023/x.txt", "2023/01/y.txt", "2023/01/02/z.txt"]:
+        fs.add_file(f"bucket/data/{path}", path.encode())
+    fs.add_file("bucket/archive/old.txt")
+
+
+@pytest.mark.parametrize("maxdepth", [1, 2])
+@pytest.mark.parametrize(
+    ("path1", "path2"),
+    [("data", "copied"), ("data", "archive"), ("data/*", "copied")],
+)
+async def test_maxdepth_copies_as_fsspec(
+    any_fs: SimulatedFileSystem, path1: str, path2: str, maxdepth: int
+) -> None:
+    reference = SimulatedFileSystem(hierarchical=any_fs.hierarchical, asynchronous=True)
+    _shallow(any_fs)
+    _shallow(reference)
+    path1, path2 = f"bucket/{path1}", f"bucket/{path2}"
+    await AsyncFileSystem._copy(
+        reference, path1, path2, recursive=True, maxdepth=maxdepth
+    )
+
+    _, errors = await _collect_with_errors(_cp(any_fs, path1, path2, maxdepth=maxdepth))
+    assert errors == []
+    assert {p: f.data for p, f in any_fs._file_data.items()} == {
+        p: f.data for p, f in reference._file_data.items()
+    }
+
+
+async def test_maxdepth_requests(hierarchical_fs: SimulatedFileSystem) -> None:
+    _shallow(hierarchical_fs)
+    hierarchical_fs.add_dir("bucket/data/empty")
+    op = _cp(hierarchical_fs, "bucket/data", "bucket/copied", maxdepth=2)
+    copied, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert sorted(source for source, _ in copied) == [
+        "bucket/data/2023/x.txt",
+        "bucket/data/a.txt",
+        "bucket/data/b.txt",
+    ]
+    # As fsspec's copy with maxdepth, no empty folder is made.
+    assert not await hierarchical_fs._exists("bucket/copied/empty")
+    hierarchical_fs.stats.calls.pop("info")
+    # data and its two folders listed, each folder with files made, a copy per file.
+    assert hierarchical_fs.stats.calls == {"list": 3, "mkdir": 2, "copy": 3}
+
+
+async def test_maxdepth_below_1_is_refused(any_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="maxdepth"):
+        _cp(any_fs, "data", "copied", maxdepth=0)

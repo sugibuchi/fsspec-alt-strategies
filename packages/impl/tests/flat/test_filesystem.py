@@ -302,3 +302,30 @@ async def test_what_the_strategies_leave_to_fsspec(
         "data/README.md",
         "database.csv",
     ]
+
+
+@pytest.mark.parametrize("maxdepth", [1, 2, 3])
+async def test_rm_with_maxdepth_deletes_what_fsspecs_does(
+    fs: _Flat, inner: SimulatedFileSystem, maxdepth: int
+) -> None:
+    expanded = await AsyncFileSystem._expand_path(
+        inner, "data", recursive=True, maxdepth=maxdepth
+    )
+    expected = sorted(set(inner._file_data) - set(expanded))
+    await fs._rm("data", recursive=True, maxdepth=maxdepth)
+    assert sorted(inner._file_data) == expected
+
+
+async def test_copy_and_mv_with_maxdepth(fs: _Flat, inner: SimulatedFileSystem) -> None:
+    inner.add_file("data/2023/top.txt")
+    await fs._copy("data", "copied", recursive=True, maxdepth=2)
+    assert sorted(p for p in inner._file_data if p.startswith("copied/")) == [
+        "copied/2023/top.txt",
+        "copied/README.md",
+    ]
+    await fs._mv("data", "moved", recursive=True, maxdepth=1)
+    assert sorted(p for p in inner._file_data if p.startswith("moved/")) == [
+        "moved/README.md"
+    ]
+    # fsspec's own deletes the whole source: the keys deeper are kept here.
+    assert "data/2023/top.txt" in inner._file_data
