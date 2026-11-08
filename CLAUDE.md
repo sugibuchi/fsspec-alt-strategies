@@ -123,5 +123,7 @@ Write docs so that people can review them. That covers this file, DEVELOPMENT.md
   - the README tells users what the library offers, without technical details;
   - USAGE.md tells them how to install and use each feature;
   - DEVELOPMENT.md tells contributors the layout and the design.
+- After each release, rewrite its GitHub release notes as DEVELOPMENT.md's "Release notes" says, without being
+  asked.
 - The README is both packages' readme on PyPI, read by each package's `hatch_build.py`. It links files by absolute
   URL, as PyPI cannot resolve relative paths.
