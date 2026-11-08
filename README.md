@@ -125,7 +125,7 @@ A strategy is a plain function, taking the storage's operations it uses:
 import asyncio
 from fsspec_alt_strategies_impl.tree.find import tree_find
 
-find = tree_find("data", ls=fs._ls, info=fs._info, concurrency_limit=asyncio.Semaphore(32))
+find = tree_find("data", ils=fs._ils, info=fs._info, concurrency_limit=asyncio.Semaphore(32))
 async with find as op:
     async for entry in op:
         if isinstance(entry, Exception):

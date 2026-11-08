@@ -12,7 +12,7 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.rm import RmState, tree_rm
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
 
 
 def _rm(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
@@ -20,7 +20,7 @@ def _rm(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
         "profile": StorageProfile(),
-        "ls": fs._ls,
+        "ils": folder_ils(fs),
         "info": fs._info,
         "rm_file": fs._rm_file,
         "rm_folder": fs._rmdir,

@@ -12,7 +12,7 @@ can be pruned. On object stores, one recursive listing usually costs fewer
 requests: `fsspec.asyn.AsyncFileSystem._find` there.
 
 The tree strategies take the storage's operations as functions, such as
-``ls``, rather than a filesystem: see `common.types`.
+``ils``, rather than a filesystem: see `common.types`.
 
 This module depends on `jobs`, `operation` and `paths` of `common`.
 """
@@ -33,7 +33,7 @@ from ..common.paths import _check_maxdepth, _trim, _triples
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Collection
 
-    from ..common.types import _Ls
+    from ..common.types import _Ils
 
 __all__ = ["WalkState", "tree_walk"]
 
@@ -41,7 +41,7 @@ __all__ = ["WalkState", "tree_walk"]
 def tree_walk(
     path: str,
     *,
-    ls: _Ls,
+    ils: _Ils,
     maxdepth: int | None = None,
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
@@ -53,7 +53,7 @@ def tree_walk(
     It yields each folder listed as ``(path, dirs, files)``, as fsspec's
     ``walk`` does with ``detail=True``: ``path`` itself first, then each folder
     below it. ``dirs`` and ``files`` map the names in the folder to their
-    ``ls`` entries. An empty folder yields empty ones. The folders come in the
+    ``ils`` entries. An empty folder yields empty ones. The folders come in the
     order their listings arrive, not in the tree's order. A folder that fails
     to list yields its error instead, and the walk goes on with the others.
     The error names its folder in its note, and as its ``folder`` attribute.
@@ -73,21 +73,22 @@ def tree_walk(
     - with ``on_error="raise"``, the error of the first folder that failed to
       list.
 
-    Requests: one ``ls`` per folder walked, as ``concurrency_limit`` allows.
+    Requests: one ``ils`` per folder walked, as ``concurrency_limit`` allows.
 
     Parameters
     ----------
     path : str
-        The folder to start from, as ``ls`` takes it.
-    ls : callable
-        Lists a folder, called as ``ls(path, detail=True)``: e.g. the
-        filesystem's ``_ls``.
+        The folder to start from, as ``ils`` takes it.
+    ils : callable
+        Lists a folder, called as ``ils(path)``: an async iterator of its
+        entries, as fsspec's ``_ls`` gives them, e.g. the filesystem's
+        ``_ils``.
     maxdepth : int, optional
         The deepest level to list: 1 lists only ``path``. No limit by default.
     topdown : bool
         Whether a folder comes before those below it, rather than after.
     descend : callable, optional
-        Called with the ``ls`` entry of each subfolder found. The walk lists it
+        Called with the ``ils`` entry of each subfolder found. The walk lists it
         only if this returns True. All by default.
     on_error : {"omit", "raise"} or callable, optional
         What to do with the error of a folder that fails to list: yield it, if
@@ -115,7 +116,7 @@ def tree_walk(
     Examples
     --------
     >>> limit = asyncio.Semaphore(16)  # Shared, e.g. by a filesystem's operations.
-    >>> walk = tree_walk("data", ls=fs._ls, concurrency_limit=limit)
+    >>> walk = tree_walk("data", ils=fs._ils, concurrency_limit=limit)
     >>> async with walk as folders:
     ...     async for folder in folders:
     ...         if isinstance(folder, Exception):
@@ -131,7 +132,7 @@ def tree_walk(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
     ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
         listings = _listings(
-            ls,
+            ils,
             path,
             maxdepth=maxdepth,
             topdown=topdown,
@@ -167,7 +168,7 @@ class _Listing:
     """A folder's listing, as ``_listings`` yields it.
 
     ``depth`` is 1 for the folder the walk started from, 2 for its subfolders,
-    and so on. ``entries`` are as ``ls`` gives them, without the folder itself,
+    and so on. ``entries`` are as ``ils`` gives them, without the folder itself,
     and empty if the listing failed with ``error``.
 
     ``depth`` 0 is no listing, but the walk's root itself, as `_find_listings`
@@ -181,7 +182,7 @@ class _Listing:
 
 
 async def _listings(
-    ls: _Ls,
+    ils: _Ils,
     path: str | Collection[str],
     *,
     maxdepth: int | None = None,
@@ -219,7 +220,7 @@ async def _listings(
     async def start() -> None:
         if stopping is not None and stopping():
             folders.waiting.clear()
-        await folders.start(lambda item: ls(item[0], detail=True))
+        await folders.start(lambda item: _listed(ils, item[0]))
 
     folders.waiting.extend((root, 1) for root in sorted(roots))
     await start()
@@ -250,6 +251,17 @@ async def _listings(
         await folders.close()
 
 
+async def _listed(ils: _Ils, folder: str) -> list[dict[str, Any]]:
+    """A folder's entries, all of them: ``ils`` yields them as they come."""
+    entries = ils(folder)
+    try:
+        return [entry async for entry in entries]
+    finally:
+        # A listing left early, e.g. failing, is closed, if it can be.
+        if (aclose := getattr(entries, "aclose", None)) is not None:
+            await aclose()
+
+
 def _listing(
     task: asyncio.Task[list[dict[str, Any]]],
     folder: str,
@@ -257,7 +269,7 @@ def _listing(
     roots: set[str],
     raise_on_error: bool,
 ) -> _Listing:
-    """The listing a finished ``ls`` task gives, or its error."""
+    """The listing a finished ``ils`` task gives, or its error."""
     try:
         entries = task.result()
     except Exception as e:
@@ -276,7 +288,7 @@ def _listing(
     if folder in roots and any(
         e["name"].rstrip("/") == folder and e["type"] != "directory" for e in entries
     ):
-        # fsspec's _ls of a file lists the file itself.
+        # ils of a file yields the file itself, as fsspec's _ls lists it.
         raise NotADirectoryError(folder)
 
     # Some storages list a folder within itself, e.g. as its marker object.

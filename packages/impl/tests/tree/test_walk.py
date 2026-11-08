@@ -10,7 +10,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies_impl.tree.walk import WalkState, _listings, tree_walk
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 def _walk(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`tree_walk` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {"concurrency_limit": asyncio.Semaphore(32), "ls": fs._ls}
+    operations = {"concurrency_limit": asyncio.Semaphore(32), "ils": folder_ils(fs)}
     return tree_walk(path, **{**operations, **kwargs})
 
 
@@ -271,14 +271,14 @@ async def test_listings_carry_folder_and_depth(any_fs: SimulatedFileSystem) -> N
     _tree(any_fs)
     # A trailing "/" is trimmed, as fsspec's _strip_protocol does.
     async with aclosing(
-        _listings(any_fs._ls, "data/", concurrency_limit=asyncio.Semaphore(32))
+        _listings(folder_ils(any_fs), "data/", concurrency_limit=asyncio.Semaphore(32))
     ) as listings:
         first = await anext(listings)
     assert (first.folder, first.depth) == ("data", 1)
     listings = {
         lst.folder: lst
         async for lst in _listings(
-            any_fs._ls, "data", concurrency_limit=asyncio.Semaphore(32)
+            folder_ils(any_fs), "data", concurrency_limit=asyncio.Semaphore(32)
         )
     }
     assert [lst.depth for lst in listings.values()].count(3) == 4
@@ -290,7 +290,10 @@ async def test_bottom_up_listings_come_after_their_subfolders() -> None:
     folders = [
         lst.folder
         async for lst in _listings(
-            fs._ls, "data", topdown=False, concurrency_limit=asyncio.Semaphore(2)
+            folder_ils(fs),
+            "data",
+            topdown=False,
+            concurrency_limit=asyncio.Semaphore(2),
         )
     ]
     assert folders[-1] == "data"

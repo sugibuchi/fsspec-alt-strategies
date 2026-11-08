@@ -42,8 +42,9 @@ class StorageProfile:
     fs_type : {"tree", "flat"}, optional
         The family of strategies the storage's filesystem answers with:
         "tree" for a hierarchical namespace listed a folder per request, with
-        `_ls`, "flat" for keys listed by prefix, with `_ils`, `_rm_files`
-        and `rm_batch_size`, as FlatFileSystem has them. A router copying
+        ``_ils``, as `TreeFileSystem` has it, "flat" for keys listed by prefix,
+        with ``_ils``, ``_rm_files`` and ``rm_batch_size``, as `FlatFileSystem`
+        has them. A router copying
         or moving between two storages picks the source's strategies with it.
         Unknown by default: the router falls back on fsspec's own copy.
     parents_required : bool, optional
@@ -78,7 +79,7 @@ class StorageProfile:
     >>> op = tree_local_cp(
     ...     "data/2024",
     ...     "archive/2024",
-    ...     ls=fs._ls,
+    ...     ils=fs._ils,
     ...     info=fs._info,
     ...     cp_file=fs._cp_file,
     ...     makedirs=fs._makedirs,

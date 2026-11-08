@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, Callable
 
-    from ..common.types import _Info, _Ls
+    from ..common.types import _Ils, _Info
 
 __all__ = ["FindState", "tree_find"]
 
@@ -32,7 +32,7 @@ __all__ = ["FindState", "tree_find"]
 def tree_find(
     path: str,
     *,
-    ls: _Ls,
+    ils: _Ils,
     info: _Info,
     maxdepth: int | None = None,
     withdirs: bool = False,
@@ -55,17 +55,18 @@ def tree_find(
     Once cancelled, it lists no new folder, and yields the paths of the
     listings in flight.
 
-    Requests: one ``ls`` per folder, as ``concurrency_limit`` allows. One
+    Requests: one ``ils`` per folder, as ``concurrency_limit`` allows. One
     ``info`` more for ``path`` itself, if a file, or a folder with
     ``withdirs``.
 
     Parameters
     ----------
     path : str
-        The folder to search, as ``ls`` takes it.
-    ls : callable
-        Lists a folder, called as ``ls(path, detail=True)``: e.g. the
-        filesystem's ``_ls``.
+        The folder to search, as ``ils`` takes it.
+    ils : callable
+        Lists a folder, called as ``ils(path)``: an async iterator of its
+        entries, as fsspec's ``_ls`` gives them, e.g. the filesystem's
+        ``_ils``.
     info : callable
         Describes a path, called as ``info(path)``: e.g. the filesystem's
         ``_info``.
@@ -81,7 +82,7 @@ def tree_find(
     Returns
     -------
     Operation
-        Yielding the ``ls`` entry of each path found, or the error of a folder
+        Yielding the ``ils`` entry of each path found, or the error of a folder
         that failed to list. Its state is a `FindState`.
 
     Raises
@@ -96,7 +97,7 @@ def tree_find(
     Examples
     --------
     >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
-    >>> find = tree_find("data", ls=fs._ls, info=fs._info, concurrency_limit=limit)
+    >>> find = tree_find("data", ils=fs._ils, info=fs._info, concurrency_limit=limit)
     >>> found = [item async for item in find]
     >>> sorted(e["name"] for e in found if not isinstance(e, Exception))
     ['data/2024/01/part-0.parquet', 'data/2024/02/part-0.parquet']
@@ -108,7 +109,7 @@ def tree_find(
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         root = _trim(path)
         steps = _find_listings(
-            ls,
+            ils,
             info,
             root,
             maxdepth=maxdepth,
@@ -142,7 +143,7 @@ def tree_find(
 
 
 async def _find_listings(
-    ls: _Ls,
+    ils: _Ils,
     info: _Info,
     path: str,
     *,
@@ -170,7 +171,7 @@ async def _find_listings(
     """
     root = _trim(path)
     listings = _listings(
-        ls,
+        ils,
         root,
         maxdepth=maxdepth,
         descend=descend,

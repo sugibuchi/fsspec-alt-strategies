@@ -41,7 +41,7 @@ from .walk import tree_walk
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import AsyncGenerator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 
     from fsspec_alt_strategies.profile import StorageProfile
 
@@ -68,7 +68,9 @@ class TreeFileSystem(_BaseFileSystem):
     ``io_limit`` as their concurrency limit, and ``_open``. ``_cat_file``,
     ``_pipe_file``, ``_get_file`` and ``_put_file`` read and write through
     ``open_async``'s files. It may implement ``_rm_tree`` too, a storage's
-    recursive delete of a folder, which a recursive ``rm`` then uses.
+    recursive delete of a folder, which a recursive ``rm`` then uses. The
+    strategies list with ``_ils``, which yields ``_ls``'s entries unless a
+    subclass streams a folder's pages.
 
     Two limits bound its requests, each an `asyncio.Semaphore` of its own:
 
@@ -160,6 +162,16 @@ class TreeFileSystem(_BaseFileSystem):
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         """List a folder: its entries, with ``detail``, else their names."""
 
+    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        """List a folder as an async iterator of its entries, as the strategies list.
+
+        Here, it yields ``_ls``'s entries, all listed at once. A subclass whose
+        storage lists a folder in pages overrides it, yielding each page's
+        entries as it comes. A file yields itself, as fsspec's ``_ls`` lists it.
+        """
+        for entry in await self._ls(path, detail=True, **kwargs):
+            yield entry
+
     @abstractmethod
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Describe a path, raising FileNotFoundError if there is none."""
@@ -209,7 +221,7 @@ class TreeFileSystem(_BaseFileSystem):
         root = self._strip_protocol(path)
         walk = tree_walk(
             root,
-            ls=_with(self._ls, kwargs),
+            ils=_with(self._ils, kwargs),
             maxdepth=maxdepth,
             topdown=topdown,
             # The failed folders' errors, which fsspec's on_error then handles:
@@ -260,7 +272,7 @@ class TreeFileSystem(_BaseFileSystem):
         entries, _ = await _collect_with_monitors(
             tree_find(
                 self._strip_protocol(path),
-                ls=_with(self._ls, kwargs),
+                ils=_with(self._ils, kwargs),
                 info=self._info,
                 maxdepth=maxdepth,
                 withdirs=withdirs,
@@ -281,7 +293,7 @@ class TreeFileSystem(_BaseFileSystem):
 
         op = tree_du(
             self._strip_protocol(path),
-            ls=_with(self._ls, kwargs),
+            ils=_with(self._ils, kwargs),
             info=self._info,
             maxdepth=maxdepth,
             concurrency_limit=self.operation_limit,
@@ -298,7 +310,7 @@ class TreeFileSystem(_BaseFileSystem):
         entries, _ = await _collect_with_monitors(
             tree_glob(
                 self._strip_only_protocol(path),
-                ls=_with(self._ls, kwargs),
+                ils=_with(self._ils, kwargs),
                 info=self._info,
                 maxdepth=maxdepth,
                 withdirs=withdirs,
@@ -324,7 +336,7 @@ class TreeFileSystem(_BaseFileSystem):
         _, errors = await _collect_with_monitors(
             tree_rm(
                 self._strip_only_protocol(path),
-                ls=self._ls,
+                ils=self._ils,
                 info=self._info,
                 rm_file=self._rm_file,
                 rm_folder=self._rmdir,
@@ -358,7 +370,7 @@ class TreeFileSystem(_BaseFileSystem):
             tree_local_cp(
                 self._strip_only_protocol(path1),
                 self._strip_only_protocol(path2),
-                ls=self._ls,
+                ils=self._ils,
                 info=self._info,
                 cp_file=self._cp_file,
                 makedirs=self._makedirs,
@@ -400,7 +412,7 @@ class TreeFileSystem(_BaseFileSystem):
             tree_local_mv(
                 self._strip_only_protocol(path1),
                 self._strip_only_protocol(path2),
-                ls=self._ls,
+                ils=self._ils,
                 info=self._info,
                 mv_file=self._mv_file,
                 makedirs=self._makedirs,

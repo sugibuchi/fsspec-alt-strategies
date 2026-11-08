@@ -10,14 +10,14 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.du import DuState, tree_du
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
 
 
 def _du(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`tree_du` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
-        "ls": fs._ls,
+        "ils": folder_ils(fs),
         "info": fs._info,
     }
     return tree_du(path, **{**operations, **kwargs})
@@ -85,7 +85,7 @@ async def test_a_failed_listing_is_yielded_and_the_rest_counted() -> None:
             raise PermissionError(path)
         return await fs._ls(path, detail=detail, **kwargs)
 
-    op = _du(fs, "data", ls=ls)
+    op = _du(fs, "data", ils=folder_ils(ls))
     _, errors = await _collect_with_errors(op)
     assert [type(e) for e in errors] == [PermissionError]
     assert (op.state.errors, op.state.size) == (1, 201)

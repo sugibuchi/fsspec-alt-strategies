@@ -11,7 +11,7 @@ from fsspec.utils import other_paths
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.mv import MvState, tree_mv
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
 
 
 def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
@@ -19,7 +19,7 @@ def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
         "profile": StorageProfile(),
-        "ls": fs._ls,
+        "ils": folder_ils(fs),
         "info": fs._info,
         "mv_file": fs._mv_file,
         "rm_folder": fs._rmdir,

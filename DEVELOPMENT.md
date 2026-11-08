@@ -49,7 +49,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../common/operation.py`       | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
-| `.../common/types.py`           | The types of the storage's operations, such as `ls` and `info`. |
+| `.../common/types.py`           | The types of the storage's operations, such as `ils` and `info`. |
 | `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
 | `.../common/patterns.py`        | Glob patterns, matched as fsspec's `_glob` matches them, by both globs. |
 | `.../files/`                    | Base classes for a filesystem's file objects, by what its storage allows. |
@@ -111,7 +111,7 @@ The library is not part of fsspec. It offers alternatives, and never patches fss
 
 ### Strategies are functions
 
-Each algorithm is a stateless function. It takes the storage's operations as functions, e.g. `ls=fs._ls`, and the
+Each algorithm is a stateless function. It takes the storage's operations as functions, e.g. `ils=fs._ils`, and the
 operation's arguments. It keeps no state between calls.
 
 - Users can call a function with any fsspec filesystem's operations, without subclassing.
@@ -127,7 +127,7 @@ library never picks for them.
 
 - A tree walk, for example, wins on storages listing one folder per call. On object stores, one flat listing wins.
 - So each strategy's docstring says what it assumes of the storage, when it wins or loses, and the calls it makes.
-- A strategy takes only the storage's primitive operations, such as `ls`, `info` and `rm_file`, as functions. So
+- A strategy takes only the storage's primitive operations, such as `ils`, `info` and `rm_file`, as functions. So
   picking one strategy never changes the behaviour of another.
 - A strategy needing another, or a native operation of the storage, takes it as a parameter too.
 
@@ -144,7 +144,7 @@ storage's operations it uses and the options:
 limit = asyncio.Semaphore(32)  # Shared by all that uses the storage, files included.
 rm = tree_rm(
     "data/2024",
-    ls=fs._ls,
+    ils=fs._ils,
     info=fs._info,
     rm_file=fs._rm_file,
     rm_folder=fs._rmdir,
@@ -158,8 +158,10 @@ print(op.state.files_deleted)
 ```
 
 - The storage's operations are functions, not a filesystem. Any coroutine function called as fsspec calls its own
-  serves, e.g. `ls(path, detail=True)`, so one may come from a storage's SDK rather than a filesystem. It also leaves
-  room for another kind of operation later, e.g. a listing yielding pages.
+  serves, e.g. `info(path)`, so one may come from a storage's SDK rather than a filesystem.
+- A listing is an async iterator of entries, as fsspec's `_ls` gives them: `ils(path)` for a folder in `tree/`,
+  `ils(prefix)` for keys in `flat/`. So a storage listing in pages streams them. `TreeFileSystem._ils` yields its
+  `_ls`'s entries, unless a subclass streams its pages.
 - They are required: a strategy guesses nothing, e.g. which request deletes a folder. Only a native operation that
   saves requests is optional, e.g. `tree_rm`'s `rm_tree`: without it, the strategy does the work itself.
 - Paths come without a protocol, as the operations take them. The method wrapping a strategy strips it first.
@@ -224,7 +226,7 @@ class MyFileSystem(AsyncFileSystem):
         if recursive:
             op = tree_rm(
                 self._strip_protocol(path),
-                ls=self._ls,
+                ils=self._ils,
                 info=self._info,
                 rm_file=self._rm_file,
                 rm_folder=self._rmdir,
@@ -439,7 +441,7 @@ come in two layers, by what they send:
 | `tree_rm`, `tree_cp`, `tree_mv` | Requests changing the storage, besides the listings | `_TreeJobs` |
 
 A copy or move within one storage is the special case of one between two. `tree_cp` and `tree_mv` take the source's
-`ls` and `info`, the destination's operations with a `dst_` prefix, and the request copying or moving one file. Within
+`ils` and `info`, the destination's operations with a `dst_` prefix, and the request copying or moving one file. Within
 one storage, the same filesystem's operations are given twice, with `same_storage=True`. `tree_local_cp` and
 `tree_local_mv` do so, taking one storage's operations, and so do `flat_local_cp` and `flat_local_mv`. The jobs of a
 copy and a move share one class per family, `_CopyOrMove`, whose subclass says how a file goes:

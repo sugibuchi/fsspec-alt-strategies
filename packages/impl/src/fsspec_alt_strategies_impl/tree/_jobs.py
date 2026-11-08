@@ -29,19 +29,19 @@ if TYPE_CHECKING:
 
     from ..common.jobs import _Roots
     from ..common.operation import Operation
-    from ..common.types import _Info, _Ls
+    from ..common.types import _Ils, _Info
     from .walk import _Listing
 
 
 async def _expand(
-    ls: _Ls,
+    ils: _Ils,
     info: _Info,
     pattern: str | Sequence[str],
     concurrency_limit: asyncio.Semaphore,
 ) -> _Roots:
     """The roots matching glob patterns, found with `tree_glob`."""
     matches, errors = await _collect_with_errors(
-        tree_glob(pattern, ls=ls, info=info, concurrency_limit=concurrency_limit)
+        tree_glob(pattern, ils=ils, info=info, concurrency_limit=concurrency_limit)
     )
     return _roots_of(matches, errors, pattern)
 
@@ -51,14 +51,14 @@ class _TreeJobs(_Jobs):
 
     def __init__(
         self,
-        ls: _Ls,
+        ils: _Ils,
         info: _Info,
         concurrency_limit: asyncio.Semaphore,
         op: Operation[Any, Any],
     ) -> None:
         super().__init__(concurrency_limit, op)
 
-        self.ls = ls
+        self.ils = ils
         self.info = info
 
         # The paths in each folder listed that are not done yet, for strategies
@@ -76,7 +76,7 @@ class _TreeJobs(_Jobs):
         if not roots.folders:
             return None
         return _listings(
-            self.ls,
+            self.ils,
             roots.folders,
             concurrency_limit=self.concurrency_limit,
             stopping=self.op.cancelling,

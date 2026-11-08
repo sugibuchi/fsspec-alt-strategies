@@ -10,7 +10,7 @@ import pytest
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.flat.walk import WalkState, flat_walk
 from fsspec_alt_strategies_impl.tree.walk import tree_walk
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
 
 
 def _walk(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
@@ -51,7 +51,7 @@ async def test_finds_what_tree_walk_finds(
     expected, _ = await _collect_with_errors(
         tree_walk(
             path,
-            ls=flat_fs._ls,
+            ils=folder_ils(flat_fs),
             topdown=topdown,
             concurrency_limit=asyncio.Semaphore(32),
             **kwargs,

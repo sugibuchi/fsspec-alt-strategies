@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from fsspec_alt_strategies.profile import StorageProfile
 
     from ..common.jobs import _Roots
-    from ..common.types import _Info, _Ls, _Request
+    from ..common.types import _Ils, _Info, _Request
     from .walk import _Listing
 
 __all__ = ["CpState", "tree_cp", "tree_local_cp"]
@@ -40,7 +40,7 @@ def tree_cp(
     path1: str | Sequence[str],
     path2: str,
     *,
-    ls: _Ls,
+    ils: _Ils,
     info: _Info,
     cp_file: _Request,
     dst_info: _Info,
@@ -108,7 +108,7 @@ def tree_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests of
-    their `tree_glob`. One ``ls`` per folder, one ``cp_file`` per file, and
+    their `tree_glob`. One ``ils`` per folder, one ``cp_file`` per file, and
     one ``dst_makedirs`` per destination folder with files or empty. A
     destination refusing to overwrite costs a ``dst_info``, a ``dst_rm_file``
     and a ``cp_file`` more per file it refused. The ``dst_info`` checks it is
@@ -124,12 +124,13 @@ def tree_cp(
     ----------
     path1 : str or sequence of str
         The folder or file to copy, a glob pattern, or a list of them, as
-        ``ls`` takes paths.
+        ``ils`` takes paths.
     path2 : str
         Where to copy it, as above.
-    ls : callable
-        Lists a folder, called as ``ls(path, detail=True)``: e.g. the
-        filesystem's ``_ls``.
+    ils : callable
+        Lists a folder, called as ``ils(path)``: an async iterator of its
+        entries, as fsspec's ``_ls`` gives them, e.g. the filesystem's
+        ``_ils``.
     info : callable
         Describes a path, called as ``info(path)``: e.g. the filesystem's
         ``_info``.
@@ -171,7 +172,7 @@ def tree_cp(
     >>> cp = tree_cp(
     ...     "data/2024",
     ...     "backup/",
-    ...     ls=fs._ls,
+    ...     ils=fs._ils,
     ...     info=fs._info,
     ...     cp_file=fs._cp_file,
     ...     dst_info=fs._info,
@@ -193,7 +194,7 @@ def tree_cp(
     >>> cp = tree_cp(
     ...     "data/2024",
     ...     "backup/",
-    ...     ls=src._ls,
+    ...     ils=src._ils,
     ...     info=src._info,
     ...     cp_file=my_streaming_copy,
     ...     dst_info=dst._info,
@@ -208,7 +209,7 @@ def tree_cp(
         lambda op: _Copy(
             path1,
             path2,
-            ls=ls,
+            ils=ils,
             info=info,
             cp_file=cp_file,
             destination_info=dst_info,
@@ -227,7 +228,7 @@ def tree_local_cp(
     path1: str | Sequence[str],
     path2: str,
     *,
-    ls: _Ls,
+    ils: _Ils,
     info: _Info,
     cp_file: _Request,
     makedirs: _Request,
@@ -247,7 +248,7 @@ def tree_local_cp(
         The folder or file to copy, a glob pattern, or a list of them.
     path2 : str
         Where to copy it, as with `tree_cp`.
-    ls, info : callable
+    ils, info : callable
         The storage's operations, as with `tree_cp`.
     cp_file : callable
         Copies a file within the storage, called as
@@ -272,7 +273,7 @@ def tree_local_cp(
     return tree_cp(
         path1,
         path2,
-        ls=ls,
+        ils=ils,
         info=info,
         cp_file=cp_file,
         dst_info=info,
@@ -299,7 +300,7 @@ class _CopyOrMove(_Placing, _TreeJobs):
         path1: str | Sequence[str],
         path2: str,
         *,
-        ls: _Ls,
+        ils: _Ils,
         info: _Info,
         destination_info: _Info,
         makedirs: _Request,
@@ -308,12 +309,12 @@ class _CopyOrMove(_Placing, _TreeJobs):
         concurrency_limit: asyncio.Semaphore,
         op: Operation[Any, Any],
     ) -> None:
-        super().__init__(ls, info, concurrency_limit, op)
+        super().__init__(ils, info, concurrency_limit, op)
 
         self.path1 = path1
         self.path2 = path2
 
-        # ls and info are the source's. destination_info, makedirs and the
+        # ils and info are the source's. destination_info, makedirs and the
         # profile are the destination's.
         self.makedirs = makedirs
 
@@ -340,7 +341,7 @@ class _CopyOrMove(_Placing, _TreeJobs):
         )
 
     async def expand(self, pattern: str | Sequence[str]) -> _Roots:
-        return await _expand(self.ls, self.info, pattern, self.concurrency_limit)
+        return await _expand(self.ils, self.info, pattern, self.concurrency_limit)
 
     def file_root(self, path: str) -> None:
         self.files_found += 1

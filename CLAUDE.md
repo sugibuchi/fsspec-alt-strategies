@@ -39,14 +39,14 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
 
 - Never use names suggesting ownership of fsspec's fundamentals, such as "base" or "core" packages of fsspec.
 - Each strategy is a stateless function taking the storage's operations as functions, never a filesystem: e.g.
-  `ls=fs._ls`. Filesystem classes only wrap those functions. File objects, in `files/`, and `common.operation.Operation` are the
+  `ils=fs._ils`. Filesystem classes only wrap those functions. File objects, in `files/`, and `common.operation.Operation` are the
   exceptions: see DEVELOPMENT.md's "File objects".
-- A strategy takes only primitive operations, such as `ls`, `info` and `rm_file`, called as fsspec calls its own,
-  e.g. `ls(path, detail=True)`. It never takes a high-level one, such as `_find` or `_glob`: another strategy may have
+- A strategy takes only primitive operations, such as `ils`, `info` and `rm_file`, called as fsspec calls its own,
+  e.g. `info(path)`. A listing is an async iterator of entries, `ils(path)`, as fsspec's `_ls` gives them. It never takes a high-level one, such as `_find` or `_glob`: another strategy may have
   replaced it. A strategy needing another takes it as a parameter. Paths come without a protocol, as the operations
   take them.
 - Every strategy follows DEVELOPMENT.md's "The strategy API":
-  - it is a plain function, `strategy(paths, *, ls=..., ..., concurrency_limit=...)`, the operations keyword-only and
+  - it is a plain function, `strategy(paths, *, ils=..., ..., concurrency_limit=...)`, the operations keyword-only and
     required, the limit an `asyncio.Semaphore`, returning an `Operation` that works as it is iterated;
   - the operation yields what it did mixed with exception objects, one per failed path, each noting its path;
   - it raises only errors ending the whole operation, such as a missing root;

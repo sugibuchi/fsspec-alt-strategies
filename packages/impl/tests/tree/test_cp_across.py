@@ -11,7 +11,7 @@ from fsspec.utils import other_paths
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.cp import CpState, tree_cp
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
 
 
 class _Reader:
@@ -87,7 +87,7 @@ def _across(
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
         "profile": StorageProfile(),
-        "ls": src._ls,
+        "ils": folder_ils(src),
         "info": src._info,
         "cp_file": streaming_copy(
             _opener(src, _Reader), _opener(dst, _Writer), block_size=4

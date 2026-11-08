@@ -34,9 +34,9 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Callable, Iterator
 
-__all__ = ["CallStats", "SimulatedFileSystem"]
+__all__ = ["CallStats", "SimulatedFileSystem", "folder_ils"]
 
 
 @dataclass
@@ -575,3 +575,19 @@ class SimulatedFileSystem(AsyncFileSystem):
         if not self.hierarchical and parent and not self._folders[parent]:
             del self._folders[parent]
             self._detach(parent)
+
+
+def folder_ils(fs: Any) -> Callable[[str], AsyncIterator[dict[str, Any]]]:
+    """A tree strategy's ``ils``, listing a folder by ``fs._ls``, or by ``fs`` itself.
+
+    A `SimulatedFileSystem`'s own ``_ils`` lists by prefix, as the flat
+    strategies take it. This one lists one folder, as the tree strategies take
+    it. ``fs._ls`` is looked up at each call, so that a test may replace it.
+    """
+
+    async def ils(path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        ls = getattr(fs, "_ls", fs)
+        for entry in await ls(path, detail=True, **kwargs):
+            yield entry
+
+    return ils
