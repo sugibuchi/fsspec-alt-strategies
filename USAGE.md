@@ -234,11 +234,20 @@ async def open_async(self, path, mode="rb", **kwargs):
 
 #### Transaction support
 
-A `TransactionFile` holds a file's writes back until fsspec's transaction commits. Its `FileTransaction` says how:
+`TransactionFile` wraps a file-like object, adding fsspec's file transactions to an existing file implementation.
+The file's writes become visible only when the transaction commits, and are dropped if it is discarded.
 
-- `TempPathTransaction` writes to a temporary path, renamed on commit;
-- `LocalBufferTransaction` writes to a local buffer, written to the file on commit;
-- `AdaptiveWritableTransaction` holds back an adaptive file's last request, sent on commit.
+How a file stays invisible until commit depends on the storage. So a `TransactionFile` takes a `FileTransaction`, a
+strategy of file-level transactions. The package provides these:
+
+- `TempPathTransaction` writes to a hidden temporary path, renamed on commit. It suits any storage, best one renaming
+  in one request.
+- `LocalBufferTransaction` writes to a local buffer, written to the file on commit. Other clients see nothing until
+  then, but the file's bytes are held locally.
+- `AdaptiveWritableTransaction` holds back an adaptive file's last request, which makes it visible, until commit. It
+  costs nothing more than writing without a transaction.
+
+A storage with a way of its own, such as a staged upload, subclasses `FileTransaction`.
 
 A filesystem's `_open` returns a `TransactionFile` when fsspec asks for no autocommit:
 
