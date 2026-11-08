@@ -26,9 +26,9 @@ Each family has the same strategies, named after it, e.g. `tree_rm` and `flat_rm
 
 ### Monitor
 
-A `Monitor` watches the operations behind fsspec's methods, such as `fs.rm(...)`, path by path. It sees each path
-done, each error and the progress, and it can cancel the operation. It is part of the interface package, so one
-`monitoring` block watches every copy of the strategies in a project.
+A `Monitor` gives the progress of file tree operations in real time. It watches the operations behind fsspec's
+methods, such as `fs.rm(...)`, path by path. It sees each path done, each error and the progress, and it can cancel
+the operation.
 
 ### Async file object
 
