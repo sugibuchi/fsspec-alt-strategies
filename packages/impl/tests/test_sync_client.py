@@ -85,3 +85,17 @@ async def test_a_sync_wrapper_calls_in_its_threads() -> None:
     finally:
         tree.close()
         memory.rm("/test_sync_client", recursive=True)
+
+
+def test_with_closes_its_threads() -> None:
+    memory = MemoryFileSystem()
+    with SyncTreeWrapper(
+        memory,
+        operation_concurrency=1,
+        io_concurrency=1,
+        storage_profile=StorageProfile(),
+    ) as tree:
+        assert tree.ls("/") is not None
+        pool = tree._thread_pool()
+    assert pool._shutdown
+    assert tree._executor is None
