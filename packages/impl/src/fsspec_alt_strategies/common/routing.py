@@ -6,10 +6,10 @@
 under one namespace, e.g. a cloud's volumes or containers, each with its own
 filesystem. It knows no family: each inner filesystem runs its own strategies,
 and a copy across two storages runs the strategy its subclass's ``_transfer``
-picks.
+picks. `streaming_copy`, the copy of a file it falls back on, streams the
+data through the two storages' files.
 
-This module depends on `filesystem`, `operation`, `paths`, `streams`
-and `types`.
+This module depends on `filesystem`, `operation`, `paths` and `types`.
 """
 
 from __future__ import annotations
@@ -36,7 +36,6 @@ from .filesystem import (
 )
 from .operation import _collected
 from .paths import _trim
-from .streams import streaming_copy
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -54,10 +53,76 @@ if TYPE_CHECKING:
     from .operation import Operation
     from .types import _Request
 
-__all__ = ["AsyncRoutingFileSystem"]
+__all__ = ["AsyncRoutingFileSystem", "streaming_copy"]
+
+_MiB = 1024 * 1024
 
 _Group = tuple[AsyncFileSystem, list[str], list[str]]
 """An inner filesystem, the inner paths given to it, and the router's paths of them."""
+
+
+def streaming_copy(
+    open_source: Callable[..., Awaitable[Any]],
+    open_destination: Callable[..., Awaitable[Any]],
+    *,
+    block_size: int = 8 * _MiB,
+) -> _Request:
+    """Make a ``copy_file(source, destination)`` streaming the data between two storages.
+
+    Each storage's ``open_async`` serves, called as ``open(path, "rb")`` and
+    ``open(path, "wb")``. The file objects are awaited, as those of
+    ``open_async`` are. A block is read, then written, before the next is
+    read. So a copy holds one block in memory, however large the file.
+
+    A copy failing midway leaves what the destination's file object leaves
+    on an exception in its ``async with`` block. An adaptive file aborts its
+    upload, for example, while a plain one may keep the blocks written.
+
+    It suits any two storages, but every byte goes through the caller. A
+    server-side copy between two storages of one cloud wins where it works:
+    a caller's ``copy_file`` may try it first, and fall back on this one, as
+    `AsyncRoutingFileSystem` does.
+
+    Parameters
+    ----------
+    open_source : callable
+        Opens a source file, e.g. the source filesystem's ``open_async``.
+    open_destination : callable
+        Opens a destination file, e.g. the destination's ``open_async``.
+    block_size : int
+        The bytes read, then written, at a time.
+
+    Returns
+    -------
+    callable
+        The ``copy_file``, a coroutine function.
+
+    Raises
+    ------
+    ValueError
+        If ``block_size`` is less than 1.
+
+    See Also
+    --------
+    tree_transfer, flat_transfer : The copies taking it.
+
+    Examples
+    --------
+    >>> copy_file = streaming_copy(src.open_async, dst.open_async)
+    >>> await copy_file("data/a.parquet", "backup/a.parquet")
+    """
+    if block_size < 1:
+        raise ValueError(f"block_size must be at least 1: {block_size}")
+
+    async def copy_file(source: str, destination: str) -> None:
+        reader = await open_source(source, "rb")
+        async with reader:
+            writer = await open_destination(destination, "wb")
+            async with writer:
+                while block := await reader.read(block_size):
+                    await writer.write(block)
+
+    return copy_file
 
 
 class AsyncRoutingFileSystem(
