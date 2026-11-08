@@ -78,12 +78,12 @@ class _StrategyFileSystem(
         io_concurrency: int,
         **kwargs: Any,
     ) -> None:
-        for name, value in (
-            ("operation_concurrency", operation_concurrency),
-            ("io_concurrency", io_concurrency),
-        ):
-            if value < 1:
-                raise ValueError(f"{name} must be at least 1: {value}")
+        if operation_concurrency < 1:
+            raise ValueError(
+                f"operation_concurrency must be at least 1: {operation_concurrency}"
+            )
+        if io_concurrency < 1:
+            raise ValueError(f"io_concurrency must be at least 1: {io_concurrency}")
         super().__init__(*args, **kwargs)
         self.operation_concurrency = operation_concurrency
         self.io_concurrency = io_concurrency
