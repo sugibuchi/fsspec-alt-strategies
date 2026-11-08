@@ -1,0 +1,128 @@
+# Release, part 2: once release-interface.yaml has succeeded for a version tag
+# (so fsspec-alt-strategies, which the strategies depend on, is on PyPI),
+# build the strategies, fsspec-alt-strategies-impl from packages/impl, for the
+# same tag, add them to the GitHub release, and publish them to PyPI. It can
+# also be run by hand for a tag (Actions > Release impl > Run workflow), e.g.
+# to retry.
+#
+# PyPI publishing uses trusted publishing (no token): the PyPI project
+# fsspec-alt-strategies-impl needs a trusted publisher for this repository,
+# workflow `release-impl.yaml` and environment `pypi` (see DEVELOPMENT.md).
+name: Release impl
+
+on:
+  # The jobs check that the run came from a tag pushed here (see their if).
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: ["Release interface"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to release, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Only after a successful release of the interface, run for a tag pushed
+    # to this repository: a workflow of the same name in a fork's pull request
+    # also ends with workflow_run, and must not release.
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.path == '.github/workflows/release-interface.yaml'
+      )
+    runs-on: ubuntu-latest
+    env:
+      # The tag the interface was released for (a tag push's "branch"), or the one given.
+      TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false  # no job pushes: the token is not left in .git/config
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0  # the version comes from the git tags (hatch-vcs)
+
+      - name: Check the tag
+        run: |
+          case "$TAG" in v*) ;; *) echo "not a version tag: $TAG"; exit 1 ;; esac
+          test "$(git describe --tags --exact-match)" = "$TAG"
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.12.22"  # not the latest uv: the same in every run
+
+      - name: Build the package
+        run: uv build --package fsspec-alt-strategies-impl --out-dir dist
+
+      - name: Check the package
+        run: |
+          uv run --no-project python - <<'EOF'
+          import glob, os, sys, zipfile
+
+          version = os.environ["TAG"].removeprefix("v")
+          name = "fsspec_alt_strategies_impl"
+          files = sorted(os.path.basename(f) for f in glob.glob("dist/*"))
+          print("\n".join(files))
+          expected = [f"{name}-{version}-py3-none-any.whl", f"{name}-{version}.tar.gz"]
+          if files != expected:
+              sys.exit(f"expected {expected} for tag {version}")
+          # The interface it shares with its callers, and the simulated
+          # filesystem of its tests, a package of its own.
+          wheel = zipfile.ZipFile(f"dist/{expected[0]}")
+          metadata = wheel.read(f"{name}-{version}.dist-info/METADATA").decode()
+          if not any(
+              line.startswith("Requires-Dist: fsspec-alt-strategies")
+              for line in metadata.splitlines()
+          ):
+              sys.exit("the strategies do not require fsspec-alt-strategies")
+          packages = {n.split("/")[0] for n in wheel.namelist()}
+          for package in (name, f"{name}_testing"):
+              if package not in packages:
+                  sys.exit(f"the wheel has no package {package}")
+          EOF
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: dist-impl
+          path: dist/
+          if-no-files-found: error
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist-impl
+          path: dist/
+
+      # The release was created by release-interface.yaml.
+      - name: Add the files to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/fsspec-alt-strategies-impl/
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist-impl
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3

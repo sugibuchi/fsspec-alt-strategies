@@ -1,4 +1,7 @@
-# Lint and test on every push to main and pull request.
+# Lint the code and the workflows, and test with coverage, on every push to
+# main and pull request. The coverage is uploaded to Codecov from one Python
+# version: uploading needs the repository secret CODECOV_TOKEN, from the
+# repository's settings on codecov.io.
 name: CI
 
 on:
@@ -22,7 +25,7 @@ jobs:
         with:
           persist-credentials: false  # no job pushes: the token is not left in .git/config
 
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           version: "0.12.22"  # not the latest uv: the same in every run
 
@@ -31,6 +34,12 @@ jobs:
 
       - name: Ruff format check
         run: uvx ruff format --check .
+
+      # The workflows: their security (zizmor) and their syntax (actionlint).
+      - name: Workflow check
+        run: |
+          uvx zizmor --offline .github/workflows
+          uvx --from actionlint-py actionlint
 
   test:
     runs-on: ubuntu-latest
@@ -44,7 +53,7 @@ jobs:
           persist-credentials: false  # no job pushes: the token is not left in .git/config
           fetch-depth: 0  # the version comes from the git tags (hatch-vcs)
 
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           version: "0.12.22"  # not the latest uv: the same in every run
           python-version: ${{ matrix.python-version }}
@@ -53,4 +62,11 @@ jobs:
         run: uv sync
 
       - name: Test with coverage
-        run: uv run --no-sync pytest --cov --cov-report=term
+        run: uv run --no-sync pytest --cov --cov-report=term --cov-report=xml:coverage.xml
+
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() && matrix.python-version == '3.14' }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml

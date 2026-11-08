@@ -59,7 +59,9 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
 | `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem`, for tests and benchmarks: a package apart, so that copies leave it out. |
 | `packages/impl/tests/`          | The strategies' tests, in the package's layout, with the shared fixtures in `conftest.py`. |
-| `.github/workflows/ci.yaml`     | Lint and tests, on pull requests and pushes to `main`.         |
+| `.github/workflows/ci.yaml`     | Lint of the code and the workflows, and tests with coverage, on pull requests and pushes to `main`. |
+| `.github/workflows/release-interface.yaml` | The interface's release: on a version tag, to the GitHub release and PyPI. |
+| `.github/workflows/release-impl.yaml` | The strategies' release, once the interface's has succeeded for the same tag. |
 
 The interface depends on fsspec alone, and the strategies on fsspec and the interface. Both take their version from
 the git tag, through hatch-vcs.
@@ -677,4 +679,21 @@ The library tells its callers by what it returns and raises, not by logging.
 
 ## Releases
 
-A release is a version tag pushed to the repository. The version of both packages comes from the tag.
+A release is a version tag pushed to the repository, e.g. `git push origin v0.1.0`. The version of both packages
+comes from the tag. Two workflows release them, one per package, as PyPI's trusted publishing takes one workflow per
+project:
+
+1. `release-interface.yaml` runs on the tag. It builds `fsspec-alt-strategies`, checks its files carry the tag's
+   version, creates the GitHub release with them, and publishes them to PyPI.
+2. `release-impl.yaml` runs once the first has succeeded, so that the interface the strategies depend on is on PyPI
+   first. It builds `fsspec-alt-strategies-impl` from the tag, checks it requires the interface and holds its testing
+   package, adds it to the GitHub release, and publishes it to PyPI. It can be run by hand for a tag, e.g. to retry.
+
+Each PyPI project needs a trusted publisher, once, before the first release:
+
+| PyPI project                 | Workflow                 | Environment |
+|------------------------------|--------------------------|-------------|
+| `fsspec-alt-strategies`      | `release-interface.yaml` | `pypi`      |
+| `fsspec-alt-strategies-impl` | `release-impl.yaml`      | `pypi`      |
+
+The repository needs the `pypi` environment, and the secret `CODECOV_TOKEN` for the coverage uploaded by `ci.yaml`.
