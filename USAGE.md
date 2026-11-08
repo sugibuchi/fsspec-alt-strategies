@@ -240,6 +240,28 @@ A `TransactionFile` holds a file's writes back until fsspec's transaction commit
 - `LocalBufferTransaction` writes to a local buffer, written to the file on commit;
 - `AdaptiveWritableTransaction` holds back an adaptive file's last request, sent on commit.
 
+A filesystem's `_open` returns a `TransactionFile` when fsspec asks for no autocommit:
+
+```python
+from fsspec_alt_strategies_impl.files.fsspec_transaction import LocalBufferTransaction, TransactionFile
+
+
+def _open(self, path, mode="rb", autocommit=True, **kwargs):
+    if autocommit:
+        return MyFile(self, path, mode)
+    return TransactionFile(LocalBufferTransaction(path, lambda p: MyFile(self, p, mode)))
+```
+
+Its files then join fsspec's transactions:
+
+```python
+with fs.transaction:
+    with fs.open("data/a.csv", "wb") as f:
+        f.write(b"...")
+    # Nothing is written yet.
+# Written now, as the transaction commits.
+```
+
 ### Filesystem router
 
 `AsyncRoutingFileSystem` is abstract. A subclass implements three methods:
