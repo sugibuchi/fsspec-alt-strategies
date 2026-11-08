@@ -12,6 +12,9 @@ dist/
 .eggs/
 wheels/
 
+# Written by hatch-vcs when the package is built
+packages/*/src/*/_version.py
+
 # Virtual environments
 .venv/
 venv/

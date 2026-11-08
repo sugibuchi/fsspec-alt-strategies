@@ -1,88 +1,44 @@
-[project]
-name = "fsspec-alt-strategies"
-dynamic = ["version"]
-description = "Alternative, filesystem-independent strategies for fsspec: tree operations, glob and file buffering"
-readme = "README.md"
-license = "Apache-2.0"
-license-files = ["LICENSE"]
-authors = [{ name = "Tsuyoshi SUGIBUCHI" }]
-keywords = [
-    "fsspec",
-    "filesystem",
-    "async",
-    "glob",
-    "hierarchical namespace",
-    "azure data lake",
-    "databricks",
-]
-classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
-    "Framework :: AsyncIO",
-    "Intended Audience :: Developers",
-    "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
-    "Topic :: System :: Filesystems",
-    "Typing :: Typed",
-]
-requires-python = ">=3.11"
-dependencies = [
-    "fsspec>=2024.2.0",
-]
+# The workspace: two packages, built and published on their own, developed and
+# tested together here.
+#
+# - packages/common, fsspec-alt-strategies: the interface the strategies
+#   share with their callers, installed as a package.
+# - packages/impl, fsspec-alt-strategies-impl: the strategies, meant to be copied
+#   into a project, and the simulated filesystem their tests use.
 
-[project.urls]
-Homepage = "https://github.com/sugibuchi/fsspec-alt-strategies"
-Source = "https://github.com/sugibuchi/fsspec-alt-strategies"
-Issues = "https://github.com/sugibuchi/fsspec-alt-strategies/issues"
-Changelog = "https://github.com/sugibuchi/fsspec-alt-strategies/releases"
+[tool.uv.workspace]
+members = ["packages/common", "packages/impl"]
 
-[build-system]
-requires = ["hatchling>=1.27.0", "hatch-vcs"]
-build-backend = "hatchling.build"
-
-[tool.hatch.version]
-source = "vcs"
-raw-options = { 'version_scheme' = 'post-release' }
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/fsspec_alt_strategies"]
-
-[tool.hatch.build.targets.sdist]
-# Files for development only.
-exclude = [
-    ".github",
-    ".pre-commit-config.yaml",
-    "CLAUDE.md",
-]
+[tool.uv.sources]
+fsspec-alt-strategies-impl = { workspace = true }
+fsspec-alt-strategies = { workspace = true }
 
 [dependency-groups]
 dev = [
+    "fsspec-alt-strategies-impl[cli]",
+    "fsspec-alt-strategies",
     "pre-commit>=4.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.0",
     "pytest-cov>=7.1.0",
 ]
 
-[tool.uv]
-# Rebuild the project when its git commit or tags change, as its version
-# comes from git (hatch-vcs), not only when pyproject.toml changes.
-cache-keys = [
-    { file = "pyproject.toml" },
-    { git = { commit = true, tags = true } },
-]
-
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["packages/common/tests", "packages/impl/tests"]
+# Test folders have no __init__.py, and share file names, e.g. tree/test_find.py
+# and flat/test_find.py: importlib imports each by its path.
+addopts = ["--import-mode=importlib"]
 # The library is async first: async tests need no marker.
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
-source = ["src/fsspec_alt_strategies"]
+source = [
+    "packages/common/src/fsspec_alt_strategies",
+    "packages/impl/src/fsspec_alt_strategies_impl",
+    "packages/impl/src/fsspec_alt_strategies_impl_testing",
+    "packages/impl/src/fsspec_alt_strategies_impl_cli",
+]
 
 [tool.ruff]
 exclude = [
@@ -90,6 +46,8 @@ exclude = [
     "build",
 ]
 line-length = 88
+# The packages' own modules, first-party in either package.
+src = ["packages/common/src", "packages/impl/src"]
 
 [tool.ruff.format]
 # Keep hand-written code examples in the documentation as they are.
