@@ -45,6 +45,14 @@ The library has two packages:
 [USAGE.md](https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/USAGE.md) explains what to copy for each
 feature, and how to use each one.
 
+## Compatibility
+
+- **Python:** 3.11 to 3.14, each tested in CI.
+- **fsspec:** 2024.2.0 or later.
+- **Dependencies:** none but fsspec. The command line copying the strategies needs click, with the `cli` extra.
+- **Filesystems:** any fsspec filesystem, async or sync. Those known to `monitored()` are the local filesystem,
+  s3fs, gcsfs, adlfs, and fsspec's memory, SFTP and HDFS filesystems.
+
 ## Development, security and license
 
 - [DEVELOPMENT.md](https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/DEVELOPMENT.md) explains how to work
