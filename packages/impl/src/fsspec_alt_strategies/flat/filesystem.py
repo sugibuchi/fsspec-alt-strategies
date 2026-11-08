@@ -234,19 +234,17 @@ class FlatFileSystem(_BaseFileSystem):
             yield _failed_folder(root, e, on_error, detail)
             return
 
-        # Each folder's entries, the folders as deep as fsspec's walk lists.
+        # Each folder's entries, the folders as deep as fsspec's walk lists. The
+        # walk is top-down, so a folder comes before what is in it.
         start = len(root) + 1 if root else 0
         folders: dict[str, list[dict[str, Any]]] = {root: []}
         for entry in entries:
             name = entry["name"].rstrip("/")
+            folders[name.rpartition("/")[0]].append(entry)
+
             depth = name[start:].count("/") + 1
             if entry["type"] == "directory" and (maxdepth is None or depth < maxdepth):
                 folders.setdefault(name, [])
-
-        for entry in entries:
-            parent = entry["name"].rstrip("/").rpartition("/")[0]
-            if parent in folders:
-                folders[parent].append(entry)
 
         order = sorted(folders, key=lambda f: f.count("/"), reverse=not topdown)
         for folder in order:
