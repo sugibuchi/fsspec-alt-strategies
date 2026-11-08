@@ -21,12 +21,9 @@ import io
 import math
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ._async_file import _AsyncFile, _MiB, _Range
-
-if TYPE_CHECKING:
-    from collections.abc import Awaitable
 
 __all__ = ["AdaptiveReadableFile", "AdaptiveWritableFile"]
 
@@ -704,7 +701,8 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
                 await self._complete_multipart_upload(list(parts))
         except BaseException as error:
             if self._multipart:
-                await self._abort_noting(error, self._requests.cancel_all())
+                await self._requests.cancel_all()
+                await self._abort_noting(error)
             raise
         finally:
             self._buffer = bytearray()
@@ -715,16 +713,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         if self._multipart:
             await self._abort_multipart_upload()
 
-    async def _abort_noting(
-        self, error: BaseException, first: Awaitable[None] | None = None
-    ) -> None:
-        """Abort the multipart upload after ``error``, which the caller raises.
-
-        ``first`` is awaited before, e.g. to cancel the parts in flight.
-        """
+    async def _abort_noting(self, error: BaseException) -> None:
+        """Abort the multipart upload after ``error``, which the caller raises."""
         try:
-            if first is not None:
-                await first
             await self._abort_multipart_upload()
         except Exception as abort_error:
             # The first error is what the caller acts on: the abort's failure
