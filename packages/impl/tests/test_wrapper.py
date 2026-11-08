@@ -28,8 +28,8 @@ _LIMITS: dict[str, Any] = {
     "storage_profile": StorageProfile(),
 }
 
-# What each family's wrapper defines itself: its listing, and the flat deletions.
-_FAMILYS_OWN = {"_ils", "_iexpand", "_rm_files"}
+# What each family's wrapper defines itself: the flat listing and deletions.
+_FAMILYS_OWN = {"_iexpand", "_rm_files"}
 # What a router passes on to its storages, each a wrapper maybe.
 _ROUTED = {
     "_info", "_ls", "_cat_file", "_pipe_file", "_get_file", "_put_file",

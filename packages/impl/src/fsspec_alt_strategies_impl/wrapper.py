@@ -125,6 +125,11 @@ class _AsyncFileSystemWrapper(_FileSystemWrapper):
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         return await self.fs._ls(path, detail=detail, **kwargs)
 
+    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        # fsspec has no listing in pages: the wrapped one's _ls, all at once.
+        for entry in await self.fs._ls(path, detail=True, **kwargs):
+            yield entry
+
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         return await self.fs._info(path, **kwargs)
 
@@ -185,6 +190,12 @@ class _SyncFileSystemWrapper(_FileSystemWrapper):
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self.fs.ls, path, detail=detail, **kwargs)
+
+    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        # fsspec has no listing in pages: the wrapped one's ls, all at once.
+        listing = await asyncio.to_thread(self.fs.ls, path, detail=True, **kwargs)
+        for entry in listing:
+            yield entry
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self.fs.info, path, **kwargs)
@@ -306,11 +317,6 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
         if rm_tree is not None:
             self._rm_tree = rm_tree
 
-    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
-        # fsspec has no listing in pages: the wrapped one's _ls, all at once.
-        for entry in await self._ls(path, detail=True, **kwargs):
-            yield entry
-
 
 class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
     """A sync filesystem, as a `TreeFileSystem`: its recursive methods the tree strategies.
@@ -374,11 +380,6 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
             storage_profile=replace(storage_profile, fs_type="tree"),
             **kwargs,
         )
-
-    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
-        # fsspec has no listing in pages: the wrapped one's ls, all at once.
-        for entry in await self._ls(path, detail=True, **kwargs):
-            yield entry
 
 
 class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):

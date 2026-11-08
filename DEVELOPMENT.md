@@ -163,8 +163,8 @@ print(op.state.files_deleted)
 - The storage's operations are functions, not a filesystem. Any coroutine function called as fsspec calls its own
   serves, e.g. `info(path)`, so one may come from a storage's SDK rather than a filesystem.
 - A listing is an async iterator of entries, as fsspec's `_ls` gives them: `ils(path)` for a folder in `tree/`,
-  `iexpand(prefix)` for every key under a prefix in `flat/`. So a storage listing in pages streams them. A `TreeFileSystem` subclass
-  implements `_ils`, and its `_ls` lists with it.
+  `iexpand(prefix)` for every key under a prefix in `flat/`. So a storage listing in pages streams them. A subclass of either family's
+  class implements `_ils`, a folder's listing, and its `_ls` lists with it. A `FlatFileSystem` implements `_iexpand` too.
 - They are required: a strategy guesses nothing, e.g. which request deletes a folder. Only a native operation that
   saves requests is optional, e.g. `tree_rm`'s `rm_tree`: without it, the strategy does the work itself.
 - Paths come without a protocol, as the operations take them. The method wrapping a strategy strips it first.

@@ -95,8 +95,9 @@ class _Flat(FlatFileSystem):
     async def _rm_files(self, paths: list[str]) -> None:
         await self.inner._rm_files(paths)
 
-    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
-        return await self.inner._ls(path, detail=detail)
+    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        for entry in await self.inner._ls(path, detail=True):
+            yield entry
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         return await self.inner._info(path)

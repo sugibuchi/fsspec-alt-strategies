@@ -62,8 +62,9 @@ class FlatFileSystem(_BaseFileSystem):
     A subclass implements the storage's primitives: ``_iexpand``, the listing by
     prefix, which fsspec has not, and ``_rm_files``, a deletion of several
     files in one request, with ``rm_batch_size``. It implements those fsspec
-    leaves abstract too: ``_ls``, for fsspec's own methods, ``_info``,
-    ``_rm_file`` and ``_cp_file``. It implements ``open_async``, giving its
+    leaves abstract too: ``_ils``, a folder's listing, which ``_ls`` and so
+    fsspec's own methods list with, ``_info``, ``_rm_file`` and ``_cp_file``.
+    It implements ``open_async``, giving its
     files ``io_limit`` as their concurrency limit, and ``_open``. The data
     methods, ``_cat_file``, ``_pipe_file``, ``_get_file`` and ``_put_file``,
     read and write through ``open_async``'s files.
@@ -109,7 +110,7 @@ class FlatFileSystem(_BaseFileSystem):
     ...
     ...     async def _iexpand(self, prefix): ...
     ...     async def _rm_files(self, paths): ...
-    ...     async def _ls(self, path, detail=True, **kwargs): ...
+    ...     async def _ils(self, path, **kwargs): ...
     ...     async def _info(self, path, **kwargs): ...
     ...     async def _rm_file(self, path, **kwargs): ...
     ...     async def _cp_file(self, path1, path2, **kwargs): ...
@@ -170,8 +171,20 @@ class FlatFileSystem(_BaseFileSystem):
         """
 
     @abstractmethod
+    def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        """List one folder, as an async iterator of its entries, for fsspec's own methods.
+
+        The entries are as fsspec's ``_ls`` gives them with ``detail``: the
+        files in the folder, and its subfolders, e.g. by an object store's
+        listing with a delimiter, a page at a time. A file yields itself, as
+        fsspec's ``_ls`` lists it. The strategies never call it: they list
+        with ``_iexpand``.
+        """
+
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
-        """List a folder, as fsspec's own methods do: its entries, or their names."""
+        """List a folder, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names."""
+        entries = [entry async for entry in self._ils(path, **kwargs)]
+        return entries if detail else [e["name"] for e in entries]
 
     @abstractmethod
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
