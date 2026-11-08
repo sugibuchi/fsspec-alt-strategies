@@ -105,9 +105,9 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         The threads are the filesystem's own, not the loop's default executor,
         which other code shares. They are made when first needed. There are
-        ``operation_concurrency + io_concurrency`` of them, as many as the two
-        limits let run at once. So a call holding a permit of either never
-        waits for a thread as well. A call made outside the limits may.
+        ``operation_concurrency`` of them, as many as ``operation_limit`` lets
+        run at once. A call beyond them, e.g. of the files' transfers holding
+        ``io_limit``, waits for a thread.
 
         ``close()`` shuts them down, as does collecting the filesystem. Neither
         waits for the calls running.
@@ -131,7 +131,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         """
         if self._executor is None:
             self._executor = ThreadPoolExecutor(
-                self.operation_concurrency + self.io_concurrency,
+                self.operation_concurrency,
                 thread_name_prefix=type(self).__name__,
             )
             # Shut down when the filesystem is collected, without keeping it

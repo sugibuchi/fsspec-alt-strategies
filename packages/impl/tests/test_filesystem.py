@@ -115,9 +115,9 @@ async def test_blocking_calls_run_on_bounded_threads() -> None:
 
     results = await asyncio.gather(*(fs._blocking(call, i) for i in range(10)))
     assert results == list(range(10))
-    # Three threads: the two operations and the one transfer allowed at once.
-    assert peak == 3
-    assert len(threads) == 3
+    # Two threads: the two operations allowed at once.
+    assert peak == 2
+    assert len(threads) == 2
     assert all(name.startswith("SyncTreeWrapper") for name in threads)
     with pytest.raises(ValueError, match="-1"):
         await fs._blocking(call, -1)
