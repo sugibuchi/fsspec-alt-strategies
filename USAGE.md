@@ -202,6 +202,15 @@ The library logs none of its routine work. To log each operation's start and end
 
 ### Async file object
 
+The adaptive files give a filesystem ready-made file objects, fast for both random and bulk sequential access,
+with no parameter to tune by hand:
+
+- scattered reads fetch small blocks, and long sequential reads ever larger ones, fetched ahead;
+- writes go in one request for a small file, and in parts growing with the bytes written for a large one;
+- large reads and writes are split into requests run at once.
+
+They suit object stores like AWS S3 best, which serve several byte ranges of one object at once.
+
 A subclass of an adaptive file implements the storage's requests, and leaves the buffering to the file:
 
 - `AdaptiveReadableFile` implements `_fetch_range`, which reads a byte range;
