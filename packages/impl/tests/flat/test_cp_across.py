@@ -9,7 +9,6 @@ import pytest
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.common.operation import _collect_with_errors
-from fsspec_alt_strategies.common.routing import streaming_copy
 from fsspec_alt_strategies.flat.cp import CpState, flat_cp
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
@@ -52,6 +51,22 @@ class _Writer:
 
     async def write(self, data: bytes) -> None:
         self.data += data
+
+
+def streaming_copy(
+    open_source: Any, open_destination: Any, *, block_size: int = 1024
+) -> Any:
+    """A ``cp_file`` between two storages, a block at a time, as the router's."""
+
+    async def copy_file(source: str, destination: str) -> None:
+        reader = await open_source(source, "rb")
+        async with reader:
+            writer = await open_destination(destination, "wb")
+            async with writer:
+                while block := await reader.read(block_size):
+                    await writer.write(block)
+
+    return copy_file
 
 
 def _opener(fs: SimulatedFileSystem, kind: type[Any]) -> Any:

@@ -64,9 +64,8 @@ def flat_cp(
     The destination is described by the ``dst_`` operations and ``profile``,
     and may be flat or a tree. Within one storage, they are the source's own,
     and ``same_storage`` is True: a path copied onto itself, or under itself,
-    is refused. Between two, ``cp_file`` copies from one to the other, e.g. one
-    made by ``common.routing.streaming_copy``, and every byte goes through the
-    caller. A path may then go to the same path, or under it.
+    is refused. Between two, ``cp_file`` copies from one to the other, e.g. the
+    router's ``_cross_fs_cp_file``, and every byte may go through the caller. A path may then go to the same path, or under it.
 
     Unless the profile says it needs none, a folder is made at the destination
     before the first key copied into it, by one ``dst_makedirs``. A folder's

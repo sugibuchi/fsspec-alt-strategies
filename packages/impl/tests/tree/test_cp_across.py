@@ -9,7 +9,6 @@ import pytest
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.common.operation import _collect_with_errors
-from fsspec_alt_strategies.common.routing import streaming_copy
 from fsspec_alt_strategies.tree.cp import CpState, tree_cp
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
@@ -52,6 +51,22 @@ class _Writer:
 
     async def write(self, data: bytes) -> None:
         self.data += data
+
+
+def streaming_copy(
+    open_source: Any, open_destination: Any, *, block_size: int = 1024
+) -> Any:
+    """A ``cp_file`` between two storages, a block at a time, as the router's."""
+
+    async def copy_file(source: str, destination: str) -> None:
+        reader = await open_source(source, "rb")
+        async with reader:
+            writer = await open_destination(destination, "wb")
+            async with writer:
+                while block := await reader.read(block_size):
+                    await writer.write(block)
+
+    return copy_file
 
 
 def _opener(fs: SimulatedFileSystem, kind: type[Any]) -> Any:
@@ -246,24 +261,3 @@ async def test_cancel_yields_the_copies_sent() -> None:
         op.cancel()
     assert len(copied) == dst.stats.calls["write"] == 10
     assert op.cancelled()
-
-
-async def teststreaming_copy_holds_one_block() -> None:
-    src = SimulatedFileSystem(asynchronous=True)
-    dst = SimulatedFileSystem(asynchronous=True)
-    src.add_file("a", bytes(range(10)))
-    blocks: list[int] = []
-
-    class _Noting(_Writer):
-        async def write(self, data: bytes) -> None:
-            blocks.append(len(data))
-            await super().write(data)
-
-    copy_file = streaming_copy(
-        _opener(src, _Reader), _opener(dst, _Noting), block_size=4
-    )
-    await copy_file("a", "b")
-    assert blocks == [4, 4, 2]
-    assert dst._file_data["b"].data == bytes(range(10))
-    with pytest.raises(ValueError, match="block_size"):
-        streaming_copy(_opener(src, _Reader), _opener(dst, _Writer), block_size=0)

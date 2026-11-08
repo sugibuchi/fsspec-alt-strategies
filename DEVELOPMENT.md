@@ -50,7 +50,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../common/operation.py`       | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
-| `.../common/routing.py`         | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. `streaming_copy`, a `copy_file` between two storages, a block at a time through their files. |
+| `.../common/routing.py`         | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. Between two storages, it copies a file a block at a time through their files. |
 | `.../common/types.py`           | The types of the storage's operations, such as `ls` and `info`. |
 | `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
 | `.../common/patterns.py`        | Glob patterns, matched as fsspec's `_glob` matches them, by both globs. |
@@ -324,7 +324,8 @@ It may override these hooks:
 - `_root_info(path)`, a coroutine, describes a path above the storages for `_info`. By default, the root is a bare
   folder entry, and any other path its entry in `_roots` of its parent.
 - `_cross_fs_cp_file(src_fs, src_path, dest_fs, dest_path)`, a coroutine, copies a file between two storages. By
-  default, it streams the data through the router with `streaming_copy`. A subclass overrides it with a server-side
+  default, it streams the data through the router, a block of the source's `transfer_size` at a time, through both
+  storages' `open_async`. A subclass overrides it with a server-side
   copy, and calls the default where that cannot be done.
 - `_cross_fs_mv_file(src_fs, src_path, dest_fs, dest_path)`, a coroutine, moves one. By default, it is
   `_cross_fs_cp_file`, then the source's `_rm_file`.
@@ -448,7 +449,7 @@ copy and a move share one class per family, `_CopyOrMove`, whose subclass says h
 - `_Placing` asks the destination's `info`, and refuses a path into itself only within one storage.
 - The profile is the destination's. Only within one storage does it tell how the source renames, or deletes its
   folders: `tree_mv` moves folders whole only then.
-- Between two storages, the request per file is the caller's, e.g. `common.routing.streaming_copy`'s. For a move, it
+- Between two storages, the request per file is the caller's, e.g. the router's `_cross_fs_cp_file`. For a move, it
   deletes the source file once copied.
 - `same_storage` is given, never detected: comparing the operations cannot tell whether two filesystems are one storage.
 
