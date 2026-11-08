@@ -22,11 +22,13 @@ from fsspec_alt_strategies.common.filesystem import (
     _StrategyFileSystem,
 )
 from fsspec_alt_strategies.files.fsspec_async import SyncFileAdapter
+from fsspec_alt_strategies.flat.wrapper import AsyncFlatWrapper
 from fsspec_alt_strategies.tree.wrapper import AsyncTreeWrapper, SyncTreeWrapper
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
 _LIMITS: dict[str, Any] = {
@@ -231,3 +233,29 @@ def test_a_folder_failing_to_list_is_raised_reported_or_empty() -> None:
     assert _failed_folder("a", error, reported.append, detail=True) == ("a", {}, {})
     assert reported == [error]
     assert _failed_folder("a", error, "omit", detail=False) == ("a", [], [])
+
+
+class _Flat(AsyncFlatWrapper):
+    """A simulated storage as a `FlatFileSystem`, listed by its own ``_ils``."""
+
+    def _ils(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
+        return self.fs._ils(prefix)
+
+
+@pytest.mark.parametrize("family", ["tree", "flat"])
+@pytest.mark.parametrize("method", ["_copy", "_mv"])
+@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("path", ["data/a/1.txt", "data/a/1.*", ["data/a/1.txt"]])
+async def test_a_file_copied_or_moved_into_a_missing_folder(
+    family: str, method: str, recursive: bool, path: str | list[str]
+) -> None:
+    sim = SimulatedFileSystem(hierarchical=family == "tree", asynchronous=True)
+    sim.add_file("data/a/1.txt", b"1")
+    if family == "tree":
+        fs: Any = AsyncTreeWrapper(sim, asynchronous=True, **_LIMITS)
+    else:
+        fs = _Flat(sim, rm_batch_size=10, asynchronous=True, **_LIMITS)
+
+    await getattr(fs, method)(path, "new/", recursive=recursive)
+    assert sim._file_data["new/1.txt"].data == b"1"
+    assert "new" not in sim._file_data

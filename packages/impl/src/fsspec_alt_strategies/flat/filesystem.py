@@ -7,9 +7,9 @@ key under a prefix in one paginated request. A subclass implements the
 storage's primitives, that listing among them, and gets fsspec's recursive
 methods from the flat strategies.
 
-This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm`, `transfer`,
+This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm`,
 `walk`, and
-`filesystem`, `operation`, `paths` and `streams` of `common`.
+`filesystem`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -20,38 +20,30 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import sync
 
 from fsspec_alt_strategies_common.monitor import Call
-from fsspec_alt_strategies_common.profile import StorageProfile
 
 from ..common.filesystem import (
     _answer,
     _copy_errors,
     _du_answer,
     _failed_folder,
-    _plain,
     _raise,
     _StrategyFileSystem,
 )
 from ..common.operation import _collected
 from ..common.paths import _triples
-from ..common.streams import streaming_copy
 from .cp import flat_cp
 from .du import flat_du
 from .find import flat_find
 from .glob import flat_glob
 from .mv import flat_mv
 from .rm import flat_rm
-from .transfer import flat_transfer
 from .walk import flat_walk
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
-    from fsspec.asyn import AsyncFileSystem
+    from fsspec_alt_strategies_common.profile import StorageProfile
 
-    from fsspec_alt_strategies_common.states import CpState
-
-    from ..common.operation import Operation
-    from ..common.types import _Request
 
 __all__ = ["FlatFileSystem"]
 
@@ -398,37 +390,6 @@ class FlatFileSystem(_StrategyFileSystem):
             kwargs.get("callback"),
         )
         _raise(errors, "Moving")
-
-    def _transfer(
-        self,
-        path1: str | Sequence[str],
-        other: AsyncFileSystem,
-        path2: str,
-        *,
-        copy_file: _Request | None = None,
-    ) -> Operation[tuple[str, str], CpState]:
-        """Copy to ``other`` with `flat_transfer`, as `_StrategyFileSystem` says."""
-        if not getattr(other, "async_impl", False):
-            raise TypeError(f"other must be an async filesystem: {other!r}")
-        profile = getattr(other, "storage_profile", None)
-        return flat_transfer(
-            self._plain(path1),
-            _plain(other, path2),
-            ils=self._ils,
-            info=self._info,
-            copy_file=copy_file
-            or streaming_copy(
-                self.open_async, other.open_async, block_size=self.transfer_size
-            ),
-            dst_info=other._info,
-            dst_makedirs=other._makedirs,
-            dst_rm_file=other._rm_file,
-            # Not declared, the destination is unknown: the way right on any.
-            profile=profile
-            if isinstance(profile, StorageProfile)
-            else StorageProfile(),
-            concurrency_limit=self.operation_limit,
-        )
 
     # fsspec makes sync methods only from the async ones it knows: _mv is not. It awaits
     # the instance's own, so that a subclass's override is the one run.

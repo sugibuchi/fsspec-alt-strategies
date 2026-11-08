@@ -311,14 +311,8 @@ Or they wrap an existing filesystem as one, to use the strategies and monitors w
 
 Choosing the class chooses the family: a developer wanting one strategy of another overrides that method, as above.
 
-Each family's class has `_transfer(path1, other, path2, *, copy_file=None)`, declared on `_StrategyFileSystem`. It
-returns the source family's transfer strategy, not yet started, so that a caller copying between storages needs to
-know neither family:
-
-- `other` is any async fsspec filesystem. Its `_info`, `_makedirs` and `_rm_file` are the destination's operations.
-- Its `storage_profile` is the destination's profile. A filesystem without one is unknown, `StorageProfile()`.
-- `copy_file` streams through both `open_async` by default. A caller may give a server-side copy instead.
-- The requests hold the source's `operation_limit`, as `_copy`'s do.
+A filesystem class deals with its own storage only. A copy to another storage is the router's concern, in its
+`_transfer` hook below.
 
 #### Routers
 
@@ -350,6 +344,12 @@ It may override these hooks:
   - `path1` may be a list, of one call's sources. The paths it returns keep their shape.
 - `_server_copy(fs1, path1, fs2, path2)` copies a file across without the data passing through the router. It returns
   False where it cannot, and the file is streamed instead. It raises on any other failure.
+- `_transfer(fs1, path1, fs2, path2, *, copy_file)` returns the strategy copying between two storages, not yet started.
+  The router knows no family, so the subclass picks it, as it knows its inner filesystems. By default, it returns None.
+  - A subclass gives it the source's listing and `_info`, and the destination's `_info`, `_makedirs`, `_rm_file` and
+    profile.
+  - `copy_file` holds a permit of `transfer_limit`. The strategy's `concurrency_limit` must be another semaphore, e.g.
+    the source's `operation_limit`, or the two would wait on each other.
 
 How it passes calls on:
 
@@ -366,10 +366,10 @@ How it passes calls on:
 - fsspec makes no sync `mv` or `rmdir`, so the router has its own, as the families' classes do.
 - `test_routing.py` fails on any fsspec method the router neither passes on nor lists as inherited on purpose.
 
-A copy or move between two storages is the source's `_transfer`, so the source's family lists it:
+A recursive copy or move between two storages runs the strategy `_transfer` returns:
 
 - Its `copy_file` tries `_server_copy`, then `streaming_copy`, under the router's `transfer_limit`.
-- An inner filesystem without `_transfer`, a plain fsspec one, gets fsspec's own copy, a `_cp_file` per file.
+- Where `_transfer` returns None, the copy is fsspec's own, a `_cp_file` per file.
 - A move deletes each source file as soon as its copy succeeds, then the source folders left empty.
 - The call is the router's own, as a monitor sees it.
 
