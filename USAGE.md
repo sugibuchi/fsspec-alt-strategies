@@ -202,9 +202,11 @@ The library logs none of its routine work. To log each operation's start and end
 
 ### Async file object
 
-An adaptive file implements the storage's requests, and leaves the buffering to the file. A readable one implements
-`_fetch_range`. A writable one implements `_upload_all`, for a small file, and the multipart upload's requests:
-`_start_multipart_upload`, `_upload_part`, `_complete_multipart_upload` and `_abort_multipart_upload`.
+A subclass of an adaptive file implements the storage's requests, and leaves the buffering to the file:
+
+- `AdaptiveReadableFile` implements `_fetch_range`, which reads a byte range;
+- `AdaptiveWritableFile` implements `_upload_all`, for a small file, and the multipart upload's requests:
+  `_start_multipart_upload`, `_upload_part`, `_complete_multipart_upload` and `_abort_multipart_upload`.
 
 A filesystem's `open_async` returns its own files through `AsyncFileAdapter`. It returns a sync file, such as an
 SDK's handle, through `SyncFileAdapter`:
