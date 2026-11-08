@@ -31,8 +31,8 @@ from fsspec_alt_strategies_common.profile import StorageProfile
 from .filesystem import (
     _AbstractFileSystemMeta,
     _copy_errors,
-    _plain,
     _raise,
+    _strip_only_protocol,
 )
 from .operation import _collected
 from .paths import _trim
@@ -410,7 +410,7 @@ class AsyncRoutingFileSystem(
         A trailing "/" of the path is kept on a non-empty inner path, as it
         means a folder to a copy or a glob: ``_route`` need not keep it.
         """
-        plain = _plain(self, path)
+        plain = _strip_only_protocol(self, path)
         target = self._route(plain)
         if target is None:
             return None
@@ -447,11 +447,11 @@ class AsyncRoutingFileSystem(
     # The same, after awaiting _prepare_route: each coroutine routes by these.
 
     async def _atarget(self, path: str) -> tuple[AsyncFileSystem, str] | None:
-        await self._prepare_route(_plain(self, path))
+        await self._prepare_route(_strip_only_protocol(self, path))
         return self._target(path)
 
     async def _arequired(self, path: str) -> tuple[AsyncFileSystem, str]:
-        await self._prepare_route(_plain(self, path))
+        await self._prepare_route(_strip_only_protocol(self, path))
         return self._required(path)
 
     async def _apattern_target(self, path: str) -> tuple[AsyncFileSystem, str] | None:
@@ -463,7 +463,7 @@ class AsyncRoutingFileSystem(
 
     def _sync_prepare(self, path: str) -> None:
         if not self.asynchronous:
-            sync(self.loop, self._prepare_route, _plain(self, path))
+            sync(self.loop, self._prepare_route, _strip_only_protocol(self, path))
 
     def _sync_target(self, path: str) -> tuple[AsyncFileSystem, str] | None:
         self._sync_prepare(path)
@@ -488,7 +488,7 @@ class AsyncRoutingFileSystem(
             group[2].append(outer)
 
         for p in [path] if isinstance(path, str) else path:
-            target = await self._apattern_target(_plain(self, p))
+            target = await self._apattern_target(_strip_only_protocol(self, p))
             if target is not None:
                 add(target, p)
             elif has_magic(p):
@@ -564,11 +564,11 @@ class AsyncRoutingFileSystem(
         placed: dict[str, str] = {}
         errors: list[Exception] = []
         skipped: set[str] = set()
-        base = _trim(_plain(self, destination))
-        for path in sorted(paths, key=lambda p: _trim(_plain(self, p))):
+        base = _trim(_strip_only_protocol(self, destination))
+        for path in sorted(paths, key=lambda p: _trim(_strip_only_protocol(self, p))):
             if has_magic(path):
                 continue
-            name = _trim(_plain(self, path)).rpartition("/")[2]
+            name = _trim(_strip_only_protocol(self, path)).rpartition("/")[2]
             target = f"{base}/{name}" if base else name
             if (other := placed.get(target)) is not None:
                 error = FileExistsError(target)
@@ -832,7 +832,7 @@ class AsyncRoutingFileSystem(
         return sizes if total else {self._outer(fs, n): s for n, s in sizes.items()}
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
-        target = await self._apattern_target(_plain(self, path))
+        target = await self._apattern_target(_strip_only_protocol(self, path))
         detail = kwargs.pop("detail", False)
         if target is None:
             # fsspec's glob, finding from the literal prefix over _roots.
@@ -851,7 +851,7 @@ class AsyncRoutingFileSystem(
         **kwargs: Any,
     ) -> list[str]:
         target = (
-            await self._apattern_target(_plain(self, path))
+            await self._apattern_target(_strip_only_protocol(self, path))
             if isinstance(path, str)
             else None
         )

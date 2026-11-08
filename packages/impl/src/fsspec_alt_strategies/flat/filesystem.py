@@ -289,7 +289,7 @@ class FlatFileSystem(_BaseFileSystem):
         detail = kwargs.pop("detail", False)
         entries, _ = await _collected(
             flat_glob(
-                self._plain(path),
+                self._strip_only_protocol(path),
                 ils=self._ils,
                 info=self._info,
                 maxdepth=maxdepth,
@@ -313,7 +313,7 @@ class FlatFileSystem(_BaseFileSystem):
             return
         _, errors = await _collected(
             flat_rm(
-                self._plain(path),
+                self._strip_only_protocol(path),
                 ils=self._ils,
                 info=self._info,
                 rm_files=self._rm_files,
@@ -342,8 +342,8 @@ class FlatFileSystem(_BaseFileSystem):
             return
         _, errors = await _collected(
             flat_cp(
-                self._plain(path1),
-                self._plain(path2),
+                self._strip_only_protocol(path1),
+                self._strip_only_protocol(path2),
                 ils=self._ils,
                 info=self._info,
                 cp_file=self._cp_file,
@@ -378,8 +378,8 @@ class FlatFileSystem(_BaseFileSystem):
             return
         _, errors = await _collected(
             flat_mv(
-                self._plain(path1),
-                self._plain(path2),
+                self._strip_only_protocol(path1),
+                self._strip_only_protocol(path2),
                 ils=self._ils,
                 info=self._info,
                 mv_file=self._mv_file,

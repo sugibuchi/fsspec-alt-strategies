@@ -289,7 +289,7 @@ class TreeFileSystem(_BaseFileSystem):
         withdirs = kwargs.pop("withdirs", True)
         entries, _ = await _collected(
             tree_glob(
-                self._plain(path),
+                self._strip_only_protocol(path),
                 ls=_with(self._ls, kwargs),
                 info=self._info,
                 maxdepth=maxdepth,
@@ -313,7 +313,7 @@ class TreeFileSystem(_BaseFileSystem):
             return
         _, errors = await _collected(
             tree_rm(
-                self._plain(path),
+                self._strip_only_protocol(path),
                 ls=self._ls,
                 info=self._info,
                 rm_file=self._rm_file,
@@ -344,8 +344,8 @@ class TreeFileSystem(_BaseFileSystem):
             return
         _, errors = await _collected(
             tree_cp(
-                self._plain(path1),
-                self._plain(path2),
+                self._strip_only_protocol(path1),
+                self._strip_only_protocol(path2),
                 ls=self._ls,
                 info=self._info,
                 cp_file=self._cp_file,
@@ -383,8 +383,8 @@ class TreeFileSystem(_BaseFileSystem):
             return
         _, errors = await _collected(
             tree_mv(
-                self._plain(path1),
-                self._plain(path2),
+                self._strip_only_protocol(path1),
+                self._strip_only_protocol(path2),
                 ls=self._ls,
                 info=self._info,
                 mv_file=self._mv_file,
