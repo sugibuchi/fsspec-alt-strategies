@@ -710,22 +710,17 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         self._buffer = bytearray()
         await super()._abort()
         if self._multipart:
-            await self._cancel_multipart_upload()
+            await self._abort_multipart_upload()
 
-    async def _cancel_multipart_upload(
-        self, cause: BaseException | None = None
-    ) -> None:
-        """Cancel the parts in flight, then abort the upload.
+    async def _cancel_multipart_upload(self, cause: BaseException) -> None:
+        """Cancel the parts in flight, then abort the upload, after ``cause``.
 
-        With ``cause``, which the caller raises, an abort failing only adds a
-        note to it. Without, the abort's failure is raised.
+        The caller raises ``cause``: an abort failing only adds a note to it.
         """
         await self._requests.cancel_all()
         try:
             await self._abort_multipart_upload()
         except Exception as abort_error:
-            if cause is None:
-                raise
             # The cause is what the caller acts on: the abort's failure only
             # adds that parts may stay on the storage.
             cause.add_note(
