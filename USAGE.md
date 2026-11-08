@@ -153,8 +153,9 @@ A wrapper is light and not cached: make one when you need it, and drop it after.
 
 None of these is right for every storage, and the library never picks one for you.
 
-- **The family** follows how the storage lists. A storage listing a folder per request, even an object store such as
-  Azure Blob Storage through adlfs, suits `tree`. One listing a key prefix in one paginated request suits `flat`.
+- **The family** follows the storage's namespace. A hierarchical namespace, a tree of folders, suits `tree`. A flat
+  namespace, keys whose folders are only prefixes, suits `flat`. An exception is a filesystem listing a flat namespace
+  one folder per request, such as adlfs on Azure Blob Storage: it suits `tree`.
 - **The profile** only saves requests, or data copied. A field left unknown is right on any storage. A field declared
   wrongly gives wrong results: declare only what you know.
 - **The concurrency limits** are yours to set. A filesystem unsafe to call from several threads, such as SFTP, needs
