@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
-from fsspec_alt_strategies.tree.wrapper import AsyncTreeWrapper, SyncTreeWrapper
+from fsspec_alt_strategies.wrapper import AsyncTreeWrapper, SyncTreeWrapper
 from fsspec_alt_strategies_common.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem

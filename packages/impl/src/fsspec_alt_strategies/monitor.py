@@ -7,8 +7,7 @@ block of its operations. One inheriting the interface's `Monitored`, such as a
 `TreeFileSystem` or a wrapper, already does. Any other is wrapped as its entry
 in the known implementations says: none is chosen for a filesystem not there.
 
-This module depends on `wrapper` of `tree` or of `flat`, imported as an entry
-needs it: a copy may keep one family only.
+This module depends on `wrapper`.
 """
 
 from __future__ import annotations
@@ -21,6 +20,13 @@ from fsspec_alt_strategies_common.monitor import Monitored
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_common.wrapper import known_implementations
 
+from .wrapper import (
+    AsyncFlatWrapper,
+    AsyncTreeWrapper,
+    SyncFlatWrapper,
+    SyncTreeWrapper,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -32,17 +38,9 @@ __all__ = ["monitored"]
 
 
 def _wrapper(kind: str, asynchronous: bool) -> Any:
-    """The wrapper class of a family, imported only when needed.
-
-    So a copy keeping only one family, tree or flat, still has `monitored`
-    for the filesystems of that family.
-    """
+    """The wrapper class of a family, async or not."""
     if kind == "tree":
-        from .tree.wrapper import AsyncTreeWrapper, SyncTreeWrapper  # noqa: PLC0415
-
         return AsyncTreeWrapper if asynchronous else SyncTreeWrapper
-    from .flat.wrapper import AsyncFlatWrapper, SyncFlatWrapper  # noqa: PLC0415
-
     return AsyncFlatWrapper if asynchronous else SyncFlatWrapper
 
 

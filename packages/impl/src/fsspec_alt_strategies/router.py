@@ -9,7 +9,7 @@ across two storages runs the source's family's strategy, as its profile's
 ``fs_type`` says, each file by ``_cross_fs_cp_file`` or ``_cross_fs_mv_file``,
 which stream the data through the two storages' files unless overridden.
 
-This module depends on `filesystem`, `operation`, `paths` and `types`. It
+This module depends on `filesystem`, `operation`, `paths` and `types` of `common`. It
 imports `cp` and `mv` of a family only to copy or move from a storage of it,
 so a copy may leave out the other family.
 """
@@ -30,14 +30,14 @@ from fsspec.spec import AbstractFileSystem
 from fsspec_alt_strategies_common.monitor import Call, Monitored, routing
 from fsspec_alt_strategies_common.profile import StorageProfile
 
-from .filesystem import (
+from .common.filesystem import (
     _AbstractFileSystemMeta,
     _copy_errors,
     _raise,
     _strip_only_protocol,
 )
-from .operation import _collect_with_monitors
-from .paths import _trim
+from .common.operation import _collect_with_monitors
+from .common.paths import _trim
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -50,8 +50,8 @@ if TYPE_CHECKING:
 
     from fsspec.callbacks import Callback
 
-    from .operation import Operation
-    from .types import _Request
+    from .common.operation import Operation
+    from .common.types import _Request
 
 __all__ = ["AsyncRoutingFileSystem"]
 
@@ -991,7 +991,7 @@ class AsyncRoutingFileSystem(
         # leave out the other family.
         destination = self._destination(fs1, fs2)
         if fs_type == "tree":
-            from ..tree.cp import tree_cp  # noqa: PLC0415
+            from .tree.cp import tree_cp  # noqa: PLC0415
 
             return tree_cp(
                 path1,
@@ -1002,7 +1002,7 @@ class AsyncRoutingFileSystem(
                 **destination,
             )
         if fs_type == "flat":
-            from ..flat.cp import flat_cp  # noqa: PLC0415
+            from .flat.cp import flat_cp  # noqa: PLC0415
 
             return flat_cp(
                 path1,
@@ -1035,7 +1035,7 @@ class AsyncRoutingFileSystem(
         # leave out the other family.
         destination = self._destination(fs1, fs2)
         if fs_type == "tree":
-            from ..tree.mv import tree_mv  # noqa: PLC0415
+            from .tree.mv import tree_mv  # noqa: PLC0415
 
             return tree_mv(
                 path1,
@@ -1046,7 +1046,7 @@ class AsyncRoutingFileSystem(
                 **destination,
             )
         if fs_type == "flat":
-            from ..flat.mv import flat_mv  # noqa: PLC0415
+            from .flat.mv import flat_mv  # noqa: PLC0415
 
             return flat_mv(
                 path1,

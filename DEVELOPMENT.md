@@ -21,6 +21,8 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `packages/common/tests/`        | The interface's tests, which never import the strategies.      |
 | `packages/impl/src/fsspec_alt_strategies/` | The strategies, copied.                              |
 | `.../monitor.py`                | `monitored(fs)`: the filesystem if `Monitored`, else wrapped as its known implementation says. |
+| `.../wrapper.py`                | `AsyncTreeWrapper`, `SyncTreeWrapper`, `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `TreeFileSystem` or a `FlatFileSystem`. |
+| `.../router.py`                 | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. Between two storages, it copies a file a block at a time through their files. |
 | `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
 | `.../tree/walk.py`              | `tree_walk`, the concurrent folder walk under the tree strategies.  |
 | `.../tree/find.py`              | `tree_find`, a find listing several folders at a time.              |
@@ -30,7 +32,6 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks, within a storage or to another. |
 | `.../tree/mv.py`                | `tree_mv`, a recursive move: a `mv_file` per file, or per folder where it moves folders. |
 | `.../tree/filesystem.py`        | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies. |
-| `.../tree/wrapper.py`           | `AsyncTreeWrapper` and `SyncTreeWrapper`: an existing filesystem, as a `TreeFileSystem`. |
 | `.../tree/_jobs.py`             | The private engine's tree side: it feeds `common`'s with the walk's listings. |
 | `.../flat/`                     | The strategies listing a flat namespace by key prefix, as object stores do. |
 | `.../flat/walk.py`              | `flat_walk`, a walk of one listing of a prefix, its folders derived from the keys. |
@@ -41,16 +42,13 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../flat/cp.py`                | `flat_cp`, a recursive copy that copies each key as it is listed, within a storage or to another. |
 | `.../flat/mv.py`                | `flat_mv`, a recursive move: a `mv_file` per key, or a copy per key and a deletion per batch. |
 | `.../flat/filesystem.py`        | `FlatFileSystem`, an abstract async filesystem whose recursive methods are the flat strategies. |
-| `.../flat/wrapper.py`           | `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `FlatFileSystem`. |
 | `.../flat/_keys.py`             | The private listing under them: a prefix's keys, and the folders they imply. |
 | `.../flat/_jobs.py`             | The private engine's flat side: it feeds `common`'s with the keys of each root. |
 | `.../common/`                   | Private machinery the families share, so that none imports another. |
 | `.../common/filesystem.py`      | What the filesystem classes share: the two limits, and data moved through file objects. |
-| `.../common/wrapper.py`         | What the wrappers share: the calls to the filesystem wrapped, awaited or in threads. |
 | `.../common/operation.py`       | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
-| `.../common/routing.py`         | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. Between two storages, it copies a file a block at a time through their files. |
 | `.../common/types.py`           | The types of the storage's operations, such as `ls` and `info`. |
 | `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
 | `.../common/patterns.py`        | Glob patterns, matched as fsspec's `_glob` matches them, by both globs. |
@@ -300,7 +298,7 @@ Or they wrap an existing filesystem as one, to use the strategies and monitors w
 - `implementations=` replaces the interface's table with the caller's own.
 - A class no entry names raises `ValueError`. With `wrap_unknown_fs=True`, it is wrapped the way right on any storage
   instead: as a tree, one request at a time, with an unknown profile.
-- It imports a family's wrappers only when it wraps a filesystem with them, so a copy may leave out the other family.
+- It imports `wrapper`, which holds the wrappers of both families.
 
 Choosing the class chooses the family: a developer wanting one strategy of another overrides that method, as above.
 
@@ -309,7 +307,7 @@ A filesystem class deals with its own storage only. A copy to another storage is
 #### Routers
 
 Some namespaces span several storages, each with a filesystem of its own, e.g. a cloud's volumes. A router passes each
-call to the filesystem of the path's storage. `AsyncRoutingFileSystem`, in `common/routing.py`, is its base: a plain
+call to the filesystem of the path's storage. `AsyncRoutingFileSystem`, in `router.py`, is its base: a plain
 async fsspec filesystem. It imports a family's `cp` and `mv` only to copy or move from a storage of that family.
 
 A subclass implements three methods:
@@ -346,7 +344,7 @@ How it passes calls on:
 - An inner filesystem's error gets a note naming the router's path. Its `filename`, if the inner path, becomes the
   router's.
 - fsspec makes no sync `mv` or `rmdir`, so the router has its own, as the families' classes do.
-- `test_routing.py` fails on any fsspec method the router neither passes on nor lists as inherited on purpose.
+- `test_router.py` fails on any fsspec method the router neither passes on nor lists as inherited on purpose.
 
 A copy or move whose two paths route to the same inner filesystem, `fs1 is fs2`, is that filesystem's own. A
 recursive copy or move between two storages runs the source's family's strategy, as its profile's `fs_type` says:

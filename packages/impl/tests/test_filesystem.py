@@ -1,4 +1,4 @@
-"""Tests of `common.filesystem` and `common.wrapper`: what the families' classes share.
+"""Tests of `common.filesystem` and `wrapper`: what the families' classes share.
 
 The families test their filesystems through fsspec's methods. These test the
 data methods the wrappers pass on, and the helpers shaping fsspec's answers.
@@ -19,8 +19,11 @@ from fsspec_alt_strategies.common.filesystem import (
     _raise,
 )
 from fsspec_alt_strategies.files.fsspec_async import SyncFileAdapter
-from fsspec_alt_strategies.flat.wrapper import AsyncFlatWrapper
-from fsspec_alt_strategies.tree.wrapper import AsyncTreeWrapper, SyncTreeWrapper
+from fsspec_alt_strategies.wrapper import (
+    AsyncFlatWrapper,
+    AsyncTreeWrapper,
+    SyncTreeWrapper,
+)
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
