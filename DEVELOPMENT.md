@@ -238,3 +238,21 @@ A release is a version tag pushed to the repository, e.g. `git push origin v0.1.
 
 Before the first release, set up on PyPI a trusted publisher for each project, with its workflow and the `pypi`
 environment. The repository also needs the `pypi` environment, and the secret `CODECOV_TOKEN`.
+
+### Release notes
+
+The workflows create the GitHub release with notes generated from the pull requests. Once both have succeeded,
+rewrite the notes for users, e.g. with `gh release edit v0.2.0 --notes-file notes.md`. Write them as
+[v0.1.0's](https://github.com/sugibuchi/fsspec-alt-strategies/releases/tag/v0.1.0) are:
+
+1. An opening line, only when the release as a whole needs one, e.g. the first release.
+2. The sections that apply, in this order:
+   - `## New`: each feature as a bold title, a colon, then what it does for the user;
+   - `## Changes`: what behaves differently;
+   - `## Fixes`: what was wrong, and is now right.
+3. A `Documentation:` list linking the sections of the README or USAGE.md that describe the new features.
+4. `## Install`, with the commands to upgrade, and what else to do after upgrading, if anything.
+5. The generated sections, kept as they are: `## What's Changed`, `## New Contributors` and `**Full Changelog**`.
+
+The notes describe what users see, not how it is built. They follow the rules for docs of CLAUDE.md, and link files
+by absolute URL.
