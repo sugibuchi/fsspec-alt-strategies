@@ -45,6 +45,11 @@ The library has two packages:
 [USAGE.md](https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/USAGE.md) explains what to copy for each
 feature, and how to use each one.
 
-## License
+## Development, security and license
 
-Apache License 2.0. See [LICENSE](https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/LICENSE).
+- [DEVELOPMENT.md](https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/DEVELOPMENT.md) explains how to work
+  on the library: its design, setup, tests and releases.
+- [SECURITY.md](https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/SECURITY.md) explains how to report a
+  vulnerability.
+- The library is licensed under the Apache License 2.0. See
+  [LICENSE](https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/LICENSE).
