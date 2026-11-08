@@ -242,8 +242,7 @@ environment. The repository also needs the `pypi` environment, and the secret `C
 ### Release notes
 
 The workflows create the GitHub release with notes generated from the pull requests. Once both have succeeded,
-rewrite the notes for users, e.g. with `gh release edit v0.2.0 --notes-file notes.md`. Write them as
-[v0.1.0's](https://github.com/sugibuchi/fsspec-alt-strategies/releases/tag/v0.1.0) are:
+rewrite the notes for users, e.g. with `gh release edit v0.2.0 --notes-file notes.md`. They hold, in order:
 
 1. An opening line, only when the release as a whole needs one, e.g. the first release.
 2. The sections that apply, in this order:
