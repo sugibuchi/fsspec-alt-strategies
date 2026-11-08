@@ -17,7 +17,7 @@ def _walk(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
     """`flat_walk` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
-        "ils": fs._ils,
+        "iexpand": fs._iexpand,
         "info": fs._info,
     }
     return flat_walk(path, **{**operations, **kwargs})
@@ -137,11 +137,13 @@ async def test_the_roots_own_marker_is_not_yielded(
     _tree(flat_fs)
     without, _ = await _collect_with_errors(_walk(flat_fs, "data"))
 
-    async def ils(prefix: str) -> Any:
+    async def iexpand(prefix: str) -> Any:
         yield {"name": "data/", "size": 0, "type": "file"}
-        async for entry in flat_fs._ils(prefix):
+        async for entry in flat_fs._iexpand(prefix):
             yield entry
 
-    folders, errors = await _collect_with_errors(_walk(flat_fs, "data", ils=ils))
+    folders, errors = await _collect_with_errors(
+        _walk(flat_fs, "data", iexpand=iexpand)
+    )
     assert errors == []
     assert folders == without

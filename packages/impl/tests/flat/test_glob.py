@@ -20,7 +20,7 @@ def _glob(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`flat_glob` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
-        "ils": fs._ils,
+        "iexpand": fs._iexpand,
         "info": fs._info,
     }
     return flat_glob(path, **{**operations, **kwargs})
@@ -96,20 +96,20 @@ async def test_several_patterns_answer_as_fsspecs_globs_together(
 
 
 def _recorded(fs: SimulatedFileSystem, prefixes: list[str]) -> Any:
-    """The filesystem's ``ils``, noting each prefix it lists."""
+    """The filesystem's ``iexpand``, noting each prefix it lists."""
 
-    def ils(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
         prefixes.append(prefix)
-        return fs._ils(prefix)
+        return fs._iexpand(prefix)
 
-    return ils
+    return iexpand
 
 
 async def test_lists_only_the_keys_starting_as_the_pattern() -> None:
     fs = SimulatedFileSystem(page_size=1, asynchronous=True)
     _tree(fs)
     prefixes: list[str] = []
-    op = _glob(fs, "data/2024-*.csv", ils=_recorded(fs, prefixes))
+    op = _glob(fs, "data/2024-*.csv", iexpand=_recorded(fs, prefixes))
     entries, _ = await _collect_with_errors(op)
     assert len(entries) == 2
     assert prefixes == ["data/2024-"]
@@ -140,7 +140,7 @@ async def test_patterns_share_a_listing() -> None:
     _tree(fs)
     prefixes: list[str] = []
     patterns = ["data/sales/2024/*", "data/sales/*", "data/s*/README.md", "other/*"]
-    await _collect_with_errors(_glob(fs, patterns, ils=_recorded(fs, prefixes)))
+    await _collect_with_errors(_glob(fs, patterns, iexpand=_recorded(fs, prefixes)))
     # data/sales/ is in data/s: one listing serves the three.
     assert prefixes == ["data/s", "other/"]
 
@@ -158,7 +158,7 @@ async def test_cancel_lists_nothing_more() -> None:
     fs = SimulatedFileSystem(page_size=1, asynchronous=True)
     _tree(fs)
     prefixes: list[str] = []
-    op = _glob(fs, ["data/s*/README.md", "other/*"], ils=_recorded(fs, prefixes))
+    op = _glob(fs, ["data/s*/README.md", "other/*"], iexpand=_recorded(fs, prefixes))
     names = []
     async for entry in op:
         names.append(entry["name"])

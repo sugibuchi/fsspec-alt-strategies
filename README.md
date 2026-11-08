@@ -172,7 +172,7 @@ None of these is right for every storage, and the library never picks one for yo
 ## Costs to know
 
 - A flat wrapper lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix. That listing
-  is held in memory, and covers the prefix's whole folder. A subclass overriding `_ils` with the storage's own listing
+  is held in memory, and covers the prefix's whole folder. A subclass overriding `_iexpand` with the storage's own listing
   by prefix streams it instead.
 - A monitor is awaited where the operation runs, so a slow monitor slows the call. For a sync call, it runs on
   fsspec's own loop, in its thread.

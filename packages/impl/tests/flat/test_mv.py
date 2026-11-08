@@ -33,7 +33,7 @@ def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
         "dst_makedirs": fs._makedirs,
         "dst_rm_file": fs._rm_file,
         "same_storage": True,
-        "ils": fs._ils,
+        "iexpand": fs._iexpand,
         "info": fs._info,
         "cp_file": fs._cp_file,
         "rm_files": fs._rm_files,
@@ -180,7 +180,7 @@ async def test_mv_file_moves_each_key(flat_fs: SimulatedFileSystem) -> None:
 async def test_mv_file_moves_markers_without_yielding_them() -> None:
     keys = {"data/": b"", "data/empty/": b"", "data/a.txt": b"a"}
 
-    async def ils(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in sorted(keys):
             if name.startswith(prefix):
                 yield {"name": name, "size": len(keys[name]), "type": "file"}
@@ -194,7 +194,7 @@ async def test_mv_file_moves_markers_without_yielding_them() -> None:
     op = flat_mv(
         "data",
         "moved",
-        ils=ils,
+        iexpand=iexpand,
         info=info,
         mv_file=mv_file,
         dst_info=info,
@@ -257,7 +257,7 @@ async def test_batches_delete_markers_without_copying_them() -> None:
     copied: list[str] = []
     deleted: list[list[str]] = []
 
-    async def ils(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in sorted(keys):
             if name.startswith(prefix):
                 yield {"name": name, "size": len(keys[name]), "type": "file"}
@@ -277,7 +277,7 @@ async def test_batches_delete_markers_without_copying_them() -> None:
     op = flat_mv(
         "data",
         "moved",
-        ils=ils,
+        iexpand=iexpand,
         info=info,
         cp_file=cp_file,
         rm_files=rm_files,
@@ -302,7 +302,7 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
     copied: list[str] = []
     deleted: list[list[str]] = []
 
-    async def ils(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
         # A listing may give a key twice, e.g. across pages of a changing prefix.
         for name in ["data/a.txt", "data/a.txt", "data/b.txt"]:
             yield {"name": name, "size": 1, "type": "file"}
@@ -322,7 +322,7 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
     op = flat_mv(
         "data",
         "moved",
-        ils=ils,
+        iexpand=iexpand,
         info=info,
         cp_file=cp_file,
         rm_files=rm_files,

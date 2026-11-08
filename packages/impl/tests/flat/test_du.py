@@ -17,7 +17,7 @@ def _du(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
     """`flat_du` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
-        "ils": fs._ils,
+        "iexpand": fs._iexpand,
         "info": fs._info,
     }
     return flat_du(path, **{**operations, **kwargs})

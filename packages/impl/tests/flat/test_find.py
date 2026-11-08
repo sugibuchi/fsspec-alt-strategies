@@ -20,7 +20,7 @@ def _find(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
     """`flat_find` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
-        "ils": fs._ils,
+        "iexpand": fs._iexpand,
         "info": fs._info,
     }
     return flat_find(path, **{**operations, **kwargs})
@@ -86,15 +86,15 @@ async def test_yields_as_the_pages_come() -> None:
 
 
 def _listing(*names: str) -> Any:
-    """An ``ils`` of these keys, as a storage with folder markers lists them."""
+    """An ``iexpand`` of these keys, as a storage with folder markers lists them."""
 
-    async def ils(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in names:
             if name.startswith(prefix):
                 size = 0 if name.endswith("/") else 1
                 yield {"name": name, "size": size, "type": "file"}
 
-    return ils
+    return iexpand
 
 
 async def _info(path: str) -> dict[str, Any]:
@@ -102,11 +102,11 @@ async def _info(path: str) -> dict[str, Any]:
 
 
 async def test_markers_are_folders() -> None:
-    ils = _listing("data/", "data/empty/", "data/a/b.txt")
+    iexpand = _listing("data/", "data/empty/", "data/a/b.txt")
     entries, _ = await _collect_with_errors(
         flat_find(
             "data",
-            ils=ils,
+            iexpand=iexpand,
             info=_info,
             withdirs=True,
             concurrency_limit=asyncio.Semaphore(32),
@@ -119,17 +119,21 @@ async def test_markers_are_folders() -> None:
         {"name": "data/empty", "size": 0, "type": "directory"},
     ]
     files, _ = await _collect_with_errors(
-        flat_find("data", ils=ils, info=_info, concurrency_limit=asyncio.Semaphore(32))
+        flat_find(
+            "data", iexpand=iexpand, info=_info, concurrency_limit=asyncio.Semaphore(32)
+        )
     )
     assert [e["name"] for e in files] == ["data/a/b.txt"]
 
 
 async def test_an_error_of_the_listing_ends_it() -> None:
-    async def ils(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
         yield {"name": "data/a", "size": 1, "type": "file"}
         raise PermissionError(prefix)
 
-    op = flat_find("data", ils=ils, info=_info, concurrency_limit=asyncio.Semaphore(32))
+    op = flat_find(
+        "data", iexpand=iexpand, info=_info, concurrency_limit=asyncio.Semaphore(32)
+    )
     with pytest.raises(PermissionError):
         await _collect_with_errors(op)
 

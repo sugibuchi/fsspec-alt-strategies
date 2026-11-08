@@ -41,7 +41,7 @@ async def test_an_async_filesystem_answers_as_fsspec(
     assert await flat._glob("data/*/*.txt") == await AsyncFileSystem._glob(
         inner, "data/*/*.txt"
     )
-    assert [e["name"] async for e in flat._ils("data/202")] == [
+    assert [e["name"] async for e in flat._iexpand("data/202")] == [
         p for p in _FILES if p.startswith("data/202")
     ]
     await flat._mv("data/2023", "moved", recursive=True)

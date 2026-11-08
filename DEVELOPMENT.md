@@ -11,57 +11,57 @@ The repository is a uv workspace of two packages, each built and published on it
 
 The root holds the tooling: the ruff, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
 
-| Path                            | Contents                                                       |
-|---------------------------------|----------------------------------------------------------------|
-| `packages/common/src/fsspec_alt_strategies/` | The interface, installed: one for all the copies in a project. |
-| `.../monitor.py`                | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitored`, `Call`, `CallCancelled`, `Monitor`, `monitoring` and `current_monitors`: watching the operations behind the filesystems' fsspec methods. `routing` and `current_routers`: the routers a call came through. |
-| `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
-| `.../states.py`                 | The states the strategies report, e.g. `FindState` of `tree_find` and `flat_find`. |
-| `.../wrapper.py`                | `KnownImplementation` and `known_implementations`: how each known filesystem class is wrapped, to be monitored. |
-| `packages/common/tests/`        | The interface's tests, which never import the strategies.      |
-| `packages/impl/src/fsspec_alt_strategies_impl/` | The strategies, copied.                              |
-| `.../monitor.py`                | `monitored(fs)`: the filesystem if `Monitored`, else wrapped as its known implementation says. |
-| `.../wrapper.py`                | `AsyncTreeWrapper`, `SyncTreeWrapper`, `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `TreeFileSystem` or a `FlatFileSystem`. |
-| `.../router.py`                 | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. Between two storages, it copies a file a block at a time through their files. |
-| `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
-| `.../tree/walk.py`              | `tree_walk`, the concurrent folder walk under the tree strategies.  |
-| `.../tree/find.py`              | `tree_find`, a find listing several folders at a time.              |
-| `.../tree/du.py`                | `tree_du`, a tree's size from its listings alone.                   |
-| `.../tree/glob.py`              | `tree_glob`, a glob listing only the folders it can match in.       |
-| `.../tree/rm.py`                | `tree_rm`, a recursive delete that deletes while it walks.          |
-| `.../tree/cp.py`                | `tree_cp`, a recursive copy that copies while it walks, within a storage or to another. |
-| `.../tree/mv.py`                | `tree_mv`, a recursive move: a `mv_file` per file, or per folder where it moves folders. |
-| `.../tree/filesystem.py`        | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies. |
-| `.../tree/_jobs.py`             | The private engine's tree side: it feeds `common`'s with the walk's listings. |
-| `.../flat/`                     | The strategies listing a flat namespace by key prefix, as object stores do. |
-| `.../flat/walk.py`              | `flat_walk`, a walk of one listing of a prefix, its folders derived from the keys. |
-| `.../flat/find.py`              | `flat_find`, a find streaming one listing of a prefix.          |
-| `.../flat/du.py`                | `flat_du`, the size of the files under a prefix, from the listing alone. |
-| `.../flat/glob.py`              | `flat_glob`, a glob listing only the keys starting as its pattern does. |
-| `.../flat/rm.py`                | `flat_rm`, a recursive delete in batches, sent as the listing goes on. |
-| `.../flat/cp.py`                | `flat_cp`, a recursive copy that copies each key as it is listed, within a storage or to another. |
-| `.../flat/mv.py`                | `flat_mv`, a recursive move: a `mv_file` per key, or a copy per key and a deletion per batch. |
-| `.../flat/filesystem.py`        | `FlatFileSystem`, an abstract async filesystem whose recursive methods are the flat strategies. |
-| `.../flat/_keys.py`             | The private listing under them: a prefix's keys, and the folders they imply. |
-| `.../flat/_jobs.py`             | The private engine's flat side: it feeds `common`'s with the keys of each root. |
-| `.../common/`                   | Private machinery the families share, so that none imports another. |
-| `.../common/filesystem.py`      | What the filesystem classes share: the two limits, and data moved through file objects. |
-| `.../common/operation.py`       | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it. |
-| `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
-| `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
-| `.../common/types.py`           | The types of the storage's operations, such as `ils` and `info`. |
-| `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
-| `.../common/patterns.py`        | Glob patterns, matched as fsspec's `_glob` matches them, by both globs. |
-| `.../files/`                    | Base classes for a filesystem's file objects, by what its storage allows. |
-| `.../files/adaptive.py`         | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts. |
-| `.../files/fsspec_transaction.py` | Files written in a transaction, by strategy: a temporary path, a local buffer, or the storage's own. |
-| `.../files/fsspec_async.py`     | `AsyncFileAdapter` and `SyncFileAdapter`, giving file objects the API of those `open_async` returns. |
-| `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
-| `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem`, for tests and benchmarks: a package apart, so that copies leave it out. |
-| `packages/impl/tests/`          | The strategies' tests, in the package's layout, with the shared fixtures in `conftest.py`. |
-| `.github/workflows/ci.yaml`     | Lint of the code and the workflows, and tests with coverage, on pull requests and pushes to `main`. |
-| `.github/workflows/release-interface.yaml` | The interface's release: on a version tag, to the GitHub release and PyPI. |
-| `.github/workflows/release-impl.yaml` | The strategies' release, once the interface's has succeeded for the same tag. |
+| Path                                                    | Contents                                                                                                                                                                                                                                                                                                   |
+|---------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `packages/common/src/fsspec_alt_strategies/`            | The interface, installed: one for all the copies in a project.                                                                                                                                                                                                                                             |
+| `.../monitor.py`                                        | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitored`, `Call`, `CallCancelled`, `Monitor`, `monitoring` and `current_monitors`: watching the operations behind the filesystems' fsspec methods. `routing` and `current_routers`: the routers a call came through. |
+| `.../profile.py`                                        | `StorageProfile`, what a storage does that fsspec's API leaves open.                                                                                                                                                                                                                                       |
+| `.../states.py`                                         | The states the strategies report, e.g. `FindState` of `tree_find` and `flat_find`.                                                                                                                                                                                                                         |
+| `.../wrapper.py`                                        | `KnownImplementation` and `known_implementations`: how each known filesystem class is wrapped, to be monitored.                                                                                                                                                                                            |
+| `packages/common/tests/`                                | The interface's tests, which never import the strategies.                                                                                                                                                                                                                                                  |
+| `packages/impl/src/fsspec_alt_strategies_impl/`         | The strategies, copied.                                                                                                                                                                                                                                                                                    |
+| `.../monitor.py`                                        | `monitored(fs)`: the filesystem if `Monitored`, else wrapped as its known implementation says.                                                                                                                                                                                                             |
+| `.../wrapper.py`                                        | `AsyncTreeWrapper`, `SyncTreeWrapper`, `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `TreeFileSystem` or a `FlatFileSystem`.                                                                                                                                                      |
+| `.../router.py`                                         | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. Between two storages, it copies a file a block at a time through their files.                                                                                                                  |
+| `.../tree/`                                             | The strategies walking a folder tree, a folder per listing.                                                                                                                                                                                                                                                |
+| `.../tree/walk.py`                                      | `tree_walk`, the concurrent folder walk under the tree strategies.                                                                                                                                                                                                                                         |
+| `.../tree/find.py`                                      | `tree_find`, a find listing several folders at a time.                                                                                                                                                                                                                                                     |
+| `.../tree/du.py`                                        | `tree_du`, a tree's size from its listings alone.                                                                                                                                                                                                                                                          |
+| `.../tree/glob.py`                                      | `tree_glob`, a glob listing only the folders it can match in.                                                                                                                                                                                                                                              |
+| `.../tree/rm.py`                                        | `tree_rm`, a recursive delete that deletes while it walks.                                                                                                                                                                                                                                                 |
+| `.../tree/cp.py`                                        | `tree_cp`, a recursive copy that copies while it walks, within a storage or to another.                                                                                                                                                                                                                    |
+| `.../tree/mv.py`                                        | `tree_mv`, a recursive move: a `mv_file` per file, or per folder where it moves folders.                                                                                                                                                                                                                   |
+| `.../tree/filesystem.py`                                | `TreeFileSystem`, an abstract async filesystem whose recursive methods are the tree strategies.                                                                                                                                                                                                            |
+| `.../tree/_jobs.py`                                     | The private engine's tree side: it feeds `common`'s with the walk's listings.                                                                                                                                                                                                                              |
+| `.../flat/`                                             | The strategies listing a flat namespace by key prefix, as object stores do.                                                                                                                                                                                                                                |
+| `.../flat/walk.py`                                      | `flat_walk`, a walk of one listing of a prefix, its folders derived from the keys.                                                                                                                                                                                                                         |
+| `.../flat/find.py`                                      | `flat_find`, a find streaming one listing of a prefix.                                                                                                                                                                                                                                                     |
+| `.../flat/du.py`                                        | `flat_du`, the size of the files under a prefix, from the listing alone.                                                                                                                                                                                                                                   |
+| `.../flat/glob.py`                                      | `flat_glob`, a glob listing only the keys starting as its pattern does.                                                                                                                                                                                                                                    |
+| `.../flat/rm.py`                                        | `flat_rm`, a recursive delete in batches, sent as the listing goes on.                                                                                                                                                                                                                                     |
+| `.../flat/cp.py`                                        | `flat_cp`, a recursive copy that copies each key as it is listed, within a storage or to another.                                                                                                                                                                                                          |
+| `.../flat/mv.py`                                        | `flat_mv`, a recursive move: a `mv_file` per key, or a copy per key and a deletion per batch.                                                                                                                                                                                                              |
+| `.../flat/filesystem.py`                                | `FlatFileSystem`, an abstract async filesystem whose recursive methods are the flat strategies.                                                                                                                                                                                                            |
+| `.../flat/_keys.py`                                     | The private listing under them: a prefix's keys, and the folders they imply.                                                                                                                                                                                                                               |
+| `.../flat/_jobs.py`                                     | The private engine's flat side: it feeds `common`'s with the keys of each root.                                                                                                                                                                                                                            |
+| `.../common/`                                           | Private machinery the families share, so that none imports another.                                                                                                                                                                                                                                        |
+| `.../common/filesystem.py`                              | What the filesystem classes share: the two limits, and data moved through file objects.                                                                                                                                                                                                                    |
+| `.../common/operation.py`                               | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it.                                                                                                                                                  |
+| `.../common/jobs.py`                                    | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too.                                                                                                                                 |
+| `.../common/placement.py`                               | Where a copy or move puts each path, as fsspec's `copy` does.                                                                                                                                                                                                                                              |
+| `.../common/types.py`                                   | The types of the storage's operations, such as `ils` and `info`.                                                                                                                                                                                                                                           |
+| `.../common/paths.py`                                   | Paths and depths, as the strategies take them.                                                                                                                                                                                                                                                             |
+| `.../common/patterns.py`                                | Glob patterns, matched as fsspec's `_glob` matches them, by both globs.                                                                                                                                                                                                                                    |
+| `.../files/`                                            | Base classes for a filesystem's file objects, by what its storage allows.                                                                                                                                                                                                                                  |
+| `.../files/adaptive.py`                                 | `AdaptiveReadableFile` and `AdaptiveWritableFile`, for range reads and writes in parts.                                                                                                                                                                                                                    |
+| `.../files/fsspec_transaction.py`                       | Files written in a transaction, by strategy: a temporary path, a local buffer, or the storage's own.                                                                                                                                                                                                       |
+| `.../files/fsspec_async.py`                             | `AsyncFileAdapter` and `SyncFileAdapter`, giving file objects the API of those `open_async` returns.                                                                                                                                                                                                       |
+| `.../files/_async_file.py`                              | The private machinery under them: the loop, the concurrency limit, the requests.                                                                                                                                                                                                                           |
+| `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem`, for tests and benchmarks: a package apart, so that copies leave it out.                                                                                                                                                                                                             |
+| `packages/impl/tests/`                                  | The strategies' tests, in the package's layout, with the shared fixtures in `conftest.py`.                                                                                                                                                                                                                 |
+| `.github/workflows/ci.yaml`                             | Lint of the code and the workflows, and tests with coverage, on pull requests and pushes to `main`.                                                                                                                                                                                                        |
+| `.github/workflows/release-interface.yaml`              | The interface's release: on a version tag, to the GitHub release and PyPI.                                                                                                                                                                                                                                 |
+| `.github/workflows/release-impl.yaml`                   | The strategies' release, once the interface's has succeeded for the same tag.                                                                                                                                                                                                                              |
 
 The interface depends on fsspec alone, and the strategies on fsspec and the interface. Both take their version from
 the git tag, through hatch-vcs.
@@ -88,7 +88,8 @@ uvx ruff format .                # format
 CI runs ruff and pytest on every supported Python version.
 
 - Tests run with pytest-asyncio in `auto` mode: an `async def` test needs no marker.
-- Tests run on `SimulatedFileSystem`, from the public `fsspec_alt_strategies_impl_testing`. It counts the requests a real
+- Tests run on `SimulatedFileSystem`, from the public `fsspec_alt_strategies_impl_testing`. It counts the requests a
+  real
   storage would get, in `stats`, and can delay each by a latency and by its bytes over a bandwidth.
 - Its two modes are an object store, where folders are only prefixes, and a hierarchical namespace, with real
   folders. Test a strategy on both, with the fixture `any_fs`.
@@ -162,7 +163,7 @@ print(op.state.files_deleted)
 - The storage's operations are functions, not a filesystem. Any coroutine function called as fsspec calls its own
   serves, e.g. `info(path)`, so one may come from a storage's SDK rather than a filesystem.
 - A listing is an async iterator of entries, as fsspec's `_ls` gives them: `ils(path)` for a folder in `tree/`,
-  `ils(prefix)` for keys in `flat/`. So a storage listing in pages streams them. A `TreeFileSystem` subclass
+  `iexpand(prefix)` for every key under a prefix in `flat/`. So a storage listing in pages streams them. A `TreeFileSystem` subclass
   implements `_ils`, and its `_ls` lists with it.
 - They are required: a strategy guesses nothing, e.g. which request deletes a folder. Only a native operation that
   saves requests is optional, e.g. `tree_rm`'s `rm_tree`: without it, the strategy does the work itself.
@@ -316,7 +317,8 @@ async fsspec filesystem. It imports a family's `cp` and `mv` only to copy or mov
 
 A subclass implements three methods:
 
-- `_route(path)` gives the inner filesystem and its path, or None above every storage. A trailing "/" means a folder to a
+- `_route(path)` gives the inner filesystem and its path, or None above every storage. A trailing "/" means a folder to
+  a
   copy or a glob: the router puts it back on a non-empty inner path that lacks it.
 - `_outer(fs, path)` gives the router's path of an inner one, so that every name answered is the router's.
 - `_roots(path)`, a coroutine, lists a folder above the storages, as `_ls` with `detail=True` does.
@@ -341,7 +343,8 @@ How it passes calls on:
 - The recursive methods, such as `_find`, `_glob`, `_rm` and `_copy`, call the inner one's own too, so that its
   strategies run.
 - The paths of one call, e.g. a list given to `rm`, are grouped by storage, and the groups run at once.
-- Above the storages, `_ls` answers from `_roots`, and `_info` from `_root_info`. `find`, `du` and `walk` are fsspec's own walk, a folder at
+- Above the storages, `_ls` answers from `_roots`, and `_info` from `_root_info`. `find`, `du` and `walk` are fsspec's
+  own walk, a folder at
   a time, handing each storage's folder to its filesystem.
 - A glob whose literal prefix routes goes whole to that storage. Any other is fsspec's own, over `_roots`.
 - A change above the storages raises PermissionError.
@@ -444,10 +447,10 @@ at most 1000 entries, as `ils` yields them, so that a folder of hundreds of thou
 
 The strategies come in two layers, by what they send:
 
-| Strategies | They send | They build on |
-|---|---|---|
-| `tree_find`, `tree_du`, `tree_glob` | Listings, and at most one `info` for the root | `_find_listings` |
-| `tree_rm`, `tree_cp`, `tree_mv` | Requests changing the storage, besides the listings | `_TreeJobs` |
+| Strategies                          | They send                                           | They build on    |
+|-------------------------------------|-----------------------------------------------------|------------------|
+| `tree_find`, `tree_du`, `tree_glob` | Listings, and at most one `info` for the root       | `_find_listings` |
+| `tree_rm`, `tree_cp`, `tree_mv`     | Requests changing the storage, besides the listings | `_TreeJobs`      |
 
 A copy or move within one storage is the special case of one between two. `tree_cp` and `tree_mv` take the source's
 `ils` and `info`, the destination's operations with a `dst_` prefix, and the request copying or moving one file. Within
@@ -462,9 +465,12 @@ copy and a move share one class per family, `_CopyOrMove`, whose subclass says h
   deletes the source file once copied.
 - `same_storage` is given, never detected: comparing the operations cannot tell whether two filesystems are one storage.
 
-`tree_walk` answers as fsspec's `walk` does, a folder at a time: `_listings` gathers the parts of `_chunks` into one listing per folder. So it holds each folder whole, unlike the other strategies. It raises for a missing or file root, as fsspec's `walk` does.
+`tree_walk` answers as fsspec's `walk` does, a folder at a time: `_listings` gathers the parts of `_chunks` into one
+listing per folder. So it holds each folder whole, unlike the other strategies. It raises for a missing or file root, as
+fsspec's `walk` does.
 
-`_find_listings`, in `tree/find.py`, treats the root as fsspec's `_find` and `_glob` do. A missing root finds nothing, and a
+`_find_listings`, in `tree/find.py`, treats the root as fsspec's `_find` and `_glob` do. A missing root finds nothing,
+and a
 file root yields its own `info` entry when asked. A folder root yields its own entry when asked, e.g. for `withdirs`.
 The strategies that only read never handle the root themselves.
 
@@ -486,22 +492,23 @@ methods and modules. The prefix keeps an import from shadowing them, and tells t
 `tree_walk` is meant to replace fsspec's `walk`, so it already has two of its options:
 
 - `topdown=False` yields a folder only after all the folders below it.
-- `on_error` takes fsspec's values: `"omit"`, `"raise"` or a callable. Its default, None, yields each folder's error, as every
+- `on_error` takes fsspec's values: `"omit"`, `"raise"` or a callable. Its default, None, yields each folder's error, as
+  every
   strategy does.
 
 #### The flat strategies
 
 The strategies in `flat/` are the counterparts of `tree/` for flat namespaces, such as object stores. A flat storage
-lists every key under a prefix, at any depth, in one paginated request. They take that listing as `ils`, a function
-called as `ils(prefix)` and giving an async iterator of entries:
+lists every key under a prefix, at any depth, in one paginated request. They take that listing as `iexpand`, a function
+called as `iexpand(prefix)` and giving an async iterator of entries:
 
 - The prefix is raw text, e.g. `data/2024-`, not only a folder. So `flat_glob` lists only the keys starting as its
   pattern does, before the first wildcard.
-- `ils` yields entries, not pages, so that its meaning stays simple. A strategy never sees the pages, and holds one at a
+- `iexpand` yields entries, not pages, so that its meaning stays simple. A strategy never sees the pages, and holds one at a
   time.
-- `ils` yields the keys in order of their names, as object stores list them. So the keys under a folder come together,
+- `iexpand` yields the keys in order of their names, as object stores list them. So the keys under a folder come together,
   and a strategy knows a folder is done once the listing has passed them.
-- `ils` yields each key once, as object stores list them. Remembering every key listed, to drop repeats, would hold the
+- `iexpand` yields each key once, as object stores list them. Remembering every key listed, to drop repeats, would hold the
   whole listing. A key listed twice is copied, moved, deleted or counted twice; only a batched `flat_mv` drops repeats.
 - The listing holds no permit of `concurrency_limit`: its pages come one after another. The other requests, such as an
   `info`, hold one.
@@ -509,7 +516,7 @@ called as `ils(prefix)` and giving an async iterator of entries:
   folder's marker.
 - An error of the listing ends the operation: there is no other listing to go on with.
 
-fsspec has no such listing, so `SimulatedFileSystem` has its own, `_ils`, counting a request per page. Test a flat
+fsspec has no such listing, so `SimulatedFileSystem` has its own, `_iexpand`, counting a request per page. Test a flat
 strategy on `flat_fs`, against fsspec's own method on it.
 
 `flat_glob` matches with `tree_glob`'s compiled patterns, so the two never answer differently.
@@ -533,7 +540,8 @@ the root down to the last key's, and yields each once the listing has passed its
   unless the profile says no folder is needed. A folder's marker is no file to copy: it makes its folder, so that a tree
   keeps it even when empty, unless the destination's folders are implicit.
 - `flat_mv` moves each key by `mv_file`, or copies it and deletes the keys copied in batches. Which is given decides,
-  and the profile's `renames_files` if both are, within one storage. Unknown, batches are right on any storage. Cancelled, it still deletes the keys copied, so that no file is
+  and the profile's `renames_files` if both are, within one storage. Unknown, batches are right on any storage.
+  Cancelled, it still deletes the keys copied, so that no file is
   left in both places: its `stopping` keeps their batches, which the engine would otherwise drop.
 
 `SimulatedFileSystem` has `_rm_files` too, a batch deletion counting one request, as S3's DeleteObjects does.
@@ -552,17 +560,18 @@ requests.
 
 The fields, and the requests each saves:
 
-| Field              | Saves                                                                              |
-|--------------------|------------------------------------------------------------------------------------|
+| Field              | Saves                                                                                                          |
+|--------------------|----------------------------------------------------------------------------------------------------------------|
 | `fs_type`          | "tree" or "flat": the router's copy or move from the storage, by that family's strategy, rather than fsspec's. |
-| `parents_required` | False: the `makedirs` of each folder with files, in `tree_cp`, `tree_mv`, `flat_cp` and `flat_mv`. |
-| `implicit_folders` | True: those, and the `rm_folder` of each folder, in `tree_rm` and `tree_mv`.       |
-| `renames_files`    | True: the data copied by `flat_mv`, given both ways, as it moves each key by `mv_file`. |
-| `renames_folders`  | True: all requests in a folder moved whole by one `mv_file`, in `tree_mv`.         |
+| `parents_required` | False: the `makedirs` of each folder with files, in `tree_cp`, `tree_mv`, `flat_cp` and `flat_mv`.             |
+| `implicit_folders` | True: those, and the `rm_folder` of each folder, in `tree_rm` and `tree_mv`.                                   |
+| `renames_files`    | True: the data copied by `flat_mv`, given both ways, as it moves each key by `mv_file`.                        |
+| `renames_folders`  | True: all requests in a folder moved whole by one `mv_file`, in `tree_mv`.                                     |
 
 A field may imply another: implicit folders need no parents made. A profile contradicting itself raises `ValueError`.
 
-A fact gets a field only once a strategy saves requests, or data copied, with it. Facts that cost nothing to handle as they come have
+A fact gets a field only once a strategy saves requests, or data copied, with it. Facts that cost nothing to handle as
+they come have
 none. An example is a copy refused because the file exists: `tree_cp` then deletes the old file and copies again.
 
 A storage with a native operation, such as a rename of a whole folder, has no field either. A strategy takes it as an
@@ -617,11 +626,11 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 
 - `files/` has abstract classes, by what the storage allows. A filesystem subclasses one, implements its requests,
   and returns it from `_open`. Their base classes are private: their names must not suggest fsspec's own.
-  - `AdaptiveReadableFile` and `AdaptiveWritableFile` are for storages reading byte ranges and writing in parts.
-    The writer aborts its upload on any failure, and after an exception in its `with` block. A failed part raises
-    OSError, whether it fails while writing or closing.
-  - A storage limiting each request's size declares it in the writer's `max_request_size`. Parts never exceed it,
-    a last part beyond it is split, and a file beyond it is never uploaded in one request.
+    - `AdaptiveReadableFile` and `AdaptiveWritableFile` are for storages reading byte ranges and writing in parts.
+      The writer aborts its upload on any failure, and after an exception in its `with` block. A failed part raises
+      OSError, whether it fails while writing or closing.
+    - A storage limiting each request's size declares it in the writer's `max_request_size`. Parts never exceed it,
+      a last part beyond it is split, and a file beyond it is never uploaded in one request.
 - Their requests are the storage's own. They never call fsspec's `_cat_file` or `_put_file`: many filesystems
   implement these with their file objects.
 - Their requests run on an asyncio event loop, such as the filesystem's `loop`. Their sync methods wait on it through
@@ -631,8 +640,10 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
 - Each request holds their `concurrency_limit`, an `asyncio.Semaphore`, while it runs. The caller passes one to
   choose the limit's scope: a file, a filesystem, or the process. A write waits for it, so a shared limit also bounds
   the memory of the parts in flight across files.
-- How they split work is planned apart from the concurrency limit, which may be shared. `spread` is how many requests a large
-  read or write is split into, and caps the bytes read ahead at `spread` blocks of `max_block_size`. An adaptive file given no limit gets its
+- How they split work is planned apart from the concurrency limit, which may be shared. `spread` is how many requests a
+  large
+  read or write is split into, and caps the bytes read ahead at `spread` blocks of `max_block_size`. An adaptive file
+  given no limit gets its
   own, of `spread`.
 - They follow Python's file API, not the strategy API: errors are raised.
 - A file read in many requests reads one version: `AdaptiveReadableFile` keeps to `version`, or the first response's.
@@ -652,9 +663,9 @@ File objects are, with `Operation`, the places for classes, as a file keeps stat
   `TransactionFile` takes any of them. A filesystem's `_open` returns it when `autocommit` is False. A commit that
   fails can still be discarded.
 - The strategies provided are:
-  - `TempPathTransaction`, writing to a hidden temporary path, renamed on commit, for any file;
-  - `LocalBufferTransaction`, writing to a local buffer, written to the file on commit, for any file;
-  - `AdaptiveWritableTransaction`, holding an adaptive file's last request, which makes it visible, until commit.
+    - `TempPathTransaction`, writing to a hidden temporary path, renamed on commit, for any file;
+    - `LocalBufferTransaction`, writing to a local buffer, written to the file on commit, for any file;
+    - `AdaptiveWritableTransaction`, holding an adaptive file's last request, which makes it visible, until commit.
 - The file objects know nothing of transactions. `AdaptiveWritableTransaction` stands in for the file's two last
   requests, on that file only. A storage with a way of its own gets a subclass of `FileTransaction`.
 

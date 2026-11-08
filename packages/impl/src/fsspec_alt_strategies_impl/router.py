@@ -74,8 +74,8 @@ class AsyncRoutingFileSystem(
     - ``_route(path)`` gives the inner filesystem and its path, or None for a
       path above every storage, e.g. a catalog holding volumes.
     - ``_outer(fs, path)`` gives the router's path of an inner one, so that
-      the names answered, e.g. by ``ils`` and ``find``, are the router's.
-    - ``_roots(path)`` lists a folder above the storages, as ``ils`` with
+      the names answered, e.g. by ``ls`` and ``find``, are the router's.
+    - ``_roots(path)`` lists a folder above the storages, as ``ls`` with
       ``detail=True`` does.
 
     ``_route`` is sync, as sync methods route too.
@@ -87,7 +87,7 @@ class AsyncRoutingFileSystem(
     sent at once. A failure raised by an inner filesystem gets a note naming
     the router's path, and its inner one.
 
-    Above the storages, ``ils`` answers from ``_roots``, and ``info`` from
+    Above the storages, ``ls`` answers from ``_roots``, and ``info`` from
     ``_root_info``, which a subclass may override. ``find``,
     ``du`` and ``walk`` are fsspec's own walk, a folder after another, handing
     each storage's folder to its filesystem. A glob whose literal prefix
@@ -1007,7 +1007,7 @@ class AsyncRoutingFileSystem(
             return flat_cp(
                 path1,
                 path2,
-                ils=fs1._ils,  # type: ignore[attr-defined]
+                iexpand=fs1._iexpand,  # type: ignore[attr-defined]
                 cp_file=self._across(fs1, fs2),
                 dst_rm_file=fs2._rm_file,
                 **destination,
@@ -1051,7 +1051,7 @@ class AsyncRoutingFileSystem(
             return flat_mv(
                 path1,
                 path2,
-                ils=fs1._ils,  # type: ignore[attr-defined]
+                iexpand=fs1._iexpand,  # type: ignore[attr-defined]
                 cp_file=self._across(fs1, fs2),
                 rm_files=fs1._rm_files,  # type: ignore[attr-defined]
                 batch_size=fs1.rm_batch_size,  # type: ignore[attr-defined]

@@ -20,10 +20,17 @@ if TYPE_CHECKING:
 
     # For the strategies' signatures: none here takes one.
     _Ils: TypeAlias = Callable[[str], AsyncIterator[dict[str, Any]]]  # noqa: PYI047
-    """Lists entries as they come, an async iterator of entries as fsspec's ``_ls`` gives.
+    """Lists a folder, called as ``ils(path)``: an async iterator of its entries.
 
-    A tree strategy's lists one folder, called as ``ils(path)``. A flat one's
-    lists every key starting with a prefix, called as ``ils(prefix)``.
+    The entries are as fsspec's ``_ls`` gives them, each as it comes, e.g. a
+    page at a time. The tree strategies list with it.
+    """
+
+    _IExpand: TypeAlias = Callable[[str], AsyncIterator[dict[str, Any]]]  # noqa: PYI047
+    """Lists every key starting with a prefix, called as ``iexpand(prefix)``.
+
+    The entries are as fsspec's ``_ls`` gives them, at any depth below the
+    prefix, in order of their names. The flat strategies list with it.
     """
 
     _Info: TypeAlias = Callable[[str], Awaitable[dict[str, Any]]]  # noqa: PYI047

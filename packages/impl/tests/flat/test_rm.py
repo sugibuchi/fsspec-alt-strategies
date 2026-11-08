@@ -21,7 +21,7 @@ def _rm(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`flat_rm` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
-        "ils": fs._ils,
+        "iexpand": fs._iexpand,
         "info": fs._info,
         "rm_files": fs._rm_files,
         "batch_size": 1000,
@@ -67,8 +67,8 @@ async def test_deletes_while_the_listing_goes_on(flat_fs: SimulatedFileSystem) -
     _tree(flat_fs)
     events: list[str] = []
 
-    async def ils(prefix: str) -> AsyncIterator[dict[str, Any]]:
-        async for entry in flat_fs._ils(prefix):
+    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
+        async for entry in flat_fs._iexpand(prefix):
             events.append("listed")
             yield entry
 
@@ -77,7 +77,7 @@ async def test_deletes_while_the_listing_goes_on(flat_fs: SimulatedFileSystem) -
         await flat_fs._rm_files(paths)
 
     await _collect_with_errors(
-        _rm(flat_fs, "data", ils=ils, rm_files=rm_files, batch_size=2)
+        _rm(flat_fs, "data", iexpand=iexpand, rm_files=rm_files, batch_size=2)
     )
     # The first batch is deleted before the listing has given the last key.
     assert events.index("deleted") < len(events) - 1 - events[::-1].index("listed")
@@ -147,7 +147,7 @@ async def test_markers_are_deleted_as_keys() -> None:
     keys = {"data/": 0, "data/empty/": 0, "data/a.txt": 1}
     deleted_keys: list[str] = []
 
-    async def ils(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in sorted(keys):
             if name.startswith(prefix):
                 yield {"name": name, "size": keys[name], "type": "file"}
@@ -160,7 +160,7 @@ async def test_markers_are_deleted_as_keys() -> None:
 
     op = flat_rm(
         "data",
-        ils=ils,
+        iexpand=iexpand,
         info=info,
         rm_files=rm_files,
         batch_size=10,

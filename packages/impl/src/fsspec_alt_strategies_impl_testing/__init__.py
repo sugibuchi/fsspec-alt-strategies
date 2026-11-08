@@ -288,10 +288,10 @@ class SimulatedFileSystem(AsyncFileSystem):
             return {n: self._entry(n) for n in names}
         return names
 
-    async def _ils(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
         """List the files whose paths start with ``prefix``, as object stores do.
 
-        It is no fsspec method: the flat strategies take it as their ``ils``.
+        It is no fsspec method: the flat strategies take it as their ``iexpand``.
         ``prefix`` is a raw string, e.g. "data/2024-" lists "data/2024-01.csv".
         The files come in path order, a page per request: a page is asked for
         only once the one before it is all taken.
@@ -580,7 +580,7 @@ class SimulatedFileSystem(AsyncFileSystem):
 def folder_ils(fs: Any) -> Callable[[str], AsyncIterator[dict[str, Any]]]:
     """A tree strategy's ``ils``, listing a folder by ``fs._ls``, or by ``fs`` itself.
 
-    A `SimulatedFileSystem`'s own ``_ils`` lists by prefix, as the flat
+    A `SimulatedFileSystem`'s own ``_iexpand`` lists by prefix, as the flat
     strategies take it. This one lists one folder, as the tree strategies take
     it. ``fs._ls`` is looked up at each call, so that a test may replace it.
     """

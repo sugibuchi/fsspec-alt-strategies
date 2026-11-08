@@ -87,7 +87,7 @@ def _across(
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
         "profile": StorageProfile(),
-        "ils": src._ils,
+        "iexpand": src._iexpand,
         "info": src._info,
         "cp_file": streaming_copy(
             _opener(src, _Reader), _opener(dst, _Writer), block_size=4
@@ -202,7 +202,7 @@ async def test_a_marker_makes_its_folder() -> None:
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     written: list[tuple[str, str]] = []
 
-    async def ils(prefix: str) -> Any:
+    async def iexpand(prefix: str) -> Any:
         for name, data in keys.items():
             if name.startswith(prefix):
                 yield {"name": name, "size": len(data), "type": "file"}
@@ -219,7 +219,7 @@ async def test_a_marker_makes_its_folder() -> None:
         flat_cp(
             "data",
             "copied",
-            ils=ils,
+            iexpand=iexpand,
             info=info,
             cp_file=copy_file,
             dst_info=dst._info,

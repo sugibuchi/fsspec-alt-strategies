@@ -175,10 +175,10 @@ def test_a_folder_failing_to_list_is_raised_reported_or_empty() -> None:
 
 
 class _Flat(AsyncFlatWrapper):
-    """A simulated storage as a `FlatFileSystem`, listed by its own ``_ils``."""
+    """A simulated storage as a `FlatFileSystem`, listed by its own ``_iexpand``."""
 
-    def _ils(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        return self.fs._ils(prefix)
+    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
+        return self.fs._iexpand(prefix)
 
 
 @pytest.mark.parametrize("family", ["tree", "flat"])

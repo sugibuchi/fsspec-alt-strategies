@@ -111,8 +111,8 @@ class _Tree(_Files, AsyncTreeWrapper):
 
 
 class _Flat(_Files, AsyncFlatWrapper):
-    def _ils(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        return self.fs._ils(prefix)
+    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
+        return self.fs._iexpand(prefix)
 
 
 _OPTIONS = {"operation_concurrency": 4, "io_concurrency": 2, "asynchronous": True}

@@ -89,8 +89,8 @@ class _Flat(FlatFileSystem):
         super().__init__(**{**options, **kwargs})
         self.inner = inner
 
-    def _ils(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        return self.inner._ils(prefix)
+    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
+        return self.inner._iexpand(prefix)
 
     async def _rm_files(self, paths: list[str]) -> None:
         await self.inner._rm_files(paths)
@@ -277,9 +277,9 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
 
 def test_a_subclass_missing_a_primitive_is_refused() -> None:
     class Incomplete(_Flat):
-        _ils = FlatFileSystem._ils  # Still abstract, as if not written.
+        _iexpand = FlatFileSystem._iexpand  # Still abstract, as if not written.
 
-    with pytest.raises(TypeError, match="_ils"):
+    with pytest.raises(TypeError, match="_iexpand"):
         Incomplete(SimulatedFileSystem(), asynchronous=True)
 
 

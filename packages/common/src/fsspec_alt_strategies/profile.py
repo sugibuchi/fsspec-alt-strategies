@@ -43,7 +43,7 @@ class StorageProfile:
         The family of strategies the storage's filesystem answers with:
         "tree" for a hierarchical namespace listed a folder per request, with
         ``_ils``, as `TreeFileSystem` has it, "flat" for keys listed by prefix,
-        with ``_ils``, ``_rm_files`` and ``rm_batch_size``, as `FlatFileSystem`
+        with ``_iexpand``, ``_rm_files`` and ``rm_batch_size``, as `FlatFileSystem`
         has them. A router copying
         or moving between two storages picks the source's strategies with it.
         Unknown by default: the router falls back on fsspec's own copy.

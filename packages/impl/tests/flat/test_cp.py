@@ -26,7 +26,7 @@ def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
     """`flat_cp` on a filesystem's own operations, which ``kwargs`` may replace."""
     operations = {
         "concurrency_limit": asyncio.Semaphore(32),
-        "ils": fs._ils,
+        "iexpand": fs._iexpand,
         "info": fs._info,
         "cp_file": fs._cp_file,
         "dst_info": fs._info,
@@ -151,7 +151,7 @@ async def test_markers_are_not_copied() -> None:
     keys = ["data/", "data/empty/", "data/a.txt"]
     copied: list[tuple[str, str]] = []
 
-    async def ils(prefix: str) -> Any:
+    async def iexpand(prefix: str) -> Any:
         for name in keys:
             if name.startswith(prefix):
                 yield {"name": name, "size": 0, "type": "file"}
@@ -165,7 +165,7 @@ async def test_markers_are_not_copied() -> None:
     op = flat_cp(
         "data",
         "copied",
-        ils=ils,
+        iexpand=iexpand,
         info=info,
         cp_file=cp_file,
         dst_info=info,

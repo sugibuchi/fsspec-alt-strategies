@@ -59,7 +59,7 @@ class FlatFileSystem(_BaseFileSystem):
     `flat_cp` and `flat_mv`. Their answers are fsspec's, and their failures are
     raised, a single one as it is, several in an ExceptionGroup.
 
-    A subclass implements the storage's primitives: ``_ils``, the listing by
+    A subclass implements the storage's primitives: ``_iexpand``, the listing by
     prefix, which fsspec has not, and ``_rm_files``, a deletion of several
     files in one request, with ``rm_batch_size``. It implements those fsspec
     leaves abstract too: ``_ls``, for fsspec's own methods, ``_info``,
@@ -107,7 +107,7 @@ class FlatFileSystem(_BaseFileSystem):
     ...     storage_profile = StorageProfile()  # Unknown.
     ...     rm_batch_size = 1000  # As S3's DeleteObjects takes.
     ...
-    ...     async def _ils(self, prefix): ...
+    ...     async def _iexpand(self, prefix): ...
     ...     async def _rm_files(self, paths): ...
     ...     async def _ls(self, path, detail=True, **kwargs): ...
     ...     async def _info(self, path, **kwargs): ...
@@ -150,7 +150,7 @@ class FlatFileSystem(_BaseFileSystem):
     # What a subclass implements: the storage's primitives, the flat ones first.
 
     @abstractmethod
-    def _ils(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
+    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
         """List every key starting with ``prefix``, as an async iterator of entries.
 
         ``prefix`` is raw text, e.g. "data/2024-". The entries are as ``_ls``
@@ -215,7 +215,7 @@ class FlatFileSystem(_BaseFileSystem):
         root = self._strip_protocol(path)
         walk = flat_walk(
             root,
-            ils=self._ils,
+            iexpand=self._iexpand,
             info=self._info,
             maxdepth=maxdepth,
             topdown=topdown,
@@ -251,7 +251,7 @@ class FlatFileSystem(_BaseFileSystem):
         entries, _ = await _collect_with_monitors(
             flat_find(
                 self._strip_protocol(path),
-                ils=self._ils,
+                iexpand=self._iexpand,
                 info=self._info,
                 maxdepth=maxdepth,
                 withdirs=withdirs,
@@ -271,7 +271,7 @@ class FlatFileSystem(_BaseFileSystem):
 
         op = flat_du(
             self._strip_protocol(path),
-            ils=self._ils,
+            iexpand=self._iexpand,
             info=self._info,
             maxdepth=maxdepth,
             concurrency_limit=self.operation_limit,
@@ -287,7 +287,7 @@ class FlatFileSystem(_BaseFileSystem):
         entries, _ = await _collect_with_monitors(
             flat_glob(
                 self._strip_only_protocol(path),
-                ils=self._ils,
+                iexpand=self._iexpand,
                 info=self._info,
                 maxdepth=maxdepth,
                 withdirs=kwargs.pop("withdirs", True),
@@ -312,7 +312,7 @@ class FlatFileSystem(_BaseFileSystem):
         _, errors = await _collect_with_monitors(
             flat_rm(
                 self._strip_only_protocol(path),
-                ils=self._ils,
+                iexpand=self._iexpand,
                 info=self._info,
                 rm_files=self._rm_files,
                 batch_size=self.rm_batch_size,
@@ -343,7 +343,7 @@ class FlatFileSystem(_BaseFileSystem):
             flat_local_cp(
                 self._strip_only_protocol(path1),
                 self._strip_only_protocol(path2),
-                ils=self._ils,
+                iexpand=self._iexpand,
                 info=self._info,
                 cp_file=self._cp_file,
                 makedirs=self._makedirs,
@@ -384,7 +384,7 @@ class FlatFileSystem(_BaseFileSystem):
             flat_local_mv(
                 self._strip_only_protocol(path1),
                 self._strip_only_protocol(path2),
-                ils=self._ils,
+                iexpand=self._iexpand,
                 info=self._info,
                 mv_file=self._mv_file,
                 cp_file=self._cp_file,
