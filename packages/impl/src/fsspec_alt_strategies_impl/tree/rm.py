@@ -269,7 +269,8 @@ class _Deletion(_TreeJobs):
                 self.files_found += 1
                 self.waiting.append(_Job("file", entry["name"].rstrip("/")))
 
-        if not listing.entries:
+        # Empty, or all in it deleted before its last part came.
+        if listing.last and self.finished(listing.folder):
             self.remove(listing.folder)
 
     def run(self, job: _Job) -> Awaitable[Any]:

@@ -432,8 +432,15 @@ class AccountFileSystem(AsyncRoutingFileSystem):
 
 #### The tree strategies
 
-The strategies in `tree/` walk with the walk's private engine, `_listings`, which yields each folder's listing. They
-come in two layers, by what they send:
+The strategies in `tree/` walk with the walk's private engine, `_chunks`. It yields each folder's listing in parts, of
+at most 1000 entries, as `ils` yields them, so that a folder of hundreds of thousands of files is never held whole:
+
+- Each part says whether it is the folder's `first` and its `last`. An empty folder is one part, both, with no entries.
+- A subfolder is listed as soon as its entry comes, while its parent's listing goes on.
+- A failed listing ends with its error, as its last part. A root's failing before its first part raises.
+- What needs a folder done, e.g. deleting it once empty, waits for its last part, as `_TreeJobs.finished` tells.
+
+The strategies come in two layers, by what they send:
 
 | Strategies | They send | They build on |
 |---|---|---|
@@ -453,7 +460,7 @@ copy and a move share one class per family, `_CopyOrMove`, whose subclass says h
   deletes the source file once copied.
 - `same_storage` is given, never detected: comparing the operations cannot tell whether two filesystems are one storage.
 
-`tree_walk` is `_listings` itself, made public. It raises for a missing or file root, as fsspec's `walk` does.
+`tree_walk` answers as fsspec's `walk` does, a folder at a time: `_listings` gathers the parts of `_chunks` into one listing per folder. So it holds each folder whole, unlike the other strategies. It raises for a missing or file root, as fsspec's `walk` does.
 
 `_find_listings`, in `tree/find.py`, treats the root as fsspec's `_find` and `_glob` do. A missing root finds nothing, and a
 file root yields its own `info` entry when asked. A folder root yields its own entry when asked, e.g. for `withdirs`.

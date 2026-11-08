@@ -232,7 +232,7 @@ def _matches_in(
         errors=state.errors + (listing.error is not None),
         current=listing.folder,
         # Depth 0 is the root's own entry: no folder listed.
-        folders_listed=state.folders_listed + (listing.depth > 0),
+        folders_listed=state.folders_listed + (listing.depth > 0 and listing.last),
         matched=state.matched + len(matches) - (listing.error is not None),
     )
 

@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies_impl.tree.walk import WalkState, _listings, tree_walk
+from fsspec_alt_strategies_impl.tree.walk import (
+    WalkState,
+    _chunks,
+    _listings,
+    tree_walk,
+)
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
 
 if TYPE_CHECKING:
@@ -299,3 +304,55 @@ async def test_bottom_up_listings_come_after_their_subfolders() -> None:
     assert folders[-1] == "data"
     for i, folder in enumerate(folders):
         assert all(not f.startswith(folder + "/") for f in folders[i + 1 :])
+
+
+def _streamed(fs: SimulatedFileSystem, listed: list[str]) -> Any:
+    """A folder ``ils`` yielding entries one by one, noting each as it goes."""
+
+    async def ils(path: str) -> AsyncIterator[dict[str, Any]]:
+        for entry in await fs._ls(path, detail=True):
+            listed.append(entry["name"])
+            yield entry
+            await asyncio.sleep(0)  # A page's wait, as a storage's would be.
+
+    return ils
+
+
+async def test_chunks_stream_a_folder_in_parts() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    for i in range(5):
+        fs.add_file(f"data/file-{i}")
+    fs.add_file("data/sub/inner")
+    listed: list[str] = []
+    chunks = _chunks(
+        _streamed(fs, listed),
+        "data",
+        concurrency_limit=asyncio.Semaphore(4),
+        chunk_size=2,
+    )
+    async with aclosing(chunks):
+        parts = [
+            (part.folder, len(part.entries), part.first, part.last, len(listed))
+            async for part in chunks
+        ]
+    data = [p for p in parts if p[0] == "data"]
+    # Full parts as they come, then the last, empty when the entries ran out
+    # on a full one.
+    assert [(n, first, last) for _, n, first, last, _ in data] == [
+        (2, True, False),
+        (2, False, False),
+        (2, False, False),
+        (0, False, True),
+    ]
+    # The first part came before its folder was all listed.
+    assert data[0][4] < 6
+    assert ("data/sub", 1, True, True) in [p[:4] for p in parts]
+
+
+async def test_chunks_of_an_empty_folder_are_one_part() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    fs.add_dir("data")
+    chunks = _chunks(folder_ils(fs), "data", concurrency_limit=asyncio.Semaphore(4))
+    async with aclosing(chunks):
+        parts = [part async for part in chunks]
+    assert [(p.entries, p.first, p.last) for p in parts] == [([], True, True)]

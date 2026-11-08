@@ -361,9 +361,16 @@ class _Move(_CopyOrMove):
         renamed, self.renamed = self.renamed, []
         return [*renamed, *await super().begin(roots, source)]
 
-    def add(self, listing: _Listing) -> None:
+    def add(self, listing: _Listing) -> list[Any] | None:
         self.track(listing)
         super().add(listing)
+
+        # All in it moved before its last part came. An empty folder goes once
+        # made at the destination, in done.
+        empty = listing.first and not listing.entries
+        if listing.last and not empty and self.finished(listing.folder):
+            return self.remove(listing.folder)
+        return None
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "rmdir":
@@ -382,7 +389,7 @@ class _Move(_CopyOrMove):
         if job.kind == "mkdir":
             outcome = super().done(job)
             # An empty folder: made at the destination, it can go.
-            if job.source and self.remaining[job.source] == 0:
+            if job.source and self.finished(job.source):
                 outcome += self.remove(job.source)
             return outcome
 

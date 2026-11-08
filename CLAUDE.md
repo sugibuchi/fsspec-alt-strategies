@@ -52,7 +52,7 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
   - it raises only errors ending the whole operation, such as a missing root;
   - its stopping mirrors `asyncio.Task`: `cancel()` starts nothing new but yields what is in flight, and `aclose()`
     stops at once, waiting for writes in flight. There are no callbacks and no result classes.
-- The tree strategies, in `tree/`, walk with `tree.walk._listings`, which is private: never expose its `_Listing`.
+- The tree strategies, in `tree/`, walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each folder in parts: never hold a folder's listing whole, but in `tree_walk`, which answers as fsspec's `walk` does.
   Two layers, by what a strategy sends: one that only reads builds on `tree.find._find_listings`, which handles the root as `_find` does; one
   that changes the storage builds on `tree._jobs._TreeJobs`. Never write another loop or root handling.
 - The strategies changing a storage, in any family, run on `common.jobs._Jobs`, fed by the family's source: listings

@@ -332,6 +332,10 @@ class _CopyOrMove(_Placing, _TreeJobs):
         # The copies waiting for their destination folder, by that folder.
         self.after_mkdir: dict[str, list[_Job]] = {}
 
+        # The destination folders made, or tried: a folder listed in several
+        # parts is made once, and its later copies need not wait.
+        self.made: set[str] = set()
+
     def state(self) -> Any:
         return CpState(
             errors=self.errors,
@@ -348,7 +352,7 @@ class _CopyOrMove(_Placing, _TreeJobs):
         target = self.target(path)
         self.queue(target.rpartition("/")[0], "", [_Job("copy", path, target)])
 
-    def add(self, listing: _Listing) -> None:
+    def add(self, listing: _Listing) -> list[Any] | None:
         copies = []
         for entry in listing.entries:
             if entry["type"] != "directory":
@@ -356,18 +360,19 @@ class _CopyOrMove(_Placing, _TreeJobs):
                 self.files_found += 1
                 copies.append(_Job("copy", name, self.target(name)))
 
-        if not listing.entries:
+        if listing.first and listing.last and not listing.entries:
             # An empty folder is made, whatever the storage.
             self.queue(self.target(listing.folder), listing.folder, [], always=True)
         elif copies:
             # A folder holding only folders needs no mkdir: theirs create it.
             self.queue(self.target(listing.folder), listing.folder, copies)
+        return None
 
     def queue(
         self, folder: str, source: str, copies: list[_Job], *, always: bool = False
     ) -> None:
         """Queue copies into a destination folder, made first if needed."""
-        if not folder or not (always or self.parents_required):
+        if not folder or folder in self.made or not (always or self.parents_required):
             self.waiting.extend(copies)
             return
 
@@ -386,6 +391,7 @@ class _CopyOrMove(_Placing, _TreeJobs):
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":
+            self.made.add(job.destination)
             self.waiting.extend(self.after_mkdir.pop(job.destination))
             return []
         self.files_done += 1
@@ -394,6 +400,8 @@ class _CopyOrMove(_Placing, _TreeJobs):
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         # A file's error is noted where it happened, in transfer_file.
         if job.kind == "mkdir":
+            # Its copies, and those of the folder's later parts, are not sent:
+            # each would fail as it did.
             error.add_note(f"Creating the folder {job.destination!r} failed.")
         return [error]
 

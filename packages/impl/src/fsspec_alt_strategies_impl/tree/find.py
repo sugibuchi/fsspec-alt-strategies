@@ -18,7 +18,7 @@ from fsspec_alt_strategies.states import FindState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
-from .walk import _Listing, _listings
+from .walk import _chunks, _Listing
 
 if TYPE_CHECKING:
     import asyncio
@@ -129,7 +129,8 @@ def tree_find(
                     errors=state.errors + (listing.error is not None),
                     current=listing.folder,
                     # Depth 0 is the root's own entry: no folder listed.
-                    folders_listed=state.folders_listed + (listing.depth > 0),
+                    folders_listed=state.folders_listed
+                    + (listing.depth > 0 and listing.last),
                     found=state.found + len(found),
                 )
 
@@ -156,21 +157,21 @@ async def _find_listings(
 ) -> AsyncGenerator[_Listing]:
     """Walk as the strategies that only read do, such as find, du and glob.
 
-    It yields each folder's listing, as ``_listings`` does, but treats ``path``
+    It yields each folder's listing in parts, as ``_chunks`` does, but treats ``path``
     itself as fsspec's ``_find`` and ``_glob`` do:
 
     - missing, it yields nothing;
     - a file, it yields the file's ``info`` entry if ``file_root``, else
       nothing;
-    - a folder, it yields the folder's own ``info`` entry after its listing,
-      if ``folder_root`` and the walk is not stopping.
+    - a folder, it yields the folder's own ``info`` entry after its listing's
+      last part, if ``folder_root`` and the walk is not stopping.
 
     The root's own entry comes as a `_Listing` of depth 0, which is no listing.
     So the strategies filter and count it as any entry, but count no folder
     listed for it.
     """
     root = _trim(path)
-    listings = _listings(
+    listings = _chunks(
         ils,
         root,
         maxdepth=maxdepth,
@@ -193,11 +194,30 @@ async def _find_listings(
             return
 
         yield root_listing
-
-        if folder_root and not (stopping and stopping()):
-            async with concurrency_limit:
-                entry = await info(root)
-            yield _Listing(root, 0, [entry])
+        if root_listing.last:
+            async for listing in _root_entry(
+                info, root, folder_root, concurrency_limit, stopping
+            ):
+                yield listing
 
         async for listing in listings:
             yield listing
+            if listing.folder == root and listing.last:
+                async for entry in _root_entry(
+                    info, root, folder_root, concurrency_limit, stopping
+                ):
+                    yield entry
+
+
+async def _root_entry(
+    info: _Info,
+    root: str,
+    folder_root: bool,
+    concurrency_limit: asyncio.Semaphore,
+    stopping: Callable[[], object] | None,
+) -> AsyncGenerator[_Listing]:
+    """The root folder's own ``info`` entry, as a listing of depth 0, if asked."""
+    if folder_root and not (stopping and stopping()):
+        async with concurrency_limit:
+            entry = await info(root)
+        yield _Listing(root, 0, [entry])

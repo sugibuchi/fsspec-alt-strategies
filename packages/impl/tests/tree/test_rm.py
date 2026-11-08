@@ -449,3 +449,32 @@ async def test_rm_tree_sends_nothing_once_cancelled(
     op.cancel()
     assert await _collect_with_errors(op) == ([], [])
     assert hierarchical_fs.stats.calls == {}
+
+
+async def test_a_large_folder_is_deleted_while_it_is_listed() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    for i in range(2500):
+        fs.add_file(f"data/file-{i:04}")
+    listed = 0
+    listed_at_first_deletion: list[int] = []
+
+    async def ils(path: str) -> Any:
+        nonlocal listed
+        for entry in await fs._ls(path, detail=True):
+            listed += 1
+            yield entry
+            await asyncio.sleep(0)  # A page's wait, as a storage's would be.
+
+    async def rm_file(path: str) -> None:
+        listed_at_first_deletion.append(listed)
+        await fs._rm_file(path)
+
+    deleted, errors = await _collect_with_errors(
+        _rm(fs, "data", ils=ils, rm_file=rm_file)
+    )
+    assert errors == []
+    assert len(deleted) == 2501  # The files, then the folder.
+    assert deleted[-1] == "data"
+    # The first deletions started after the first part, not the whole listing.
+    assert listed_at_first_deletion[0] < 2500
+    assert not await fs._exists("data")
