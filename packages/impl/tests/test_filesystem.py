@@ -18,6 +18,7 @@ from fsspec_alt_strategies_impl.common.filesystem import (
     _copy_errors,
     _failed_folder,
     _raise,
+    _strip_only_protocol,
 )
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
 from fsspec_alt_strategies_impl.wrapper import (
@@ -147,7 +148,7 @@ async def test_a_local_folder_is_no_transfer(tmp_path: Path) -> None:
 
 def test_plain_paths_keep_a_trailing_slash() -> None:
     tree = SyncTreeWrapper(MemoryFileSystem(), **_LIMITS)
-    assert tree._strip_only_protocol(["memory://w/a/", "w/b"]) == ["/w/a/", "/w/b"]
+    assert _strip_only_protocol(tree, ["memory://w/a/", "w/b"]) == ["/w/a/", "/w/b"]
 
 
 def test_a_copy_drops_sources_gone_unless_errors_raise() -> None:

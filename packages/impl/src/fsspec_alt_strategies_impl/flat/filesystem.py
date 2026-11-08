@@ -29,6 +29,7 @@ from ..common.filesystem import (
     _du_answer,
     _failed_folder,
     _raise,
+    _strip_only_protocol,
 )
 from ..common.operation import _collect_with_monitors, _with_monitors
 from .cp import flat_local_cp
@@ -299,7 +300,7 @@ class FlatFileSystem(_BaseFileSystem):
         detail = kwargs.pop("detail", False)
         entries, _ = await _collect_with_monitors(
             flat_glob(
-                self._strip_only_protocol(path),
+                _strip_only_protocol(self, path),
                 iexpand=self._iexpand,
                 info=self._info,
                 maxdepth=maxdepth,
@@ -324,7 +325,7 @@ class FlatFileSystem(_BaseFileSystem):
 
         _, errors = await _collect_with_monitors(
             flat_rm(
-                self._strip_only_protocol(path),
+                _strip_only_protocol(self, path),
                 iexpand=self._iexpand,
                 info=self._info,
                 rm_files=self._rm_files,
@@ -354,8 +355,8 @@ class FlatFileSystem(_BaseFileSystem):
 
         _, errors = await _collect_with_monitors(
             flat_local_cp(
-                self._strip_only_protocol(path1),
-                self._strip_only_protocol(path2),
+                _strip_only_protocol(self, path1),
+                _strip_only_protocol(self, path2),
                 iexpand=self._iexpand,
                 info=self._info,
                 cp_file=self._cp_file,
@@ -395,8 +396,8 @@ class FlatFileSystem(_BaseFileSystem):
 
         _, errors = await _collect_with_monitors(
             flat_local_mv(
-                self._strip_only_protocol(path1),
-                self._strip_only_protocol(path2),
+                _strip_only_protocol(self, path1),
+                _strip_only_protocol(self, path2),
                 iexpand=self._iexpand,
                 info=self._info,
                 mv_file=self._mv_file,
