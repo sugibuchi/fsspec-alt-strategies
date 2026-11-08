@@ -3,11 +3,9 @@
 How to get the library's features, and how to use them. See the
 [README](https://github.com/sugibuchi/fsspec-alt-strategies#readme) for why they exist.
 
-## Introduction
+## Provided features
 
-### Provided features
-
-#### File tree operation strategies
+### File tree operation strategies
 
 The strategies walk, find, glob, measure, delete, copy and move file trees. `tree/` holds those for storages listing
 one folder per request, and `flat/` those for object stores listing a key prefix in one paginated request. They come
@@ -20,25 +18,25 @@ in three forms:
 - **Wrappers**, in `wrapper.py`, for existing filesystem implementations: they give a filesystem the strategies
   without changing it. `monitored()` picks the wrapper for a known filesystem.
 
-#### Monitor
+### Monitor
 
 A `Monitor` watches the operations behind fsspec's methods, such as `fs.rm(...)`, path by path. It sees each path
 done, each error and the progress, and it can cancel the operation. It is part of the interface package, so one
 `monitoring` block watches every copy of the strategies in a project.
 
-#### Async file object
+### Async file object
 
 The file objects in `files/` adapt their buffering to how a file is used. `AsyncFileAdapter` gives a sync file the
 API of the files `open_async()` opens, and fsspec's transactions work with any file object.
 
-#### Filesystem router
+### Filesystem router
 
 `AsyncRoutingFileSystem`, in `router.py`, spans several storages, e.g. a cloud's volumes. It routes each path to the
 storage holding it, and copies or moves between storages with the source's strategy.
 
-### Installation
+## Installation
 
-#### The interface package, from PyPI
+### The interface package, from PyPI
 
 The interface holds the operations' control and states, the monitors, the storage profiles and the known
 implementations. It is installed, never copied:
@@ -50,7 +48,7 @@ pip install fsspec-alt-strategies
 Every copy of the strategies in a project, of any version, then shares one interface. An exception such as
 `CallCancelled` is the same class whichever copy raised it.
 
-#### The implementation package, by copying its files
+### The implementation package, by copying its files
 
 We recommend copying the modules of `fsspec_alt_strategies_impl` you use into your own package, e.g. as
 `_contrib/strategy`. Your filesystem's behaviour then never changes with a release of this library. The modules
@@ -58,7 +56,7 @@ import each other relatively, so a copy works under any name. Keep their license
 
 It is also on PyPI, as `fsspec-alt-strategies-impl`, to try it before copying.
 
-#### The modules to copy for each feature
+### The modules to copy for each feature
 
 | Feature                         | Modules to copy                                                            |
 |---------------------------------|----------------------------------------------------------------------------|
