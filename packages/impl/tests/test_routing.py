@@ -13,10 +13,10 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 from fsspec.spec import AbstractFileSystem
 
+from fsspec_alt_strategies.common.routing import AsyncRoutingFileSystem
 from fsspec_alt_strategies.flat.filesystem import FlatFileSystem
 from fsspec_alt_strategies.flat.transfer import flat_transfer
 from fsspec_alt_strategies.flat.wrapper import AsyncFlatWrapper
-from fsspec_alt_strategies.routing import AsyncRoutingFileSystem
 from fsspec_alt_strategies.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies.tree.transfer import tree_transfer
 from fsspec_alt_strategies.tree.wrapper import AsyncTreeWrapper

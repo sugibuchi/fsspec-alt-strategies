@@ -21,7 +21,6 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `packages/common/tests/`        | The interface's tests, which never import the strategies.      |
 | `packages/impl/src/fsspec_alt_strategies/` | The strategies, copied.                              |
 | `.../monitor.py`                | `monitored(fs)`: the filesystem if `Monitored`, else wrapped as its known implementation says. |
-| `.../routing.py`                | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. |
 | `.../tree/`                     | The strategies walking a folder tree, a folder per listing.    |
 | `.../tree/walk.py`              | `tree_walk`, the concurrent folder walk under the tree strategies.  |
 | `.../tree/find.py`              | `tree_find`, a find listing several folders at a time.              |
@@ -53,6 +52,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../common/operation.py`       | `Operation`, which a strategy returns, implementing `OperationHandler`, and how one is run to its end, as the monitors and fsspec's `callback=` watch it. |
 | `.../common/jobs.py`            | The private engine running a strategy's jobs, e.g. deletions, while what to change is found, and the queue of requests under a concurrency limit, which the walk uses too. |
 | `.../common/placement.py`       | Where a copy or move puts each path, as fsspec's `copy` does.   |
+| `.../common/routing.py`         | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. |
 | `.../common/streams.py`         | `streaming_copy`, a `copy_file` between two storages, a block at a time through their files. |
 | `.../common/types.py`           | The types of the storage's operations, such as `ls` and `info`. |
 | `.../common/paths.py`           | Paths and depths, as the strategies take them.                  |
@@ -313,7 +313,7 @@ A filesystem class deals with its own storage only. A copy to another storage is
 #### Routers
 
 Some namespaces span several storages, each with a filesystem of its own, e.g. a cloud's volumes. A router passes each
-call to the filesystem of the path's storage. `AsyncRoutingFileSystem`, in `routing.py`, is its base: a plain
+call to the filesystem of the path's storage. `AsyncRoutingFileSystem`, in `common/routing.py`, is its base: a plain
 async fsspec filesystem, knowing no family and importing none.
 
 A subclass implements three methods:

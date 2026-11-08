@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.implementations.local import LocalFileSystem
 
+from fsspec_alt_strategies.common.routing import AsyncRoutingFileSystem
 from fsspec_alt_strategies.common.wrapper import (
     _AsyncFileSystemWrapper,
     _SyncFileSystemWrapper,
 )
 from fsspec_alt_strategies.flat.filesystem import FlatFileSystem
-from fsspec_alt_strategies.routing import AsyncRoutingFileSystem
 from fsspec_alt_strategies.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies.tree.wrapper import AsyncTreeWrapper, SyncTreeWrapper
 from fsspec_alt_strategies_common.profile import StorageProfile

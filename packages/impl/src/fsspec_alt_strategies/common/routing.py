@@ -8,7 +8,7 @@ filesystem. It knows no family: each inner filesystem runs its own strategies,
 and a copy across two storages runs the strategy its subclass's ``_transfer``
 picks.
 
-This module depends on `common`: `filesystem`, `operation`, `paths`, `streams`
+This module depends on `filesystem`, `operation`, `paths`, `streams`
 and `types`.
 """
 
@@ -28,15 +28,15 @@ from fsspec.spec import AbstractFileSystem
 from fsspec_alt_strategies_common.monitor import Call, Monitored, routing
 from fsspec_alt_strategies_common.profile import StorageProfile
 
-from .common.filesystem import (
+from .filesystem import (
     _AbstractFileSystemMeta,
     _copy_errors,
     _plain,
     _raise,
 )
-from .common.operation import _collected
-from .common.paths import _trim
-from .common.streams import streaming_copy
+from .operation import _collected
+from .paths import _trim
+from .streams import streaming_copy
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -51,8 +51,8 @@ if TYPE_CHECKING:
 
     from fsspec_alt_strategies_common.states import CpState
 
-    from .common.operation import Operation
-    from .common.types import _Request
+    from .operation import Operation
+    from .types import _Request
 
 __all__ = ["AsyncRoutingFileSystem"]
 
