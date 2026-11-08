@@ -20,87 +20,48 @@ an operation cannot be watched or stopped until it ends.
 
 This library offers other ways of doing the same things. It is a third-party project, not part of fsspec.
 
-## What is in it
+## What it offers
 
-### File tree operations for hierarchical namespaces
+### Faster file tree operations
 
-The `tree` strategies suit storages listing one folder per request, such as Azure Data Lake Storage Gen2, SFTP or HDFS.
-They list several folders at a time: a walk, find, du, a glob listing only the folders it can match in, and a recursive
-delete, copy and move. Their counterparts in `flat` suit object stores, which list a key prefix in one paginated request.
+Finding, deleting, copying or moving a whole folder tree is faster, on storages with folders and on object stores
+alike. Many folders are listed at once, and what you tell the library about your storage saves further requests.
 
-Storage profiles declare what a storage does, such as renaming a folder in one request. The strategies then send fewer
-requests.
+### Work on huge folders
 
-### Streaming through large trees
+Files are deleted, copied or moved as soon as they are found, not after the whole tree is listed. A folder of hundreds
+of thousands of files never needs to fit in memory.
 
-A delete, copy or move acts on what it finds while the walk goes on, rather than after listing the whole tree. A
-folder's listing streams in parts, so that a folder of hundreds of thousands of files is never held whole in memory. The
-first files are deleted or copied after the first part of the first listing.
+### Progress you can see, and stop
 
-### File objects that adapt to how a file is used
+You can follow a long operation file by file, see which files failed while the others go on, and stop it at any time.
+This works with the familiar fsspec calls, such as `fs.rm(path, recursive=True)`.
 
-The file objects for cloud storages adapt their buffering to the access pattern:
+### Faster reads and writes
 
-- scattered reads fetch small blocks;
-- the longer a run of sequential reads, the bigger the blocks, fetched further ahead, several at a time;
-- a small file is written in one request, a larger one in parts that grow with the bytes written.
+Files read and write faster in cloud storages, adapting to how each file is used. Writes can wait for fsspec's
+transaction to commit, even with an SDK's own file objects.
 
-fsspec's transactions work with any file object, including an SDK's own.
+### Copies between storages
 
-### Observability and control of bulk operations
+One filesystem can span several storages, and copy or move files between them.
 
-A strategy returns an operation, iterated step by step:
+### Works with what you have
 
-- it yields each path done, and the error of each path that failed, while the others go on;
-- it reports its progress as it goes;
-- it stops as an asyncio task does: cancelled, it finishes what is in flight.
+Existing fsspec filesystems, such as s3fs or the local one, get these features with a single call. A new filesystem
+gets them by implementing a few basic operations.
 
-Monitors watch the operations behind fsspec's methods, such as `fs.rm(...)`, file by file, without changing their API.
+## Getting started
 
-### Wrappers for existing filesystems
+The library has two packages:
 
-The wrappers give an existing fsspec filesystem the strategies, observability and control above. `monitored()` picks the
-wrapper for a known filesystem, such as s3fs or the local one.
+- `fsspec-alt-strategies`, installed with `pip install fsspec-alt-strategies`;
+- `fsspec-alt-strategies-impl`, which we recommend copying into your own package, so that its behaviour changes only
+  when you choose.
 
-`TreeFileSystem` and `FlatFileSystem` are the classes to subclass for a new filesystem. A router,
-`AsyncRoutingFileSystem`, spans several storages, e.g. a cloud's volumes, and copies between them with the source's
-strategy.
+[USAGE.md](https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/USAGE.md) explains what to copy for each
+feature, and how to use each one.
 
-## Two packages
-
-| Package                        | What it holds                                                    | How you get it |
-|--------------------------------|------------------------------------------------------------------|----------------|
-| `fsspec-alt-strategies`        | The interface: operations' control and states, monitors, storage profiles, known implementations | Installed |
-| `fsspec-alt-strategies-impl`   | The strategies, filesystem classes, wrappers and file objects    | Copied, or installed |
-
-We recommend copying the strategies' modules you use into your own package, e.g. as `_contrib/strategy`. Your
-filesystem's behaviour then never changes with a release of this library. The modules import each other relatively,
-so a copy works under any name. Keep their license headers.
-
-The interface is installed, never copied:
-
-```bash
-pip install fsspec-alt-strategies
-```
-
-So every copy in a project, of any version, shares one interface: one `monitoring` block watches the calls of all of
-them, and an exception such as `CallCancelled` is the same class whichever copy raised it.
-
-A copy keeps what the modules it uses import:
-
-- each family, `tree/` or `flat/`, needs `common/` and `files/`;
-- the router, `router.py`, needs `common/`, and the family of each storage it copies or moves from, imported only
-  then;
-- the wrappers, `wrapper.py`, and so `monitored()`, need both families.
-
-## Using it
-
-[USAGE.md](https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/USAGE.md) shows how:
-
-- to watch an existing filesystem's operations, with `monitored()` and a `Monitor`;
-- to subclass `TreeFileSystem` or `FlatFileSystem` for a new storage;
-- to call a strategy directly;
-- to choose a family, a profile and the concurrency limits, with the costs to know and a simulated storage to measure.
 ## License
 
 Apache License 2.0. See [LICENSE](https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/LICENSE).
