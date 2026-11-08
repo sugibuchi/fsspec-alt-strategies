@@ -22,34 +22,17 @@ This library offers other ways of doing the same things. It is a third-party pro
 
 ## What it offers
 
-### Faster file tree operations
-
-Finding, deleting, copying or moving a whole folder tree is faster, on storages with folders and on object stores
-alike. Many folders are listed at once, and what you tell the library about your storage saves further requests.
-
-### Work on huge folders
-
-Files are deleted, copied or moved as soon as they are found, not after the whole tree is listed. A folder of hundreds
-of thousands of files never needs to fit in memory.
-
-### Progress you can see, and stop
-
-You can follow a long operation file by file, see which files failed while the others go on, and stop it at any time.
-This works with the familiar fsspec calls, such as `fs.rm(path, recursive=True)`.
-
-### Faster reads and writes
-
-Files read and write faster in cloud storages, adapting to how each file is used. Writes can wait for fsspec's
-transaction to commit, even with an SDK's own file objects.
-
-### Copies between storages
-
-One filesystem can span several storages, and copy or move files between them.
-
-### Works with what you have
-
-Existing fsspec filesystems, such as s3fs or the local one, get these features with a single call. A new filesystem
-gets them by implementing a few basic operations.
+- **Faster file tree operations:** finding, deleting, copying or moving a whole folder tree, on storages with folders
+  and on object stores alike.
+- **Work on huge folders:** files are acted on as soon as they are found, so a folder of hundreds of thousands of
+  files never needs to fit in memory.
+- **Progress you can see, and stop:** follow a long operation file by file, see which files failed, and stop it at
+  any time, through the familiar fsspec calls.
+- **Faster reads and writes:** files in cloud storages adapt to how each is used, and writes can wait for fsspec's
+  transaction to commit.
+- **Copies between storages:** one filesystem can span several storages, and copy or move files between them.
+- **Works with what you have:** existing fsspec filesystems, such as s3fs, get these features with a single call, and
+  a new one by implementing a few basic operations.
 
 ## Getting started
 
