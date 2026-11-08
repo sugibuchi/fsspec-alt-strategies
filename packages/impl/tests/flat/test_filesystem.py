@@ -9,15 +9,15 @@ import pytest
 from fsspec.asyn import AsyncFileSystem, sync
 from fsspec.callbacks import Callback
 
-from fsspec_alt_strategies.files.adaptive import (
+from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
+from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
 )
-from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
-from fsspec_alt_strategies.flat.filesystem import FlatFileSystem
-from fsspec_alt_strategies_common.monitor import Call, Monitor, monitoring
-from fsspec_alt_strategies_common.profile import StorageProfile
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.files.fsspec_async import AsyncFileAdapter
+from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

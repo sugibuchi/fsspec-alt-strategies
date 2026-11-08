@@ -16,13 +16,13 @@ from typing import Any
 
 import pytest
 
-from fsspec_alt_strategies.files import adaptive
-from fsspec_alt_strategies.files.adaptive import (
+from fsspec_alt_strategies_impl.files import adaptive
+from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
 )
-from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.files.fsspec_async import AsyncFileAdapter
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 _KiB = 1024
 
@@ -755,8 +755,8 @@ def test_a_failed_abort_off_the_loop_is_logged(
 _LEFT_OPEN_AT_EXIT = """
 from fsspec.asyn import get_loop
 
-from fsspec_alt_strategies.files.adaptive import AdaptiveWritableFile
-from fsspec_alt_strategies.files.fsspec_transaction import (
+from fsspec_alt_strategies_impl.files.adaptive import AdaptiveWritableFile
+from fsspec_alt_strategies_impl.files.fsspec_transaction import (
     AdaptiveWritableTransaction,
     TransactionFile,
 )

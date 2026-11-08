@@ -1,22 +1,22 @@
 # The workspace: two packages, built and published on their own, developed and
 # tested together here.
 #
-# - packages/common, fsspec-alt-strategies-common: the interface the strategies
+# - packages/common, fsspec-alt-strategies: the interface the strategies
 #   share with their callers, installed as a package.
-# - packages/impl, fsspec-alt-strategies: the strategies, meant to be copied
+# - packages/impl, fsspec-alt-strategies-impl: the strategies, meant to be copied
 #   into a project, and the simulated filesystem their tests use.
 
 [tool.uv.workspace]
 members = ["packages/common", "packages/impl"]
 
 [tool.uv.sources]
+fsspec-alt-strategies-impl = { workspace = true }
 fsspec-alt-strategies = { workspace = true }
-fsspec-alt-strategies-common = { workspace = true }
 
 [dependency-groups]
 dev = [
+    "fsspec-alt-strategies-impl",
     "fsspec-alt-strategies",
-    "fsspec-alt-strategies-common",
     "pre-commit>=4.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.0",
@@ -34,9 +34,9 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = [
-    "packages/common/src/fsspec_alt_strategies_common",
-    "packages/impl/src/fsspec_alt_strategies",
-    "packages/impl/src/fsspec_alt_strategies_testing",
+    "packages/common/src/fsspec_alt_strategies",
+    "packages/impl/src/fsspec_alt_strategies_impl",
+    "packages/impl/src/fsspec_alt_strategies_impl_testing",
 ]
 
 [tool.ruff]

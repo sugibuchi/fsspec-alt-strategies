@@ -28,10 +28,10 @@ CI, in `.github/workflows/ci.yaml`, runs ruff and pytest on pull requests and pu
 A third-party library of alternative, filesystem-independent strategies for fsspec. README.md lists the planned
 features. It is a uv workspace of two packages, each built and published on its own:
 
-- `packages/common`, `fsspec_alt_strategies_common`: the interface the strategies share with their callers, in
+- `packages/common`, `fsspec_alt_strategies`: the interface the strategies share with their callers, in
   `monitor.py`, `profile.py` and `states.py`. It is installed, never copied.
-- `packages/impl`, `fsspec_alt_strategies`: the strategies, copied into the projects using them, and
-  `fsspec_alt_strategies_testing`, the simulated filesystem.
+- `packages/impl`, `fsspec_alt_strategies_impl`: the strategies, copied into the projects using them, and
+  `fsspec_alt_strategies_impl_testing`, the simulated filesystem.
 
 The workspace root holds the tooling: ruff, pytest and coverage settings, CI, and the docs. DEVELOPMENT.md's Design section has the choices that shape the code: read it before adding a strategy.
 
@@ -70,10 +70,10 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
 - A strategy's name tells its family, e.g. `tree_rm` and `tree_glob`, never a bare `rm` or `glob`. Code using fsspec
   has those names already, as methods and modules.
 - Never swallow `CancelledError`.
-- `fsspec_alt_strategies_common` holds only what callers use, and what every copy must share: one `OperationHandler`, one
+- `fsspec_alt_strategies` holds only what callers use, and what every copy must share: one `OperationHandler`, one
   set of monitors, one `StorageProfile`. The machinery stays in the copied package, e.g. `common/operation.py`. The
   interface depends on nothing but fsspec and the standard library, and never imports the strategies.
-- `fsspec_alt_strategies_common/__init__.py` re-exports its public API. In `fsspec_alt_strategies`, the package's
+- `fsspec_alt_strategies/__init__.py` re-exports its public API. In `fsspec_alt_strategies_impl`, the package's
   `__init__.py` re-exports `monitored` only, and no other `__init__.py` re-exports anything: users import from each
   module, so a copy can leave out modules it does not use.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
@@ -81,9 +81,9 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
   storage, and when it wins or loses.
 - Async first: write the async version; a sync one only when asked.
 - Users copy the modules into their own package. So the package imports itself only with relative imports, and depends
-  on nothing but fsspec, `fsspec_alt_strategies_common` and the standard library.
-- `SimulatedFileSystem` lives in its own top-level package, `fsspec_alt_strategies_testing`, so that copies of the
-  strategies leave it out. Never move it, or anything for tests only, into `fsspec_alt_strategies`.
+  on nothing but fsspec, `fsspec_alt_strategies` and the standard library.
+- `SimulatedFileSystem` lives in its own top-level package, `fsspec_alt_strategies_impl_testing`, so that copies of the
+  strategies leave it out. Never move it, or anything for tests only, into `fsspec_alt_strategies_impl`.
 - Each file in `packages/*/src/` starts with the SPDX license header, as copies must keep it.
   `packages/impl/tests/test_copyable.py` checks this and the import rules for the copied package.
 - `_version.py` is written by hatch-vcs and git-ignored: never edit or commit it.

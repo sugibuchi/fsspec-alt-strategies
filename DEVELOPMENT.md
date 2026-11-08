@@ -4,22 +4,22 @@
 
 The repository is a uv workspace of two packages, each built and published on its own:
 
-- `packages/common`, the distribution `fsspec-alt-strategies-common`, is the interface the strategies share with
+- `packages/common`, the distribution `fsspec-alt-strategies`, is the interface the strategies share with
   their callers. It is installed.
-- `packages/impl`, the distribution `fsspec-alt-strategies`, is the strategies, meant to be copied into a project,
+- `packages/impl`, the distribution `fsspec-alt-strategies-impl`, is the strategies, meant to be copied into a project,
   and the simulated filesystem their tests use.
 
 The root holds the tooling: the ruff, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
 
 | Path                            | Contents                                                       |
 |---------------------------------|----------------------------------------------------------------|
-| `packages/common/src/fsspec_alt_strategies_common/` | The interface, installed: one for all the copies in a project. |
+| `packages/common/src/fsspec_alt_strategies/` | The interface, installed: one for all the copies in a project. |
 | `.../monitor.py`                | `State` and `OperationHandler`: what callers see of an operation, and its control. `Monitored`, `Call`, `CallCancelled`, `Monitor`, `monitoring` and `current_monitors`: watching the operations behind the filesystems' fsspec methods. `routing` and `current_routers`: the routers a call came through. |
 | `.../profile.py`                | `StorageProfile`, what a storage does that fsspec's API leaves open. |
 | `.../states.py`                 | The states the strategies report, e.g. `FindState` of `tree_find` and `flat_find`. |
 | `.../wrapper.py`                | `KnownImplementation` and `known_implementations`: how each known filesystem class is wrapped, to be monitored. |
 | `packages/common/tests/`        | The interface's tests, which never import the strategies.      |
-| `packages/impl/src/fsspec_alt_strategies/` | The strategies, copied.                              |
+| `packages/impl/src/fsspec_alt_strategies_impl/` | The strategies, copied.                              |
 | `.../monitor.py`                | `monitored(fs)`: the filesystem if `Monitored`, else wrapped as its known implementation says. |
 | `.../wrapper.py`                | `AsyncTreeWrapper`, `SyncTreeWrapper`, `AsyncFlatWrapper` and `SyncFlatWrapper`: an existing filesystem, as a `TreeFileSystem` or a `FlatFileSystem`. |
 | `.../router.py`                 | `AsyncRoutingFileSystem`, the base of a router: a filesystem passing each path to its storage's filesystem. Between two storages, it copies a file a block at a time through their files. |
@@ -57,7 +57,7 @@ The root holds the tooling: the ruff, pytest and coverage settings in `pyproject
 | `.../files/fsspec_transaction.py` | Files written in a transaction, by strategy: a temporary path, a local buffer, or the storage's own. |
 | `.../files/fsspec_async.py`     | `AsyncFileAdapter` and `SyncFileAdapter`, giving file objects the API of those `open_async` returns. |
 | `.../files/_async_file.py`      | The private machinery under them: the loop, the concurrency limit, the requests. |
-| `packages/impl/src/fsspec_alt_strategies_testing/` | `SimulatedFileSystem`, for tests and benchmarks: a package apart, so that copies leave it out. |
+| `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem`, for tests and benchmarks: a package apart, so that copies leave it out. |
 | `packages/impl/tests/`          | The strategies' tests, in the package's layout, with the shared fixtures in `conftest.py`. |
 | `.github/workflows/ci.yaml`     | Lint and tests, on pull requests and pushes to `main`.         |
 
@@ -86,7 +86,7 @@ uvx ruff format .                # format
 CI runs ruff and pytest on every supported Python version.
 
 - Tests run with pytest-asyncio in `auto` mode: an `async def` test needs no marker.
-- Tests run on `SimulatedFileSystem`, from the public `fsspec_alt_strategies_testing`. It counts the requests a real
+- Tests run on `SimulatedFileSystem`, from the public `fsspec_alt_strategies_impl_testing`. It counts the requests a real
   storage would get, in `stats`, and can delay each by a latency and by its bytes over a bandwidth.
 - Its two modes are an object store, where folders are only prefixes, and a hierarchical namespace, with real
   folders. Test a strategy on both, with the fixture `any_fs`.
@@ -571,7 +571,7 @@ operation instead, and falls back on its own way where it fails:
 The strategies are on PyPI, but we recommend copying their modules into your own package, e.g. as
 `_contrib/strategy`. A filesystem's behaviour then never changes with a release of this library.
 
-The interface is not copied: `fsspec-alt-strategies-common` is installed, once per project.
+The interface is not copied: `fsspec-alt-strategies` is installed, once per project.
 
 - Every copy then shares one `OperationHandler`, one `CallCancelled` and one `StorageProfile`, so that callers catch and
   pass them whatever copy they come from.
@@ -586,7 +586,7 @@ So the code stays easy to copy:
 - Each strategy depends on few shared modules, and its module docstring names them.
 - The package's `__init__.py` re-exports `monitored` only, which needs both families' wrappers. No other
   `__init__.py` imports a module, so a copy may leave out those it does not use. Users import from the modules,
-  e.g. `fsspec_alt_strategies.tree.find`. The interface's `__init__.py` re-exports its public API.
+  e.g. `fsspec_alt_strategies_impl.tree.find`. The interface's `__init__.py` re-exports its public API.
 
 `packages/impl/tests/test_copyable.py` checks the first three rules. It also imports a copy of the package under
 another name.

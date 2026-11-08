@@ -1,7 +1,7 @@
 [project]
-name = "fsspec-alt-strategies-common"
+name = "fsspec-alt-strategies"
 dynamic = ["version"]
-description = "The interface the fsspec-alt-strategies strategies share: operations, monitors and storage profiles"
+description = "The interface the strategies of fsspec-alt-strategies-impl share: operations, monitors and storage profiles"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -42,7 +42,7 @@ source = "vcs"
 raw-options = { root = "../..", version_scheme = "post-release" }
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/fsspec_alt_strategies_common/_version.py"
+version-file = "src/fsspec_alt_strategies/_version.py"
 template = '''
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
@@ -52,7 +52,7 @@ __version__ = "{version}"
 '''
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/fsspec_alt_strategies_common"]
+packages = ["src/fsspec_alt_strategies"]
 
 [tool.uv]
 # Rebuild the package when its git commit or tags change, as its version

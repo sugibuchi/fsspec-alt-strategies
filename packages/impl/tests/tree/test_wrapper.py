@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
-from fsspec_alt_strategies.wrapper import AsyncTreeWrapper, SyncTreeWrapper
-from fsspec_alt_strategies_common.monitor import Call, Monitor, monitoring
-from fsspec_alt_strategies_common.profile import StorageProfile
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
+from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.wrapper import AsyncTreeWrapper, SyncTreeWrapper
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path

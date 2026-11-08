@@ -8,20 +8,20 @@ import pytest
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 
-from fsspec_alt_strategies.monitor import monitored
-from fsspec_alt_strategies.wrapper import (
+from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
+from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.monitor import monitored
+from fsspec_alt_strategies_impl.wrapper import (
     AsyncFlatWrapper,
     AsyncTreeWrapper,
     SyncTreeWrapper,
 )
-from fsspec_alt_strategies_common.monitor import Call, Monitor, monitoring
-from fsspec_alt_strategies_common.profile import StorageProfile
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-_SIMULATED = "fsspec_alt_strategies_testing.SimulatedFileSystem"
+_SIMULATED = "fsspec_alt_strategies_impl_testing.SimulatedFileSystem"
 
 
 def test_a_monitored_filesystem_is_returned_as_it_is() -> None:

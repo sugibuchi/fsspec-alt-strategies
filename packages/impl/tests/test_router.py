@@ -12,11 +12,11 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 from fsspec.spec import AbstractFileSystem
 
-from fsspec_alt_strategies.router import AsyncRoutingFileSystem
-from fsspec_alt_strategies.wrapper import AsyncFlatWrapper, AsyncTreeWrapper
-from fsspec_alt_strategies_common.monitor import Monitor, monitoring
-from fsspec_alt_strategies_common.profile import StorageProfile
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies.monitor import Monitor, monitoring
+from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.router import AsyncRoutingFileSystem
+from fsspec_alt_strategies_impl.wrapper import AsyncFlatWrapper, AsyncTreeWrapper
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import fsspec
 
-from fsspec_alt_strategies_common import (
+from fsspec_alt_strategies import (
     Call,
     CallCancelled,
     LoggingMonitor,

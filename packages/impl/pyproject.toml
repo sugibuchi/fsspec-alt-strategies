@@ -1,5 +1,5 @@
 [project]
-name = "fsspec-alt-strategies"
+name = "fsspec-alt-strategies-impl"
 dynamic = ["version"]
 description = "Alternative, filesystem-independent strategies for fsspec: tree operations, glob and file buffering"
 readme = "README.md"
@@ -32,7 +32,7 @@ classifiers = [
 requires-python = ">=3.11"
 dependencies = [
     "fsspec>=2024.2.0",
-    "fsspec-alt-strategies-common",
+    "fsspec-alt-strategies",
 ]
 
 [project.urls]
@@ -42,7 +42,7 @@ Issues = "https://github.com/sugibuchi/fsspec-alt-strategies/issues"
 Changelog = "https://github.com/sugibuchi/fsspec-alt-strategies/releases"
 
 [tool.uv.sources]
-fsspec-alt-strategies-common = { workspace = true }
+fsspec-alt-strategies = { workspace = true }
 
 [build-system]
 requires = ["hatchling>=1.27.0", "hatch-vcs"]
@@ -57,7 +57,7 @@ raw-options = { root = "../..", version_scheme = "post-release" }
 # distribution's metadata: a copy of the modules in another package keeps the
 # version it was copied at.
 [tool.hatch.build.hooks.vcs]
-version-file = "src/fsspec_alt_strategies/_version.py"
+version-file = "src/fsspec_alt_strategies_impl/_version.py"
 template = '''
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
@@ -69,7 +69,7 @@ __version__ = "{version}"
 [tool.hatch.build.targets.wheel]
 # The simulated filesystem is a package of its own, so that copies of the
 # strategies leave it out.
-packages = ["src/fsspec_alt_strategies", "src/fsspec_alt_strategies_testing"]
+packages = ["src/fsspec_alt_strategies_impl", "src/fsspec_alt_strategies_impl_testing"]
 
 [tool.uv]
 # Rebuild the package when its git commit or tags change, as its version

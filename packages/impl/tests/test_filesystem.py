@@ -12,20 +12,20 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
-from fsspec_alt_strategies.common.filesystem import (
+from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.common.filesystem import (
     _BaseFileSystem,
     _copy_errors,
     _failed_folder,
     _raise,
 )
-from fsspec_alt_strategies.files.fsspec_async import SyncFileAdapter
-from fsspec_alt_strategies.wrapper import (
+from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
+from fsspec_alt_strategies_impl.wrapper import (
     AsyncFlatWrapper,
     AsyncTreeWrapper,
     SyncTreeWrapper,
 )
-from fsspec_alt_strategies_common.profile import StorageProfile
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

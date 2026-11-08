@@ -7,10 +7,10 @@ from typing import Any
 
 import pytest
 
-from fsspec_alt_strategies.common.operation import _collect_with_errors
-from fsspec_alt_strategies.flat.walk import WalkState, flat_walk
-from fsspec_alt_strategies.tree.walk import tree_walk
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
+from fsspec_alt_strategies_impl.flat.walk import WalkState, flat_walk
+from fsspec_alt_strategies_impl.tree.walk import tree_walk
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 
 def _walk(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:

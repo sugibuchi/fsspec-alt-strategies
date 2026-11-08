@@ -17,15 +17,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-import fsspec_alt_strategies
+import fsspec_alt_strategies_impl
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-PACKAGE = fsspec_alt_strategies.__name__
-PACKAGE_DIR = Path(fsspec_alt_strategies.__file__).parent
+PACKAGE = fsspec_alt_strategies_impl.__name__
+PACKAGE_DIR = Path(fsspec_alt_strategies_impl.__file__).parent
 # The shared interface is installed, not copied: a copy imports it by its name.
-COMMON = "fsspec_alt_strategies_common"
+COMMON = "fsspec_alt_strategies"
 ALLOWED_IMPORTS = sys.stdlib_module_names | {"fsspec", COMMON}
 
 
@@ -80,7 +80,7 @@ def test_copy_imports_under_another_name(
         ]
         for name in modules:
             importlib.import_module(name)
-        assert copy.__version__ == fsspec_alt_strategies.__version__
+        assert copy.__version__ == fsspec_alt_strategies_impl.__version__
     finally:
         for name in [n for n in sys.modules if n.partition(".")[0] == "_contrib"]:
             del sys.modules[name]

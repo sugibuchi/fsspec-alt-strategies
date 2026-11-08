@@ -8,9 +8,9 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
-from fsspec_alt_strategies.wrapper import AsyncFlatWrapper, SyncFlatWrapper
-from fsspec_alt_strategies_common.profile import StorageProfile
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.wrapper import AsyncFlatWrapper, SyncFlatWrapper
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path

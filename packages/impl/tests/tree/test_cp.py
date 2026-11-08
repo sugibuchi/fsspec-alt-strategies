@@ -9,10 +9,10 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 from fsspec.utils import other_paths
 
-from fsspec_alt_strategies.common.operation import _collect_with_errors
-from fsspec_alt_strategies.tree.cp import CpState, tree_cp
-from fsspec_alt_strategies_common.profile import StorageProfile
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
+from fsspec_alt_strategies_impl.tree.cp import CpState, tree_cp
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 
 def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:

@@ -11,9 +11,15 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from fsspec_alt_strategies.common.jobs import _Job, _Jobs, _Queue, _Roots, _roots_of
-from fsspec_alt_strategies.common.operation import Operation, _collect_with_errors
-from fsspec_alt_strategies_common.monitor import State
+from fsspec_alt_strategies.monitor import State
+from fsspec_alt_strategies_impl.common.jobs import (
+    _Job,
+    _Jobs,
+    _Queue,
+    _Roots,
+    _roots_of,
+)
+from fsspec_alt_strategies_impl.common.operation import Operation, _collect_with_errors
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

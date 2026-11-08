@@ -6,7 +6,7 @@ import asyncio
 
 import fsspec
 
-from fsspec_alt_strategies_common import Call, current_routers, routing
+from fsspec_alt_strategies import Call, current_routers, routing
 
 _FS = fsspec.filesystem("memory")
 

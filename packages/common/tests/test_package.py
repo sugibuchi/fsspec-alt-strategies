@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import fsspec_alt_strategies_common
+import fsspec_alt_strategies
 
 
 def test_version() -> None:
-    assert fsspec_alt_strategies_common.__version__
+    assert fsspec_alt_strategies.__version__

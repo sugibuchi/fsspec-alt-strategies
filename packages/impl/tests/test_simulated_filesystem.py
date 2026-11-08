@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 
 def _tree(fs: SimulatedFileSystem) -> None:

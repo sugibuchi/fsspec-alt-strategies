@@ -9,10 +9,10 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 from fsspec.utils import other_paths
 
-from fsspec_alt_strategies.common.operation import _collect_with_errors
-from fsspec_alt_strategies.flat.cp import CpState, flat_cp
-from fsspec_alt_strategies_common.profile import StorageProfile
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
+from fsspec_alt_strategies_impl.flat.cp import CpState, flat_cp
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 # A flat storage's: its folders are implicit, and none is made.
 _FLAT = StorageProfile(implicit_folders=True)

@@ -5,13 +5,13 @@ requires-python = ">=3.11"
 [manifest]
 members = [
     "fsspec-alt-strategies",
-    "fsspec-alt-strategies-common",
+    "fsspec-alt-strategies-impl",
 ]
 
 [manifest.dependency-groups]
 dev = [
-    { name = "fsspec-alt-strategies", editable = "packages/impl" },
-    { name = "fsspec-alt-strategies-common", editable = "packages/common" },
+    { name = "fsspec-alt-strategies", editable = "packages/common" },
+    { name = "fsspec-alt-strategies-impl", editable = "packages/impl" },
     { name = "pre-commit", specifier = ">=4.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.0" },
@@ -191,20 +191,6 @@ wheels = [
 
 [[package]]
 name = "fsspec-alt-strategies"
-source = { editable = "packages/impl" }
-dependencies = [
-    { name = "fsspec" },
-    { name = "fsspec-alt-strategies-common" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fsspec", specifier = ">=2024.2.0" },
-    { name = "fsspec-alt-strategies-common", editable = "packages/common" },
-]
-
-[[package]]
-name = "fsspec-alt-strategies-common"
 source = { editable = "packages/common" }
 dependencies = [
     { name = "fsspec" },
@@ -212,6 +198,20 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "fsspec", specifier = ">=2024.2.0" }]
+
+[[package]]
+name = "fsspec-alt-strategies-impl"
+source = { editable = "packages/impl" }
+dependencies = [
+    { name = "fsspec" },
+    { name = "fsspec-alt-strategies" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fsspec", specifier = ">=2024.2.0" },
+    { name = "fsspec-alt-strategies", editable = "packages/common" },
+]
 
 [[package]]
 name = "identify"

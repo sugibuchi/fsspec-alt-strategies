@@ -8,9 +8,9 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.common.operation import _collect_with_errors
-from fsspec_alt_strategies.tree.du import DuState, tree_du
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
+from fsspec_alt_strategies_impl.tree.du import DuState, tree_du
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 
 def _du(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:

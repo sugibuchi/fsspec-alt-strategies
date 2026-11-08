@@ -10,12 +10,15 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from fsspec_alt_strategies.files.adaptive import (
+from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
 )
-from fsspec_alt_strategies.files.fsspec_async import AsyncFileAdapter, SyncFileAdapter
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.files.fsspec_async import (
+    AsyncFileAdapter,
+    SyncFileAdapter,
+)
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path

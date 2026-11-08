@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.common.operation import _collect_with_errors
-from fsspec_alt_strategies.flat.glob import GlobState, flat_glob
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
+from fsspec_alt_strategies_impl.flat.glob import GlobState, flat_glob
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

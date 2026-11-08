@@ -8,10 +8,10 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.common.operation import _collect_with_errors
-from fsspec_alt_strategies.common.patterns import _Prefix
-from fsspec_alt_strategies.tree.glob import GlobState, tree_glob
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
+from fsspec_alt_strategies_impl.common.patterns import _Prefix
+from fsspec_alt_strategies_impl.tree.glob import GlobState, tree_glob
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 
 def _glob(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:

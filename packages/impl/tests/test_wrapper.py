@@ -7,17 +7,17 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.implementations.local import LocalFileSystem
 
-from fsspec_alt_strategies.flat.filesystem import FlatFileSystem
-from fsspec_alt_strategies.router import AsyncRoutingFileSystem
-from fsspec_alt_strategies.tree.filesystem import TreeFileSystem
-from fsspec_alt_strategies.wrapper import (
+from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
+from fsspec_alt_strategies_impl.router import AsyncRoutingFileSystem
+from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+from fsspec_alt_strategies_impl.wrapper import (
     AsyncTreeWrapper,
     SyncTreeWrapper,
     _AsyncFileSystemWrapper,
     _SyncFileSystemWrapper,
 )
-from fsspec_alt_strategies_common.profile import StorageProfile
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path

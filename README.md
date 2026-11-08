@@ -37,8 +37,8 @@ This library offers other ways of doing the same things. It is a third-party pro
 
 | Package                        | What it holds                                                    | How you get it |
 |--------------------------------|------------------------------------------------------------------|----------------|
-| `fsspec-alt-strategies-common` | The interface: operations' control and states, monitors, storage profiles, known implementations | Installed |
-| `fsspec-alt-strategies`        | The strategies, filesystem classes, wrappers and file objects    | Copied, or installed |
+| `fsspec-alt-strategies`        | The interface: operations' control and states, monitors, storage profiles, known implementations | Installed |
+| `fsspec-alt-strategies-impl`   | The strategies, filesystem classes, wrappers and file objects    | Copied, or installed |
 
 We recommend copying the strategies' modules you use into your own package, e.g. as `_contrib/strategy`. Your
 filesystem's behaviour then never changes with a release of this library. The modules import each other relatively,
@@ -47,7 +47,7 @@ so a copy works under any name. Keep their license headers.
 The interface is installed, never copied:
 
 ```bash
-pip install fsspec-alt-strategies-common
+pip install fsspec-alt-strategies
 ```
 
 So every copy in a project, of any version, shares one interface: one `monitoring` block watches the calls of all of
@@ -69,8 +69,8 @@ fsspec's methods:
 
 ```python
 import fsspec
-from fsspec_alt_strategies import monitored
-from fsspec_alt_strategies_common import Monitor, monitoring
+from fsspec_alt_strategies_impl import monitored
+from fsspec_alt_strategies import Monitor, monitoring
 
 
 class Progress(Monitor):
@@ -101,8 +101,8 @@ A wrapper is light and not cached: make one when you need it, and drop it after.
 implement the storage's primitives, and declare its profile:
 
 ```python
-from fsspec_alt_strategies.tree.filesystem import TreeFileSystem
-from fsspec_alt_strategies_common import StorageProfile
+from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+from fsspec_alt_strategies import StorageProfile
 
 
 class MyFileSystem(TreeFileSystem):
@@ -123,7 +123,7 @@ A strategy is a plain function, taking the storage's operations it uses:
 
 ```python
 import asyncio
-from fsspec_alt_strategies.tree.find import tree_find
+from fsspec_alt_strategies_impl.tree.find import tree_find
 
 find = tree_find("data", ls=fs._ls, info=fs._info, concurrency_limit=asyncio.Semaphore(32))
 async with find as op:
@@ -156,13 +156,13 @@ None of these is right for every storage, and the library never picks one for yo
 
 ## Choosing with numbers
 
-`fsspec_alt_strategies_testing.SimulatedFileSystem` is an in-memory async filesystem. It counts the requests a real
+`fsspec_alt_strategies_impl_testing.SimulatedFileSystem` is an in-memory async filesystem. It counts the requests a real
 storage would get, and delays each by a latency and a bandwidth you set. It models an object store, or a storage with a
 hierarchical namespace. Run a strategy and fsspec's default on it, then compare their requests and times. It is a
 package of its own, so a copy of the strategies leaves it out.
 
 ```python
-from fsspec_alt_strategies_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 fs = SimulatedFileSystem(hierarchical=True, latency=0.02)
 fs.add_file("data/2024/01/a.parquet", b"...")

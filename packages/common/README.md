@@ -1,4 +1,4 @@
-# fsspec-alt-strategies-common
+# fsspec-alt-strategies
 
 The interface the strategies of [fsspec-alt-strategies](https://github.com/sugibuchi/fsspec-alt-strategies) share with
 their callers:
@@ -13,7 +13,7 @@ The strategies are copied into a project. This package is installed once, so tha
 interface, and one set of monitors.
 
 ```bash
-pip install fsspec-alt-strategies-common
+pip install fsspec-alt-strategies
 ```
 
 ## License

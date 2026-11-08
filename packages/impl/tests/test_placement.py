@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fsspec_alt_strategies.common.jobs import _Roots
-from fsspec_alt_strategies.common.placement import _Placing
+from fsspec_alt_strategies_impl.common.jobs import _Roots
+from fsspec_alt_strategies_impl.common.placement import _Placing
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
