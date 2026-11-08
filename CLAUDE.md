@@ -58,8 +58,8 @@ code: read it before adding a strategy.
     stops at once, waiting for writes in flight. There are no callbacks and no result classes.
 - A strategy's name tells its family, e.g. `tree_rm`, never a bare `rm`: code using fsspec has those names already.
 - A strategy replacing an fsspec method answers as it does. Where it departs on purpose, its docstring says why.
-- What a storage does that fsspec leaves open is declared in `profile.StorageProfile`, never detected. `profile=` is
-  required, and `StorageProfile()` must be correct on any storage. Add a field only when a strategy saves requests
+- What a storage does that fsspec leaves open is declared in `profile.StorageProfile`, never detected. A strategy
+  using it takes `profile=`, required, and `StorageProfile()` must be correct on any storage. Add a field only when a strategy saves requests
   or data copied with it.
 - The library never chooses a strategy for the developer. Each docstring says what the strategy assumes of the
   storage, and when it wins or loses.

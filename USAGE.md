@@ -32,7 +32,7 @@ the operation.
 
 ### Async file object
 
-The file objects in `files/` adapt their buffering to how a file is used. The module also provides adapters,
+The file objects in `files/` adapt their buffering to how a file is used. The package also provides adapters,
 which add fsspec's file features to an existing file-like object, e.g. an SDK's own:
 
 - `SyncFileAdapter` gives a sync file, such as an SDK's handle, the API of the files `open_async()` opens;
@@ -71,8 +71,7 @@ Its command line copies it, with its `cli` extra. Run it from your project, with
 uv run --with "fsspec-alt-strategies-impl[cli]" fsspec-alt-strategies-impl copy src/mypkg/_contrib/strategy
 ```
 
-It copies the package as installed. It replaces a previous copy, and
-refuses any other folder that is not empty. Delete the modules you do not use afterwards.
+It copies the package as installed. It replaces a previous copy, and refuses any other folder that is not empty. Delete the modules you do not use afterwards.
 
 ### The modules to copy for each feature
 

@@ -3,9 +3,13 @@
 """How to wrap a known filesystem, to monitor its calls.
 
 `known_implementations` maps a filesystem's class, by its full name, to how a
-copy of the strategies wraps it: with its `StorageProfile`, whose ``fs_type``
-says a `TreeFileSystem` or a `FlatFileSystem`, async or not, with its limits. The strategies'
-``monitored`` reads it, or a table of the caller's own.
+copy of the strategies wraps it:
+
+- its `StorageProfile`, whose ``fs_type`` picks a tree or a flat wrapper;
+- whether it is async;
+- its concurrency limits, and a flat wrapper's batch of deletions.
+
+The strategies' ``monitored`` reads it, or a table of the caller's own.
 
 It is declared, never detected: an entry says what the developer knows of the
 storage. A project adds its own, or changes one, before wrapping.

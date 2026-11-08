@@ -40,13 +40,13 @@ class StorageProfile:
     Parameters
     ----------
     fs_type : {"tree", "flat"}, optional
-        The family of strategies the storage's filesystem answers with:
-        "tree" for a hierarchical namespace listed a folder per request, with
-        ``_ils``, as `TreeFileSystem` has it, "flat" for keys listed by prefix,
-        with ``_iexpand``, ``_rm_files`` and ``rm_batch_size``, as `FlatFileSystem`
-        has them. A router copying
-        or moving between two storages picks the source's strategies with it.
-        Unknown by default: the router falls back on fsspec's own copy.
+        The family of strategies the storage's filesystem answers with.
+        "tree" is a hierarchical namespace listed a folder per request, with
+        ``_ils``, as on a `TreeFileSystem`. "flat" is keys listed by prefix,
+        with ``_iexpand``, ``_rm_files`` and ``rm_batch_size``, as on a
+        `FlatFileSystem`. A router copying or moving between two storages
+        picks the source's strategies with it. Unknown by default: the router
+        falls back on fsspec's own copy.
     parents_required : bool, optional
         Whether writing a file into a missing folder fails, rather than
         creating its parents. Unknown by default, taken as True: folders are
@@ -70,7 +70,8 @@ class StorageProfile:
     Raises
     ------
     ValueError
-        If ``fs_type`` is neither "tree" nor "flat", or ``implicit_folders`` is True and ``parents_required`` too, as a
+        If ``fs_type`` is neither "tree" nor "flat", or if
+        ``implicit_folders`` and ``parents_required`` are both True, as a
         file's parents then exist as soon as it does.
 
     Examples

@@ -4,7 +4,8 @@
 
 Strategies win or lose by the requests they make, and by how many run at a time.
 `SimulatedFileSystem` keeps its files in memory. It counts each request a real
-storage would get, and delays each by a fixed latency.
+storage would get, and delays each by a fixed latency, plus its bytes over a
+bandwidth if one is set.
 
 Its two modes model the two kinds of storage that strategies are chosen for:
 

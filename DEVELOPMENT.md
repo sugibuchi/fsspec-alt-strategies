@@ -8,7 +8,7 @@ ruff, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
 | Path                                                    | Contents                                                                   |
 |---------------------------------------------------------|----------------------------------------------------------------------------|
 | `packages/common/src/fsspec_alt_strategies/`            | The interface, installed once per project                                  |
-| `.../monitor.py`                                        | Operations' control, monitors, and the routers a call came through          |
+| `.../monitor.py`                                        | Operations' control, monitors, and the routers a call came through         |
 | `.../profile.py`                                        | `StorageProfile`: what a storage does that fsspec leaves open              |
 | `.../states.py`                                         | The states the strategies report, e.g. `FindState`                         |
 | `.../wrapper.py`                                        | `known_implementations`: how each known filesystem class is wrapped        |
@@ -103,6 +103,15 @@ The `Operation` returned works as it is iterated, a few requests ahead of the ca
 - It never swallows `CancelledError`.
 - It yields in the order the storage answers. A caller wanting fsspec's order sorts.
 
+A strategy replacing an fsspec method answers as it does. Where it departs on purpose, its docstring says why:
+
+- It keeps going past a failure, and reports each, where fsspec stops at the first.
+- A copy or move of a list keeps each folder's tree, under its name, as `cp -r` does. fsspec's flattens the trees.
+- With `maxdepth`, a copy or move places the files as without it. fsspec's places them by the files found, which
+  moves them when all are in one subfolder.
+- With `maxdepth`, a move keeps the files deeper than the limit, and the folders holding them. fsspec's deletes the
+  whole source.
+
 ### Filesystem classes, wrappers and monitors
 
 A strategy is attached in one of three ways:
@@ -132,7 +141,8 @@ implements three methods:
 - `_roots(path)` lists a folder above the storages.
 
 Within one storage, a call is that storage's own. Between two, a recursive copy or move runs the source family's
-strategy, chosen by the profile's `fs_type`. Each file goes through `_cross_fs_cp_file` or `_cross_fs_mv_file`. By
+strategy, chosen by the profile's `fs_type`. Without one, or with `maxdepth`, it is fsspec's copy, a file at a time.
+Each file goes through `_cross_fs_cp_file` or `_cross_fs_mv_file`. By
 default these stream the data through both storages' `open_async`; a subclass can use a server-side copy instead.
 
 The router imports a family only when copying from it. Its inner filesystems must be async, and `close()` closes them.
@@ -195,7 +205,9 @@ changes with a release. The interface is installed instead, so that every copy s
 - each source file keeps its SPDX license header;
 - no `__init__.py` but the package's own re-exports anything, so a copy can leave modules out.
 
-`packages/impl/tests/test_copyable.py` checks these rules.
+`packages/impl/tests/test_copyable.py` checks these rules. The command line, `fsspec-alt-strategies-impl copy`,
+copies the package as installed, with the `_version.py` its build wrote. It lives in its own package,
+`fsspec_alt_strategies_impl_cli`, so that copies leave it and click out.
 
 ### File objects
 
