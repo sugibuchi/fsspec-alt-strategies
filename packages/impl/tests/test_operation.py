@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from fsspec_alt_strategies.common.operation import Operation, _collect
+from fsspec_alt_strategies.common.operation import Operation, _collect_with_errors
 from fsspec_alt_strategies_common.monitor import State
 
 if TYPE_CHECKING:
@@ -101,7 +101,7 @@ async def test_its_repr_tells_its_status() -> None:
     await op.aclose()
     assert repr(op).startswith("<Operation cancelled ")
     op = _counting(0, [])
-    await _collect(op)
+    await _collect_with_errors(op)
     assert repr(op).startswith("<Operation done ")
 
 
@@ -115,7 +115,7 @@ async def test_an_error_ending_it_is_raised() -> None:
 
 async def test_collect_splits_items_and_errors() -> None:
     op = _counting(7, [])
-    items, errors = await _collect(op)
+    items, errors = await _collect_with_errors(op)
     assert items == [1, 2, 3, 4, 6]
     assert [e.args for e in errors] == [(0,), (5,)]
     assert op.done()

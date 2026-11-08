@@ -9,7 +9,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 from fsspec.utils import other_paths
 
-from fsspec_alt_strategies.common.operation import _collect
+from fsspec_alt_strategies.common.operation import _collect_with_errors
 from fsspec_alt_strategies.tree.cp import CpState, tree_cp
 from fsspec_alt_strategies_common.profile import StorageProfile
 from fsspec_alt_strategies_testing import SimulatedFileSystem
@@ -69,7 +69,7 @@ async def test_places_as_fsspec(
     expected = dict(zip(paths, other_paths(paths, path2, exists=exists), strict=True))
     data = {p: any_fs._file_data[p].data for p in paths if p in any_fs._file_data}
 
-    copied, errors = await _collect(_cp(any_fs, path1, path2))
+    copied, errors = await _collect_with_errors(_cp(any_fs, path1, path2))
     assert errors == []
     assert sorted(copied) == sorted((p, expected[p]) for p in data)
     for source, content in data.items():
@@ -98,7 +98,7 @@ async def test_a_pattern_places_as_fsspec(
     expected = dict(zip(paths, destinations, strict=True))
     files = [p for p in paths if p in any_fs._file_data]
 
-    copied, errors = await _collect(_cp(any_fs, pattern, path2))
+    copied, errors = await _collect_with_errors(_cp(any_fs, pattern, path2))
     assert errors == []
     assert sorted(copied) == sorted((p, expected[p]) for p in files)
 
@@ -118,7 +118,7 @@ async def test_a_list_of_files_places_as_fsspec(
     files = await AsyncFileSystem._expand_path(any_fs, paths, recursive=True)
     expected = dict(zip(files, other_paths(files, path2, flatten=True), strict=True))
 
-    copied, errors = await _collect(_cp(any_fs, paths, path2))
+    copied, errors = await _collect_with_errors(_cp(any_fs, paths, path2))
     assert errors == []
     assert sorted(copied) == sorted(expected.items())
 
@@ -127,7 +127,7 @@ async def test_a_list_keeps_the_trees_of_its_folders(
     any_fs: SimulatedFileSystem,
 ) -> None:
     _tree(any_fs)
-    copied, errors = await _collect(
+    copied, errors = await _collect_with_errors(
         _cp(any_fs, ["data/2023", "data/2024/*", "data/README.md"], "copied")
     )
     assert errors == []
@@ -154,7 +154,7 @@ async def test_a_list_copies_only_the_first_of_a_name(
     any_fs: SimulatedFileSystem, paths: list[str], destination: str
 ) -> None:
     _tree(any_fs)
-    copied, errors = await _collect(_cp(any_fs, paths, "copied"))
+    copied, errors = await _collect_with_errors(_cp(any_fs, paths, "copied"))
     # The first in path order is copied, as GNU's cp does, never overwritten.
     assert copied == [("data/2023/01/part-0.parquet", destination)]
     assert any_fs._file_data[copied[0][1]].data == b"data/2023/01/part-0.parquet"
@@ -165,7 +165,7 @@ async def test_a_list_copies_only_the_first_of_a_name(
 async def test_a_list_matching_nothing_raises(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     with pytest.raises(FileNotFoundError):
-        await _collect(_cp(any_fs, ["missing", "data/*/13"], "copied"))
+        await _collect_with_errors(_cp(any_fs, ["missing", "data/*/13"], "copied"))
 
 
 async def test_a_pattern_onto_its_own_matches_is_refused(
@@ -173,14 +173,14 @@ async def test_a_pattern_onto_its_own_matches_is_refused(
 ) -> None:
     _tree(any_fs)
     with pytest.raises(ValueError, match="into itself"):
-        await _collect(_cp(any_fs, "data/*", "data"))
+        await _collect_with_errors(_cp(any_fs, "data/*", "data"))
 
 
 async def test_requests(hierarchical_fs: SimulatedFileSystem) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.add_dir("data/empty")
     op = _cp(hierarchical_fs, "data", "copied")
-    copied, _ = await _collect(op)
+    copied, _ = await _collect_with_errors(op)
     assert len(copied) == 4
     assert op.state == CpState(current=op.state.current, files_found=4, files_copied=4)
     assert hierarchical_fs.stats.calls == {
@@ -195,7 +195,7 @@ async def test_requests(hierarchical_fs: SimulatedFileSystem) -> None:
 
     hierarchical_fs.reset_stats()
     profile = StorageProfile(parents_required=False)
-    await _collect(_cp(hierarchical_fs, "data", "again", profile=profile))
+    await _collect_with_errors(_cp(hierarchical_fs, "data", "again", profile=profile))
     assert hierarchical_fs.stats.calls["mkdir"] == 1  # Only the empty folder.
 
 
@@ -204,10 +204,10 @@ async def test_a_storage_requiring_parents() -> None:
         hierarchical=True, parents_required=True, asynchronous=True
     )
     _tree(fs)
-    _, errors = await _collect(_cp(fs, "data", "new/deep/copied"))
+    _, errors = await _collect_with_errors(_cp(fs, "data", "new/deep/copied"))
     assert errors == []
     assert await fs._exists("new/deep/copied/2023/01/part-0.parquet")
-    _, errors = await _collect(_cp(fs, "data/README.md", "other/README.md"))
+    _, errors = await _collect_with_errors(_cp(fs, "data/README.md", "other/README.md"))
     assert errors == []
 
 
@@ -215,7 +215,7 @@ async def test_a_storage_refusing_to_overwrite() -> None:
     fs = SimulatedFileSystem(hierarchical=True, overwrite=False, asynchronous=True)
     _tree(fs)
     fs.add_file("target.md", b"old")
-    await _collect(_cp(fs, "data/README.md", "target.md"))
+    await _collect_with_errors(_cp(fs, "data/README.md", "target.md"))
     assert fs._file_data["target.md"].data == b"data/README.md"
     # The refused copy, the old file found a file, its deletion, the copy again.
     assert fs.stats.calls == {"info": 2, "list": 1, "copy": 2, "delete": 1}
@@ -233,7 +233,7 @@ async def test_a_folder_refusing_a_copy_is_not_deleted() -> None:
     async def rm_file(path: str) -> None:
         deleted.append(path)
 
-    copied, errors = await _collect(
+    copied, errors = await _collect_with_errors(
         _cp(fs, "data/README.md", "target/", cp_file=cp_file, rm_file=rm_file)
     )
     assert copied == []
@@ -254,7 +254,7 @@ class _Locked(SimulatedFileSystem):
 async def test_a_failure_is_yielded_and_the_rest_is_copied() -> None:
     fs = _Locked(hierarchical=True, asynchronous=True)
     _tree(fs)
-    copied, errors = await _collect(_cp(fs, "data", "copied"))
+    copied, errors = await _collect_with_errors(_cp(fs, "data", "copied"))
     assert [type(e) for e in errors] == [PermissionError]
     assert errors[0].__notes__ == [
         "Copying 'data/2023/01/part-0.parquet' to"
@@ -266,9 +266,9 @@ async def test_a_failure_is_yielded_and_the_rest_is_copied() -> None:
 async def test_paths_it_refuses(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     with pytest.raises(ValueError, match="Cannot copy 'data' into itself"):
-        await _collect(_cp(any_fs, "data", "data/inner"))
+        await _collect_with_errors(_cp(any_fs, "data", "data/inner"))
     with pytest.raises(FileNotFoundError):
-        await _collect(_cp(any_fs, "missing", "copied"))
+        await _collect_with_errors(_cp(any_fs, "missing", "copied"))
 
 
 async def test_cancel_yields_the_copies_sent() -> None:
@@ -296,7 +296,9 @@ async def test_a_folder_failing_to_be_created_keeps_its_files() -> None:
             raise PermissionError(path)
         await fs._makedirs(path, exist_ok=exist_ok)
 
-    copied, errors = await _collect(_cp(fs, "data", "copied", makedirs=makedirs))
+    copied, errors = await _collect_with_errors(
+        _cp(fs, "data", "copied", makedirs=makedirs)
+    )
     assert [type(e) for e in errors] == [PermissionError]
     assert errors[0].__notes__ == ["Creating the folder 'copied/2023/01' failed."]
     # The files waiting on the folder are not copied; the others are.

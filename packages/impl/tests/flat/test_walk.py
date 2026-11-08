@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from fsspec_alt_strategies.common.operation import _collect
+from fsspec_alt_strategies.common.operation import _collect_with_errors
 from fsspec_alt_strategies.flat.walk import WalkState, flat_walk
 from fsspec_alt_strategies.tree.walk import tree_walk
 from fsspec_alt_strategies_testing import SimulatedFileSystem
@@ -44,9 +44,11 @@ async def test_finds_what_tree_walk_finds(
     flat_fs: SimulatedFileSystem, path: str, kwargs: dict[str, Any], topdown: bool
 ) -> None:
     _tree(flat_fs)
-    entries, errors = await _collect(_walk(flat_fs, path, topdown=topdown, **kwargs))
+    entries, errors = await _collect_with_errors(
+        _walk(flat_fs, path, topdown=topdown, **kwargs)
+    )
     assert errors == []
-    folders, _ = await _collect(
+    folders, _ = await _collect_with_errors(
         tree_walk(
             path,
             ls=flat_fs._ls,
@@ -72,7 +74,7 @@ async def test_folders_come_before_or_after_all_in_them(
     flat_fs: SimulatedFileSystem, topdown: bool
 ) -> None:
     _tree(flat_fs)
-    entries, _ = await _collect(_walk(flat_fs, "data", topdown=topdown))
+    entries, _ = await _collect_with_errors(_walk(flat_fs, "data", topdown=topdown))
     names = [e["name"] for e in entries]
     for folder in (e["name"] for e in entries if e["type"] == "directory"):
         for inside in (n for n in names if n.startswith(folder + "/")):
@@ -83,7 +85,7 @@ async def test_requests() -> None:
     fs = SimulatedFileSystem(page_size=2, asynchronous=True)
     _tree(fs)
     op = _walk(fs, "data")
-    entries, _ = await _collect(op)
+    entries, _ = await _collect_with_errors(op)
     # 5 keys, 2 a page: no listing per folder, and no info.
     assert fs.stats.calls == {"list": 3}
     assert len(entries) == 5 + 6  # The files, and data's 6 folders.
@@ -99,7 +101,7 @@ async def test_a_root_not_a_folder_raises(
 ) -> None:
     _tree(flat_fs)
     with pytest.raises(error):
-        await _collect(_walk(flat_fs, path))
+        await _collect_with_errors(_walk(flat_fs, path))
 
 
 @pytest.mark.parametrize("topdown", [True, False])
@@ -130,13 +132,13 @@ async def test_the_roots_own_marker_is_not_yielded(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)
-    without, _ = await _collect(_walk(flat_fs, "data"))
+    without, _ = await _collect_with_errors(_walk(flat_fs, "data"))
 
     async def ils(prefix: str) -> Any:
         yield {"name": "data/", "size": 0, "type": "file"}
         async for entry in flat_fs._ils(prefix):
             yield entry
 
-    entries, errors = await _collect(_walk(flat_fs, "data", ils=ils))
+    entries, errors = await _collect_with_errors(_walk(flat_fs, "data", ils=ils))
     assert errors == []
     assert entries == without

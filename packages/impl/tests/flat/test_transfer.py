@@ -8,7 +8,7 @@ from typing import Any, Self
 import pytest
 from fsspec.utils import other_paths
 
-from fsspec_alt_strategies.common.operation import _collect
+from fsspec_alt_strategies.common.operation import _collect_with_errors
 from fsspec_alt_strategies.common.routing import streaming_copy
 from fsspec_alt_strategies.flat.transfer import CpState, flat_transfer
 from fsspec_alt_strategies_common.profile import StorageProfile
@@ -128,7 +128,7 @@ async def test_places_as_fsspec(
     expected = dict(zip(paths, other_paths(paths, path2, exists=exists), strict=True))
     data = {p: src._file_data[p].data for p in paths if p in src._file_data}
 
-    copied, errors = await _collect(_transfer(src, dst, path1, path2))
+    copied, errors = await _collect_with_errors(_transfer(src, dst, path1, path2))
     assert errors == []
     assert sorted(copied) == sorted((p, expected[p]) for p in data)
     for source, content in data.items():
@@ -140,13 +140,15 @@ async def test_patterns_and_lists_place_as_flat_cp(
 ) -> None:
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     _tree(flat_fs)
-    copied, errors = await _collect(_transfer(flat_fs, dst, "data/*/01", "copied"))
+    copied, errors = await _collect_with_errors(
+        _transfer(flat_fs, dst, "data/*/01", "copied")
+    )
     assert errors == []
     assert sorted(copied) == [
         ("data/2023/01/part-0.parquet", "copied/2023/01/part-0.parquet"),
         ("data/2024/01/part-0.parquet", "copied/2024/01/part-0.parquet"),
     ]
-    copied, errors = await _collect(
+    copied, errors = await _collect_with_errors(
         _transfer(flat_fs, dst, ["data/2023/01", "data/2024/01"], "listed")
     )
     # Two roots of one name: the first is copied, the other reported.
@@ -158,7 +160,7 @@ async def test_requests_to_a_tree(flat_fs: SimulatedFileSystem) -> None:
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     _tree(flat_fs)
     op = _transfer(flat_fs, dst, "data", "copied")
-    copied, _ = await _collect(op)
+    copied, _ = await _collect_with_errors(op)
     assert len(copied) == 4
     assert op.state == CpState(current=op.state.current, files_found=4, files_copied=4)
     # One listing, and the reads in blocks of 4 bytes: 27 or 14 bytes each.
@@ -171,7 +173,7 @@ async def test_requests_to_an_object_store(flat_fs: SimulatedFileSystem) -> None
     dst = SimulatedFileSystem(asynchronous=True)
     _tree(flat_fs)
     profile = StorageProfile(implicit_folders=True)
-    _, errors = await _collect(
+    _, errors = await _collect_with_errors(
         _transfer(flat_fs, dst, "data", "copied/", profile=profile)
     )
     assert errors == []
@@ -197,7 +199,7 @@ async def test_a_marker_makes_its_folder() -> None:
         await dst._pipe_file(destination, keys[source])
 
     profile = StorageProfile(parents_required=False)
-    copied, errors = await _collect(
+    copied, errors = await _collect_with_errors(
         flat_transfer(
             "data",
             "copied",
@@ -224,7 +226,9 @@ async def test_a_destination_refusing_to_overwrite(
     dst = SimulatedFileSystem(hierarchical=True, overwrite=False, asynchronous=True)
     _tree(flat_fs)
     dst.add_file("target.md", b"old")
-    _, errors = await _collect(_transfer(flat_fs, dst, "data/README.md", "target.md"))
+    _, errors = await _collect_with_errors(
+        _transfer(flat_fs, dst, "data/README.md", "target.md")
+    )
     assert errors == []
     assert dst._file_data["target.md"].data == b"data/README.md"
     # The refused write, the old file found a file, its deletion, the write again.
@@ -248,7 +252,7 @@ async def test_failures_are_yielded_and_the_rest_is_copied(
             raise PermissionError(path)
         await dst._makedirs(path, exist_ok=exist_ok)
 
-    copied, errors = await _collect(
+    copied, errors = await _collect_with_errors(
         _transfer(
             flat_fs, dst, "data", "copied", copy_file=copy_file, dst_makedirs=makedirs
         )
@@ -265,7 +269,7 @@ async def test_failures_are_yielded_and_the_rest_is_copied(
 async def test_a_missing_source_raises(flat_fs: SimulatedFileSystem) -> None:
     dst = SimulatedFileSystem(asynchronous=True)
     with pytest.raises(FileNotFoundError):
-        await _collect(_transfer(flat_fs, dst, "missing", "copied"))
+        await _collect_with_errors(_transfer(flat_fs, dst, "missing", "copied"))
     assert dst.stats.calls == {"info": 1}
 
 

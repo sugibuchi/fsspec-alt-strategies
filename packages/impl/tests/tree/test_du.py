@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.common.operation import _collect
+from fsspec_alt_strategies.common.operation import _collect_with_errors
 from fsspec_alt_strategies.tree.du import DuState, tree_du
 from fsspec_alt_strategies_testing import SimulatedFileSystem
 
@@ -37,7 +37,7 @@ async def test_measures_as_fsspec(
 ) -> None:
     _tree(any_fs)
     op = _du(any_fs, path, maxdepth=maxdepth)
-    entries, errors = await _collect(op)
+    entries, errors = await _collect_with_errors(op)
     assert errors == []
     total = await AsyncFileSystem._du(any_fs, path, maxdepth=maxdepth)
     assert op.state.size == total
@@ -48,7 +48,7 @@ async def test_measures_as_fsspec(
 async def test_sends_no_info_per_file(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     op = _du(any_fs, "data")
-    await _collect(op)
+    await _collect_with_errors(op)
     assert op.state == DuState(
         current=op.state.current, folders_listed=7, files=5, size=221
     )
@@ -71,7 +71,7 @@ async def test_cancel_before_iterating_sends_nothing(
     _tree(any_fs)
     op = _du(any_fs, "data")
     op.cancel()
-    assert await _collect(op) == ([], [])
+    assert await _collect_with_errors(op) == ([], [])
     assert any_fs.stats.calls == {}
     assert op.cancelled()
 
@@ -86,6 +86,6 @@ async def test_a_failed_listing_is_yielded_and_the_rest_counted() -> None:
         return await fs._ls(path, detail=detail, **kwargs)
 
     op = _du(fs, "data", ls=ls)
-    _, errors = await _collect(op)
+    _, errors = await _collect_with_errors(op)
     assert [type(e) for e in errors] == [PermissionError]
     assert (op.state.errors, op.state.size) == (1, 201)

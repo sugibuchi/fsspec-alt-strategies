@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from fsspec_alt_strategies.common.jobs import _Job, _Jobs, _Queue, _Roots, _roots_of
-from fsspec_alt_strategies.common.operation import Operation, _collect
+from fsspec_alt_strategies.common.operation import Operation, _collect_with_errors
 from fsspec_alt_strategies_common.monitor import State
 
 if TYPE_CHECKING:
@@ -101,7 +101,7 @@ _BATCHES = [[f"a{i}" for i in range(5)], [f"b{i}" for i in range(5)]]
 async def test_runs_every_job_within_the_limit_and_gives_back_each_permit() -> None:
     limit = asyncio.Semaphore(3)
     op, jobs = _toy(limit, _BATCHES, failing=frozenset({"a2"}))
-    items, errors = await _collect(op)
+    items, errors = await _collect_with_errors(op)
     toy = jobs[0]
     assert sorted(items) == sorted({*_BATCHES[0], *_BATCHES[1]} - {"a2"})
     assert [e.args[0] for e in errors] == ["a2"]
@@ -114,7 +114,7 @@ async def test_runs_every_job_within_the_limit_and_gives_back_each_permit() -> N
 async def test_an_empty_source_ends_at_once() -> None:
     limit = asyncio.Semaphore(2)
     op, jobs = _toy(limit, [])
-    assert await _collect(op) == ([], [])
+    assert await _collect_with_errors(op) == ([], [])
     assert jobs[0].exhausted_calls == 1
     assert limit._value == 2
 
@@ -152,7 +152,7 @@ async def test_closing_waits_for_the_jobs_running() -> None:
 async def test_cancelling_its_task_cancels_the_jobs_running() -> None:
     limit = asyncio.Semaphore(2)
     op, jobs = _toy(limit, _BATCHES, delay=10)
-    task = asyncio.ensure_future(_collect(op))
+    task = asyncio.ensure_future(_collect_with_errors(op))
     await asyncio.sleep(0.005)
     assert jobs[0].started
     task.cancel()
@@ -167,7 +167,7 @@ async def test_a_shared_limit_is_waited_for_and_given_back() -> None:
     limit = asyncio.Semaphore(1)
     await limit.acquire()
     op, jobs = _toy(limit, _BATCHES[:1])
-    task = asyncio.ensure_future(_collect(op))
+    task = asyncio.ensure_future(_collect_with_errors(op))
     await asyncio.sleep(0.02)
     assert jobs[0].started == []
     limit.release()

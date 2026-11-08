@@ -20,7 +20,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _Jobs, _roots_of
-from ..common.operation import _collect
+from ..common.operation import _collect_with_errors
 from ._keys import _close
 from .glob import flat_glob
 
@@ -40,7 +40,7 @@ async def _expand(
     concurrency_limit: asyncio.Semaphore,
 ) -> _Roots:
     """The roots matching glob patterns, found with `flat_glob`."""
-    matches, errors = await _collect(
+    matches, errors = await _collect_with_errors(
         flat_glob(pattern, ils=ils, info=info, concurrency_limit=concurrency_limit)
     )
     return _roots_of(matches, errors, pattern)

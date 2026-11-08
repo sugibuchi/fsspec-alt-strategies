@@ -10,9 +10,9 @@ is stopped, through the methods of the interface's `OperationHandler`.
 From what its callers use to what that builds on:
 
 - `Operation` is what a strategy returns.
-- `_collect` runs an operation to its end, returning all it yielded.
-- `_collect_with_watching` does so for an fsspec call, as the call's monitors watch it.
-- `_watched` runs an operation for an fsspec call, yielding its items, telling
+- `_collect_with_errors` runs an operation to its end, returning all it yielded.
+- `_collect_with_monitors` does so for an fsspec call, as the call's monitors watch it.
+- `_with_monitors` runs an operation for an fsspec call, yielding its items, telling
   the monitors of the `monitoring` blocks around it, and fsspec's ``callback=``.
 - `_Counting` is the monitor fsspec's ``callback=`` is told through.
 
@@ -186,7 +186,7 @@ class Operation(OperationHandler, Generic[T, S]):
         await self.aclose()
 
 
-async def _collect(
+async def _collect_with_errors(
     items: Operation[Any, Any] | AsyncGenerator[Any],
 ) -> tuple[list[Any], list[Exception]]:
     """Run an operation to its end, and return what it yielded but errors, and its errors.
@@ -205,14 +205,14 @@ async def _collect(
     return found, errors
 
 
-async def _collect_with_watching(
+async def _collect_with_monitors(
     operation: Operation[Any, Any], call: Call, callback: Any = None
 ) -> tuple[list[Any], list[Exception]]:
-    """`_collect` of an operation, as its monitors watch it."""
-    return await _collect(_watched(operation, call, callback))
+    """`_collect_with_errors` of an operation, as its monitors watch it."""
+    return await _collect_with_errors(_with_monitors(operation, call, callback))
 
 
-async def _watched(
+async def _with_monitors(
     operation: Operation[Any, Any], call: Call, callback: Any = None
 ) -> AsyncGenerator[Any]:
     """Run an operation for a call, yielding its items, as its monitors watch it.

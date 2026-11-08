@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.common.operation import _collect
+from fsspec_alt_strategies.common.operation import _collect_with_errors
 from fsspec_alt_strategies.common.patterns import _Prefix
 from fsspec_alt_strategies.tree.glob import GlobState, tree_glob
 from fsspec_alt_strategies_testing import SimulatedFileSystem
@@ -27,7 +27,7 @@ def _glob(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
 async def _sorted_glob(
     fs: SimulatedFileSystem, path: str, **kwargs: Any
 ) -> tuple[list[dict[str, Any]], list[Exception]]:
-    entries, errors = await _collect(_glob(fs, path, **kwargs))
+    entries, errors = await _collect_with_errors(_glob(fs, path, **kwargs))
     return sorted(entries, key=lambda e: e["name"]), errors
 
 
@@ -81,7 +81,7 @@ async def test_prunes_folders_the_pattern_cannot_match_in(
 ) -> None:
     _tree(hierarchical_fs)
     op = _glob(hierarchical_fs, "data/*/2024/*/part-*")
-    entries, _ = await _collect(op)
+    entries, _ = await _collect_with_errors(op)
     assert len(entries) == 6
     assert op.state == GlobState(
         current=op.state.current, folders_listed=1 + 3 + 3 + 6, matched=6
@@ -98,7 +98,7 @@ async def test_double_star_prunes_after_it(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
-    await _collect(_glob(hierarchical_fs, "data/sales/**"))
+    await _collect_with_errors(_glob(hierarchical_fs, "data/sales/**"))
     # Only data/sales and below: the literal root is data/sales.
     assert hierarchical_fs.stats.calls["list"] == 1 + 2 + 4
 
@@ -122,7 +122,7 @@ async def test_several_patterns_answer_as_fsspecs_globs_together(
     any_fs: SimulatedFileSystem, paths: list[str], kwargs: dict[str, Any]
 ) -> None:
     _tree(any_fs)
-    entries, errors = await _collect(_glob(any_fs, paths, **kwargs))
+    entries, errors = await _collect_with_errors(_glob(any_fs, paths, **kwargs))
     assert errors == []
     expected: dict[str, Any] = {}
     for path in paths:
@@ -139,14 +139,14 @@ async def test_several_patterns_list_shared_folders_once(
 ) -> None:
     _tree(hierarchical_fs)
     patterns = ["data/*/2024/*/*.parquet", "data/*/2024/*/*.csv"]
-    entries, _ = await _collect(_glob(hierarchical_fs, patterns))
+    entries, _ = await _collect_with_errors(_glob(hierarchical_fs, patterns))
     assert len(entries) == 6
     # data, the 3 tables, their 2024s: as for one pattern.
     assert hierarchical_fs.stats.calls == {"list": 1 + 3 + 3 + 6}
 
     hierarchical_fs.reset_stats()
     for pattern in patterns:
-        await _collect(_glob(hierarchical_fs, pattern))
+        await _collect_with_errors(_glob(hierarchical_fs, pattern))
     assert hierarchical_fs.stats.calls == {"list": 2 * (1 + 3 + 3 + 6)}
 
 
@@ -155,7 +155,7 @@ async def test_lists_folders_concurrently_within_batch_size() -> None:
     for i in range(5):
         for j in range(5):
             fs.add_file(f"root/{i}/{j}/file")
-    entries, _ = await _collect(
+    entries, _ = await _collect_with_errors(
         _glob(fs, "root/*/*/file", concurrency_limit=asyncio.Semaphore(4))
     )
     assert len(entries) == 25
@@ -169,7 +169,7 @@ async def test_plain_paths_are_asked_for_concurrently() -> None:
     for path in paths:
         fs.add_file(path)
     op = _glob(fs, [*paths, "root/missing.csv"], concurrency_limit=asyncio.Semaphore(4))
-    entries, _ = await _collect(op)
+    entries, _ = await _collect_with_errors(op)
     assert sorted(e["name"] for e in entries) == paths
     assert fs.stats.calls == {"info": 21}
     assert fs.stats.max_concurrency == 4  # Not one after another.
@@ -201,7 +201,7 @@ class _Forbidding(SimulatedFileSystem):
 async def test_failed_listing_adds_its_error_and_the_search_goes_on() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
-    entries, errors = await _collect(_glob(fs, "data/*/2024/*/*"))
+    entries, errors = await _collect_with_errors(_glob(fs, "data/*/2024/*/*"))
     assert [type(e) for e in errors] == [PermissionError]
     assert len(entries) == 4
     assert not any(e["name"].startswith("data/sales/") for e in entries)
