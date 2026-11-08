@@ -1,8 +1,78 @@
-# Using fsspec-alt-strategies
+# Usage
 
-How to use the strategies, and how to choose among them. See the
-[README](https://github.com/sugibuchi/fsspec-alt-strategies#readme) for what they are, and how to install or copy them.
-## Ways to use it
+How to get the library's features, and how to use them. See the
+[README](https://github.com/sugibuchi/fsspec-alt-strategies#readme) for why they exist.
+
+## Introduction
+
+### Provided features
+
+#### File tree operation strategies
+
+The strategies walk, find, glob, measure, delete, copy and move file trees. `tree/` holds those for storages listing
+one folder per request, and `flat/` those for object stores listing a key prefix in one paginated request. They come
+in three forms:
+
+- **Functions**, such as `tree_rm` or `flat_find`, for built-in, specific strategies: you call one with the storage's
+  operations it uses.
+- **Abstract filesystem classes**, `TreeFileSystem` and `FlatFileSystem`, for a new filesystem implementation: you
+  implement the storage's primitives, and the recursive methods are the strategies.
+- **Wrappers**, in `wrapper.py`, for existing filesystem implementations: they give a filesystem the strategies
+  without changing it. `monitored()` picks the wrapper for a known filesystem.
+
+#### Monitor
+
+A `Monitor` watches the operations behind fsspec's methods, such as `fs.rm(...)`, path by path. It sees each path
+done, each error and the progress, and it can cancel the operation. It is part of the interface package, so one
+`monitoring` block watches every copy of the strategies in a project.
+
+#### Async file object
+
+The file objects in `files/` adapt their buffering to how a file is used. `AsyncFileAdapter` gives a sync file the
+API of the files `open_async()` opens, and fsspec's transactions work with any file object.
+
+#### Filesystem router
+
+`AsyncRoutingFileSystem`, in `router.py`, spans several storages, e.g. a cloud's volumes. It routes each path to the
+storage holding it, and copies or moves between storages with the source's strategy.
+
+### Installation
+
+#### The interface package, from PyPI
+
+The interface holds the operations' control and states, the monitors, the storage profiles and the known
+implementations. It is installed, never copied:
+
+```bash
+pip install fsspec-alt-strategies
+```
+
+Every copy of the strategies in a project, of any version, then shares one interface. An exception such as
+`CallCancelled` is the same class whichever copy raised it.
+
+#### The implementation package, by copying its files
+
+We recommend copying the modules of `fsspec_alt_strategies_impl` you use into your own package, e.g. as
+`_contrib/strategy`. Your filesystem's behaviour then never changes with a release of this library. The modules
+import each other relatively, so a copy works under any name. Keep their license headers.
+
+It is also on PyPI, as `fsspec-alt-strategies-impl`, to try it before copying.
+
+#### The modules to copy for each feature
+
+| Feature                         | Modules to copy                                                            |
+|---------------------------------|----------------------------------------------------------------------------|
+| A family's functions            | `tree/` or `flat/`, and `common/`                                          |
+| A family's abstract class       | `tree/` or `flat/`, and `common/`; `files/` for its file objects, if used  |
+| Wrappers and `monitored()`      | `wrapper.py`, `monitor.py`, `__init__.py`, `tree/`, `flat/`, `common/` and `files/` |
+| Monitor                         | Nothing: it is in the interface package                                    |
+| Async file objects              | `files/`                                                                   |
+| Filesystem router               | `router.py`, `common/`, and the family of each storage copied or moved from |
+
+A monitor watches only filesystems whose methods run the strategies: the abstract classes' subclasses and the
+wrappers.
+
+## Usage
 
 ### Watch an existing filesystem
 
@@ -75,7 +145,7 @@ async with find as op:
 print(op.state.found)
 ```
 
-## Choosing
+### Choosing
 
 None of these is right for every storage, and the library never picks one for you.
 
@@ -86,7 +156,7 @@ None of these is right for every storage, and the library never picks one for yo
 - **The concurrency limits** are yours to set. A filesystem unsafe to call from several threads, such as SFTP, needs
   them at 1.
 
-## Costs to know
+### Costs to know
 
 - A flat wrapper lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix. That listing
   is held in memory, and covers the prefix's whole folder. A subclass overriding `_iexpand` with the storage's own listing
@@ -96,7 +166,7 @@ None of these is right for every storage, and the library never picks one for yo
 - `known_implementations` is shared by every copy in a project. Change it with care, or pass your own table.
 - Only the calls a strategy runs are watched. A call fsspec answers itself, e.g. a copy that is not recursive, is not.
 
-## Choosing with numbers
+### Choosing with numbers
 
 `fsspec_alt_strategies_impl_testing.SimulatedFileSystem` is an in-memory async filesystem. It counts the requests a real
 storage would get, and delays each by a latency and a bandwidth you set. It models an object store, or a storage with a
