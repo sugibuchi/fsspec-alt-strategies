@@ -1,8 +1,7 @@
 [project]
 name = "fsspec-alt-strategies-impl"
-dynamic = ["version"]
+dynamic = ["version", "readme"]
 description = "Alternative, filesystem-independent strategies for fsspec: tree operations, glob and file buffering"
-readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Tsuyoshi SUGIBUCHI" }]
@@ -44,6 +43,13 @@ Changelog = "https://github.com/sugibuchi/fsspec-alt-strategies/releases"
 [tool.uv.sources]
 fsspec-alt-strategies = { workspace = true }
 
+# The readme is the workspace's README.md, read by hatch_build.py, and copied
+# into the sdist, which a wheel may be built from.
+[tool.hatch.metadata.hooks.custom]
+
+[tool.hatch.build.targets.sdist.force-include]
+"../../README.md" = "README.md"
+
 [build-system]
 requires = ["hatchling>=1.27.0", "hatch-vcs"]
 build-backend = "hatchling.build"
@@ -76,5 +82,7 @@ packages = ["src/fsspec_alt_strategies_impl", "src/fsspec_alt_strategies_impl_te
 # comes from git (hatch-vcs), not only when pyproject.toml changes.
 cache-keys = [
     { file = "pyproject.toml" },
+    { file = "hatch_build.py" },
+    { file = "../../README.md" },
     { git = { commit = true, tags = true } },
 ]

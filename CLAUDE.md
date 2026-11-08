@@ -106,10 +106,10 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
 
 ### Writing docs
 
-Write docs so that people can review them. That covers this file, DEVELOPMENT.md and the README.
+Write docs so that people can review them. That covers this file, DEVELOPMENT.md, USAGE.md and the README.
 
 - One idea per sentence: about 30 words, never more than 50.
 - At most one parenthesis per sentence, never nested.
 - Three or more items make a list.
 - Describe what is, not what was: git keeps the history.
-- The README uses absolute URLs for links to files, as PyPI cannot resolve relative paths.
+- The README uses absolute URLs for links to files, as PyPI cannot resolve relative paths. It is both packages' readme on PyPI, read by each package's `hatch_build.py`: they have none of their own.
