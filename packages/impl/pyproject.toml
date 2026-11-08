@@ -1,7 +1,7 @@
 [project]
 name = "fsspec-alt-strategies-impl"
 dynamic = ["version", "readme"]
-description = "Alternative, filesystem-independent strategies for fsspec: tree operations, glob and file buffering"
+description = "Alternative, filesystem-independent strategies for fsspec: streaming tree operations, monitors, adaptive files and a router"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Tsuyoshi SUGIBUCHI" }]
@@ -12,10 +12,11 @@ keywords = [
     "glob",
     "hierarchical namespace",
     "azure data lake",
-    "databricks",
+    "object storage",
+    "s3",
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Framework :: AsyncIO",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
@@ -31,7 +32,7 @@ classifiers = [
 requires-python = ">=3.11"
 dependencies = [
     "fsspec>=2024.2.0",
-    "fsspec-alt-strategies",
+    "fsspec-alt-strategies>=0.1,<1",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +44,7 @@ fsspec-alt-strategies-impl = "fsspec_alt_strategies_impl_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/sugibuchi/fsspec-alt-strategies"
+Documentation = "https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/USAGE.md"
 Source = "https://github.com/sugibuchi/fsspec-alt-strategies"
 Issues = "https://github.com/sugibuchi/fsspec-alt-strategies/issues"
 Changelog = "https://github.com/sugibuchi/fsspec-alt-strategies/releases"

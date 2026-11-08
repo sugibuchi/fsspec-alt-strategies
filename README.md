@@ -11,7 +11,7 @@
 Alternative, filesystem-independent strategies for [fsspec](https://github.com/fsspec/filesystem_spec) filesystems, and
 a way to watch and stop what they do.
 
-> **Status:** pre-alpha. The API may change.
+> **Status:** alpha. The API may change.
 
 fsspec's recursive operations, such as `find`, `rm` and `copy`, list a whole tree before they act on it. That suits
 object stores, which list every key under a prefix in one paginated request. It is slow on storages with a hierarchical
