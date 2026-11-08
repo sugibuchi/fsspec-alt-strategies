@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from ..common.types import _Info, _Ls, _Request
     from .walk import _Listing
 
-__all__ = ["CpState", "tree_cp"]
+__all__ = ["CpState", "tree_cp", "tree_local_cp"]
 
 
 def tree_cp(
@@ -223,7 +223,68 @@ def tree_cp(
     )
 
 
-class _Transfer(_Placing, _TreeJobs):
+def tree_local_cp(
+    path1: str | Sequence[str],
+    path2: str,
+    *,
+    ls: _Ls,
+    info: _Info,
+    cp_file: _Request,
+    makedirs: _Request,
+    rm_file: _Request,
+    profile: StorageProfile,
+    concurrency_limit: asyncio.Semaphore,
+) -> Operation[tuple[str, str], CpState]:
+    """Copy a folder and everything in it within one storage, as `tree_cp` does.
+
+    It is `tree_cp` with the destination's operations the source's own, and
+    ``same_storage=True``: a path copied onto itself, or under itself, is
+    refused.
+
+    Parameters
+    ----------
+    path1 : str or sequence of str
+        The folder or file to copy, a glob pattern, or a list of them.
+    path2 : str
+        Where to copy it, as with `tree_cp`.
+    ls, info : callable
+        The storage's operations, as with `tree_cp`.
+    cp_file : callable
+        Copies a file within the storage, called as
+        ``cp_file(source, destination)``: e.g. the filesystem's ``_cp_file``.
+    makedirs, rm_file : callable
+        The storage's operations, as `tree_cp`'s ``dst_makedirs`` and
+        ``dst_rm_file``.
+    profile : StorageProfile
+        What the storage does: ``StorageProfile()`` if it is unknown.
+    concurrency_limit : asyncio.Semaphore
+        Held by each request while it runs.
+
+    Returns
+    -------
+    Operation
+        As `tree_cp`'s.
+
+    See Also
+    --------
+    tree_cp : The same, to another storage too.
+    """
+    return tree_cp(
+        path1,
+        path2,
+        ls=ls,
+        info=info,
+        cp_file=cp_file,
+        dst_info=info,
+        dst_makedirs=makedirs,
+        dst_rm_file=rm_file,
+        same_storage=True,
+        profile=profile,
+        concurrency_limit=concurrency_limit,
+    )
+
+
+class _CopyOrMove(_Placing, _TreeJobs):
     """The jobs of a copy or a move: a folder made where needed, and one per file.
 
     A file's job waits for its destination folder, when the storage needs it.
@@ -336,7 +397,7 @@ class _Transfer(_Placing, _TreeJobs):
         return [error]
 
 
-class _Copy(_Transfer):
+class _Copy(_CopyOrMove):
     """The jobs of one `tree_cp`: a ``cp_file`` per file."""
 
     def __init__(

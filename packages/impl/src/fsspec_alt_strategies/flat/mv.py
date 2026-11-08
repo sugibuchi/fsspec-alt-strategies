@@ -20,7 +20,7 @@ from fsspec_alt_strategies_common.states import MvState
 from ..common.jobs import _Job
 from ..common.operation import Operation
 from ._jobs import _keys_of
-from .cp import _Copy
+from .cp import _Copy, _CopyOrMove
 
 if TYPE_CHECKING:
     import asyncio
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
     from ..common.types import _Ils, _Info, _Request, _Requests
 
-__all__ = ["MvState", "flat_mv"]
+__all__ = ["MvState", "flat_local_mv", "flat_mv"]
 
 
 def flat_mv(
@@ -224,11 +224,78 @@ def flat_mv(
     )
 
 
-class _Rename(_Copy):
+def flat_local_mv(
+    path1: str | Sequence[str],
+    path2: str,
+    *,
+    ils: _Ils,
+    info: _Info,
+    mv_file: _Request | None = None,
+    cp_file: _Request | None = None,
+    rm_files: _Requests | None = None,
+    batch_size: int | None = None,
+    makedirs: _Request,
+    rm_file: _Request,
+    profile: StorageProfile,
+    concurrency_limit: asyncio.Semaphore,
+) -> Operation[tuple[str, str], MvState]:
+    """Move the keys under a prefix within one storage, as `flat_mv` does.
+
+    It is `flat_mv` with the destination's operations the source's own, and
+    ``same_storage=True``: the profile's ``renames_files`` then chooses a
+    rename, and a path moved under itself is refused.
+
+    Parameters
+    ----------
+    path1 : str or sequence of str
+        The folder or file to move, a glob pattern, or a list of them.
+    path2 : str
+        Where to move it, as with `flat_mv`.
+    ils, info, mv_file, cp_file, rm_files, batch_size : callable or int
+        The storage's operations, as with `flat_mv`.
+    makedirs, rm_file : callable
+        The storage's, as `flat_mv`'s ``dst_makedirs`` and ``dst_rm_file``.
+    profile : StorageProfile
+        What the storage does: ``StorageProfile()`` if it is unknown.
+    concurrency_limit : asyncio.Semaphore
+        Held by each request but the listing while it runs.
+
+    Returns
+    -------
+    Operation
+        As `flat_mv`'s.
+
+    Raises
+    ------
+    ValueError
+        As `flat_mv` raises it.
+
+    See Also
+    --------
+    flat_mv : The same, to another storage too.
+    """
+    return flat_mv(
+        path1,
+        path2,
+        ils=ils,
+        info=info,
+        mv_file=mv_file,
+        cp_file=cp_file,
+        rm_files=rm_files,
+        batch_size=batch_size,
+        dst_info=info,
+        dst_makedirs=makedirs,
+        dst_rm_file=rm_file,
+        same_storage=True,
+        profile=profile,
+        concurrency_limit=concurrency_limit,
+    )
+
+
+class _Rename(_CopyOrMove):
     """The jobs of one `flat_mv` by ``mv_file``: one move per key.
 
-    They are a copy's jobs, `flat_cp`'s, with ``mv_file`` as the request per
-    key: it moves the key where the copy would put it. A folder's marker is
+    ``mv_file`` moves each key where a copy would put it. A folder's marker is
     moved too, but not yielded.
     """
 
@@ -241,9 +308,20 @@ class _Rename(_Copy):
         path2: str,
         *,
         mv_file: _Request,
+        rm_file: _Request,
         **kwargs: Any,
     ) -> None:
-        super().__init__(path1, path2, cp_file=mv_file, **kwargs)
+        # rm_file is the destination's, which a move never needs.
+        super().__init__(path1, path2, **kwargs)
+        self.mv_file = mv_file
+
+    async def transfer_file(self, source: str, destination: str) -> None:
+        try:
+            await self.mv_file(source, destination)
+        except Exception as e:
+            # Yielded among paths, the error must tell its paths itself.
+            e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")
+            raise
 
     def state(self) -> MvState:
         return MvState(

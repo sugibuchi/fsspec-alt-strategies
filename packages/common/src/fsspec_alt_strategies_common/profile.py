@@ -25,6 +25,7 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 __all__ = ["StorageProfile"]
 
@@ -38,6 +39,13 @@ class StorageProfile:
 
     Parameters
     ----------
+    fs_type : {"tree", "flat"}, optional
+        The family of strategies the storage's filesystem answers with:
+        "tree" for a hierarchical namespace listed a folder per request, with
+        `_ls`, "flat" for keys listed by prefix, with `_ils`, `_rm_files`
+        and `rm_batch_size`, as FlatFileSystem has them. A router copying
+        or moving between two storages picks the source's strategies with it.
+        Unknown by default: the router falls back on fsspec's own copy.
     parents_required : bool, optional
         Whether writing a file into a missing folder fails, rather than
         creating its parents. Unknown by default, taken as True: folders are
@@ -61,13 +69,13 @@ class StorageProfile:
     Raises
     ------
     ValueError
-        If ``implicit_folders`` is True and ``parents_required`` too, as a
+        If ``fs_type`` is neither "tree" nor "flat", or ``implicit_folders`` is True and ``parents_required`` too, as a
         file's parents then exist as soon as it does.
 
     Examples
     --------
     >>> profile = StorageProfile(implicit_folders=True)
-    >>> op = tree_cp(
+    >>> op = tree_local_cp(
     ...     "data/2024",
     ...     "archive/2024",
     ...     ls=fs._ls,
@@ -80,12 +88,15 @@ class StorageProfile:
     ... )
     """
 
+    fs_type: Literal["tree", "flat"] | None = None
     parents_required: bool | None = None
     implicit_folders: bool | None = None
     renames_files: bool | None = None
     renames_folders: bool | None = None
 
     def __post_init__(self) -> None:
+        if self.fs_type not in (None, "tree", "flat"):
+            raise ValueError(f"fs_type must be 'tree' or 'flat': {self.fs_type!r}")
         if self.implicit_folders and self.parents_required:
             raise ValueError(
                 "parents_required cannot be True with implicit_folders: a file's"

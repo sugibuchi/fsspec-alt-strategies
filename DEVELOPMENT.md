@@ -304,14 +304,13 @@ Or they wrap an existing filesystem as one, to use the strategies and monitors w
 
 Choosing the class chooses the family: a developer wanting one strategy of another overrides that method, as above.
 
-A filesystem class deals with its own storage only. A copy to another storage is the router's concern, in its
-`_transfer` hook below.
+A filesystem class deals with its own storage only. A copy to another storage is the router's concern, below.
 
 #### Routers
 
 Some namespaces span several storages, each with a filesystem of its own, e.g. a cloud's volumes. A router passes each
 call to the filesystem of the path's storage. `AsyncRoutingFileSystem`, in `common/routing.py`, is its base: a plain
-async fsspec filesystem, knowing no family and importing none.
+async fsspec filesystem. It imports a family's `cp` and `mv` only to copy or move from a storage of that family.
 
 A subclass implements three methods:
 
@@ -324,14 +323,13 @@ It may override these hooks:
 
 - `_root_info(path)`, a coroutine, describes a path above the storages for `_info`. By default, the root is a bare
   folder entry, and any other path its entry in `_roots` of its parent.
-- `_server_copy(fs1, path1, fs2, path2)` copies a file across without the data passing through the router. It returns
-  False where it cannot, and the file is streamed instead. It raises on any other failure.
-- `_transfer(fs1, path1, fs2, path2, *, copy_file)` returns the strategy copying between two storages, not yet started.
-  The router knows no family, so the subclass picks it, as it knows its inner filesystems. By default, it returns None.
-  - A subclass gives it the source's listing and `_info`, and the destination's `_info`, `_makedirs`, `_rm_file` and
-    profile.
-  - `copy_file` holds a permit of `transfer_limit`. The strategy's `concurrency_limit` must be another semaphore, e.g.
-    the source's `operation_limit`, or the two would wait on each other.
+- `_cross_fs_cp_file(src_fs, src_path, dest_fs, dest_path)`, a coroutine, copies a file between two storages. By
+  default, it streams the data through the router with `streaming_copy`. A subclass overrides it with a server-side
+  copy, and calls the default where that cannot be done.
+- `_cross_fs_mv_file(src_fs, src_path, dest_fs, dest_path)`, a coroutine, moves one. By default, it is
+  `_cross_fs_cp_file`, then the source's `_rm_file`.
+- Both run holding a permit of `transfer_limit`. So the strategy's `concurrency_limit` is the source's
+  `operation_limit`: the same semaphore would make the two wait on each other.
 
 How it passes calls on:
 
@@ -350,11 +348,14 @@ How it passes calls on:
 - `test_routing.py` fails on any fsspec method the router neither passes on nor lists as inherited on purpose.
 
 A copy or move whose two paths route to the same inner filesystem, `fs1 is fs2`, is that filesystem's own. A
-recursive copy or move between two storages runs the strategy `_transfer` returns:
+recursive copy or move between two storages runs the source's family's strategy, as its profile's `fs_type` says:
 
-- Its `copy_file` tries `_server_copy`, then `streaming_copy`, under the router's `transfer_limit`.
-- Where `_transfer` returns None, the copy is fsspec's own, a `_cp_file` per file.
-- A move deletes each source file as soon as its copy succeeds, then the source folders left empty.
+- A tree source runs `tree_cp` or `tree_mv`, a flat one `flat_cp` or `flat_mv`, with `same_storage=False`. The
+  destination's operations and profile are the other filesystem's.
+- Each file goes by `_cross_fs_cp_file`, or `_cross_fs_mv_file` for a tree source's move. A flat source's move copies
+  each key, then deletes the keys copied in batches, by its `_rm_files`.
+- Where `fs_type` is unknown, the copy is fsspec's own, a `_cp_file` per file.
+- A move deletes each source file once its copy succeeds, and the source folders left empty.
 - The call is the router's own, as a monitor sees it.
 
 A list of sources in several storages is copied or moved per storage, as a list in each:
@@ -421,11 +422,11 @@ class AccountFileSystem(AsyncRoutingFileSystem):
     async def _roots(self, path):
         return [{"name": c, "type": "directory", "size": 0} async for c in self.list_containers()]
 
-    async def _server_copy(self, fs1, path1, fs2, path2):
-        if fs1.account != fs2.account:
-            return False
-        await fs2.copy_from_url(fs1.url(path1), path2)
-        return True
+    async def _cross_fs_cp_file(self, src_fs, src_path, dest_fs, dest_path):
+        if src_fs.account != dest_fs.account:
+            await super()._cross_fs_cp_file(src_fs, src_path, dest_fs, dest_path)
+            return
+        await dest_fs.copy_from_url(src_fs.url(src_path), dest_path)
 ```
 
 #### The tree strategies
@@ -440,7 +441,9 @@ come in two layers, by what they send:
 
 A copy or move within one storage is the special case of one between two. `tree_cp` and `tree_mv` take the source's
 `ls` and `info`, the destination's operations with a `dst_` prefix, and the request copying or moving one file. Within
-one storage, the same filesystem's operations are given twice, with `same_storage=True`:
+one storage, the same filesystem's operations are given twice, with `same_storage=True`. `tree_local_cp` and
+`tree_local_mv` do so, taking one storage's operations, and so do `flat_local_cp` and `flat_local_mv`. The jobs of a
+copy and a move share one class per family, `_CopyOrMove`, whose subclass says how a file goes:
 
 - `_Placing` asks the destination's `info`, and refuses a path into itself only within one storage.
 - The profile is the destination's. Only within one storage does it tell how the source renames, or deletes its
@@ -541,7 +544,8 @@ The fields, and the requests each saves:
 
 | Field              | Saves                                                                              |
 |--------------------|------------------------------------------------------------------------------------|
-| `parents_required` | False: the `makedirs` of each folder with files, in `tree_cp`, `tree_mv` and the transfers. |
+| `fs_type`          | "tree" or "flat": the router's copy or move from the storage, by that family's strategy, rather than fsspec's. |
+| `parents_required` | False: the `makedirs` of each folder with files, in `tree_cp`, `tree_mv`, `flat_cp` and `flat_mv`. |
 | `implicit_folders` | True: those, and the `rm_folder` of each folder, in `tree_rm` and `tree_mv`.       |
 | `renames_files`    | True: the data copied by `flat_mv`, given both ways, as it moves each key by `mv_file`. |
 | `renames_folders`  | True: all requests in a folder moved whole by one `mv_file`, in `tree_mv`.         |

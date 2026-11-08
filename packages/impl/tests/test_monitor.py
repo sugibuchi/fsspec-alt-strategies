@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -50,7 +51,9 @@ def test_a_filesystem_is_wrapped_as_its_entry_says() -> None:
     assert isinstance(flat, AsyncFlatWrapper)
     assert flat.fs is fs
     assert (flat.operation_concurrency, flat.io_concurrency) == (3, 2)
-    assert (flat.rm_batch_size, flat.storage_profile) == (100, profile)
+    # The wrapper declares its family.
+    assert flat.rm_batch_size == 100
+    assert flat.storage_profile == replace(profile, fs_type="flat")
 
 
 def test_a_subclass_takes_the_entry_of_its_class() -> None:
@@ -112,4 +115,4 @@ def test_an_unknown_filesystem_is_wrapped_if_asked(asynchronous: bool) -> None:
     tree = monitored(fs, {}, wrap_unknown_fs=True)
     assert isinstance(tree, AsyncTreeWrapper if asynchronous else SyncTreeWrapper)
     assert (tree.operation_concurrency, tree.io_concurrency) == (1, 1)
-    assert tree.storage_profile == StorageProfile()
+    assert tree.storage_profile == StorageProfile(fs_type="tree")

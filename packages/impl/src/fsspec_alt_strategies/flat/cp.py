@@ -13,6 +13,7 @@ This module depends on `_jobs`, and `jobs`, `operation` and `placement` of
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies_common.states import CpState
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
     from ..common.jobs import _Roots
     from ..common.types import _Ils, _Info, _Request
 
-__all__ = ["CpState", "flat_cp"]
+__all__ = ["CpState", "flat_cp", "flat_local_cp"]
 
 
 def flat_cp(
@@ -192,12 +193,74 @@ def flat_cp(
     )
 
 
-class _Copy(_Placing, _FlatJobs):
-    """The jobs of one `flat_cp`: a folder made where needed, a copy per key.
+def flat_local_cp(
+    path1: str | Sequence[str],
+    path2: str,
+    *,
+    ils: _Ils,
+    info: _Info,
+    cp_file: _Request,
+    makedirs: _Request,
+    rm_file: _Request,
+    profile: StorageProfile,
+    concurrency_limit: asyncio.Semaphore,
+) -> Operation[tuple[str, str], CpState]:
+    """Copy the keys under a prefix within one storage, as `flat_cp` does.
 
-    A key's copy waits for its destination folder, when the destination needs
+    It is `flat_cp` with the destination's operations the source's own, and
+    ``same_storage=True``: a path copied onto itself, or under itself, is
+    refused.
+
+    Parameters
+    ----------
+    path1 : str or sequence of str
+        The folder or file to copy, a glob pattern, or a list of them.
+    path2 : str
+        Where to copy it, as with `flat_cp`.
+    ils, info : callable
+        The storage's operations, as with `flat_cp`.
+    cp_file : callable
+        Copies a file within the storage, called as
+        ``cp_file(source, destination)``: e.g. the filesystem's ``_cp_file``.
+    makedirs, rm_file : callable
+        The storage's operations, as `flat_cp`'s ``dst_makedirs`` and
+        ``dst_rm_file``.
+    profile : StorageProfile
+        What the storage does: ``StorageProfile()`` if it is unknown.
+    concurrency_limit : asyncio.Semaphore
+        Held by each request but the listing while it runs.
+
+    Returns
+    -------
+    Operation
+        As `flat_cp`'s.
+
+    See Also
+    --------
+    flat_cp : The same, to another storage too.
+    """
+    return flat_cp(
+        path1,
+        path2,
+        ils=ils,
+        info=info,
+        cp_file=cp_file,
+        dst_info=info,
+        dst_makedirs=makedirs,
+        dst_rm_file=rm_file,
+        same_storage=True,
+        profile=profile,
+        concurrency_limit=concurrency_limit,
+    )
+
+
+class _CopyOrMove(_Placing, _FlatJobs):
+    """The jobs of a copy or a move: a folder made where needed, and one per key.
+
+    A key's job waits for its destination folder, when the destination needs
     it. The keys of one folder come apart in the listing, so the folders made
-    are remembered, and each is made once.
+    are remembered, and each is made once. A subclass says how a key goes, in
+    `transfer_file`.
     """
 
     def __init__(
@@ -207,10 +270,8 @@ class _Copy(_Placing, _FlatJobs):
         *,
         ils: _Ils,
         info: _Info,
-        cp_file: _Request,
         destination_info: _Info,
         makedirs: _Request,
-        rm_file: _Request,
         same_storage: bool,
         profile: StorageProfile,
         concurrency_limit: asyncio.Semaphore,
@@ -220,12 +281,10 @@ class _Copy(_Placing, _FlatJobs):
 
         self.path1 = path1
         self.path2 = path2
-        self.cp_file = cp_file
 
-        # ils and info are the source's. destination_info, makedirs, rm_file
-        # and the profile are the destination's.
+        # ils and info are the source's. destination_info, makedirs and the
+        # profile are the destination's.
         self.makedirs = makedirs
-        self.rm_file = rm_file
         self._placing(destination_info, same_storage=same_storage)
 
         # Unknown, folders are made first. Implicit folders need none.
@@ -279,7 +338,11 @@ class _Copy(_Placing, _FlatJobs):
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
             return self.makedirs(job.destination, exist_ok=True)
-        return self.copy_file(job.source, job.destination)
+        return self.transfer_file(job.source, job.destination)
+
+    @abstractmethod
+    async def transfer_file(self, source: str, destination: str) -> None:
+        """Copy or move a key. An error raised notes its paths, as it is yielded."""
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":
@@ -297,11 +360,27 @@ class _Copy(_Placing, _FlatJobs):
             self.waiting.extend(self.after_mkdir.pop(job.destination))
             error.add_note(f"Creating the folder {job.destination!r} failed.")
 
-        # A key's error is noted where it happened, in copy_file.
+        # A key's error is noted where it happened, in transfer_file.
         return [error]
 
-    async def copy_file(self, source: str, destination: str) -> None:
-        """Copy a key, noting its paths on an error."""
+
+class _Copy(_CopyOrMove):
+    """The jobs of one `flat_cp`: a ``cp_file`` per key."""
+
+    def __init__(
+        self,
+        path1: str | Sequence[str],
+        path2: str,
+        *,
+        cp_file: _Request,
+        rm_file: _Request,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(path1, path2, **kwargs)
+        self.cp_file = cp_file
+        self.rm_file = rm_file
+
+    async def transfer_file(self, source: str, destination: str) -> None:
         try:
             try:
                 await self.cp_file(source, destination)

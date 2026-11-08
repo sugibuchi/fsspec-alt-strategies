@@ -13,11 +13,7 @@ from fsspec.implementations.memory import MemoryFileSystem
 from fsspec.spec import AbstractFileSystem
 
 from fsspec_alt_strategies.common.routing import AsyncRoutingFileSystem
-from fsspec_alt_strategies.flat.cp import flat_cp
-from fsspec_alt_strategies.flat.filesystem import FlatFileSystem
 from fsspec_alt_strategies.flat.wrapper import AsyncFlatWrapper
-from fsspec_alt_strategies.tree.cp import tree_cp
-from fsspec_alt_strategies.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies.tree.wrapper import AsyncTreeWrapper
 from fsspec_alt_strategies_common.monitor import Monitor, monitoring
 from fsspec_alt_strategies_common.profile import StorageProfile
@@ -177,37 +173,6 @@ class _Router(AsyncRoutingFileSystem):
             raise FileNotFoundError(path)
         return [{"name": n, "size": 0, "type": "directory"} for n in names]
 
-    def _transfer(
-        self,
-        fs1: AsyncFileSystem,
-        path1: str | list[str],
-        fs2: AsyncFileSystem,
-        path2: str,
-        *,
-        copy_file: Any,
-    ) -> Any:
-        # The plain storage has no strategy: fsspec's own copy, the default.
-        if isinstance(fs1, TreeFileSystem):
-            strategy, listing = tree_cp, {"ls": fs1._ls}
-        elif isinstance(fs1, FlatFileSystem):
-            strategy, listing = flat_cp, {"ils": fs1._ils}
-        else:
-            return None
-        profile = getattr(fs2, "storage_profile", None) or StorageProfile()
-        return strategy(
-            path1,
-            path2,
-            **listing,
-            info=fs1._info,
-            cp_file=copy_file,
-            dst_info=fs2._info,
-            dst_makedirs=fs2._makedirs,
-            dst_rm_file=fs2._rm_file,
-            same_storage=False,
-            profile=profile,
-            concurrency_limit=fs1.operation_limit,
-        )
-
     def backend(self, name: str) -> Any:
         return self._route(f"lake/{name}/x")[0]  # type: ignore[index]
 
@@ -352,7 +317,7 @@ async def test_a_sync_filesystem_is_refused(router: _Router) -> None:
 
 def test_a_storages_profile(router: _Router) -> None:
     assert router.storage_profile_of("lake/flat/x").implicit_folders is True
-    assert router.storage_profile_of("lake/tree/x") == StorageProfile()
+    assert router.storage_profile_of("lake/tree/x") == StorageProfile(fs_type="tree")
     assert router.storage_profile_of("lake") == StorageProfile()
 
 
@@ -551,14 +516,20 @@ class _ServerCopying(_Router):
         super().__init__(**kwargs)
         self.server_copies: list[tuple[str, str]] = []
 
-    async def _server_copy(
-        self, fs1: AsyncFileSystem, path1: str, fs2: AsyncFileSystem, path2: str
-    ) -> bool:
-        if path1.endswith("3.txt"):
-            return False  # e.g. not possible for this one: streamed.
-        self.server_copies.append((path1, path2))
-        fs2.fs.add_file(path2, fs1.fs._file_data[path1].data)  # type: ignore[attr-defined]
-        return True
+    async def _cross_fs_cp_file(
+        self,
+        src_fs: AsyncFileSystem,
+        src_path: str,
+        dest_fs: AsyncFileSystem,
+        dest_path: str,
+    ) -> None:
+        if src_path.endswith("3.txt"):
+            # e.g. not possible for this one: streamed.
+            await super()._cross_fs_cp_file(src_fs, src_path, dest_fs, dest_path)
+            return
+        self.server_copies.append((src_path, dest_path))
+        data = src_fs.fs._file_data[src_path].data  # type: ignore[attr-defined]
+        dest_fs.fs.add_file(dest_path, data)  # type: ignore[attr-defined]
 
 
 async def test_copy_across_storages_tries_the_server_first() -> None:
@@ -605,9 +576,10 @@ async def test_mv_across_storages_deletes_each_source(
     assert sorted(p for p in dst._file_data if p.startswith("moved/")) == sorted(
         p.replace("data", "moved", 1) for p in _FILES
     )
-    # The sources were deleted as their copies ended, not after them all.
-    assert deleted_while_copying[-1] > 0
     if source == "tree":
+        # The sources were deleted as their copies ended, not after them all.
+        # A flat source's go in batches, as flat_mv deletes them.
+        assert deleted_while_copying[-1] > 0
         assert not await router._exists("lake/tree/data")
 
 

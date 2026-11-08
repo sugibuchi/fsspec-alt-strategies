@@ -31,11 +31,11 @@ from ..common.filesystem import (
     _raise,
 )
 from ..common.operation import _collect_with_monitors, _with_monitors
-from .cp import flat_cp
+from .cp import flat_local_cp
 from .du import flat_du
 from .find import flat_find
 from .glob import flat_glob
-from .mv import flat_mv
+from .mv import flat_local_mv
 from .rm import flat_rm
 from .walk import flat_walk
 
@@ -340,16 +340,14 @@ class FlatFileSystem(_BaseFileSystem):
             return
 
         _, errors = await _collect_with_monitors(
-            flat_cp(
+            flat_local_cp(
                 self._strip_only_protocol(path1),
                 self._strip_only_protocol(path2),
                 ils=self._ils,
                 info=self._info,
                 cp_file=self._cp_file,
-                dst_info=self._info,
-                dst_makedirs=self._makedirs,
-                dst_rm_file=self._rm_file,
-                same_storage=True,
+                makedirs=self._makedirs,
+                rm_file=self._rm_file,
                 profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
             ),
@@ -383,7 +381,7 @@ class FlatFileSystem(_BaseFileSystem):
             return
 
         _, errors = await _collect_with_monitors(
-            flat_mv(
+            flat_local_mv(
                 self._strip_only_protocol(path1),
                 self._strip_only_protocol(path2),
                 ils=self._ils,
@@ -392,10 +390,8 @@ class FlatFileSystem(_BaseFileSystem):
                 cp_file=self._cp_file,
                 rm_files=self._rm_files,
                 batch_size=self.rm_batch_size,
-                dst_info=self._info,
-                dst_makedirs=self._makedirs,
-                dst_rm_file=self._rm_file,
-                same_storage=True,
+                makedirs=self._makedirs,
+                rm_file=self._rm_file,
                 profile=self.storage_profile,
                 concurrency_limit=self.operation_limit,
             ),

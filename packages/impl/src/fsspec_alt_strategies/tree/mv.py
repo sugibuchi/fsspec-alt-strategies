@@ -23,7 +23,7 @@ from fsspec_alt_strategies_common.states import MvState
 
 from ..common.jobs import _Job, _Roots
 from ..common.operation import Operation
-from .cp import _Transfer
+from .cp import _CopyOrMove
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from ..common.types import _Info, _Ls, _Request
     from .walk import _Listing
 
-__all__ = ["MvState", "tree_mv"]
+__all__ = ["MvState", "tree_local_mv", "tree_mv"]
 
 
 def tree_mv(
@@ -200,7 +200,64 @@ def tree_mv(
     )
 
 
-class _Move(_Transfer):
+def tree_local_mv(
+    path1: str | Sequence[str],
+    path2: str,
+    *,
+    ls: _Ls,
+    info: _Info,
+    mv_file: _Request,
+    makedirs: _Request,
+    rm_folder: _Request,
+    profile: StorageProfile,
+    concurrency_limit: asyncio.Semaphore,
+) -> Operation[tuple[str, str], MvState]:
+    """Move a folder and everything in it within one storage, as `tree_mv` does.
+
+    It is `tree_mv` with the destination's operations the source's own, and
+    ``same_storage=True``: the profile's ``renames_folders`` then moves
+    folders whole, and a path moved under itself is refused.
+
+    Parameters
+    ----------
+    path1 : str or sequence of str
+        The folder or file to move, a glob pattern, or a list of them.
+    path2 : str
+        Where to move it, as with `tree_mv`.
+    ls, info, mv_file, rm_folder : callable
+        The storage's operations, as with `tree_mv`.
+    makedirs : callable
+        The storage's, as `tree_mv`'s ``dst_makedirs``.
+    profile : StorageProfile
+        What the storage does: ``StorageProfile()`` if it is unknown.
+    concurrency_limit : asyncio.Semaphore
+        Held by each request while it runs.
+
+    Returns
+    -------
+    Operation
+        As `tree_mv`'s.
+
+    See Also
+    --------
+    tree_mv : The same, to another storage too.
+    """
+    return tree_mv(
+        path1,
+        path2,
+        ls=ls,
+        info=info,
+        mv_file=mv_file,
+        rm_folder=rm_folder,
+        dst_info=info,
+        dst_makedirs=makedirs,
+        same_storage=True,
+        profile=profile,
+        concurrency_limit=concurrency_limit,
+    )
+
+
+class _Move(_CopyOrMove):
     """The jobs of one `tree_mv`: a ``mv_file`` per file, deleting each folder emptied."""
 
     verb = "move"

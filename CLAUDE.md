@@ -59,7 +59,8 @@ The workspace root holds the tooling: ruff, pytest and coverage settings, CI, an
   for `tree`, keys for `flat`. A copy or move places its paths with `common.placement._Placing`.
 - A family of strategies, such as `tree/` or `flat/`, never imports another. What two share goes in `common/`, a
   module per concern, e.g. `common/patterns.py` for glob patterns. So does what no family owns, e.g. the router in
-  `common/routing.py`.
+  `common/routing.py`. It imports a family's strategies only when copying or moving from a storage of it, as its
+  profile's `fs_type` says.
 - The flat strategies, in `flat/`, list with `ils(prefix)`, an async iterator of entries in order of their names, never pages: see
   DEVELOPMENT.md's "The flat strategies". Those that only read derive folders from keys with `flat._keys`.
   `flat.find._find_entries` handles the root as fsspec's `_find` does, and `flat_walk` as `tree_walk` does.

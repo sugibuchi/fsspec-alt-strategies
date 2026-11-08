@@ -56,7 +56,8 @@ them, and an exception such as `CallCancelled` is the same class whichever copy 
 A copy keeps what the modules it uses import:
 
 - each family, `tree/` or `flat/`, needs `common/` and `files/`;
-- the router, `common/routing.py`, needs only `common/`, and no family;
+- the router, `common/routing.py`, needs `common/`, and the family of each storage it copies or moves from, imported
+  only then;
 - `monitored()` needs the family of each filesystem it wraps, and imports it only then, so a copy may keep one family.
 
 ## Ways to use it
