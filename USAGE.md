@@ -225,14 +225,11 @@ A filesystem's `open_async` returns its own files through `AsyncFileAdapter`. It
 SDK's handle, through `SyncFileAdapter`:
 
 ```python
-import functools
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
 
 
 async def open_async(self, path, mode="rb", **kwargs):
-    size = (await self._info(path))["size"] if "r" in mode else None
-    opener = functools.partial(self.client.open, path, mode)
-    return await SyncFileAdapter.open(opener, mode=mode, size=size)
+    return SyncFileAdapter(self.client.open(path, mode))
 ```
 
 #### Transaction support
