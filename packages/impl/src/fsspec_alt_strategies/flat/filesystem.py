@@ -29,7 +29,7 @@ from ..common.filesystem import (
     _failed_folder,
     _raise,
 )
-from ..common.operation import _collected
+from ..common.operation import _collect_with_watching
 from ..common.paths import _triples
 from .cp import flat_cp
 from .du import flat_du
@@ -213,7 +213,7 @@ class FlatFileSystem(_BaseFileSystem):
         detail = kwargs.pop("detail", False)
         root = self._strip_protocol(path)
         try:
-            entries, _ = await _collected(
+            entries, _ = await _collect_with_watching(
                 flat_walk(
                     root,
                     ils=self._ils,
@@ -255,7 +255,7 @@ class FlatFileSystem(_BaseFileSystem):
         **kwargs: Any,
     ) -> Any:
         detail = kwargs.pop("detail", False)
-        entries, _ = await _collected(
+        entries, _ = await _collect_with_watching(
             flat_find(
                 self._strip_protocol(path),
                 ils=self._ils,
@@ -282,12 +282,14 @@ class FlatFileSystem(_BaseFileSystem):
             maxdepth=maxdepth,
             concurrency_limit=self.operation_limit,
         )
-        entries, _ = await _collected(op, Call(self._unwrapped(), "du", path))
+        entries, _ = await _collect_with_watching(
+            op, Call(self._unwrapped(), "du", path)
+        )
         return _du_answer(op.state.size, entries, total)
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
         detail = kwargs.pop("detail", False)
-        entries, _ = await _collected(
+        entries, _ = await _collect_with_watching(
             flat_glob(
                 self._strip_only_protocol(path),
                 ils=self._ils,
@@ -311,7 +313,7 @@ class FlatFileSystem(_BaseFileSystem):
         if not recursive or maxdepth is not None:
             await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
             return
-        _, errors = await _collected(
+        _, errors = await _collect_with_watching(
             flat_rm(
                 self._strip_only_protocol(path),
                 ils=self._ils,
@@ -340,7 +342,7 @@ class FlatFileSystem(_BaseFileSystem):
                 path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
             )
             return
-        _, errors = await _collected(
+        _, errors = await _collect_with_watching(
             flat_cp(
                 self._strip_only_protocol(path1),
                 self._strip_only_protocol(path2),
@@ -376,7 +378,7 @@ class FlatFileSystem(_BaseFileSystem):
             await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
             await self._rm(path1, recursive=recursive)
             return
-        _, errors = await _collected(
+        _, errors = await _collect_with_watching(
             flat_mv(
                 self._strip_only_protocol(path1),
                 self._strip_only_protocol(path2),

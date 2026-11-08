@@ -34,7 +34,7 @@ from .filesystem import (
     _raise,
     _strip_only_protocol,
 )
-from .operation import _collected
+from .operation import _collect_with_watching
 from .paths import _trim
 
 if TYPE_CHECKING:
@@ -1071,7 +1071,7 @@ class AsyncRoutingFileSystem(
         The call is the router's own, watched by the monitors as such.
         """
         call = Call(self, "mv" if delete else "copy", outer1, outer2)
-        _, errors = await _collected(op, call, callback)
+        _, errors = await _collect_with_watching(op, call, callback)
         for error in errors:
             error.add_note(
                 f"Through {self!r}, from {fs1!r} as {path1!r} to {fs2!r} as {path2!r}."

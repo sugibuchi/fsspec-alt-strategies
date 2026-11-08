@@ -30,7 +30,7 @@ from ..common.filesystem import (
     _raise,
     _with,
 )
-from ..common.operation import _collected, _watched
+from ..common.operation import _collect_with_watching, _watched
 from .cp import tree_cp
 from .du import tree_du
 from .find import tree_find
@@ -254,7 +254,7 @@ class TreeFileSystem(_BaseFileSystem):
         **kwargs: Any,
     ) -> Any:
         detail = kwargs.pop("detail", False)
-        entries, _ = await _collected(
+        entries, _ = await _collect_with_watching(
             tree_find(
                 self._strip_protocol(path),
                 ls=_with(self._ls, kwargs),
@@ -281,13 +281,15 @@ class TreeFileSystem(_BaseFileSystem):
             maxdepth=maxdepth,
             concurrency_limit=self.operation_limit,
         )
-        entries, _ = await _collected(op, Call(self._unwrapped(), "du", path))
+        entries, _ = await _collect_with_watching(
+            op, Call(self._unwrapped(), "du", path)
+        )
         return _du_answer(op.state.size, entries, total)
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
         detail = kwargs.pop("detail", False)
         withdirs = kwargs.pop("withdirs", True)
-        entries, _ = await _collected(
+        entries, _ = await _collect_with_watching(
             tree_glob(
                 self._strip_only_protocol(path),
                 ls=_with(self._ls, kwargs),
@@ -311,7 +313,7 @@ class TreeFileSystem(_BaseFileSystem):
         if not recursive or maxdepth is not None:
             await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
             return
-        _, errors = await _collected(
+        _, errors = await _collect_with_watching(
             tree_rm(
                 self._strip_only_protocol(path),
                 ls=self._ls,
@@ -342,7 +344,7 @@ class TreeFileSystem(_BaseFileSystem):
                 path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
             )
             return
-        _, errors = await _collected(
+        _, errors = await _collect_with_watching(
             tree_cp(
                 self._strip_only_protocol(path1),
                 self._strip_only_protocol(path2),
@@ -381,7 +383,7 @@ class TreeFileSystem(_BaseFileSystem):
             await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
             await self._rm(path1, recursive=recursive)
             return
-        _, errors = await _collected(
+        _, errors = await _collect_with_watching(
             tree_mv(
                 self._strip_only_protocol(path1),
                 self._strip_only_protocol(path2),

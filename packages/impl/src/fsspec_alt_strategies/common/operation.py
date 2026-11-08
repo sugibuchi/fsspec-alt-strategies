@@ -11,7 +11,7 @@ From what its callers use to what that builds on:
 
 - `Operation` is what a strategy returns.
 - `_collect` runs an operation to its end, returning all it yielded.
-- `_collected` does so for an fsspec call, as the call's monitors watch it.
+- `_collect_with_watching` does so for an fsspec call, as the call's monitors watch it.
 - `_watched` runs an operation for an fsspec call, yielding its items, telling
   the monitors of the `monitoring` blocks around it, and fsspec's ``callback=``.
 - `_Counting` is the monitor fsspec's ``callback=`` is told through.
@@ -205,7 +205,7 @@ async def _collect(
     return found, errors
 
 
-async def _collected(
+async def _collect_with_watching(
     operation: Operation[Any, Any], call: Call, callback: Any = None
 ) -> tuple[list[Any], list[Exception]]:
     """`_collect` of an operation, as its monitors watch it."""
