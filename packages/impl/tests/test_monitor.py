@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -34,38 +33,35 @@ def test_a_monitored_filesystem_is_returned_as_it_is() -> None:
 
 def test_a_filesystem_is_wrapped_as_its_entry_says() -> None:
     fs = SimulatedFileSystem()
-    profile = StorageProfile(implicit_folders=True)
+    profile = StorageProfile(fs_type="flat", implicit_folders=True)
     flat = monitored(
         fs,
         {
             _SIMULATED: {
-                "type": "flat",
+                "storage_profile": profile,
                 "async": True,
                 "operation_concurrency": 3,
                 "io_concurrency": 2,
                 "rm_batch_size": 100,
-                "storage_profile": profile,
             }
         },
     )
     assert isinstance(flat, AsyncFlatWrapper)
     assert flat.fs is fs
     assert (flat.operation_concurrency, flat.io_concurrency) == (3, 2)
-    # The wrapper declares its family.
-    assert flat.rm_batch_size == 100
-    assert flat.storage_profile == replace(profile, fs_type="flat")
+    assert (flat.rm_batch_size, flat.storage_profile) == (100, profile)
 
 
 def test_a_subclass_takes_the_entry_of_its_class() -> None:
     class Mine(SimulatedFileSystem):
         pass
 
+    # Of no fs_type: a tree, the way right on any storage.
     entry: Any = {
-        "type": "tree",
+        "storage_profile": StorageProfile(),
         "async": True,
         "operation_concurrency": 2,
         "io_concurrency": 1,
-        "storage_profile": StorageProfile(),
     }
     assert isinstance(monitored(Mine(), {_SIMULATED: entry}), AsyncTreeWrapper)
 

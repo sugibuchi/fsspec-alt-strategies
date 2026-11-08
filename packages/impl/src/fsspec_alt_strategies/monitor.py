@@ -55,8 +55,9 @@ def monitored(
 
     A filesystem inheriting `Monitored` is returned as it is. Any other is
     wrapped, as the entry of its class says, or of the nearest class it
-    inherits: as a `TreeFileSystem` or a `FlatFileSystem`, async or not, with
-    the entry's limits and profile. The wrapper is new, and may be dropped
+    inherits: as a `TreeFileSystem` or a `FlatFileSystem`, as its profile's
+    ``fs_type`` says, a tree if unknown, async or not, with the entry's limits
+    and profile. The wrapper is new, and may be dropped
     once used.
 
     A filesystem no entry names is wrapped only if ``wrap_unknown_fs``: as
@@ -105,19 +106,20 @@ def monitored(
             name = f"{type(fs).__module__}.{type(fs).__qualname__}"
             raise ValueError(f"No known implementation says how to wrap {name}")
         entry = {
-            "type": "tree",
+            "storage_profile": StorageProfile(fs_type="tree"),
             "async": isinstance(fs, AsyncFileSystem),
             "operation_concurrency": 1,
             "io_concurrency": 1,
-            "storage_profile": StorageProfile(),
         }
 
-    wrapper = _wrapper(entry["type"], entry["async"])
+    # A family unknown is a tree, the way right on any storage.
+    fs_type = entry["storage_profile"].fs_type or "tree"
+    wrapper = _wrapper(fs_type, entry["async"])
     options: dict[str, Any] = {
         "operation_concurrency": entry["operation_concurrency"],
         "io_concurrency": entry["io_concurrency"],
         "storage_profile": entry["storage_profile"],
     }
-    if entry["type"] == "flat":
+    if fs_type == "flat":
         options["rm_batch_size"] = entry["rm_batch_size"]
     return wrapper(fs, **options)
