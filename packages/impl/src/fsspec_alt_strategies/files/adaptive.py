@@ -701,8 +701,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
                 await self._complete_multipart_upload(list(parts))
         except BaseException as error:
             if self._multipart:
-                await self._requests.cancel_all()
-                await self._abort_noting(error)
+                await self._cancel_multipart_upload(error)
             raise
         finally:
             self._buffer = bytearray()
@@ -713,14 +712,18 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         if self._multipart:
             await self._abort_multipart_upload()
 
-    async def _abort_noting(self, error: BaseException) -> None:
-        """Abort the multipart upload after ``error``, which the caller raises."""
+    async def _cancel_multipart_upload(self, cause: BaseException) -> None:
+        """Cancel the parts in flight, then abort the upload, after ``cause``.
+
+        The caller raises ``cause``: an abort failing only adds a note to it.
+        """
+        await self._requests.cancel_all()
         try:
             await self._abort_multipart_upload()
         except Exception as abort_error:
-            # The first error is what the caller acts on: the abort's failure
-            # only adds that parts may stay on the storage.
-            error.add_note(
+            # The cause is what the caller acts on: the abort's failure only
+            # adds that parts may stay on the storage.
+            cause.add_note(
                 f"Aborting the upload of {self.path!r} failed: {abort_error!r}"
             )
 
@@ -749,9 +752,8 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
             if not self._forced:
                 # A forced flush finished the file: nothing is left to undo.
                 self._buffer = bytearray()
-                await self._requests.cancel_all()
                 if self._multipart:
-                    await self._abort_noting(exc)
+                    await self._cancel_multipart_upload(exc)
         finally:
             await self._requests.cancel_all()
             io.RawIOBase.close(self)
@@ -808,7 +810,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
                         await self._start_multipart_upload()
                     except BaseException as error:
                         # It may have started a session on the storage first.
-                        await self._abort_noting(error)
+                        await self._cancel_multipart_upload(error)
                         raise
                     self._multipart = True
                 elif self.sequential:
