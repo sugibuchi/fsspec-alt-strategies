@@ -5,9 +5,9 @@ description = "The interface the strategies of fsspec-alt-strategies-impl share:
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Tsuyoshi SUGIBUCHI" }]
-keywords = ["fsspec", "filesystem", "async"]
+keywords = ["fsspec", "filesystem", "async", "monitoring"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Framework :: AsyncIO",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
@@ -27,6 +27,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/sugibuchi/fsspec-alt-strategies"
+Documentation = "https://github.com/sugibuchi/fsspec-alt-strategies/blob/main/USAGE.md"
 Source = "https://github.com/sugibuchi/fsspec-alt-strategies"
 Issues = "https://github.com/sugibuchi/fsspec-alt-strategies/issues"
 Changelog = "https://github.com/sugibuchi/fsspec-alt-strategies/releases"
