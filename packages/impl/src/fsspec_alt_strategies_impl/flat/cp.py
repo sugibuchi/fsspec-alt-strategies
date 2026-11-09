@@ -32,8 +32,8 @@ __all__: list[str] = []
 
 
 def _flat_cp(
-    source: Any,
-    destination: Any,
+    src_fs: Any,
+    dst_fs: Any,
     path1: str | Sequence[str],
     path2: str,
     *,
@@ -53,9 +53,9 @@ def _flat_cp(
     The keys are listed as `_flat_find` lists them, and each is copied by one
     ``cp_file`` as soon as the listing gives it.
 
-    The destination is described by ``destination`` and its
+    The destination is described by ``dst_fs`` and its
     ``storage_profile``, unknown if it has none, and may be flat or a tree.
-    Within one storage, ``destination`` is ``source``, and ``same_storage`` is
+    Within one storage, ``dst_fs`` is ``src_fs``, and ``same_storage`` is
     True: a path copied onto itself, or under itself, is refused. Between two,
     ``cp_file`` copies from one to the other, e.g. the router's
     ``_cross_fs_cp_file``, and every byte may go through the caller. A path
@@ -117,10 +117,10 @@ def _flat_cp(
 
     Parameters
     ----------
-    source : FlatFileSystem
+    src_fs : FlatFileSystem
         The filesystem copied from.
-    destination : AsyncFileSystem
-        The filesystem copied to: ``source`` within one storage.
+    dst_fs : AsyncFileSystem
+        The filesystem copied to: ``src_fs`` within one storage.
     path1 : str or sequence of str
         The folder or file to copy, a glob pattern, or a list of them, as
         the source's ``_iexpand`` takes paths.
@@ -132,7 +132,7 @@ def _flat_cp(
         default, which copies within one storage.
     same_storage : bool, optional
         Whether the destination is the source's storage: whether
-        ``destination`` is ``source`` by default.
+        ``dst_fs`` is ``src_fs`` by default.
     maxdepth : int, optional
         The deepest level to copy: 1 copies only the keys right in ``path1``.
         No limit by default.
@@ -154,13 +154,13 @@ def _flat_cp(
     _flat_mv : The same, deleting the sources as it goes.
     """
     _check_maxdepth(maxdepth)
-    cp_file = source._cp_file if cp_file is None else cp_file
+    cp_file = src_fs._cp_file if cp_file is None else cp_file
     if same_storage is None:
-        same_storage = source is destination
+        same_storage = src_fs is dst_fs
     return Operation(
         lambda op: _Copy(
-            fs=source,
-            destination=destination,
+            fs=src_fs,
+            dst_fs=dst_fs,
             path1=path1,
             path2=path2,
             same_storage=same_storage,
@@ -215,7 +215,7 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
-            return self.destination._makedirs(job.destination, exist_ok=True)
+            return self.dst_fs._makedirs(job.destination, exist_ok=True)
         return self.transfer_file(job.source, job.destination)
 
     @abstractmethod

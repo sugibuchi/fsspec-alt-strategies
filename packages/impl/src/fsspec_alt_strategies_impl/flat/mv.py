@@ -34,8 +34,8 @@ __all__: list[str] = []
 
 
 def _flat_mv(
-    source: Any,
-    destination: Any,
+    src_fs: Any,
+    dst_fs: Any,
     path1: str | Sequence[str],
     path2: str,
     *,
@@ -65,7 +65,7 @@ def _flat_mv(
     which is right on any storage: about one request per key either way, but
     a rename copies no data.
 
-    The destination is described by ``destination`` and its profile, as with
+    The destination is described by ``dst_fs`` and its profile, as with
     `_flat_cp`. Between two storages, ``same_storage`` is False, and
     ``cp_file`` copies to the other storage. ``_rm_files`` always deletes the
     source's.
@@ -99,10 +99,10 @@ def _flat_mv(
 
     Parameters
     ----------
-    source : FlatFileSystem
+    src_fs : FlatFileSystem
         The filesystem moved from.
-    destination : AsyncFileSystem
-        The filesystem moved to: ``source`` within one storage.
+    dst_fs : AsyncFileSystem
+        The filesystem moved to: ``src_fs`` within one storage.
     path1 : str or sequence of str
         The folder or file to move, a glob pattern, or a list of them, as
         the source's ``_iexpand`` takes paths.
@@ -114,7 +114,7 @@ def _flat_mv(
         default, which copies within one storage.
     same_storage : bool, optional
         Whether the destination is the source's storage: whether
-        ``destination`` is ``source`` by default.
+        ``dst_fs`` is ``src_fs`` by default.
     maxdepth : int, optional
         The deepest level to move: 1 moves only the keys right in ``path1``.
         No limit by default.
@@ -137,10 +137,10 @@ def _flat_mv(
     """
     _check_maxdepth(maxdepth)
     if same_storage is None:
-        same_storage = source is destination
+        same_storage = src_fs is dst_fs
     options = {
-        "fs": source,
-        "destination": destination,
+        "fs": src_fs,
+        "dst_fs": dst_fs,
         "path1": path1,
         "path2": path2,
         "same_storage": same_storage,
@@ -148,14 +148,14 @@ def _flat_mv(
     }
 
     # A rename wins only where the storage is known to rename.
-    if same_storage and _profile_of(destination).renames_files is True:
+    if same_storage and _profile_of(dst_fs).renames_files is True:
         return Operation(
             lambda op: _Rename(op=op, **options).outcomes(),
             MvState(),
         )
 
-    _check_batch_size(source.rm_batch_size)
-    cp_file = source._cp_file if cp_file is None else cp_file
+    _check_batch_size(src_fs.rm_batch_size)
+    cp_file = src_fs._cp_file if cp_file is None else cp_file
     return Operation(
         lambda op: _Move(cp_file=cp_file, op=op, **options).outcomes(),
         MvState(),

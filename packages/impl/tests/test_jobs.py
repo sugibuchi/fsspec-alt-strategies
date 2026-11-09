@@ -245,7 +245,7 @@ class _Copy(_CopyJobs):
         storage = SimpleNamespace(operation_limit=asyncio.Semaphore(1), _info=_missing)
         super().__init__(
             fs=storage,
-            destination=storage,
+            dst_fs=storage,
             path1=path1,
             path2=path2,
             same_storage=True,

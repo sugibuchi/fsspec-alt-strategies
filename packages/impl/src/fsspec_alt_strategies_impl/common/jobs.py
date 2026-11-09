@@ -378,13 +378,13 @@ class _Jobs(ABC):
 
 
 class _CopyJobs(_Jobs):
-    """The jobs of a copy or a move: where each path goes, onto ``destination``.
+    """The jobs of a copy or a move: where each path goes, onto ``dst_fs``.
 
     A path under ``prefix`` goes to the same place under ``base``. For a list,
     a path under a root of ``places`` goes there instead. `prepare` sets them,
     before `target` is used.
 
-    The destination is described by ``destination``, the filesystem copied
+    The destination is described by ``dst_fs``, the filesystem copied
     to, and its profile, unknown if it has none. Within one storage, it is the
     source, and ``same_storage`` is True: a path copied onto itself, or under
     itself, is refused. Between two, a path may go to the same path, or under
@@ -399,7 +399,7 @@ class _CopyJobs(_Jobs):
         *,
         path1: str | Sequence[str],
         path2: str,
-        destination: Any,
+        dst_fs: Any,
         same_storage: bool,
         **kwargs: Any,
     ) -> None:
@@ -411,8 +411,8 @@ class _CopyJobs(_Jobs):
 
         # The profile is the destination's, as what a copy saves depends on
         # where it writes. Within one storage, it is the source's too.
-        self.destination = destination
-        self.profile = _profile_of(destination)
+        self.dst_fs = dst_fs
+        self.profile = _profile_of(dst_fs)
 
         # Unknown, folders are made first. Implicit folders need none.
         self.implicit_folders = bool(self.profile.implicit_folders)
@@ -515,7 +515,7 @@ class _CopyJobs(_Jobs):
             into = True
         else:
             try:
-                entry = await self.destination._info(destination)
+                entry = await self.dst_fs._info(destination)
                 into = entry["type"] == "directory"
             except FileNotFoundError:
                 self.missing.add(destination)
@@ -554,11 +554,11 @@ class _CopyJobs(_Jobs):
             try:
                 await cp_file(source, destination)
             except FileExistsError:
-                entry = await self.destination._info(destination)
+                entry = await self.dst_fs._info(destination)
                 if entry["type"] == "directory":
                     raise
 
-                await self.destination._rm_file(destination)
+                await self.dst_fs._rm_file(destination)
                 await cp_file(source, destination)
         except Exception as e:
             e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")

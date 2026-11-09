@@ -38,8 +38,8 @@ __all__: list[str] = []
 
 
 def _tree_mv(
-    source: Any,
-    destination: Any,
+    src_fs: Any,
+    dst_fs: Any,
     path1: str | Sequence[str],
     path2: str,
     *,
@@ -73,9 +73,9 @@ def _tree_mv(
     folder is created at the destination before files are moved into it, and
     for each empty folder.
 
-    The destination is described by ``destination`` and its
+    The destination is described by ``dst_fs`` and its
     ``storage_profile``, unknown if it has none. Within
-    one storage, ``destination`` is ``source``, and ``same_storage`` is True.
+    one storage, ``dst_fs`` is ``src_fs``, and ``same_storage`` is True.
     Between two, ``mv_file`` copies a file to the other storage, then
     deletes it: e.g. the router's ``_cross_fs_mv_file``. A path may then go
     to the same path, or under it, and nothing is moved whole.
@@ -134,10 +134,10 @@ def _tree_mv(
 
     Parameters
     ----------
-    source : TreeFileSystem
+    src_fs : TreeFileSystem
         The filesystem moved from.
-    destination : AsyncFileSystem
-        The filesystem moved to: ``source`` within one storage.
+    dst_fs : AsyncFileSystem
+        The filesystem moved to: ``src_fs`` within one storage.
     path1 : str or sequence of str
         The folder or file to move, a glob pattern, or a list of them, as
         the source's ``_ils`` takes paths.
@@ -150,7 +150,7 @@ def _tree_mv(
         with it too, as the profile's ``renames_folders`` declares.
     same_storage : bool, optional
         Whether the destination is the source's storage: whether
-        ``destination`` is ``source`` by default.
+        ``dst_fs`` is ``src_fs`` by default.
     maxdepth : int, optional
         The deepest level to move: 1 moves only the files in ``path1``. No
         limit by default.
@@ -172,19 +172,17 @@ def _tree_mv(
     _tree_rm : The deletion it does as it goes.
     """
     _check_maxdepth(maxdepth)
-    mv_file = source._mv_file if mv_file is None else mv_file
+    mv_file = src_fs._mv_file if mv_file is None else mv_file
     if same_storage is None:
-        same_storage = source is destination
+        same_storage = src_fs is dst_fs
     # A folder moved whole would take what is deeper than maxdepth along.
     renames_folders = (
-        same_storage
-        and bool(_profile_of(destination).renames_folders)
-        and maxdepth is None
+        same_storage and bool(_profile_of(dst_fs).renames_folders) and maxdepth is None
     )
     return Operation(
         lambda op: _Move(
-            fs=source,
-            destination=destination,
+            fs=src_fs,
+            dst_fs=dst_fs,
             path1=path1,
             path2=path2,
             same_storage=same_storage,
@@ -265,7 +263,7 @@ class _Move(_CopyOrMove):
         if target not in self.missing:
             try:
                 async with self.concurrency_limit:
-                    await self.destination._info(target)
+                    await self.dst_fs._info(target)
             except FileNotFoundError:
                 pass  # Free: the root can go there whole.
             except Exception:
@@ -276,7 +274,7 @@ class _Move(_CopyOrMove):
         try:
             if parent and self.parents_required:
                 async with self.concurrency_limit:
-                    await self.destination._makedirs(parent, exist_ok=True)
+                    await self.dst_fs._makedirs(parent, exist_ok=True)
 
             async with self.concurrency_limit:
                 await self.mv_file(source, target)
