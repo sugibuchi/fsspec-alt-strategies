@@ -45,12 +45,11 @@ class _Roots(NamedTuple):
 
     ``folders`` are walked, or listed, at once. A single path of unknown kind is
     among them, as its listing tells. ``files`` are known files, e.g. glob
-    matches. ``errors`` are those found in finding the roots, yielded first.
+    matches.
     """
 
     folders: Sequence[str]
     files: Sequence[str] = ()
-    errors: Sequence[Exception] = ()
 
 
 def _roots_of(
@@ -80,7 +79,7 @@ def _roots_of(
         else:
             files.append(name)
 
-    return _Roots(list(folders), files, errors)
+    return _Roots(list(folders), files)
 
 
 class _Queue(Generic[_T]):
@@ -166,6 +165,9 @@ class _Jobs(ABC):
         self.errors = 0
         self.current: str | None = None
 
+        # The errors found in finding the roots, e.g. by a glob: yielded first.
+        self.found: list[Exception] = []
+
         # The source's next item, awaited along with the jobs.
         self.next: asyncio.Task[Any] | None = None
 
@@ -212,10 +214,10 @@ class _Jobs(ABC):
             return
 
         try:
-            if roots.errors:
-                self.errors += len(roots.errors)
+            if self.found:
+                self.errors += len(self.found)
                 self.op.state = self.state()
-                for error in roots.errors:
+                for error in self.found:
                     yield error
 
             async with aclosing(self.steps(roots)) as steps:

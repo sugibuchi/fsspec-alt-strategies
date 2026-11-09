@@ -351,9 +351,7 @@ class _Move(_CopyOrMove):
         self.renamed = [(s, self.target(s)) for s in sources if s in whole]
         self.roots_renamed = len(self.renamed)
 
-        return _Roots(
-            [f for f in roots.folders if f not in whole], roots.files, roots.errors
-        )
+        return _Roots([f for f in roots.folders if f not in whole], roots.files)
 
     async def move_whole(self, source: str) -> bool:
         """Move a root with one ``mv_file``, and tell whether it went.

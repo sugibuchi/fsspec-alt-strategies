@@ -43,8 +43,8 @@ async def _expand(
     pattern: str | Sequence[str],
     concurrency_limit: asyncio.Semaphore,
     maxdepth: int | None = None,
-) -> _Roots:
-    """The roots matching glob patterns, found with `tree_glob`."""
+) -> tuple[_Roots, list[Exception]]:
+    """The roots matching glob patterns, found with `tree_glob`, and the errors found."""
     matches, errors = await _collect_with_errors(
         tree_glob(
             pattern,
@@ -54,7 +54,7 @@ async def _expand(
             concurrency_limit=concurrency_limit,
         )
     )
-    return _roots_of(matches, errors, pattern)
+    return _roots_of(matches, errors, pattern), errors
 
 
 class _TreeJobs(_Jobs):
@@ -102,9 +102,10 @@ class _TreeJobs(_Jobs):
 
     async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
         """The roots matching glob patterns, noting those a pattern matched."""
-        roots = await _expand(
+        roots, errors = await _expand(
             self.ils, self.info, pattern, self.concurrency_limit, self.maxdepth
         )
+        self.found.extend(errors)
         if self.maxdepth is not None:
             named = [pattern] if isinstance(pattern, str) else pattern
             literal = {_trim(p) for p in named if not has_magic(p)}

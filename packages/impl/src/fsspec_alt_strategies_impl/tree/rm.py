@@ -240,7 +240,6 @@ class _Deletion(_TreeJobs):
         return _Roots(
             [s for s, k in zip(sources, kinds, strict=True) if k == "walk"],
             [*roots.files, *files],
-            roots.errors,
         )
 
     async def delete_whole(self, folder: str, known: bool) -> str:

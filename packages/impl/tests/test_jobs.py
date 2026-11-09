@@ -220,4 +220,4 @@ def test_roots_of_nothing_raise_unless_errors_were_found() -> None:
     with pytest.raises(FileNotFoundError):
         _roots_of([], [], "x*")
     error = OSError("x")
-    assert _roots_of([], [error], "x*") == _Roots([], [], [error])
+    assert _roots_of([], [error], "x*") == _Roots([], [])

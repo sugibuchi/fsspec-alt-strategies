@@ -22,6 +22,7 @@ class _Copy(_Placing):
         self.path1 = path1
         self.path2 = path2
         self.roots = roots
+        self.found = []
         self._placing(self.info, same_storage=True)
 
     async def info(self, path: str) -> dict[str, Any]:
@@ -32,7 +33,7 @@ class _Copy(_Placing):
 
 
 async def test_a_pattern_matching_only_errors_yields_them() -> None:
-    roots = _Roots([], [], [OSError("x")])
+    roots = _Roots([], [])
     assert await _Copy("x*", "dest", roots).prepare() is roots
 
 

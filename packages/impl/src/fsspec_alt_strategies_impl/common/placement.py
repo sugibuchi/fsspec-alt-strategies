@@ -31,7 +31,7 @@ class _Placing:
 
     A path under ``prefix`` goes to the same place under ``base``. For a list,
     a path under a root of ``places`` goes there instead. A subclass sets
-    ``path1``, ``path2`` and ``info``, and calls `_placing` first. ``info``
+    ``path1``, ``path2``, ``info`` and ``found``, the errors to yield first, and calls `_placing` first. ``info``
     describes the destination too, unless `_placing` is given its own.
     """
 
@@ -40,6 +40,7 @@ class _Placing:
     path1: str | Sequence[str]
     path2: str
     info: _Info
+    found: list[Exception]
 
     def _placing(self, destination_info: _Info, *, same_storage: bool) -> None:
         """Start placing paths, ``destination_info`` describing the destination's.
@@ -75,7 +76,7 @@ class _Placing:
             roots = await self.expand(self.path1)
             sources = [*roots.folders, *roots.files]
             if not sources:
-                return roots  # Only errors, to yield.
+                return roots  # Only errors, in found, to yield.
             self.prefix = common_prefix(sources)
             if sources == list(roots.files) and len(sources) == 1:
                 # A single file goes into the destination.
@@ -111,7 +112,6 @@ class _Placing:
         roots = await self.expand(self.path1)
         folders = set(roots.folders)
         placed: dict[str, str] = {}
-        errors = list(roots.errors)
 
         for source in sorted([*roots.folders, *roots.files]):
             name = source.rpartition("/")[2]
@@ -122,7 +122,7 @@ class _Placing:
                     f"{self.doing} {source!r} to {target!r} skipped: {other!r} goes"
                     " there too."
                 )
-                errors.append(error)
+                self.found.append(error)
                 continue
 
             placed[target] = source
@@ -131,7 +131,6 @@ class _Placing:
         return _Roots(
             [s for s in self.places if s in folders],
             [s for s in self.places if s not in folders],
-            errors,
         )
 
     async def _base(self, root: str, destination: str) -> str:
