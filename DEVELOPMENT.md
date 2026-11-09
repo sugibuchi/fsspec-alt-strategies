@@ -52,6 +52,101 @@ CI runs ruff and pytest on every supported Python version. When writing tests:
 
 The choices below shape the whole project. Keep to them, or change them on purpose.
 
+### Proposed: class first
+
+This section is a proposal under review. Once accepted and ported, it replaces "Principles" and "The strategy API"
+below.
+
+The strategies are functions today, so that they could apply to any filesystem's methods. Two things now do that
+better:
+
+- the wrappers apply a family to an existing filesystem, by passing its primitives through;
+- a router holds the filesystems of both storages, so a copy between them can call each directly.
+
+So the abstract classes become the API, and the strategies become their methods. Passing operations as functions,
+e.g. `ils=fs._ils`, goes away.
+
+#### The classes
+
+```text
+AsyncFileSystem                    fsspec's
+└── _BaseFileSystem                common/filesystem.py
+    ├── TreeFileSystem             tree/filesystem.py
+    │   ├── AsyncTreeWrapper       wrapper.py
+    │   └── SyncTreeWrapper
+    └── FlatFileSystem             flat/filesystem.py
+        ├── AsyncFlatWrapper
+        └── SyncFlatWrapper
+AsyncRoutingFileSystem             router.py, holding filesystems of the above
+```
+
+`_BaseFileSystem` holds what both families share:
+
+- the abstract primitives both need: `_info`, `_rm_file`, `_cp_file`, `_makedirs`, `open_async` and `_open`;
+- `_mv_file`, fsspec's copy and delete unless a subclass overrides it with the storage's rename;
+- `storage_profile`, a property a subclass may compute per instance, e.g. from the account it connects to;
+- the two limits, `operation_limit` and `io_limit`;
+- the running of operations: `Operation`, the monitors, and the job engine of `common/jobs.py`;
+- the data methods through `open_async`, the error grouping, and the sync methods fsspec does not make.
+
+Each family adds its listing primitive, and its versions of fsspec's recursive methods:
+
+| Class            | Adds the primitives          | Overrides                                                |
+|------------------|------------------------------|----------------------------------------------------------|
+| `TreeFileSystem` | `_ils`, `_rmdir`, `_rm_tree` | `_walk`, `_find`, `_du`, `_glob`, `_rm`, `_copy`, `_mv` |
+| `FlatFileSystem` | `_iexpand`, `_rm_files`      | The same                                                 |
+
+`_rm_tree` stays optional. A wrapper is a family's class whose primitives are the wrapped filesystem's, as now.
+
+#### Operations
+
+Each recursive method runs an operation object, made for the call:
+
+- It is a private class of its family's module, e.g. `tree/rm.py`'s `_TreeRm`.
+- It takes the filesystems it works on, not their methods: `_TreeRm(fs, path, ...)`.
+- A copy or a move takes two: `_TreeCopy(source, destination, ...)`. Within one storage, both are the same.
+- It computes where each path goes in its own methods, as fsspec's `copy` does. `_Placement` goes away.
+- Its outcomes still stream through `Operation`, which the monitors see, and which `cancel()` and `aclose()` stop.
+
+Private helpers stay functions where several operations share them: `tree.walk._chunks`, `tree.find._find_listings`,
+`common.jobs._Queue`, the patterns of `common/patterns.py`, and the paths of `common/paths.py`.
+
+#### Choosing
+
+A developer still chooses, per method:
+
+- a family, by subclassing its class or wrapping with it;
+- fsspec's own algorithm instead, by putting it back, e.g. `_rm = AsyncFileSystem._rm`;
+- a storage's native operation, by overriding the method.
+
+The library still never chooses for them.
+
+#### The router
+
+A copy or move between two storages is the router's method. It takes the two inner filesystems from `_route`, and
+runs the source family's copy operation on them. The per-file hooks, `_cross_fs_cp_file` and `_cross_fs_mv_file`,
+stay the router's.
+
+#### What changes for callers
+
+- The strategy functions, e.g. `tree_rm`, leave the public API. The classes and wrappers are the API.
+- A caller watches an operation through a `Monitor`, as through the classes now.
+- This breaks 0.1.0's API: it is released as 0.2.0.
+
+#### Open questions
+
+- Do callers need to iterate an operation without a monitor, as the functions allow now? If so, through which
+  methods, e.g. `fs.iter_rm(path)` returning an `Operation`?
+- Does `tree_walk`'s streaming of a huge folder need a public method, beyond fsspec's `walk`?
+- Do the operation classes of the two families share a base, e.g. for the copy's placement, or only helpers?
+
+#### Porting
+
+1. Port the tree family, keeping its tests, which assert the requests made through `SimulatedFileSystem`.
+2. Port the flat family the same way.
+3. Port the router's copy and move between storages.
+4. Rewrite the docs and CLAUDE.md's rules on strategies, then remove this section.
+
 ### Principles
 
 - **A third party.** The library offers alternatives to fsspec's algorithms, and never patches fsspec.
