@@ -76,18 +76,8 @@ class StorageProfile:
 
     Examples
     --------
-    >>> profile = StorageProfile(implicit_folders=True)
-    >>> op = tree_local_cp(
-    ...     "data/2024",
-    ...     "archive/2024",
-    ...     ils=fs._ils,
-    ...     info=fs._info,
-    ...     cp_file=fs._cp_file,
-    ...     makedirs=fs._makedirs,
-    ...     rm_file=fs._rm_file,
-    ...     profile=profile,
-    ...     concurrency_limit=asyncio.Semaphore(32),
-    ... )
+    >>> class MyFileSystem(TreeFileSystem):
+    ...     storage_profile = StorageProfile(implicit_folders=True)
     """
 
     fs_type: Literal["tree", "flat"] | None = None

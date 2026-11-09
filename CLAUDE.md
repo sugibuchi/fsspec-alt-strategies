@@ -77,8 +77,8 @@ code: read it before adding a strategy.
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
 - The flat strategies list with `iexpand(prefix)`, an async iterator of entries in name order, never pages: see
   DEVELOPMENT.md's "The flat strategies". Those that only read derive folders with `flat._keys`.
-- The strategies changing a storage, in any family, run on `common.jobs._Jobs`. A copy or move places its paths with
-  `common.placement._Placement`.
+- The strategies changing a storage, in any family, run on `common.jobs._Jobs`. A copy or move builds on
+  `common.copying._Copying`, which places its paths.
 
 ### Packages
 

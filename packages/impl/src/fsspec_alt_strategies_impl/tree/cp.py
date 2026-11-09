@@ -7,8 +7,8 @@ whole tree first, then copies each path. `_tree_cp` copies each folder's files
 as soon as the folder is listed. The destination may be another storage:
 within one, it is the same storage's operations given twice.
 
-This module depends on `_jobs`, and `jobs`, `operation`, `paths` and
-`placement` of `common`.
+This module depends on `_jobs`, and `copying`, `jobs`, `operation` and
+`paths` of `common`.
 """
 
 from __future__ import annotations
@@ -18,20 +18,16 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import CpState
 
-from ..common.filesystem import _profile_of
+from ..common.copying import _Copying
 from ..common.jobs import _Job
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
-from ..common.placement import _Placement
 from ._jobs import _TreeJobs
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
-    from fsspec_alt_strategies.profile import StorageProfile
-
-    from ..common.jobs import _Roots
-    from ..common.types import _Info, _Request
+    from ..common.types import _Request
     from .walk import _Listing
 
 __all__: list[str] = []
@@ -169,86 +165,34 @@ def _tree_cp(
     _tree_mv : The same, deleting the source as it goes.
     """
     _check_maxdepth(maxdepth)
-    options = _options(source, destination, same_storage, maxdepth)
     cp_file = source._cp_file if cp_file is None else cp_file
+    if same_storage is None:
+        same_storage = source is destination
     return Operation(
-        lambda op: _Copy(path1, path2, cp_file=cp_file, op=op, **options).outcomes(),
+        lambda op: _Copy(
+            fs=source,
+            destination=destination,
+            path1=path1,
+            path2=path2,
+            same_storage=same_storage,
+            maxdepth=maxdepth,
+            cp_file=cp_file,
+            op=op,
+        ).outcomes(),
         CpState(),
     )
 
 
-def _options(
-    source: Any,
-    destination: Any,
-    same_storage: bool | None,
-    maxdepth: int | None,
-) -> dict[str, Any]:
-    """The options of a copy or a move, taken from its filesystems.
-
-    The profile is the destination's, as what a copy saves depends on where
-    it writes. Within one storage, it is the source's too.
-    """
-    return {
-        "source": source,
-        "destination": destination,
-        "same_storage": source is destination if same_storage is None else same_storage,
-        "profile": _profile_of(destination),
-        "maxdepth": maxdepth,
-    }
-
-
-class _CopyOrMove(_TreeJobs):
+class _CopyOrMove(_Copying, _TreeJobs):
     """The jobs of a copy or a move: a folder made where needed, and one per file.
 
-    A file's job waits for its destination folder, when the storage needs it.
-    A subclass says how a file goes, in `transfer_file`.
+    The tree walked is the source's, ``fs``. A file's job waits for its
+    destination folder, when the storage needs it. A subclass says how a file
+    goes, in `transfer_file`.
     """
 
-    verb = "copy"
-    doing = "Copying"
-
-    def __init__(
-        self,
-        path1: str | Sequence[str],
-        path2: str,
-        *,
-        source: Any,
-        destination: Any,
-        same_storage: bool,
-        profile: StorageProfile,
-        maxdepth: int | None,
-        op: Operation[Any, Any],
-    ) -> None:
-        super().__init__(source, op, maxdepth)
-
-        self.path1 = path1
-        self.path2 = path2
-
-        # The walk is the source's. The profile is the destination's.
-        self.destination = destination
-        destination_info: _Info = destination._info
-        self.makedirs: _Request = destination._makedirs
-
-        # Unknown, folders are made first. Implicit folders need none.
-        self.parents_required = (
-            profile.parents_required is not False and not profile.implicit_folders
-        )
-        self.implicit_folders = bool(profile.implicit_folders)
-
-        self.destination_info = destination_info
-        self.placement = _Placement(
-            path1,
-            path2,
-            destination_info=destination_info,
-            same_storage=same_storage,
-            expand=self.glob_roots,
-            found=self.found,
-            verb=self.verb,
-            doing=self.doing,
-        )
-
-        self.files_found = 0
-        self.files_done = 0
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
 
         # The copies waiting for their destination folder, by that folder.
         self.after_mkdir: dict[str, list[_Job]] = {}
@@ -256,21 +200,6 @@ class _CopyOrMove(_TreeJobs):
         # The destination folders made, or tried: a folder listed in several
         # parts is made once, and its later copies need not wait.
         self.made: set[str] = set()
-
-    def state(self) -> Any:
-        return CpState(
-            errors=self.errors,
-            current=self.current,
-            files_found=self.files_found,
-            files_copied=self.files_done,
-        )
-
-    async def prepare(self) -> _Roots | None:
-        return await self.placement.prepare()
-
-    def target(self, path: str) -> str:
-        """Where a path goes."""
-        return self.placement.target(path)
 
     def file_root(self, path: str) -> None:
         self.files_found += 1
@@ -310,7 +239,7 @@ class _CopyOrMove(_TreeJobs):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
-            return self.makedirs(job.destination, exist_ok=True)
+            return self.destination._makedirs(job.destination, exist_ok=True)
         return self.transfer_file(job.source, job.destination)
 
     @abstractmethod
@@ -337,32 +266,9 @@ class _CopyOrMove(_TreeJobs):
 class _Copy(_CopyOrMove):
     """The jobs of one `_tree_cp`: a ``cp_file`` per file."""
 
-    def __init__(
-        self,
-        path1: str | Sequence[str],
-        path2: str,
-        *,
-        cp_file: _Request,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(path1, path2, **kwargs)
+    def __init__(self, *, cp_file: _Request, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
         self.cp_file = cp_file
-        self.rm_file: _Request = self.destination._rm_file
 
     async def transfer_file(self, source: str, destination: str) -> None:
-        try:
-            try:
-                await self.cp_file(source, destination)
-            except FileExistsError:
-                # The destination refuses to overwrite, which fsspec's copy
-                # does. A folder there is no file to replace: rm_file takes
-                # files only. The job holds its permit already.
-                if (await self.destination_info(destination))["type"] == "directory":
-                    raise
-
-                await self.rm_file(destination)
-                await self.cp_file(source, destination)
-        except Exception as e:
-            # Yielded among paths, the error must tell its paths itself.
-            e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")
-            raise
+        await self.copy_file(self.cp_file, source, destination)

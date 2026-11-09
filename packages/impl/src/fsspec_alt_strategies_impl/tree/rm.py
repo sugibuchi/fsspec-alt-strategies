@@ -144,11 +144,9 @@ class _Deletion(_TreeJobs):
         maxdepth: int | None,
         op: Operation[str, RmState],
     ) -> None:
-        super().__init__(fs, op, maxdepth)
+        super().__init__(fs=fs, op=op, maxdepth=maxdepth)
 
         self.path = path
-        self.rm_file: _Request = fs._rm_file
-        self.rm_folder: _Request = fs._rmdir
         # A folder deleted whole would take what is deeper than maxdepth.
         self.rm_tree: _Request | None = (
             getattr(fs, "_rm_tree", None) if maxdepth is None else None
@@ -243,8 +241,8 @@ class _Deletion(_TreeJobs):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "folder":
-            return self.rm_folder(job.source)
-        return self.rm_file(job.source)
+            return self.fs._rmdir(job.source)
+        return self.fs._rm_file(job.source)
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "folder":

@@ -40,7 +40,7 @@ from fsspec_alt_strategies.profile import StorageProfile
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
 
-__all__ = ["CallStats", "SimulatedFileSystem", "TreeView", "folder_ils"]
+__all__ = ["CallStats", "FlatView", "SimulatedFileSystem", "TreeView", "folder_ils"]
 
 
 @dataclass
@@ -295,7 +295,7 @@ class SimulatedFileSystem(AsyncFileSystem):
     async def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
         """List the files whose paths start with ``prefix``, as object stores do.
 
-        It is no fsspec method: the flat strategies take it as their ``iexpand``.
+        It is no fsspec method: the flat strategies list with it.
         ``prefix`` is a raw string, e.g. "data/2024-" lists "data/2024-01.csv".
         The files come in path order, a page per request: a page is asked for
         only once the one before it is all taken.
@@ -355,9 +355,9 @@ class SimulatedFileSystem(AsyncFileSystem):
     async def _rm_files(self, paths: list[str]) -> None:
         """Delete files in one request, as S3's DeleteObjects does.
 
-        It is no fsspec method: the flat strategies take it as their
-        ``rm_files``. A path that is no file is left out, as object stores
-        leave out a key that does not exist.
+        It is no fsspec method: the flat strategies delete with it. A path
+        that is no file is left out, as object stores leave out a key that
+        does not exist.
         """
         await self._request("delete")
         for path in map(self._strip_protocol, paths):
@@ -636,3 +636,48 @@ class TreeView:
         self._makedirs = fs._makedirs if makedirs is None else makedirs
         self.storage_profile = storage_profile or StorageProfile()
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
+
+
+class FlatView:
+    """A filesystem as the flat strategies take it, its primitives replaceable.
+
+    The flat strategies take a filesystem, and call its ``_iexpand``,
+    ``_info``, ``_rm_files``, ``_cp_file``, ``_mv_file``, ``_makedirs`` and
+    ``_rm_file``. Each is the filesystem's own, unless given, so that a test
+    may replace one, e.g. with one that fails. ``fs`` may be None when all
+    that a test calls is given.
+
+    ``operation_limit``, ``storage_profile`` and ``rm_batch_size`` are a
+    filesystem's: 32 requests at a time, a storage unknown, and 1000 keys
+    deleted in one request.
+    """
+
+    def __init__(
+        self,
+        fs: Any,
+        *,
+        iexpand: Any = None,
+        info: Any = None,
+        rm_files: Any = None,
+        cp_file: Any = None,
+        mv_file: Any = None,
+        makedirs: Any = None,
+        rm_file: Any = None,
+        storage_profile: StorageProfile | None = None,
+        operation_limit: asyncio.Semaphore | None = None,
+        rm_batch_size: int = 1000,
+    ) -> None:
+        def own(name: str, given: Any) -> Any:
+            return getattr(fs, name, None) if given is None else given
+
+        self.fs = fs
+        self._iexpand = own("_iexpand", iexpand)
+        self._info = own("_info", info)
+        self._rm_files = own("_rm_files", rm_files)
+        self._cp_file = own("_cp_file", cp_file)
+        self._mv_file = own("_mv_file", mv_file)
+        self._makedirs = own("_makedirs", makedirs)
+        self._rm_file = own("_rm_file", rm_file)
+        self.storage_profile = storage_profile or StorageProfile()
+        self.operation_limit = operation_limit or asyncio.Semaphore(32)
+        self.rm_batch_size = rm_batch_size

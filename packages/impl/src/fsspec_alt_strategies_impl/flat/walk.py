@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """A walk of the keys under a prefix, from one listing streamed as it comes.
 
-`flat_walk` is the counterpart of `_tree_walk` for flat storages. fsspec's
+`_flat_walk` is the counterpart of `_tree_walk` for flat storages. fsspec's
 ``walk`` lists one folder per request, even on object stores, which can list
-all the keys under a prefix at once. `flat_walk` makes that one listing, and
+all the keys under a prefix at once. `_flat_walk` makes that one listing, and
 derives the folders from the keys. As the keys come in order, those in a
 folder come together: the folder is done once the listing has passed them.
 
@@ -23,30 +23,25 @@ from ..common.paths import _check_maxdepth, _trim, _triples
 from ._keys import _close, _folder, _folders
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncGenerator, Callable
 
-    from ..common.types import _IExpand, _Info
-
-__all__ = ["WalkState", "flat_walk"]
+__all__: list[str] = []
 
 
-def flat_walk(
+def _flat_walk(
+    fs: Any,
     path: str,
     *,
-    iexpand: _IExpand,
-    info: _Info,
     maxdepth: int | None = None,
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
-    concurrency_limit: asyncio.Semaphore,
 ) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
     """Walk the keys under a prefix, from one listing streamed as it comes.
 
     It yields each folder as ``(path, dirs, files)``, as `_tree_walk` does:
     ``path`` itself, then each folder below it. ``dirs`` and ``files`` map the
-    names in the folder to their entries. The files are the keys, as ``iexpand``
-    gives them. The folders are derived from the keys, as fsspec's filesystems
+    names in the folder to their entries. The files are the keys, as
+    ``_iexpand`` gives them. The folders are derived from the keys, as fsspec's filesystems
     derive them for object stores, and a key ending with "/" is a folder's
     marker. A derived folder's entry has only its ``name``, ``size`` 0 and
     ``type``.
@@ -73,20 +68,18 @@ def flat_walk(
     - NotADirectoryError, if ``path`` is a file;
     - the error of the listing, as there is no other to go on with.
 
-    Requests: the pages of one ``iexpand`` of ``path``, one after another. One
-    ``info`` for ``path``, if nothing is under it.
+    Requests: the pages of one ``_iexpand`` of ``path``, one after another.
+    One ``_info`` for ``path``, if nothing is under it, holding a permit of
+    the filesystem's ``operation_limit``. The listing holds none.
 
     Parameters
     ----------
+    fs : FlatFileSystem
+        The filesystem walked. Its ``_iexpand`` lists every key starting with a
+        prefix, in order of their names, each key once, as an object store
+        lists them.
     path : str
-        The folder to start from, as ``iexpand`` takes paths.
-    iexpand : callable
-        Lists every key starting with a prefix, called as ``iexpand(prefix)``: an
-        async iterator of entries as fsspec's ``_ls`` gives them, in order of
-        their names, each key once, as an object store lists them.
-    info : callable
-        Describes a path, called as ``info(path)``: e.g. the filesystem's
-        ``_info``.
+        The folder to start from, as ``_iexpand`` takes paths.
     maxdepth : int, optional
         The deepest level to walk: 1 yields only ``path``. No limit by default.
     topdown : bool
@@ -94,9 +87,6 @@ def flat_walk(
     descend : callable, optional
         Called with the entry of each subfolder found. It is walked only if
         this returns True. All by default.
-    concurrency_limit : asyncio.Semaphore
-        Held by the ``info`` while it runs. The listing holds none. Share one
-        to limit several operations, or files, together.
 
     Returns
     -------
@@ -112,17 +102,7 @@ def flat_walk(
     See Also
     --------
     _tree_walk : The same, for storages listing one folder per request.
-    flat_find : The files under a prefix, as fsspec's ``_find`` finds them.
-
-    Examples
-    --------
-    >>> limit = asyncio.Semaphore(16)  # Shared, e.g. by a filesystem's operations.
-    >>> walk = flat_walk(
-    ...     "data", iexpand=fs._iexpand, info=fs._info, concurrency_limit=limit
-    ... )
-    >>> async with walk as folders:
-    ...     async for path, dirs, files in folders:
-    ...         print(path, sorted(dirs), sorted(files))
+    _flat_find : The files under a prefix, as fsspec's ``_find`` finds them.
     """
     _check_maxdepth(maxdepth)
 
@@ -130,12 +110,10 @@ def flat_walk(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
     ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]]]:
         folders = _folders_done(
-            iexpand,
-            info,
+            fs,
             path,
             maxdepth=maxdepth,
             descend=descend,
-            concurrency_limit=concurrency_limit,
             stopping=op.cancelling,
         )
 
@@ -162,13 +140,11 @@ def flat_walk(
 
 
 async def _folders_done(
-    iexpand: _IExpand,
-    info: _Info,
+    fs: Any,
     path: str,
     *,
     maxdepth: int | None,
     descend: Callable[[dict[str, Any]], bool] | None,
-    concurrency_limit: asyncio.Semaphore,
     stopping: Callable[[], object],
 ) -> AsyncGenerator[tuple[str, list[dict[str, Any]]]]:
     """Each folder walked with its entries, as soon as it is done: bottom up.
@@ -185,7 +161,7 @@ async def _folders_done(
     # The folders open, the root first, each with its entries so far.
     open_: list[tuple[str, list[dict[str, Any]]]] = [(root, [])]
 
-    keys = iexpand(prefix)
+    keys = fs._iexpand(prefix)
     try:
         async for key in keys:
             under = True
@@ -201,8 +177,8 @@ async def _folders_done(
 
     if not under and root:
         # Nothing under it: a file, or missing, as _tree_walk raises for them.
-        async with concurrency_limit:
-            entry = await info(root)
+        async with fs.operation_limit:
+            entry = await fs._info(root)
         if entry["type"] != "directory":
             raise NotADirectoryError(root)
 

@@ -3,9 +3,9 @@
 """The states of the operations several families have, such as a find's.
 
 A family's strategy and its counterpart in another, e.g. `_tree_find` and
-`flat_find`, report their progress with one state class. A field that only
+`_flat_find`, report their progress with one state class. A field that only
 some of them can count is None in the others: e.g. ``folders_listed`` of a
-`flat_find`, which lists keys, not folders. Each strategy's module exports its
+`_flat_find`, which lists keys, not folders. Each strategy's module exports its
 state class, so that it is imported from there.
 
 This module depends on `monitor`.
@@ -30,13 +30,13 @@ __all__ = [
 
 @dataclass(frozen=True, kw_only=True)
 class WalkState(State):
-    """The progress of a walk, such as `_tree_walk` or `flat_walk`.
+    """The progress of a walk, such as `_tree_walk` or `_flat_walk`.
 
     Attributes
     ----------
     folders_listed : int or None
         The folders listed so far, those that failed included. None for a
-        strategy listing no folders, such as `flat_walk`.
+        strategy listing no folders, such as `_flat_walk`.
     found : int
         The entries found so far.
     """
@@ -47,13 +47,13 @@ class WalkState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class FindState(State):
-    """The progress of a find, such as `_tree_find` or `flat_find`.
+    """The progress of a find, such as `_tree_find` or `_flat_find`.
 
     Attributes
     ----------
     folders_listed : int or None
         The folders listed so far, those that failed included. None for a
-        strategy listing no folders, such as `flat_find`.
+        strategy listing no folders, such as `_flat_find`.
     found : int
         The paths found so far.
     """
@@ -64,13 +64,13 @@ class FindState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class DuState(State):
-    """The progress of a du, such as `_tree_du` or `flat_du`.
+    """The progress of a du, such as `_tree_du` or `_flat_du`.
 
     Attributes
     ----------
     folders_listed : int or None
         The folders listed so far, those that failed included. None for a
-        strategy listing no folders, such as `flat_du`.
+        strategy listing no folders, such as `_flat_du`.
     files : int
         The files counted so far.
     size : int
@@ -85,13 +85,13 @@ class DuState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class GlobState(State):
-    """The progress of a glob, such as `_tree_glob` or `flat_glob`.
+    """The progress of a glob, such as `_tree_glob` or `_flat_glob`.
 
     Attributes
     ----------
     folders_listed : int or None
         The folders listed so far, those that failed included. None for a
-        strategy listing no folders, such as `flat_glob`.
+        strategy listing no folders, such as `_flat_glob`.
     matched : int
         The paths matched so far.
     """
@@ -102,7 +102,7 @@ class GlobState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class RmState(State):
-    """The progress of a recursive delete, such as `_tree_rm` or `flat_rm`.
+    """The progress of a recursive delete, such as `_tree_rm` or `_flat_rm`.
 
     Attributes
     ----------
@@ -112,7 +112,7 @@ class RmState(State):
         The files deleted so far.
     folders_deleted : int or None
         The folders deleted so far. None for a strategy deleting no folders,
-        such as `flat_rm`.
+        such as `_flat_rm`.
     """
 
     files_found: int = 0
@@ -122,7 +122,7 @@ class RmState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class CpState(State):
-    """The progress of a recursive copy, such as `_tree_cp` or `flat_cp`.
+    """The progress of a recursive copy, such as `_tree_cp` or `_flat_cp`.
 
     Attributes
     ----------
@@ -138,7 +138,7 @@ class CpState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class MvState(State):
-    """The progress of a recursive move, such as `_tree_mv` or `flat_mv`.
+    """The progress of a recursive move, such as `_tree_mv` or `_flat_mv`.
 
     Attributes
     ----------
@@ -148,7 +148,7 @@ class MvState(State):
         The files moved so far: copied, and their source deleted.
     folders_moved : int or None
         The source folders deleted so far, once all in them was moved. None
-        for a strategy deleting no folders, such as `flat_mv`.
+        for a strategy deleting no folders, such as `_flat_mv`.
     roots_renamed : int or None
         The folders moved whole, each by one ``mv_file``, what is in them
         neither found nor counted. None unless the storage moves folders so.

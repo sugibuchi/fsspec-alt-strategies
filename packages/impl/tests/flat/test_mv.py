@@ -1,8 +1,9 @@
-"""Tests of `flat_mv`, moving each key, or copying it and deleting in batches."""
+"""Tests of `_flat_mv`, moving each key, or copying it and deleting in batches."""
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -10,8 +11,8 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.mv import MvState, flat_mv
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.flat.mv import MvState, _flat_mv
+from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 # A flat storage's: its folders are implicit, and none is made.
 _FLAT = StorageProfile(implicit_folders=True)
@@ -25,22 +26,58 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
-def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
-    """`flat_mv` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "profile": _FLAT,
-        "dst_info": fs._info,
-        "dst_makedirs": fs._makedirs,
-        "dst_rm_file": fs._rm_file,
-        "same_storage": True,
-        "iexpand": fs._iexpand,
-        "info": fs._info,
-        "cp_file": fs._cp_file,
-        "rm_files": fs._rm_files,
-        "batch_size": 1000,
+_SOURCE = {"iexpand", "info", "rm_files", "mv_file"}
+"""The keyword arguments that replace a primitive of the source."""
+
+_DESTINATION = {
+    "dst_info": "info",
+    "dst_makedirs": "makedirs",
+    "dst_rm_file": "rm_file",
+}
+"""The keyword arguments that replace a primitive of the destination, by its name."""
+
+
+def _views(fs: Any, kwargs: dict[str, Any]) -> tuple[FlatView, FlatView]:
+    """The source and the destination, both ``fs``, with the primitives ``kwargs`` replace.
+
+    The destination is the source unless a primitive of its own is replaced.
+    The limit and the batch size are the source's, and the profile the
+    destination's.
+    """
+    source = {k: kwargs.pop(k) for k in _SOURCE & kwargs.keys()}
+    if "concurrency_limit" in kwargs:
+        source["operation_limit"] = kwargs.pop("concurrency_limit")
+    if "batch_size" in kwargs:
+        source["rm_batch_size"] = kwargs.pop("batch_size")
+    profile = {}
+    if "profile" in kwargs:
+        profile["storage_profile"] = kwargs.pop("profile")
+
+    replaced = {
+        _DESTINATION[k]: kwargs.pop(k) for k in _DESTINATION.keys() & kwargs.keys()
     }
-    return flat_mv(path1, path2, **{**operations, **kwargs})
+    if not replaced:
+        view = FlatView(fs, **source, **profile)
+        return view, view
+    return FlatView(fs, **source), FlatView(fs, **replaced, **profile)
+
+
+def _mv(fs: Any, path1: Any, path2: Any, **kwargs: Any) -> Any:
+    """`_flat_mv` within ``fs``, whose primitives ``kwargs`` may replace.
+
+    ``cp_file``, ``rm_files`` and ``batch_size`` given None move by
+    ``mv_file``: the profile then says the storage renames.
+    """
+    kwargs = {"profile": _FLAT, **kwargs}
+    batched = ("cp_file", "rm_files", "batch_size")
+    if all(k in kwargs and kwargs[k] is None for k in batched):
+        for k in batched:
+            del kwargs[k]
+        kwargs["profile"] = replace(kwargs["profile"], renames_files=True)
+    source, destination = _views(fs, kwargs)
+    return _flat_mv(
+        source, destination, path1, path2, **{"same_storage": True, **kwargs}
+    )
 
 
 _FILES = [
@@ -192,7 +229,8 @@ async def test_mv_file_moves_markers_without_yielding_them() -> None:
     async def mv_file(source: str, destination: str) -> None:
         keys[destination] = keys.pop(source)
 
-    op = flat_mv(
+    op = _mv(
+        None,
         "data",
         "moved",
         iexpand=iexpand,
@@ -201,28 +239,11 @@ async def test_mv_file_moves_markers_without_yielding_them() -> None:
         dst_info=info,
         dst_makedirs=_nothing,
         dst_rm_file=_nothing,
-        same_storage=True,
-        profile=_FLAT,
         concurrency_limit=asyncio.Semaphore(4),
+        **_BY_MV_FILE,
     )
     assert await _collect_with_errors(op) == ([("data/a.txt", "moved/a.txt")], [])
     assert sorted(keys) == ["moved/", "moved/a.txt", "moved/empty/"]
-
-
-@pytest.mark.parametrize(
-    "operations",
-    [
-        {"mv_file": None, "cp_file": None},  # Neither way.
-        {"mv_file": None, "batch_size": None},  # Batches, of no size.
-        {"rm_files": None},  # Batches, of nothing to delete with, besides mv_file.
-    ],
-)
-def test_a_way_to_move_is_whole(
-    flat_fs: SimulatedFileSystem, operations: dict[str, Any]
-) -> None:
-    operations = {"mv_file": flat_fs._mv_file, **operations}
-    with pytest.raises(ValueError, match="cp_file, rm_files and batch_size"):
-        _mv(flat_fs, "data", "moved", **operations)
 
 
 @pytest.mark.parametrize(
@@ -248,11 +269,6 @@ async def test_the_profile_chooses_between_both_ways(
     assert flat_fs.stats.calls["delete"] == (len(_FILES) if by_mv_file else 1)
 
 
-def test_a_way_to_move_is_needed(flat_fs: SimulatedFileSystem) -> None:
-    with pytest.raises(ValueError, match="Give mv_file"):
-        _mv(flat_fs, "data", "moved", mv_file=None, **_BY_MV_FILE)
-
-
 async def test_batches_delete_markers_without_copying_them() -> None:
     keys = {"data/": b"", "data/empty/": b"", "data/a.txt": b"a"}
     copied: list[str] = []
@@ -275,7 +291,8 @@ async def test_batches_delete_markers_without_copying_them() -> None:
         for path in paths:
             del keys[path]
 
-    op = flat_mv(
+    op = _mv(
+        None,
         "data",
         "moved",
         iexpand=iexpand,
@@ -286,8 +303,6 @@ async def test_batches_delete_markers_without_copying_them() -> None:
         dst_info=info,
         dst_makedirs=_nothing,
         dst_rm_file=_nothing,
-        same_storage=True,
-        profile=_FLAT,
         concurrency_limit=asyncio.Semaphore(4),
     )
     assert await _collect_with_errors(op) == ([("data/a.txt", "moved/a.txt")], [])
@@ -320,7 +335,8 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
         for path in paths:
             del keys[path]
 
-    op = flat_mv(
+    op = _mv(
+        None,
         "data",
         "moved",
         iexpand=iexpand,
@@ -331,8 +347,6 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
         dst_info=info,
         dst_makedirs=_nothing,
         dst_rm_file=_nothing,
-        same_storage=True,
-        profile=_FLAT,
         concurrency_limit=asyncio.Semaphore(4),
     )
     moved, errors = await _collect_with_errors(op)

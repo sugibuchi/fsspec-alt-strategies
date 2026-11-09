@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Glob patterns, matched as fsspec's ``_glob`` matches them.
 
-Both globs, `_tree_glob` and `flat_glob`, match with `_Search`, so the two never
+Both globs, `_tree_glob` and `_flat_glob`, match with `_Search`, so the two never
 answer differently. A `_Search` also tells which folders the pattern can still
 match in, as `_tree_glob` prunes by folder.
 
@@ -31,30 +31,28 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from .operation import Operation
-    from .types import _Info
 
 
 async def _infos(
-    info: _Info,
+    fs: Any,
     paths: list[str],
-    concurrency_limit: asyncio.Semaphore,
     op: Operation[dict[str, Any], GlobState],
     found: set[str],
 ) -> AsyncGenerator[dict[str, Any]]:
-    """The ``info`` of each pattern without wildcards that exists, noted in ``found``.
+    """The ``_info`` of each pattern without wildcards that exists, noted in ``found``.
 
-    They run at once, each holding a permit of ``concurrency_limit``: a list of
-    plain paths may give many. The entries come as the answers arrive. Once the
-    operation is cancelled, no new ``info`` starts, but those running are
-    yielded.
+    They run at once, each holding a permit of the filesystem's
+    ``operation_limit``: a list of plain paths may give many. The entries come
+    as the answers arrive. Once the operation is cancelled, no new ``_info``
+    starts, but those running are yielded.
     """
-    requests: _Queue[str] = _Queue(concurrency_limit)
+    requests: _Queue[str] = _Queue(fs.operation_limit)
     requests.waiting.extend(dict.fromkeys(paths))
 
     async def start() -> None:
         if op.cancelling():
             requests.waiting.clear()
-        await requests.start(info)
+        await requests.start(fs._info)
 
     try:
         await start()

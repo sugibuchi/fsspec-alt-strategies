@@ -31,7 +31,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.jobs import _Roots
-    from ..common.operation import Operation
     from .walk import _Listing
 
 
@@ -57,15 +56,8 @@ class _TreeJobs(_Jobs):
     to `at_limit`, as fsspec finds it, but not what is in it.
     """
 
-    def __init__(
-        self,
-        fs: Any,
-        op: Operation[Any, Any],
-        maxdepth: int | None = None,
-    ) -> None:
-        super().__init__(fs.operation_limit, op)
-
-        self.fs = fs
+    def __init__(self, *, maxdepth: int | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
         self.maxdepth = maxdepth
 
         # The folder roots a pattern matched: fsspec walks them one level less

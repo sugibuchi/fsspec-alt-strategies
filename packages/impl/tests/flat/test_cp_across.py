@@ -1,4 +1,4 @@
-"""Tests of `flat_cp` between two storages, copying the keys under a prefix between two storages."""
+"""Tests of `_flat_cp` between two storages, copying the keys under a prefix between two storages."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.cp import CpState, flat_cp
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.flat.cp import CpState, _flat_cp
+from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 
 class _Reader:
@@ -83,21 +83,31 @@ def _across(
     path2: str,
     **kwargs: Any,
 ) -> Any:
-    """`flat_cp` between two filesystems, streaming each file."""
+    """`_flat_cp` between two filesystems, streaming each file.
+
+    ``kwargs`` may replace the destination's ``dst_makedirs``. The limit is
+    the source's, and the profile the destination's.
+    """
     operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "profile": StorageProfile(),
-        "iexpand": src._iexpand,
-        "info": src._info,
         "cp_file": streaming_copy(
             _opener(src, _Reader), _opener(dst, _Writer), block_size=4
         ),
-        "dst_info": dst._info,
-        "dst_makedirs": dst._makedirs,
-        "dst_rm_file": dst._rm_file,
         "same_storage": False,
     }
-    return flat_cp(path1, path2, **{**operations, **kwargs})
+    source = FlatView(
+        src,
+        **(
+            {"operation_limit": kwargs.pop("concurrency_limit")}
+            if "concurrency_limit" in kwargs
+            else {}
+        ),
+    )
+    destination = FlatView(
+        dst,
+        makedirs=kwargs.pop("dst_makedirs", None),
+        **({"storage_profile": kwargs.pop("profile")} if "profile" in kwargs else {}),
+    )
+    return _flat_cp(source, destination, path1, path2, **{**operations, **kwargs})
 
 
 _FILES = [
@@ -216,18 +226,18 @@ async def test_a_marker_makes_its_folder() -> None:
 
     profile = StorageProfile(parents_required=False)
     copied, errors = await _collect_with_errors(
-        flat_cp(
+        _flat_cp(
+            FlatView(
+                None,
+                iexpand=iexpand,
+                info=info,
+                operation_limit=asyncio.Semaphore(4),
+            ),
+            FlatView(dst, storage_profile=profile),
             "data",
             "copied",
-            iexpand=iexpand,
-            info=info,
             cp_file=copy_file,
-            dst_info=dst._info,
-            dst_makedirs=dst._makedirs,
-            dst_rm_file=dst._rm_file,
             same_storage=False,
-            profile=profile,
-            concurrency_limit=asyncio.Semaphore(4),
         )
     )
     assert errors == []

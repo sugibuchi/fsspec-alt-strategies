@@ -127,7 +127,7 @@ def _tree_glob(
         found: set[str] = set()
         # Shared with the flat family, which is not ported yet: it takes the
         # primitive and the limit.
-        infos = _infos(fs._info, literals, fs.operation_limit, op, found)
+        infos = _infos(fs, literals, op, found)
         async for entry in infos:
             yield entry
 

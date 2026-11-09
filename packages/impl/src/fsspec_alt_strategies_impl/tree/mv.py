@@ -11,7 +11,8 @@ Where ``mv_file`` moves a folder too, in one request, as a storage's rename
 does, the profile says so. `_tree_mv` then moves each folder whole with it
 where it can, and walks only what it cannot move so.
 
-This module depends on `cp`, and `jobs`, `operation` and `paths` of `common`.
+This module depends on `cp`, and `filesystem`, `jobs`, `operation` and
+`paths` of `common`.
 """
 
 from __future__ import annotations
@@ -21,15 +22,14 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
+from ..common.filesystem import _profile_of
 from ..common.jobs import _Job, _Roots
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
-from .cp import _CopyOrMove, _options
+from .cp import _CopyOrMove
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
-
-    from fsspec_alt_strategies.profile import StorageProfile
 
     from ..common.types import _Request
     from .walk import _Listing
@@ -172,16 +172,26 @@ def _tree_mv(
     _tree_rm : The deletion it does as it goes.
     """
     _check_maxdepth(maxdepth)
-    options = _options(source, destination, same_storage, maxdepth)
     mv_file = source._mv_file if mv_file is None else mv_file
+    if same_storage is None:
+        same_storage = source is destination
     # A folder moved whole would take what is deeper than maxdepth along.
     renames_folders = (
-        options["same_storage"]
-        and bool(options["profile"].renames_folders)
+        same_storage
+        and bool(_profile_of(destination).renames_folders)
         and maxdepth is None
     )
     return Operation(
-        lambda op: _Move(path1, path2, mv_file=mv_file, op=op, **options).outcomes(),
+        lambda op: _Move(
+            fs=source,
+            destination=destination,
+            path1=path1,
+            path2=path2,
+            same_storage=same_storage,
+            maxdepth=maxdepth,
+            mv_file=mv_file,
+            op=op,
+        ).outcomes(),
         MvState(folders_moved=0, roots_renamed=0 if renames_folders else None),
     )
 
@@ -192,30 +202,20 @@ class _Move(_CopyOrMove):
     verb = "move"
     doing = "Moving"
 
-    def __init__(
-        self,
-        path1: str | Sequence[str],
-        path2: str,
-        *,
-        mv_file: _Request,
-        same_storage: bool,
-        profile: StorageProfile,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(
-            path1, path2, same_storage=same_storage, profile=profile, **kwargs
-        )
+    def __init__(self, *, mv_file: _Request, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
 
         self.mv_file = mv_file
-        self.rm_folder: _Request = self.fs._rmdir
 
         # The profile is the destination's: only within one storage does it
         # tell how the source renames, or deletes its folders. A folder moved
         # whole would take what is deeper than maxdepth along.
         self.renames_folders = (
-            same_storage and bool(profile.renames_folders) and self.maxdepth is None
+            self.same_storage
+            and bool(self.profile.renames_folders)
+            and self.maxdepth is None
         )
-        self.implicit_folders = same_storage and self.implicit_folders
+        self.implicit_folders = self.same_storage and self.implicit_folders
         self.folders_moved = 0
 
         # The roots moved whole, yielded with the first step.
@@ -262,10 +262,10 @@ class _Move(_CopyOrMove):
         target = self.target(source)
         parent = target.rpartition("/")[0]
 
-        if target not in self.placement.missing:
+        if target not in self.missing:
             try:
                 async with self.concurrency_limit:
-                    await self.destination_info(target)
+                    await self.destination._info(target)
             except FileNotFoundError:
                 pass  # Free: the root can go there whole.
             except Exception:
@@ -276,7 +276,7 @@ class _Move(_CopyOrMove):
         try:
             if parent and self.parents_required:
                 async with self.concurrency_limit:
-                    await self.makedirs(parent, exist_ok=True)
+                    await self.destination._makedirs(parent, exist_ok=True)
 
             async with self.concurrency_limit:
                 await self.mv_file(source, target)
@@ -304,7 +304,7 @@ class _Move(_CopyOrMove):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "rmdir":
-            return self.rm_folder(job.source)
+            return self.fs._rmdir(job.source)
         return super().run(job)
 
     async def transfer_file(self, source: str, destination: str) -> None:

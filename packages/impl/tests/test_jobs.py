@@ -7,6 +7,7 @@ none of them shows: each permit given back, however the operation ends.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -39,7 +40,7 @@ class _Toy(_Jobs):
         failing: frozenset[str] = frozenset(),
         delay: float = 0.01,
     ) -> None:
-        super().__init__(limit, op)
+        super().__init__(fs=SimpleNamespace(operation_limit=limit), op=op)
         self.batches = batches
         self.failing = failing
         self.delay = delay
@@ -51,6 +52,9 @@ class _Toy(_Jobs):
 
     async def prepare(self) -> _Roots | None:
         return _Roots(["root"])
+
+    async def glob_roots(self, pattern: Any) -> _Roots:
+        raise NotImplementedError  # The toy takes no pattern.
 
     def state(self) -> State:
         return State(errors=self.errors, current=self.current)

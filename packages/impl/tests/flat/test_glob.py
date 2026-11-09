@@ -1,4 +1,4 @@
-"""Tests of `flat_glob`, checked against fsspec's own ``_glob``."""
+"""Tests of `_flat_glob`, checked against fsspec's own ``_glob``."""
 
 from __future__ import annotations
 
@@ -9,21 +9,19 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.glob import GlobState, flat_glob
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.flat.glob import GlobState, _flat_glob
+from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
 def _glob(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`flat_glob` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "iexpand": fs._iexpand,
-        "info": fs._info,
-    }
-    return flat_glob(path, **{**operations, **kwargs})
+    """`_flat_glob` on ``fs``, whose primitives or limit ``kwargs`` may replace."""
+    primitives = {k: kwargs.pop(k) for k in ("iexpand", "info") if k in kwargs}
+    if "concurrency_limit" in kwargs:
+        primitives["operation_limit"] = kwargs.pop("concurrency_limit")
+    return _flat_glob(FlatView(fs, **primitives), path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:

@@ -146,16 +146,21 @@ class _Queue(Generic[_T]):
 
 
 class _Jobs(ABC):
-    """The jobs of one operation, run while what it changes is found."""
+    """The jobs of one operation on ``fs``, run while what it changes is found.
 
-    def __init__(
-        self,
-        concurrency_limit: asyncio.Semaphore,
-        op: Operation[Any, Any],
-    ) -> None:
+    Each request holds a permit of the filesystem's ``operation_limit``. The
+    constructor takes keywords only, and passes on what it does not take, so
+    that a subclass may join a family's jobs with another base, such as a
+    copy's.
+    """
+
+    def __init__(self, *, fs: Any, op: Operation[Any, Any], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.fs = fs
+
         # The source's requests, the jobs, and a pattern's glob share it.
-        self.concurrency_limit = concurrency_limit
-        self.jobs: _Queue[_Job] = _Queue(concurrency_limit)
+        self.concurrency_limit: asyncio.Semaphore = fs.operation_limit
+        self.jobs: _Queue[_Job] = _Queue(self.concurrency_limit)
 
         # The queue's own, which the subclasses queue their jobs in.
         self.waiting = self.jobs.waiting
@@ -178,6 +183,13 @@ class _Jobs(ABC):
     @abstractmethod
     def state(self) -> Any:
         """The operation's state now."""
+
+    @abstractmethod
+    async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
+        """The roots matching glob patterns, found with the family's glob.
+
+        Its errors go to ``found``, yielded first.
+        """
 
     @abstractmethod
     def source(self, roots: _Roots) -> AsyncGenerator[Any] | None:

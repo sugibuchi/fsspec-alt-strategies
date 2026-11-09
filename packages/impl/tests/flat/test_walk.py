@@ -1,26 +1,21 @@
-"""Tests of `flat_walk`, checked against `_tree_walk` on the same flat storage."""
+"""Tests of `_flat_walk`, checked against `_tree_walk` on the same flat storage."""
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import pytest
 
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.walk import WalkState, flat_walk
+from fsspec_alt_strategies_impl.flat.walk import WalkState, _flat_walk
 from fsspec_alt_strategies_impl.tree.walk import _tree_walk
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
+from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem, TreeView
 
 
 def _walk(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
-    """`flat_walk` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "iexpand": fs._iexpand,
-        "info": fs._info,
-    }
-    return flat_walk(path, **{**operations, **kwargs})
+    """`_flat_walk` on ``fs``, whose ``iexpand`` or ``info`` ``kwargs`` may replace."""
+    primitives = {k: kwargs.pop(k) for k in ("iexpand", "info") if k in kwargs}
+    return _flat_walk(FlatView(fs, **primitives), path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:

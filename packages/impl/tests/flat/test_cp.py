@@ -1,4 +1,4 @@
-"""Tests of `flat_cp`, placing paths as fsspec's ``copy`` does."""
+"""Tests of `_flat_cp`, placing paths as fsspec's ``copy`` does."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.cp import CpState, flat_cp
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.flat.cp import CpState, _flat_cp
+from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 # A flat storage's: its folders are implicit, and none is made.
 _FLAT = StorageProfile(implicit_folders=True)
@@ -22,20 +22,49 @@ async def _nothing(*args: Any, **kwargs: Any) -> None:
     pass
 
 
-def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
-    """`flat_cp` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "iexpand": fs._iexpand,
-        "info": fs._info,
-        "cp_file": fs._cp_file,
-        "dst_info": fs._info,
-        "dst_makedirs": fs._makedirs,
-        "dst_rm_file": fs._rm_file,
-        "same_storage": True,
-        "profile": _FLAT,
+_SOURCE = {"iexpand", "info", "rm_files", "mv_file"}
+"""The keyword arguments that replace a primitive of the source."""
+
+_DESTINATION = {
+    "dst_info": "info",
+    "dst_makedirs": "makedirs",
+    "dst_rm_file": "rm_file",
+}
+"""The keyword arguments that replace a primitive of the destination, by its name."""
+
+
+def _views(fs: Any, kwargs: dict[str, Any]) -> tuple[FlatView, FlatView]:
+    """The source and the destination, both ``fs``, with the primitives ``kwargs`` replace.
+
+    The destination is the source unless a primitive of its own is replaced.
+    The limit and the batch size are the source's, and the profile the
+    destination's.
+    """
+    source = {k: kwargs.pop(k) for k in _SOURCE & kwargs.keys()}
+    if "concurrency_limit" in kwargs:
+        source["operation_limit"] = kwargs.pop("concurrency_limit")
+    if "batch_size" in kwargs:
+        source["rm_batch_size"] = kwargs.pop("batch_size")
+    profile = {}
+    if "profile" in kwargs:
+        profile["storage_profile"] = kwargs.pop("profile")
+
+    replaced = {
+        _DESTINATION[k]: kwargs.pop(k) for k in _DESTINATION.keys() & kwargs.keys()
     }
-    return flat_cp(path1, path2, **{**operations, **kwargs})
+    if not replaced:
+        view = FlatView(fs, **source, **profile)
+        return view, view
+    return FlatView(fs, **source), FlatView(fs, **replaced, **profile)
+
+
+def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
+    """`_flat_cp` within ``fs``, whose primitives ``kwargs`` may replace."""
+    kwargs = {"profile": _FLAT, **kwargs}
+    source, destination = _views(fs, kwargs)
+    return _flat_cp(
+        source, destination, path1, path2, **{"same_storage": True, **kwargs}
+    )
 
 
 _FILES = [
@@ -162,18 +191,20 @@ async def test_markers_are_not_copied() -> None:
     async def cp_file(source: str, destination: str) -> None:
         copied.append((source, destination))
 
-    op = flat_cp(
-        "data",
-        "copied",
-        iexpand=iexpand,
-        info=info,
-        cp_file=cp_file,
-        dst_info=info,
-        dst_makedirs=_nothing,
-        dst_rm_file=_nothing,
-        same_storage=True,
-        profile=_FLAT,
-        concurrency_limit=asyncio.Semaphore(4),
+    source, destination = _views(
+        None,
+        {
+            "iexpand": iexpand,
+            "info": info,
+            "dst_info": info,
+            "dst_makedirs": _nothing,
+            "dst_rm_file": _nothing,
+            "profile": _FLAT,
+            "concurrency_limit": asyncio.Semaphore(4),
+        },
+    )
+    op = _flat_cp(
+        source, destination, "data", "copied", cp_file=cp_file, same_storage=True
     )
     assert await _collect_with_errors(op) == ([("data/a.txt", "copied/a.txt")], [])
     assert copied == [("data/a.txt", "copied/a.txt")]

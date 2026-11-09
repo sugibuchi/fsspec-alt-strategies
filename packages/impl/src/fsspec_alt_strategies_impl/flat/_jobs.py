@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""The engine under the flat strategies that change a storage, such as flat_rm.
+"""The engine under the flat strategies that change a storage, such as _flat_rm.
 
 They list the keys under each root, and start their jobs, e.g. a batch
 deletion, as the keys arrive: `_FlatJobs` feeds `common`'s `_Jobs` with the
 keys. A subclass says what a key queues, how a job runs, and what its outcome
 is. The roots are listed one after another.
 
-A glob pattern is expanded first, with `flat_glob`, as fsspec's
+A glob pattern is expanded first, with `_flat_glob`, as fsspec's
 ``_expand_path`` expands it: the keys under its matching folders are then
 listed.
 
@@ -26,35 +26,30 @@ from ..common.operation import _collect_with_errors
 from ..common.paths import _trim
 from ._keys import _close
 from .find import _within
-from .glob import flat_glob
+from .glob import _flat_glob
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.jobs import _Roots
-    from ..common.operation import Operation
-    from ..common.types import _IExpand, _Info
 
 
 async def _expand(
-    iexpand: _IExpand,
-    info: _Info,
+    fs: Any,
     pattern: str | Sequence[str],
-    concurrency_limit: asyncio.Semaphore,
     maxdepth: int | None = None,
 ) -> tuple[_Roots, list[Exception]]:
-    """The roots matching glob patterns, found with `flat_glob`, and the errors found."""
+    """The roots matching glob patterns, found with `_flat_glob`, and the errors found."""
     matches, errors = await _collect_with_errors(
-        flat_glob(
-            pattern,
-            iexpand=iexpand,
-            info=info,
-            maxdepth=maxdepth,
-            concurrency_limit=concurrency_limit,
-        )
+        _flat_glob(fs, pattern, maxdepth=maxdepth)
     )
     return _roots_of(matches, errors, pattern), errors
+
+
+def _check_batch_size(batch_size: int) -> None:
+    """Refuse a filesystem's ``rm_batch_size`` below 1, as no batch could be sent."""
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be at least 1: {batch_size}")
 
 
 def _keys_of(paths: tuple[str, ...]) -> str:
@@ -67,22 +62,13 @@ def _keys_of(paths: tuple[str, ...]) -> str:
 class _FlatJobs(_Jobs):
     """The jobs of one operation, run while the keys under its roots are listed.
 
-    With ``maxdepth``, the keys deeper than it are listed, but left out, as
+    ``fs`` is the filesystem listed, by its ``_iexpand`` and ``_info``. With
+    ``maxdepth``, the keys deeper than it are listed, but left out, as
     fsspec's ``_expand_path`` finds paths. A prefix lists every key under it.
     """
 
-    def __init__(
-        self,
-        iexpand: _IExpand,
-        info: _Info,
-        concurrency_limit: asyncio.Semaphore,
-        op: Operation[Any, Any],
-        maxdepth: int | None = None,
-    ) -> None:
-        super().__init__(concurrency_limit, op)
-
-        self.iexpand = iexpand
-        self.info = info
+    def __init__(self, *, maxdepth: int | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
         self.maxdepth = maxdepth
 
         # The folder roots a pattern matched: fsspec takes them one level less
@@ -91,9 +77,7 @@ class _FlatJobs(_Jobs):
 
     async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
         """The roots matching glob patterns, noting those a pattern matched."""
-        roots, errors = await _expand(
-            self.iexpand, self.info, pattern, self.concurrency_limit, self.maxdepth
-        )
+        roots, errors = await _expand(self.fs, pattern, self.maxdepth)
         self.found.extend(errors)
         if self.maxdepth is not None:
             named = [pattern] if isinstance(pattern, str) else pattern
@@ -120,9 +104,9 @@ class _FlatJobs(_Jobs):
         return []
 
     async def _keys(self, folders: Sequence[str]) -> AsyncGenerator[dict[str, Any]]:
-        """The keys under each folder, as ``iexpand`` lists them.
+        """The keys under each folder, as ``_iexpand`` lists them.
 
-        A folder with nothing under it is asked for with ``info``: a file is
+        A folder with nothing under it is asked for with ``_info``: a file is
         yielded as a key, and a missing one raises FileNotFoundError, ending the
         operation, as a missing root does.
         """
@@ -135,7 +119,7 @@ class _FlatJobs(_Jobs):
 
             under = False
             prefix = f"{folder}/" if folder else ""
-            entries = self.iexpand(prefix)
+            entries = self.fs._iexpand(prefix)
             try:
                 async for entry in entries:
                     under = True
@@ -150,6 +134,6 @@ class _FlatJobs(_Jobs):
                 continue
 
             async with self.concurrency_limit:
-                entry = await self.info(folder)
+                entry = await self.fs._info(folder)
             if entry["type"] != "directory":
                 yield entry

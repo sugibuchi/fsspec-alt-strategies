@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """A recursive find that streams one listing of a prefix.
 
-`flat_find` is an alternative to fsspec's ``_find`` for flat storages, with the
+`_flat_find` is an alternative to fsspec's ``_find`` for flat storages, with the
 same paths. fsspec's, and the object stores' own, gather every page of the
-listing before answering. `flat_find` yields each path as its page arrives.
+listing before answering. `_flat_find` yields each path as its page arrives.
 
 This module depends on `_keys`, and `operation` and `paths` of `common`.
 """
@@ -21,22 +21,17 @@ from ..common.paths import _check_maxdepth, _trim
 from ._keys import _close, _folder, _folders, _new
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncGenerator, Callable
 
-    from ..common.types import _IExpand, _Info
-
-__all__ = ["FindState", "flat_find"]
+__all__: list[str] = []
 
 
-def flat_find(
+def _flat_find(
+    fs: Any,
     path: str,
     *,
-    iexpand: _IExpand,
-    info: _Info,
     maxdepth: int | None = None,
     withdirs: bool = False,
-    concurrency_limit: asyncio.Semaphore,
 ) -> Operation[dict[str, Any], FindState]:
     """Find the files under a prefix, from one listing streamed as it comes.
 
@@ -60,27 +55,23 @@ def flat_find(
     Once cancelled, it takes nothing more from the listing. An error from the
     listing ends the operation, raised by its iteration.
 
-    Requests: the pages of one ``iexpand`` of ``path``, one after another. One
-    ``info`` for ``path`` itself, if nothing is under it, or with ``withdirs``.
+    Requests: the pages of one ``_iexpand`` of ``path``, one after another.
+    One ``_info`` for ``path`` itself, if nothing is under it, or with
+    ``withdirs``, holding a permit of the filesystem's ``operation_limit``.
+    The listing holds none.
 
     Parameters
     ----------
+    fs : FlatFileSystem
+        The filesystem searched. Its ``_iexpand`` lists every key starting
+        with a prefix, in order of their names, each key once.
     path : str
-        The folder to search, as ``iexpand`` takes paths.
-    iexpand : callable
-        Lists every key starting with a prefix, called as ``iexpand(prefix)``: an
-        async iterator of entries as fsspec's ``_ls`` gives them, in order of
-        their names, each key once, as an object store lists them.
-    info : callable
-        Describes a path, called as ``info(path)``: e.g. the filesystem's
-        ``_info``.
+        The folder to search, as ``_iexpand`` takes paths.
     maxdepth : int, optional
         The deepest level to find: 1 finds only the files in ``path``. No
         limit by default. The listing still lists every key under it.
     withdirs : bool
         Whether to find folders too, ``path`` included.
-    concurrency_limit : asyncio.Semaphore
-        Held by each ``info`` while it runs. The listing holds none.
 
     Returns
     -------
@@ -95,16 +86,6 @@ def flat_find(
     See Also
     --------
     _tree_find : The same, for storages listing one folder per request.
-
-    Examples
-    --------
-    >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
-    >>> find = flat_find(
-    ...     "data", iexpand=fs._iexpand, info=fs._info, concurrency_limit=limit
-    ... )
-    >>> async with find as op:
-    ...     async for entry in op:
-    ...         print(entry["name"])
     """
     _check_maxdepth(maxdepth)
 
@@ -112,12 +93,10 @@ def flat_find(
         op: Operation[dict[str, Any], FindState],
     ) -> AsyncGenerator[dict[str, Any]]:
         steps = _find_entries(
-            iexpand,
-            info,
+            fs,
             path,
             maxdepth=maxdepth,
             withdirs=withdirs,
-            concurrency_limit=concurrency_limit,
             stopping=op.cancelling,
         )
 
@@ -130,13 +109,11 @@ def flat_find(
 
 
 async def _find_entries(
-    iexpand: _IExpand,
-    info: _Info,
+    fs: Any,
     path: str,
     *,
     maxdepth: int | None = None,
     withdirs: bool = False,
-    concurrency_limit: asyncio.Semaphore,
     stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[dict[str, Any]]:
     """The entries under ``path``, as fsspec's ``_find`` finds them.
@@ -146,8 +123,8 @@ async def _find_entries(
     treated as fsspec's ``_find`` treats it:
 
     - missing, it yields nothing;
-    - a file, it yields the file's ``info`` entry;
-    - a folder, it yields the folder's own ``info`` entry with ``withdirs``,
+    - a file, it yields the file's ``_info`` entry;
+    - a folder, it yields the folder's own ``_info`` entry with ``withdirs``,
       unless stopping.
 
     Once ``stopping`` returns true, it takes no more from the listing. An error
@@ -160,7 +137,7 @@ async def _find_entries(
     # The folders of the key listed last.
     before: list[str] = []
 
-    entries = iexpand(prefix)
+    entries = fs._iexpand(prefix)
     try:
         async for entry in entries:
             under = True
@@ -182,8 +159,8 @@ async def _find_entries(
         return
 
     try:
-        async with concurrency_limit:
-            entry = await info(root)
+        async with fs.operation_limit:
+            entry = await fs._info(root)
     except FileNotFoundError:
         return
 
