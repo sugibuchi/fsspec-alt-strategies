@@ -27,9 +27,15 @@ from .jobs import _Jobs, _Roots
 from .paths import _trim
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
+    from typing import TypeAlias
 
-    from .types import _Request
+    _Transfer: TypeAlias = Callable[[str, str], Awaitable[None]]
+    """How one file goes from a source path to a destination path.
+
+    It is the source's ``_cp_file`` or ``_mv_file`` within one storage, or a
+    router's copy or move of a file between two.
+    """
 
 
 class _Copying(_Jobs):
@@ -195,7 +201,9 @@ class _Copying(_Jobs):
             return self.base + path[len(self.prefix) :]
         return f"{self.base}/{path}" if self.base else path
 
-    async def copy_file(self, cp_file: _Request, source: str, destination: str) -> None:
+    async def copy_file(
+        self, cp_file: _Transfer, source: str, destination: str
+    ) -> None:
         """Copy a file by ``cp_file``, replacing a file there the destination keeps.
 
         A destination refusing to overwrite, as fsspec's copy does not, costs

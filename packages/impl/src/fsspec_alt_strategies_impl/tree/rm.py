@@ -25,9 +25,8 @@ from ..common.paths import _check_maxdepth
 from ._jobs import _TreeJobs
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 
-    from ..common.types import _Request
     from .walk import _Listing
 
 __all__: list[str] = []
@@ -148,7 +147,7 @@ class _Deletion(_TreeJobs):
 
         self.path = path
         # A folder deleted whole would take what is deeper than maxdepth.
-        self.rm_tree: _Request | None = (
+        self.rm_tree: Callable[[str], Awaitable[None]] | None = (
             getattr(fs, "_rm_tree", None) if maxdepth is None else None
         )
 

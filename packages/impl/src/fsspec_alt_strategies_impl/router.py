@@ -51,8 +51,8 @@ if TYPE_CHECKING:
 
     from fsspec.callbacks import Callback
 
+    from .common.copying import _Transfer
     from .common.operation import Operation
-    from .common.types import _Request
 
 __all__ = ["AsyncRoutingFileSystem"]
 
@@ -1062,7 +1062,7 @@ class AsyncRoutingFileSystem(
 
     def _across(
         self, fs1: AsyncFileSystem, fs2: AsyncFileSystem, *, move: bool = False
-    ) -> _Request:
+    ) -> _Transfer:
         """A file's copy, or move, from ``fs1`` to ``fs2``, under ``transfer_limit``."""
         hook = self._cross_fs_mv_file if move else self._cross_fs_cp_file
 

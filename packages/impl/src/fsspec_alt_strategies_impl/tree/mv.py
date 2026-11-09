@@ -31,7 +31,7 @@ from .cp import _CopyOrMove
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
 
-    from ..common.types import _Request
+    from ..common.copying import _Transfer
     from .walk import _Listing
 
 __all__: list[str] = []
@@ -43,7 +43,7 @@ def _tree_mv(
     path1: str | Sequence[str],
     path2: str,
     *,
-    mv_file: _Request | None = None,
+    mv_file: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
 ) -> Operation[tuple[str, str], MvState]:
@@ -202,7 +202,7 @@ class _Move(_CopyOrMove):
     verb = "move"
     doing = "Moving"
 
-    def __init__(self, *, mv_file: _Request, **kwargs: Any) -> None:
+    def __init__(self, *, mv_file: _Transfer, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
         self.mv_file = mv_file

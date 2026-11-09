@@ -27,7 +27,7 @@ from ._jobs import _TreeJobs
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
-    from ..common.types import _Request
+    from ..common.copying import _Transfer
     from .walk import _Listing
 
 __all__: list[str] = []
@@ -39,7 +39,7 @@ def _tree_cp(
     path1: str | Sequence[str],
     path2: str,
     *,
-    cp_file: _Request | None = None,
+    cp_file: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
 ) -> Operation[tuple[str, str], CpState]:
@@ -266,7 +266,7 @@ class _CopyOrMove(_Copying, _TreeJobs):
 class _Copy(_CopyOrMove):
     """The jobs of one `_tree_cp`: a ``cp_file`` per file."""
 
-    def __init__(self, *, cp_file: _Request, **kwargs: Any) -> None:
+    def __init__(self, *, cp_file: _Transfer, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.cp_file = cp_file
 

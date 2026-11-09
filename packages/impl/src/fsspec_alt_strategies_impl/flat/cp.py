@@ -27,7 +27,7 @@ from ._jobs import _FlatJobs
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
-    from ..common.types import _Request
+    from ..common.copying import _Transfer
 
 __all__: list[str] = []
 
@@ -38,7 +38,7 @@ def _flat_cp(
     path1: str | Sequence[str],
     path2: str,
     *,
-    cp_file: _Request | None = None,
+    cp_file: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
 ) -> Operation[tuple[str, str], CpState]:
@@ -246,7 +246,7 @@ class _CopyOrMove(_Copying, _FlatJobs):
 class _Copy(_CopyOrMove):
     """The jobs of one `_flat_cp`: a ``cp_file`` per key."""
 
-    def __init__(self, *, cp_file: _Request, **kwargs: Any) -> None:
+    def __init__(self, *, cp_file: _Transfer, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.cp_file = cp_file
 
