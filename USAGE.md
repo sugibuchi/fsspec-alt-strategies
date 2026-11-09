@@ -128,8 +128,8 @@ fs.rm("data/2024", recursive=True)  # Deletes by the tree family's strategy.
 ```
 
 The known filesystems are those in `known_implementations`, by class: the local filesystem, s3fs, gcsfs, adlfs,
-fsspec's memory, SFTP and HDFS filesystems. Each entry says its family, whether it is async, its concurrency limits
-and its profile. Pass your own table to `monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem the way
+fsspec's memory, SFTP and HDFS filesystems. Each entry says its profile, whose s_type is its family, and its
+concurrency limits. The wrapper is async if the filesystem is. Pass your own table to `monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem the way
 right on every storage: as a tree, one request at a time, with nothing known of the storage.
 
 A wrapper is light and not cached: make one when you need it, and drop it after.
