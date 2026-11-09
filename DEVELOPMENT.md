@@ -58,10 +58,6 @@ The choices below shape the whole project. Keep to them, or change them on purpo
 ### Principles
 
 - **A third party.** The library offers alternatives to fsspec's algorithms, and never patches fsspec.
-- **Classes are the API.** The strategies are the recursive methods of two abstract filesystem classes, one per family.
-  A developer gets them by subclassing a class, or by wrapping an existing filesystem.
-- **Primitives only.** A strategy calls only a storage's primitives, such as `_ils`, `_info` and `_rm_file`, never
-  another strategy's method. So choosing one strategy never changes another.
 - **Developers choose.** The library never picks a strategy. Each docstring says what it assumes of the storage, and
   when it wins or loses.
 - **Async first.** Strategies are async. Sync filesystems get them through the sync wrappers.
