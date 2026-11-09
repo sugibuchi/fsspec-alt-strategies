@@ -76,14 +76,16 @@ known_implementations: dict[str, KnownImplementation] = {
         "rm_batch_size": 1000,
     },
     "gcsfs.core.GCSFileSystem": {
-        # A bucket with a hierarchical namespace has folders of its own, and
-        # renames: one class serves both kinds of bucket, so those are unknown.
+        # A bucket with a hierarchical namespace has folders of its own: one
+        # class serves both kinds of bucket, so that is unknown. Its _mv renames
+        # a folder in such a bucket, but the wrapper moves by _mv_file, which
+        # is fsspec's copy, then a delete.
         "storage_profile": StorageProfile(
             fs_type="flat",
             parents_required=False,
             implicit_folders=None,
-            renames_files=None,
-            renames_folders=None,
+            renames_files=False,
+            renames_folders=False,
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
@@ -93,13 +95,15 @@ known_implementations: dict[str, KnownImplementation] = {
     "adlfs.spec.AzureBlobFileSystem": {
         # Its ls lists one folder per request, with walk_blobs and a delimiter,
         # with a hierarchical namespace or without. Its folders are real with
-        # one, prefixes without, and one class serves both: unknown.
+        # one, prefixes without, and one class serves both: unknown. It has no
+        # move of its own, so its mv is fsspec's copy, then a delete, even with
+        # a hierarchical namespace.
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=False,
             implicit_folders=None,
-            renames_files=None,
-            renames_folders=None,
+            renames_files=False,
+            renames_folders=False,
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
