@@ -130,15 +130,13 @@ stay the router's.
 #### What changes for callers
 
 - The strategy functions, e.g. `tree_rm`, leave the public API. The classes and wrappers are the API.
-- A caller watches an operation through a `Monitor`, as through the classes now.
+- `Operation` stays private: no method returns one. A caller watches and stops an operation through an
+  `OperationHandler`, such as a `Monitor`.
+- `_walk` is the family's walk, listing with `_ils` or `_iexpand`: no other method streams a huge folder.
 - This breaks 0.1.0's API: it is released as 0.2.0.
 
-#### Open questions
-
-- Do callers need to iterate an operation without a monitor, as the functions allow now? If so, through which
-  methods, e.g. `fs.iter_rm(path)` returning an `Operation`?
-- Does `tree_walk`'s streaming of a huge folder need a public method, beyond fsspec's `walk`?
-- Do the operation classes of the two families share a base, e.g. for the copy's placement, or only helpers?
+The operation classes of both families share a base in `common/`. It holds what a copy or move does whatever the
+family, such as placing each path as fsspec's `copy` does.
 
 #### Porting
 
