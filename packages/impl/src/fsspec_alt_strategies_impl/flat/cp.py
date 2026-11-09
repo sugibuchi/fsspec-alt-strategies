@@ -54,7 +54,7 @@ def flat_cp(
     """Copy the keys under a prefix, copying as the listing goes on.
 
     It places the paths as fsspec's ``copy`` with ``recursive=True`` does, as
-    `tree_cp` places them: into ``path2`` if it is an existing folder or ends
+    `_tree_cp` places them: into ``path2`` if it is an existing folder or ends
     with "/", and ``path1`` does not end with "/", otherwise onto it. A glob
     pattern copies each path it matches, relative to the matches' common
     prefix. A list copies each path it names or matches into ``path2``, under
@@ -80,7 +80,7 @@ def flat_cp(
     those at most ``maxdepth`` levels below ``path1``, or below a pattern's
     matches one level less. The keys deeper are listed, but not copied. As
     fsspec's, it then makes no folder for a marker. It places the keys as
-    without ``maxdepth``, as `tree_cp` does.
+    without ``maxdepth``, as `_tree_cp` does.
 
     The copies run concurrently, so the destination's keys are created in
     another order than the source's. A storage listing in creation order
@@ -96,7 +96,7 @@ def flat_cp(
     Between two storages, it wins over fsspec's way too, a ``get`` to local
     files then a ``put``: the data needs no local disk. It loses on sources
     with a hierarchical namespace, whose folders a listing by prefix does not
-    see: `tree_cp` suits those.
+    see: `_tree_cp` suits those.
 
     Once cancelled, it takes nothing more from the listing, and starts no new
     copy, but yields the outcomes of those sent. Closed, it waits for those
@@ -168,7 +168,7 @@ def flat_cp(
 
     See Also
     --------
-    tree_cp : The same, for storages listing one folder per request.
+    _tree_cp : The same, for storages listing one folder per request.
     flat_mv : The same, deleting the sources as it goes.
 
     Examples

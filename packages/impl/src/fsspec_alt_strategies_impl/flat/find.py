@@ -55,7 +55,7 @@ def flat_find(
     caller starts on the first page, and holds one page at a time, not the
     whole listing. It sends the same listing requests. It loses on storages
     with a hierarchical namespace, whose folders a listing by prefix does not
-    see when empty: `tree_find` suits those.
+    see when empty: `_tree_find` suits those.
 
     Once cancelled, it takes nothing more from the listing. An error from the
     listing ends the operation, raised by its iteration.
@@ -94,7 +94,7 @@ def flat_find(
 
     See Also
     --------
-    tree_find : The same, for storages listing one folder per request.
+    _tree_find : The same, for storages listing one folder per request.
 
     Examples
     --------

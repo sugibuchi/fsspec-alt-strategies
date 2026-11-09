@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The size of a tree, from its listings alone.
 
-`tree_du` is an alternative to fsspec's ``_du``. fsspec's finds the files, then asks
-each file's size with a request of its own. `tree_du` adds up the sizes the
+`_tree_du` is an alternative to fsspec's ``_du``. fsspec's finds the files, then asks
+each file's size with a request of its own. `_tree_du` adds up the sizes the
 listings already give.
 
 This module depends on `find`, and `operation` and `paths` of `common`.
@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import DuState
 
+from ..common.filesystem import _with
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
 from .find import _find_listings
@@ -24,18 +25,17 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator
 
-    from ..common.types import _Ils, _Info
 
-__all__ = ["DuState", "tree_du"]
+__all__: list[str] = []
 
 
-def tree_du(
+def _tree_du(
+    fs: Any,
     path: str,
     *,
-    ils: _Ils,
-    info: _Info,
     maxdepth: int | None = None,
-    concurrency_limit: asyncio.Semaphore,
+    ils_kwargs: dict[str, Any] | None = None,
+    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[dict[str, Any], DuState]:
     """Measure a tree's size from its listings, listing several folders at a time.
 
@@ -60,21 +60,18 @@ def tree_du(
 
     Parameters
     ----------
+    fs : TreeFileSystem
+        The filesystem measured, by its ``_ils`` and ``_info``.
     path : str
-        The folder to measure, as ``ils`` takes it.
-    ils : callable
-        Lists a folder, called as ``ils(path)``: an async iterator of its
-        entries, as fsspec's ``_ls`` gives them, e.g. the filesystem's
-        ``_ils``.
-    info : callable
-        Describes a path, called as ``info(path)``: e.g. the filesystem's
-        ``_info``.
+        The folder to measure, as ``_ils`` takes it.
     maxdepth : int, optional
         The deepest level to measure: 1 counts only the files in ``path``. No
         limit by default.
-    concurrency_limit : asyncio.Semaphore
-        Held by each request while it runs. Share one to limit several
-        operations, or files, together.
+    ils_kwargs : dict, optional
+        Passed to each ``_ils``, as fsspec's ``du`` passes its own on.
+    concurrency_limit : asyncio.Semaphore, optional
+        Held by each request while it runs: the filesystem's
+        ``operation_limit`` by default.
 
     Returns
     -------
@@ -89,20 +86,12 @@ def tree_du(
 
     See Also
     --------
-    tree_walk : The walk under it.
-
-    Examples
-    --------
-    >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
-    >>> du = tree_du("data", ils=fs._ils, info=fs._info, concurrency_limit=limit)
-    >>> async with du as op:
-    ...     async for entry in op:
-    ...         if isinstance(entry, Exception):
-    ...             raise entry
-    >>> op.state.size, op.state.files
-    (73400320, 70)
+    _tree_walk : The walk under it.
     """
     _check_maxdepth(maxdepth)
+    ils, info = _with(fs._ils, ils_kwargs or {}), fs._info
+    if concurrency_limit is None:
+        concurrency_limit = fs.operation_limit
 
     async def run(
         op: Operation[dict[str, Any], DuState],

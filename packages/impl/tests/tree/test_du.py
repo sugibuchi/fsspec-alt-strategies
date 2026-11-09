@@ -1,4 +1,4 @@
-"""Tests of `tree_du`, checked against fsspec's own ``_du``."""
+"""Tests of `_tree_du`, checked against fsspec's own ``_du``."""
 
 from __future__ import annotations
 
@@ -9,18 +9,21 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.du import DuState, tree_du
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl.tree.du import DuState, _tree_du
+from fsspec_alt_strategies_impl_testing import (
+    SimulatedFileSystem,
+    TreeView,
+    folder_ils,
+)
+
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_folder", "rm_tree", "cp_file", "mv_file"}
+"""The keyword arguments that replace a primitive of the filesystem."""
 
 
 def _du(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`tree_du` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "ils": folder_ils(fs),
-        "info": fs._info,
-    }
-    return tree_du(path, **{**operations, **kwargs})
+    """`_tree_du` on a filesystem's own primitives, which ``kwargs`` may replace."""
+    view = TreeView(fs, **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()})
+    return _tree_du(view, path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:

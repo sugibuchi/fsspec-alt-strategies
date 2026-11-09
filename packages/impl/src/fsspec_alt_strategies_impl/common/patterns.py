@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Glob patterns, matched as fsspec's ``_glob`` matches them.
 
-Both globs, `tree_glob` and `flat_glob`, match with `_Search`, so the two never
+Both globs, `_tree_glob` and `flat_glob`, match with `_Search`, so the two never
 answer differently. A `_Search` also tells which folders the pattern can still
-match in, as `tree_glob` prunes by folder.
+match in, as `_tree_glob` prunes by folder.
 
 To decide, a folder's path is matched with the pattern's segments, one by one.
 A ``**`` matches any number of segments, so only those before the first ``**``

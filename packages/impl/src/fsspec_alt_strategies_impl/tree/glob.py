@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """A glob that lists only the folders its pattern can match in.
 
-`tree_glob` is an alternative to fsspec's ``_glob``, with the same matches. fsspec's
+`_tree_glob` is an alternative to fsspec's ``_glob``, with the same matches. fsspec's
 finds every path under the pattern's literal root, as deep as the pattern goes,
-then filters them with a regular expression. `tree_glob` walks the tree as `tree_walk`
+then filters them with a regular expression. `_tree_glob` walks the tree as `_tree_walk`
 does, and lists a folder only if the pattern can match in it.
 
 To decide, a folder's path is matched with the pattern's segments, one by one.
@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import GlobState
 
+from ..common.filesystem import _with
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _inside, _Search
@@ -39,17 +40,17 @@ if TYPE_CHECKING:
     from ..common.types import _Ils, _Info
     from .walk import _Listing
 
-__all__ = ["GlobState", "tree_glob"]
+__all__: list[str] = []
 
 
-def tree_glob(
+def _tree_glob(
+    fs: Any,
     path: str | Sequence[str],
     *,
-    ils: _Ils,
-    info: _Info,
     maxdepth: int | None = None,
     withdirs: bool = True,
-    concurrency_limit: asyncio.Semaphore,
+    ils_kwargs: dict[str, Any] | None = None,
+    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[dict[str, Any], GlobState]:
     """Find the paths matching glob patterns, listing only folders they can match in.
 
@@ -74,7 +75,7 @@ def tree_glob(
     pattern goes. Several patterns win again where they share folders, e.g.
     ``data/*/2024/*.csv`` and ``data/*/2024/*.json``. It loses on object
     stores, which list a whole tree in one paginated request, and gains nothing
-    over `tree_find` with patterns such as ``data/**/*.parquet``, which can
+    over `_tree_find` with patterns such as ``data/**/*.parquet``, which can
     match anywhere.
 
     Once cancelled, it lists no new folder, and yields the matches of the
@@ -87,23 +88,20 @@ def tree_glob(
 
     Parameters
     ----------
+    fs : TreeFileSystem
+        The filesystem searched, by its ``_ils`` and ``_info``.
     path : str or sequence of str
-        The pattern, or patterns, of paths as ``ils`` takes them. A trailing
+        The pattern, or patterns, of paths as ``_ils`` takes them. A trailing
         "/" matches only folders.
-    ils : callable
-        Lists a folder, called as ``ils(path)``: an async iterator of its
-        entries, as fsspec's ``_ls`` gives them, e.g. the filesystem's
-        ``_ils``.
-    info : callable
-        Describes a path, called as ``info(path)``: e.g. the filesystem's
-        ``_info``.
     maxdepth : int, optional
         How deep a ``**`` goes, as with fsspec's ``_glob``. No limit by default.
     withdirs : bool
         Whether folders can match, as with fsspec's ``_glob``.
-    concurrency_limit : asyncio.Semaphore
-        Held by each request while it runs. Share one to limit several
-        operations, or files, together.
+    ils_kwargs : dict, optional
+        Passed to each ``_ils``, as fsspec's ``glob`` passes its own on.
+    concurrency_limit : asyncio.Semaphore, optional
+        Held by each request while it runs: the filesystem's
+        ``operation_limit`` by default.
 
     Returns
     -------
@@ -118,23 +116,13 @@ def tree_glob(
 
     See Also
     --------
-    tree_find : Every path in a tree.
-    tree_walk : The walk under it.
-
-    Examples
-    --------
-    >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
-    >>> glob = tree_glob(
-    ...     "data/*/2024/*.parquet", ils=fs._ils, info=fs._info, concurrency_limit=limit
-    ... )
-    >>> async with glob as matches:
-    ...     async for match in matches:
-    ...         if isinstance(match, Exception):
-    ...             raise match
-    ...         print(match["name"])
-    data/sales/2024/part-0.parquet
+    _tree_find : Every path in a tree.
+    _tree_walk : The walk under it.
     """
     _check_maxdepth(maxdepth)
+    ils, info = _with(fs._ils, ils_kwargs or {}), fs._info
+    if concurrency_limit is None:
+        concurrency_limit = fs.operation_limit
 
     literals: list[str] = []
     searches: list[_Search] = []

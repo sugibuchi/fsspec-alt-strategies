@@ -1,4 +1,4 @@
-"""Tests of `tree_cp`, placing paths as fsspec's ``copy`` does."""
+"""Tests of `_tree_cp`, placing paths as fsspec's ``copy`` does."""
 
 from __future__ import annotations
 
@@ -11,24 +11,45 @@ from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.cp import CpState, tree_cp
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl.tree.cp import CpState, _tree_cp
+from fsspec_alt_strategies_impl_testing import (
+    SimulatedFileSystem,
+    TreeView,
+)
+
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_folder", "rm_tree", "cp_file", "mv_file"}
+"""The keyword arguments that replace a primitive of the filesystem."""
+
+
+_DESTINATION = {
+    "dst_info": "info",
+    "dst_makedirs": "makedirs",
+    "dst_rm_file": "rm_file",
+}
+"""The keyword arguments that replace a primitive of the destination, by its name."""
+
+
+def _views(
+    fs: SimulatedFileSystem, kwargs: dict[str, Any]
+) -> tuple[TreeView, TreeView]:
+    """The source and the destination, both ``fs``, with the primitives ``kwargs`` replace.
+
+    The destination is the source unless a primitive of its own is replaced.
+    """
+    source = TreeView(fs, **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()})
+    replaced = {
+        _DESTINATION[k]: kwargs.pop(k) for k in _DESTINATION.keys() & kwargs.keys()
+    }
+    destination = TreeView(fs, **replaced) if replaced else source
+    return source, destination
 
 
 def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
-    """`tree_cp` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "profile": StorageProfile(),
-        "ils": folder_ils(fs),
-        "info": fs._info,
-        "cp_file": fs._cp_file,
-        "dst_info": fs._info,
-        "dst_makedirs": fs._makedirs,
-        "dst_rm_file": fs._rm_file,
-        "same_storage": True,
-    }
-    return tree_cp(path1, path2, **{**operations, **kwargs})
+    """`_tree_cp` within ``fs``, whose primitives ``kwargs`` may replace."""
+    source, destination = _views(fs, kwargs)
+    return _tree_cp(
+        source, destination, path1, path2, **{"same_storage": True, **kwargs}
+    )
 
 
 _FILES = [

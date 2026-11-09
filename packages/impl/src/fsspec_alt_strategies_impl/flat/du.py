@@ -86,7 +86,7 @@ def flat_du(
 
     See Also
     --------
-    tree_du : The same, for storages listing one folder per request.
+    _tree_du : The same, for storages listing one folder per request.
 
     Examples
     --------

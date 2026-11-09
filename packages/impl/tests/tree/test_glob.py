@@ -1,4 +1,4 @@
-"""Tests of `tree_glob`, checked against fsspec's own ``_glob``."""
+"""Tests of `_tree_glob`, checked against fsspec's own ``_glob``."""
 
 from __future__ import annotations
 
@@ -10,18 +10,20 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.common.patterns import _Prefix
-from fsspec_alt_strategies_impl.tree.glob import GlobState, tree_glob
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl.tree.glob import GlobState, _tree_glob
+from fsspec_alt_strategies_impl_testing import (
+    SimulatedFileSystem,
+    TreeView,
+)
+
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_folder", "rm_tree", "cp_file", "mv_file"}
+"""The keyword arguments that replace a primitive of the filesystem."""
 
 
 def _glob(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`tree_glob` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "ils": folder_ils(fs),
-        "info": fs._info,
-    }
-    return tree_glob(path, **{**operations, **kwargs})
+    """`_tree_glob` on a filesystem's own primitives, which ``kwargs`` may replace."""
+    view = TreeView(fs, **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()})
+    return _tree_glob(view, path, **kwargs)
 
 
 async def _sorted_glob(

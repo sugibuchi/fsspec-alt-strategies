@@ -2,24 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 """A concurrent walk of a folder tree, a folder per listing request.
 
-`tree_walk` lists folders breadth first, several at a time, and yields each
+`_tree_walk` lists folders breadth first, several at a time, and yields each
 folder's ``(path, dirs, files)`` as its listing arrives, as fsspec's ``walk``
 gives them. A ``descend`` predicate prunes the folders it lists, as glob needs.
 
 Its engine, ``_chunks``, is the walk under the other tree strategies, such as
 find, rm and du. It streams each folder's listing in parts, as ``ils`` yields
 it, so that they act on a folder of hundreds of thousands of files as it is
-listed. ``tree_walk`` gathers the parts, as fsspec's ``walk`` gives a folder
+listed. ``_tree_walk`` gathers the parts, as fsspec's ``walk`` gives a folder
 whole.
 
 It suits storages that list one folder per request, and those whose folders
 can be pruned. On object stores, one recursive listing usually costs fewer
 requests: `fsspec.asyn.AsyncFileSystem._find` there.
 
-The tree strategies take the storage's operations as functions, such as
-``ils``, rather than a filesystem: see `common.types`.
+The tree strategies take the filesystem they work on, and call its
+primitives, such as ``_ils``. The engines under them take the primitives as
+functions: see `common.types`.
 
-This module depends on `jobs`, `operation` and `paths` of `common`.
+This module depends on `filesystem`, `jobs`, `operation` and `paths` of
+`common`.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from fsspec_alt_strategies.states import WalkState
 
+from ..common.filesystem import _with
 from ..common.jobs import _Queue
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
@@ -40,18 +43,19 @@ if TYPE_CHECKING:
 
     from ..common.types import _Ils
 
-__all__ = ["WalkState", "tree_walk"]
+__all__: list[str] = []
 
 
-def tree_walk(
+def _tree_walk(
+    fs: Any,
     path: str,
     *,
-    ils: _Ils,
     maxdepth: int | None = None,
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
     on_error: Literal["omit", "raise"] | Callable[[Exception], object] | None = None,
-    concurrency_limit: asyncio.Semaphore,
+    ils_kwargs: dict[str, Any] | None = None,
+    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
     """Walk a folder tree, listing several folders at a time.
 
@@ -82,12 +86,11 @@ def tree_walk(
 
     Parameters
     ----------
+    fs : TreeFileSystem
+        The filesystem walked: its ``_ils`` lists a folder, as an async
+        iterator of its entries.
     path : str
-        The folder to start from, as ``ils`` takes it.
-    ils : callable
-        Lists a folder, called as ``ils(path)``: an async iterator of its
-        entries, as fsspec's ``_ls`` gives them, e.g. the filesystem's
-        ``_ils``.
+        The folder to start from, as ``_ils`` takes it.
     maxdepth : int, optional
         The deepest level to list: 1 lists only ``path``. No limit by default.
     topdown : bool
@@ -99,9 +102,11 @@ def tree_walk(
         What to do with the error of a folder that fails to list: yield it, if
         None, as every strategy does; leave it out, with "omit"; raise it,
         ending the walk, with "raise"; or call this with it, leaving it out.
-    concurrency_limit : asyncio.Semaphore
-        Held by each request while it runs. Share one to limit several
-        operations, or files, together.
+    ils_kwargs : dict, optional
+        Passed to each ``_ils``, as fsspec's ``walk`` passes its own on.
+    concurrency_limit : asyncio.Semaphore, optional
+        Held by each request while it runs: the filesystem's
+        ``operation_limit`` by default.
 
     Returns
     -------
@@ -116,22 +121,15 @@ def tree_walk(
 
     See Also
     --------
-    tree_find : The paths in a tree, from the same walk.
-
-    Examples
-    --------
-    >>> limit = asyncio.Semaphore(16)  # Shared, e.g. by a filesystem's operations.
-    >>> walk = tree_walk("data", ils=fs._ils, concurrency_limit=limit)
-    >>> async with walk as folders:
-    ...     async for folder in folders:
-    ...         if isinstance(folder, Exception):
-    ...             raise folder
-    ...         path, dirs, files = folder
-    ...         print(path, sorted(dirs), sorted(files))
+    _tree_find : The paths in a tree, from the same walk.
     """
     _check_maxdepth(maxdepth)
     if not (on_error in (None, "omit", "raise") or callable(on_error)):
         raise ValueError(f"on_error must be 'omit', 'raise' or callable: {on_error!r}")
+
+    ils = _with(fs._ils, ils_kwargs or {})
+    if concurrency_limit is None:
+        concurrency_limit = fs.operation_limit
 
     async def run(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
@@ -384,7 +382,7 @@ async def _listings(
     concurrency_limit: asyncio.Semaphore,
     stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[_Listing]:
-    """Walk a folder tree as `tree_walk` does, yielding each folder's listing whole.
+    """Walk a folder tree as `_tree_walk` does, yielding each folder's listing whole.
 
     It gathers the parts of `_chunks` into one listing per folder, as fsspec's
     walk gives a folder at a time, so it holds each folder until it is done.

@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """A recursive find that lists several folders at a time.
 
-`tree_find` is an alternative to fsspec's ``_find``, with the same paths. fsspec's
+`_tree_find` is an alternative to fsspec's ``_find``, with the same paths. fsspec's
 walks a tree one folder at a time, unless the filesystem lists whole trees.
-`tree_find` lists several folders at a time, as `tree_walk` does.
+`_tree_find` lists several folders at a time, as `_tree_walk` does.
 
 This module depends on `walk`, and `operation` and `paths` of `common`.
 """
@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import FindState
 
+from ..common.filesystem import _with
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from .walk import _chunks, _Listing
@@ -26,17 +27,17 @@ if TYPE_CHECKING:
 
     from ..common.types import _Ils, _Info
 
-__all__ = ["FindState", "tree_find"]
+__all__: list[str] = []
 
 
-def tree_find(
+def _tree_find(
+    fs: Any,
     path: str,
     *,
-    ils: _Ils,
-    info: _Info,
     maxdepth: int | None = None,
     withdirs: bool = False,
-    concurrency_limit: asyncio.Semaphore,
+    ils_kwargs: dict[str, Any] | None = None,
+    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[dict[str, Any], FindState]:
     """Find the files in a tree, listing several folders at a time.
 
@@ -61,23 +62,20 @@ def tree_find(
 
     Parameters
     ----------
+    fs : TreeFileSystem
+        The filesystem searched, by its ``_ils`` and ``_info``.
     path : str
-        The folder to search, as ``ils`` takes it.
-    ils : callable
-        Lists a folder, called as ``ils(path)``: an async iterator of its
-        entries, as fsspec's ``_ls`` gives them, e.g. the filesystem's
-        ``_ils``.
-    info : callable
-        Describes a path, called as ``info(path)``: e.g. the filesystem's
-        ``_info``.
+        The folder to search, as ``_ils`` takes it.
     maxdepth : int, optional
         The deepest level to search: 1 finds only the files in ``path``. No
         limit by default.
     withdirs : bool
         Whether to find folders too, ``path`` included.
-    concurrency_limit : asyncio.Semaphore
-        Held by each request while it runs. Share one to limit several
-        operations, or files, together.
+    ils_kwargs : dict, optional
+        Passed to each ``_ils``, as fsspec's ``find`` passes its own on.
+    concurrency_limit : asyncio.Semaphore, optional
+        Held by each request while it runs: the filesystem's
+        ``operation_limit`` by default.
 
     Returns
     -------
@@ -92,17 +90,12 @@ def tree_find(
 
     See Also
     --------
-    tree_walk : The walk under it.
-
-    Examples
-    --------
-    >>> limit = asyncio.Semaphore(32)  # Shared, e.g. by a filesystem's operations.
-    >>> find = tree_find("data", ils=fs._ils, info=fs._info, concurrency_limit=limit)
-    >>> found = [item async for item in find]
-    >>> sorted(e["name"] for e in found if not isinstance(e, Exception))
-    ['data/2024/01/part-0.parquet', 'data/2024/02/part-0.parquet']
+    _tree_walk : The walk under it.
     """
     _check_maxdepth(maxdepth)
+    ils, info = _with(fs._ils, ils_kwargs or {}), fs._info
+    if concurrency_limit is None:
+        concurrency_limit = fs.operation_limit
 
     async def run(
         op: Operation[dict[str, Any], FindState],

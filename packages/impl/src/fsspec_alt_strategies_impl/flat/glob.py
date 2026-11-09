@@ -8,7 +8,7 @@ then filters them. A flat storage lists by any prefix, not only by folder: so
 `flat_glob` lists only the keys starting with the pattern's text before its
 first wildcard, e.g. ``data/2024-`` for ``data/2024-*.parquet``.
 
-The paths are matched as `tree_glob` matches them, with the same compiled
+The paths are matched as `_tree_glob` matches them, with the same compiled
 patterns: the two never answer differently.
 
 This module depends on `_keys`, and `operation`, `paths` and `patterns` of
@@ -65,7 +65,7 @@ def flat_glob(
     first wildcard ends within a name, e.g. ``data/2024-*``: fsspec's lists all
     of ``data``. It wins too when the caller starts on the first matches, or
     the listing is large. It loses on storages with a hierarchical namespace,
-    whose empty folders a listing by prefix does not see, and which `tree_glob`
+    whose empty folders a listing by prefix does not see, and which `_tree_glob`
     prunes by folder.
 
     Once cancelled, it takes nothing more from the listings. An error from a
@@ -107,7 +107,7 @@ def flat_glob(
 
     See Also
     --------
-    tree_glob : The same, for storages listing one folder per request.
+    _tree_glob : The same, for storages listing one folder per request.
 
     Examples
     --------

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""The engine under the strategies that change a storage, such as tree_rm.
+"""The engine under the strategies that change a storage, such as _tree_rm.
 
 They find what to change, e.g. by walking a tree or listing a prefix, and start
 their jobs, e.g. deleting a file, as each item found arrives. `_Jobs` runs both

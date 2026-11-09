@@ -28,16 +28,15 @@ from ..common.filesystem import (
     _failed_folder,
     _raise,
     _strip_only_protocol,
-    _with,
 )
 from ..common.operation import _collect_with_monitors, _with_monitors
-from .cp import tree_local_cp
-from .du import tree_du
-from .find import tree_find
-from .glob import tree_glob
-from .mv import tree_local_mv
-from .rm import tree_rm
-from .walk import tree_walk
+from .cp import _tree_cp
+from .du import _tree_du
+from .find import _tree_find
+from .glob import _tree_glob
+from .mv import _tree_mv
+from .rm import _tree_rm
+from .walk import _tree_walk
 
 if TYPE_CHECKING:
     import asyncio
@@ -55,8 +54,8 @@ class TreeFileSystem(_BaseFileSystem):
     It suits storages with a hierarchical namespace, which list one folder per
     request, such as Azure Data Lake Storage Gen2. It overrides fsspec's
     ``_walk``, ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``_mv``
-    when recursive, with `tree_walk`, `tree_find`, `tree_du`, `tree_glob`,
-    `tree_rm`, `tree_cp` and `tree_mv`. Their answers are fsspec's, and their
+    when recursive, with `_tree_walk`, `_tree_find`, `_tree_du`, `_tree_glob`,
+    `_tree_rm`, `_tree_cp` and `_tree_mv`. Their answers are fsspec's, and their
     failures are raised, a single one as it is, several in an ExceptionGroup.
     A folder that fails to list is yielded empty by ``_walk``, as fsspec's
     ``walk`` yields it. ``on_error`` handles every folder's failure, where
@@ -218,15 +217,15 @@ class TreeFileSystem(_BaseFileSystem):
     ) -> AsyncGenerator[tuple[str, Any, Any]]:
         detail = kwargs.pop("detail", False)
         root = self._strip_protocol(path)
-        walk = tree_walk(
+        walk = _tree_walk(
+            self,
             root,
-            ils=_with(self._ils, kwargs),
             maxdepth=maxdepth,
             topdown=topdown,
             # The failed folders' errors, which fsspec's on_error then handles:
             # its "omit" still yields them empty.
             on_error="raise" if on_error == "raise" else None,
-            concurrency_limit=self.operation_limit,
+            ils_kwargs=kwargs,
         )
 
         async with aclosing(
@@ -269,13 +268,12 @@ class TreeFileSystem(_BaseFileSystem):
     ) -> Any:
         detail = kwargs.pop("detail", False)
         entries, _ = await _collect_with_monitors(
-            tree_find(
+            _tree_find(
+                self,
                 self._strip_protocol(path),
-                ils=_with(self._ils, kwargs),
-                info=self._info,
                 maxdepth=maxdepth,
                 withdirs=withdirs,
-                concurrency_limit=self.operation_limit,
+                ils_kwargs=kwargs,
             ),
             Call(self._unwrapped(), "find", path),
         )
@@ -290,12 +288,8 @@ class TreeFileSystem(_BaseFileSystem):
                 path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
             )
 
-        op = tree_du(
-            self._strip_protocol(path),
-            ils=_with(self._ils, kwargs),
-            info=self._info,
-            maxdepth=maxdepth,
-            concurrency_limit=self.operation_limit,
+        op = _tree_du(
+            self, self._strip_protocol(path), maxdepth=maxdepth, ils_kwargs=kwargs
         )
         entries, _ = await _collect_with_monitors(
             op, Call(self._unwrapped(), "du", path)
@@ -307,13 +301,12 @@ class TreeFileSystem(_BaseFileSystem):
         detail = kwargs.pop("detail", False)
         withdirs = kwargs.pop("withdirs", True)
         entries, _ = await _collect_with_monitors(
-            tree_glob(
+            _tree_glob(
+                self,
                 _strip_only_protocol(self, path),
-                ils=_with(self._ils, kwargs),
-                info=self._info,
                 maxdepth=maxdepth,
                 withdirs=withdirs,
-                concurrency_limit=self.operation_limit,
+                ils_kwargs=kwargs,
             ),
             Call(self._unwrapped(), "glob", path),
         )
@@ -333,17 +326,7 @@ class TreeFileSystem(_BaseFileSystem):
             return
 
         _, errors = await _collect_with_monitors(
-            tree_rm(
-                _strip_only_protocol(self, path),
-                ils=self._ils,
-                info=self._info,
-                rm_file=self._rm_file,
-                rm_folder=self._rmdir,
-                rm_tree=self._rm_tree,
-                profile=self.storage_profile,
-                maxdepth=maxdepth,
-                concurrency_limit=self.operation_limit,
-            ),
+            _tree_rm(self, _strip_only_protocol(self, path), maxdepth=maxdepth),
             Call(self._unwrapped(), "rm", path),
             kwargs.get("callback"),
         )
@@ -367,17 +350,12 @@ class TreeFileSystem(_BaseFileSystem):
             return
 
         _, errors = await _collect_with_monitors(
-            tree_local_cp(
+            _tree_cp(
+                self,
+                self,
                 _strip_only_protocol(self, path1),
                 _strip_only_protocol(self, path2),
-                ils=self._ils,
-                info=self._info,
-                cp_file=self._cp_file,
-                makedirs=self._makedirs,
-                rm_file=self._rm_file,
-                profile=self.storage_profile,
                 maxdepth=maxdepth,
-                concurrency_limit=self.operation_limit,
             ),
             Call(self._unwrapped(), "copy", path1, path2),
             kwargs.get("callback"),
@@ -393,9 +371,9 @@ class TreeFileSystem(_BaseFileSystem):
         maxdepth: int | None = None,
         **kwargs: Any,
     ) -> None:
-        """Move files, as fsspec's ``mv`` does: with `tree_mv` when recursive.
+        """Move files, as fsspec's ``mv`` does: with `_tree_mv` when recursive.
 
-        A single file goes by `tree_mv` too, recursive or not, so that it moves
+        A single file goes by `_tree_mv` too, recursive or not, so that it moves
         by ``_mv_file``, the storage's rename where a subclass overrides it.
         """
         if path1 == path2:
@@ -408,17 +386,12 @@ class TreeFileSystem(_BaseFileSystem):
             return
 
         _, errors = await _collect_with_monitors(
-            tree_local_mv(
+            _tree_mv(
+                self,
+                self,
                 _strip_only_protocol(self, path1),
                 _strip_only_protocol(self, path2),
-                ils=self._ils,
-                info=self._info,
-                mv_file=self._mv_file,
-                makedirs=self._makedirs,
-                rm_folder=self._rmdir,
-                profile=self.storage_profile,
                 maxdepth=maxdepth,
-                concurrency_limit=self.operation_limit,
             ),
             Call(self._unwrapped(), "mv", path1, path2),
             kwargs.get("callback"),

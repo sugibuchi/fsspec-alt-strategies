@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Where a recursive copy or move puts each path, as fsspec's ``copy`` does.
 
-`_Placement` is held by the jobs of a copy, such as `tree_cp`'s or
+`_Placement` is held by the jobs of a copy, such as `_tree_cp`'s or
 `flat_cp`'s. It finds the roots, and the place of each path under them. A
 family expands patterns with its own glob, given as ``expand``.
 

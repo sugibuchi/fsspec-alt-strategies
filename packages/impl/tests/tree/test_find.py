@@ -1,4 +1,4 @@
-"""Tests of `tree_find`, checked against fsspec's own ``_find``."""
+"""Tests of `_tree_find`, checked against fsspec's own ``_find``."""
 
 from __future__ import annotations
 
@@ -9,18 +9,20 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.find import FindState, tree_find
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl.tree.find import FindState, _tree_find
+from fsspec_alt_strategies_impl_testing import (
+    SimulatedFileSystem,
+    TreeView,
+)
+
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_folder", "rm_tree", "cp_file", "mv_file"}
+"""The keyword arguments that replace a primitive of the filesystem."""
 
 
 def _find(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`tree_find` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "ils": folder_ils(fs),
-        "info": fs._info,
-    }
-    return tree_find(path, **{**operations, **kwargs})
+    """`_tree_find` on a filesystem's own primitives, which ``kwargs`` may replace."""
+    view = TreeView(fs, **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()})
+    return _tree_find(view, path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:

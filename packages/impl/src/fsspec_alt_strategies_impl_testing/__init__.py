@@ -19,7 +19,8 @@ Whether a whole subtree can be listed in one paginated request is set apart, by
 per request.
 
 It is a package of its own, apart from the strategies: copying them into
-another package leaves it out. It depends on fsspec alone.
+another package leaves it out. It depends on fsspec, and on the interface for
+`StorageProfile`.
 """
 
 from __future__ import annotations
@@ -34,10 +35,12 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 
+from fsspec_alt_strategies.profile import StorageProfile
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
 
-__all__ = ["CallStats", "SimulatedFileSystem", "folder_ils"]
+__all__ = ["CallStats", "SimulatedFileSystem", "TreeView", "folder_ils"]
 
 
 @dataclass
@@ -419,7 +422,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         """Move a file, or a folder with all in it, in one request.
 
         It is no fsspec method: it is a hierarchical storage's own, as Azure Data
-        Lake Storage Gen2 renames a path. `tree_mv` takes it as its
+        Lake Storage Gen2 renames a path. `_tree_mv` takes it as its
         ``mv_file``, with a profile's ``renames_folders=True``. It refuses a
         ``path2`` that exists, and an object store has none.
         """
@@ -592,3 +595,44 @@ def folder_ils(fs: Any) -> Callable[[str], AsyncIterator[dict[str, Any]]]:
             yield entry
 
     return ils
+
+
+class TreeView:
+    """A filesystem as the tree strategies take it, its primitives replaceable.
+
+    The tree strategies take a filesystem, and call its ``_ils``, ``_info``,
+    ``_rm_file``, ``_rmdir``, ``_cp_file``, ``_mv_file``, ``_makedirs`` and
+    ``_rm_tree``. A `SimulatedFileSystem` has no ``_ils``: this view lists
+    with `folder_ils`. Each other primitive is the filesystem's own, unless
+    given, so that a test may replace one, e.g. with one that fails.
+
+    ``operation_limit`` and ``storage_profile`` are a filesystem's: 32
+    requests at a time, and a storage unknown.
+    """
+
+    def __init__(
+        self,
+        fs: Any,
+        *,
+        ils: Any = None,
+        info: Any = None,
+        rm_file: Any = None,
+        rm_folder: Any = None,
+        rm_tree: Any = None,
+        cp_file: Any = None,
+        mv_file: Any = None,
+        makedirs: Any = None,
+        storage_profile: StorageProfile | None = None,
+        operation_limit: asyncio.Semaphore | None = None,
+    ) -> None:
+        self.fs = fs
+        self._ils = folder_ils(fs) if ils is None else ils
+        self._info = fs._info if info is None else info
+        self._rm_file = fs._rm_file if rm_file is None else rm_file
+        self._rmdir = fs._rmdir if rm_folder is None else rm_folder
+        self._rm_tree = rm_tree
+        self._cp_file = fs._cp_file if cp_file is None else cp_file
+        self._mv_file = fs._mv_file if mv_file is None else mv_file
+        self._makedirs = fs._makedirs if makedirs is None else makedirs
+        self.storage_profile = storage_profile or StorageProfile()
+        self.operation_limit = operation_limit or asyncio.Semaphore(32)

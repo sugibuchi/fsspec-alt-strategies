@@ -156,7 +156,7 @@ def flat_mv(
     See Also
     --------
     flat_cp : The same, keeping the sources.
-    tree_mv : The same, for storages listing one folder per request.
+    _tree_mv : The same, for storages listing one folder per request.
 
     Examples
     --------

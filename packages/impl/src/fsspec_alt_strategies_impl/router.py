@@ -98,7 +98,7 @@ class AsyncRoutingFileSystem(
     A copy or move between two paths of one storage is the inner filesystem's
     own: both paths route to the same inner filesystem. Between two storages,
     it is the strategy of the source's family, as its profile's ``fs_type`` says:
-    `tree_cp` or `tree_mv`, `flat_cp` or `flat_mv`. Each file goes by
+    `_tree_cp` or `_tree_mv`, `flat_cp` or `flat_mv`. Each file goes by
     ``_cross_fs_cp_file`` or ``_cross_fs_mv_file``, which stream the data
     unless a subclass overrides them, e.g. with a server-side copy. A source
     of unknown ``fs_type``, or a call with ``maxdepth``, is copied by fsspec's
@@ -990,18 +990,19 @@ class AsyncRoutingFileSystem(
 
         # A family's strategies are imported only when used, so that a copy may
         # leave out the other family.
-        destination = self._destination(fs1, fs2)
         if fs_type == "tree":
-            from .tree.cp import tree_cp  # noqa: PLC0415
+            from .tree.cp import _tree_cp  # noqa: PLC0415
 
-            return tree_cp(
+            return _tree_cp(
+                fs1,
+                fs2,
                 path1,
                 path2,
-                ils=fs1._ils,
                 cp_file=self._across(fs1, fs2),
-                dst_rm_file=fs2._rm_file,
-                **destination,
+                same_storage=False,
+                profile=_profile(fs2),
             )
+        destination = self._destination(fs1, fs2)
         if fs_type == "flat":
             from .flat.cp import flat_cp  # noqa: PLC0415
 
@@ -1034,18 +1035,19 @@ class AsyncRoutingFileSystem(
 
         # A family's strategies are imported only when used, so that a copy may
         # leave out the other family.
-        destination = self._destination(fs1, fs2)
         if fs_type == "tree":
-            from .tree.mv import tree_mv  # noqa: PLC0415
+            from .tree.mv import _tree_mv  # noqa: PLC0415
 
-            return tree_mv(
+            return _tree_mv(
+                fs1,
+                fs2,
                 path1,
                 path2,
-                ils=fs1._ils,
                 mv_file=self._across(fs1, fs2, move=True),
-                rm_folder=fs1._rmdir,
-                **destination,
+                same_storage=False,
+                profile=_profile(fs2),
             )
+        destination = self._destination(fs1, fs2)
         if fs_type == "flat":
             from .flat.mv import flat_mv  # noqa: PLC0415
 
@@ -1064,9 +1066,10 @@ class AsyncRoutingFileSystem(
     def _destination(
         self, fs1: AsyncFileSystem, fs2: AsyncFileSystem
     ) -> dict[str, Any]:
-        """What a copy or move from ``fs1`` to ``fs2`` takes of both, but the listing.
+        """What a flat copy or move from ``fs1`` to ``fs2`` takes of both, but the listing.
 
-        Each file holds a permit of ``transfer_limit``, so the strategy's
+        A tree copy or move takes the two filesystems instead, and the source's
+        ``operation_limit`` by default. Each file holds a permit of ``transfer_limit``, so the strategy's
         ``concurrency_limit`` is the source's own: the same semaphore would
         deadlock.
         """

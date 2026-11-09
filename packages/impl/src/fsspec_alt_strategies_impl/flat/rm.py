@@ -66,7 +66,7 @@ def flat_rm(
     and the keys are held a batch at a time. It sends the same requests as a
     storage deleting in batches of ``batch_size``. It loses on storages with a
     hierarchical namespace, whose folders a listing by prefix does not see:
-    `tree_rm` suits those.
+    `_tree_rm` suits those.
 
     Once cancelled, it takes nothing more from the listing, and sends no new
     batch, but yields the outcomes of those sent. Closed, it waits for those
@@ -116,7 +116,7 @@ def flat_rm(
 
     See Also
     --------
-    tree_rm : The same, for storages listing one folder per request.
+    _tree_rm : The same, for storages listing one folder per request.
 
     Examples
     --------

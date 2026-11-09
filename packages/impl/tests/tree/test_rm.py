@@ -1,4 +1,4 @@
-"""Tests of `tree_rm`, the delete that walks and deletes at once."""
+"""Tests of `_tree_rm`, the delete that walks and deletes at once."""
 
 from __future__ import annotations
 
@@ -11,21 +11,20 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.rm import RmState, tree_rm
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl.tree.rm import RmState, _tree_rm
+from fsspec_alt_strategies_impl_testing import (
+    SimulatedFileSystem,
+    TreeView,
+)
+
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_folder", "rm_tree", "cp_file", "mv_file"}
+"""The keyword arguments that replace a primitive of the filesystem."""
 
 
 def _rm(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`tree_rm` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "profile": StorageProfile(),
-        "ils": folder_ils(fs),
-        "info": fs._info,
-        "rm_file": fs._rm_file,
-        "rm_folder": fs._rmdir,
-    }
-    return tree_rm(path, **{**operations, **kwargs})
+    """`_tree_rm` on a filesystem's own primitives, which ``kwargs`` may replace."""
+    view = TreeView(fs, **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()})
+    return _tree_rm(view, path, **kwargs)
 
 
 _FILES = [

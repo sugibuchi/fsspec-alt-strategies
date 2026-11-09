@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""The engine under the tree strategies that change a tree, such as tree_rm.
+"""The engine under the tree strategies that change a tree, such as _tree_rm.
 
-They walk the tree as tree_walk does, and start their jobs, e.g. deleting a
+They walk the tree as _tree_walk does, and start their jobs, e.g. deleting a
 file, as each part of a folder's listing arrives: `_TreeJobs` feeds
 `common`'s `_Jobs` with the parts of `_chunks`, so that a folder of many files
 is never held whole. A subclass says what a listing queues, how a job
@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 from ..common.jobs import _Jobs, _roots_of
 from ..common.operation import _collect_with_errors
 from ..common.paths import _trim
-from .glob import tree_glob
+from .glob import _tree_glob
 from .walk import _chunks
 
 if TYPE_CHECKING:
@@ -38,45 +38,39 @@ if TYPE_CHECKING:
 
 
 async def _expand(
-    ils: _Ils,
-    info: _Info,
+    fs: Any,
     pattern: str | Sequence[str],
     concurrency_limit: asyncio.Semaphore,
     maxdepth: int | None = None,
 ) -> tuple[_Roots, list[Exception]]:
-    """The roots matching glob patterns, found with `tree_glob`, and the errors found."""
+    """The roots matching glob patterns, found with `_tree_glob`, and the errors found."""
     matches, errors = await _collect_with_errors(
-        tree_glob(
-            pattern,
-            ils=ils,
-            info=info,
-            maxdepth=maxdepth,
-            concurrency_limit=concurrency_limit,
-        )
+        _tree_glob(fs, pattern, maxdepth=maxdepth, concurrency_limit=concurrency_limit)
     )
     return _roots_of(matches, errors, pattern), errors
 
 
 class _TreeJobs(_Jobs):
-    """The jobs of one operation, run while its tree is walked.
+    """The jobs of one operation, run while the tree of ``fs`` is walked.
 
-    With ``maxdepth``, the walk lists no folder deeper than it, as fsspec's
+    ``fs`` is the filesystem walked, by its ``_ils`` and ``_info``. With
+    ``maxdepth``, the walk lists no folder deeper than it, as fsspec's
     ``_expand_path`` finds paths. Each subfolder the walk leaves unlisted goes
     to `at_limit`, as fsspec finds it, but not what is in it.
     """
 
     def __init__(
         self,
-        ils: _Ils,
-        info: _Info,
+        fs: Any,
         concurrency_limit: asyncio.Semaphore,
         op: Operation[Any, Any],
         maxdepth: int | None = None,
     ) -> None:
         super().__init__(concurrency_limit, op)
 
-        self.ils = ils
-        self.info = info
+        self.fs = fs
+        self.ils: _Ils = fs._ils
+        self.info: _Info = fs._info
         self.maxdepth = maxdepth
 
         # The folder roots a pattern matched: fsspec walks them one level less
@@ -103,7 +97,7 @@ class _TreeJobs(_Jobs):
     async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
         """The roots matching glob patterns, noting those a pattern matched."""
         roots, errors = await _expand(
-            self.ils, self.info, pattern, self.concurrency_limit, self.maxdepth
+            self.fs, pattern, self.concurrency_limit, self.maxdepth
         )
         self.found.extend(errors)
         if self.maxdepth is not None:

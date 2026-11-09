@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The states of the operations several families have, such as a find's.
 
-A family's strategy and its counterpart in another, e.g. `tree_find` and
+A family's strategy and its counterpart in another, e.g. `_tree_find` and
 `flat_find`, report their progress with one state class. A field that only
 some of them can count is None in the others: e.g. ``folders_listed`` of a
 `flat_find`, which lists keys, not folders. Each strategy's module exports its
@@ -30,7 +30,7 @@ __all__ = [
 
 @dataclass(frozen=True, kw_only=True)
 class WalkState(State):
-    """The progress of a walk, such as `tree_walk` or `flat_walk`.
+    """The progress of a walk, such as `_tree_walk` or `flat_walk`.
 
     Attributes
     ----------
@@ -47,7 +47,7 @@ class WalkState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class FindState(State):
-    """The progress of a find, such as `tree_find` or `flat_find`.
+    """The progress of a find, such as `_tree_find` or `flat_find`.
 
     Attributes
     ----------
@@ -64,7 +64,7 @@ class FindState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class DuState(State):
-    """The progress of a du, such as `tree_du` or `flat_du`.
+    """The progress of a du, such as `_tree_du` or `flat_du`.
 
     Attributes
     ----------
@@ -85,7 +85,7 @@ class DuState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class GlobState(State):
-    """The progress of a glob, such as `tree_glob` or `flat_glob`.
+    """The progress of a glob, such as `_tree_glob` or `flat_glob`.
 
     Attributes
     ----------
@@ -102,7 +102,7 @@ class GlobState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class RmState(State):
-    """The progress of a recursive delete, such as `tree_rm` or `flat_rm`.
+    """The progress of a recursive delete, such as `_tree_rm` or `flat_rm`.
 
     Attributes
     ----------
@@ -122,7 +122,7 @@ class RmState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class CpState(State):
-    """The progress of a recursive copy, such as `tree_cp` or `flat_cp`.
+    """The progress of a recursive copy, such as `_tree_cp` or `flat_cp`.
 
     Attributes
     ----------
@@ -138,7 +138,7 @@ class CpState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class MvState(State):
-    """The progress of a recursive move, such as `tree_mv` or `flat_mv`.
+    """The progress of a recursive move, such as `_tree_mv` or `flat_mv`.
 
     Attributes
     ----------

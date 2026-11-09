@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """A walk of the keys under a prefix, from one listing streamed as it comes.
 
-`flat_walk` is the counterpart of `tree_walk` for flat storages. fsspec's
+`flat_walk` is the counterpart of `_tree_walk` for flat storages. fsspec's
 ``walk`` lists one folder per request, even on object stores, which can list
 all the keys under a prefix at once. `flat_walk` makes that one listing, and
 derives the folders from the keys. As the keys come in order, those in a
@@ -43,7 +43,7 @@ def flat_walk(
 ) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
     """Walk the keys under a prefix, from one listing streamed as it comes.
 
-    It yields each folder as ``(path, dirs, files)``, as `tree_walk` does:
+    It yields each folder as ``(path, dirs, files)``, as `_tree_walk` does:
     ``path`` itself, then each folder below it. ``dirs`` and ``files`` map the
     names in the folder to their entries. The files are the keys, as ``iexpand``
     gives them. The folders are derived from the keys, as fsspec's filesystems
@@ -64,7 +64,7 @@ def flat_walk(
     It wins over fsspec's ``walk`` on flat storages, with many folders: one
     listing, of as many pages as there are keys, rather than a listing per
     folder. It loses on storages with a hierarchical namespace, whose empty
-    folders a listing by prefix does not see: `tree_walk` suits those.
+    folders a listing by prefix does not see: `_tree_walk` suits those.
 
     Once cancelled, it takes nothing more from the listing. Iterating it raises
     these errors, which end it:
@@ -111,7 +111,7 @@ def flat_walk(
 
     See Also
     --------
-    tree_walk : The same, for storages listing one folder per request.
+    _tree_walk : The same, for storages listing one folder per request.
     flat_find : The files under a prefix, as fsspec's ``_find`` finds them.
 
     Examples
@@ -200,7 +200,7 @@ async def _folders_done(
         await _close(keys)
 
     if not under and root:
-        # Nothing under it: a file, or missing, as tree_walk raises for them.
+        # Nothing under it: a file, or missing, as _tree_walk raises for them.
         async with concurrency_limit:
             entry = await info(root)
         if entry["type"] != "directory":

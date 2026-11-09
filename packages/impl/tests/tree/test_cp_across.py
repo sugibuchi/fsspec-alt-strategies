@@ -1,4 +1,4 @@
-"""Tests of `tree_cp` between two storages, copying a tree between two storages."""
+"""Tests of `_tree_cp` between two storages, copying a tree between two storages."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.cp import CpState, tree_cp
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl.tree.cp import CpState, _tree_cp
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 
 class _Reader:
@@ -83,21 +83,16 @@ def _across(
     path2: str,
     **kwargs: Any,
 ) -> Any:
-    """`tree_cp` between two filesystems, streaming each file."""
+    """`_tree_cp` between two filesystems, streaming each file."""
     operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "profile": StorageProfile(),
-        "ils": folder_ils(src),
-        "info": src._info,
         "cp_file": streaming_copy(
             _opener(src, _Reader), _opener(dst, _Writer), block_size=4
         ),
-        "dst_info": dst._info,
-        "dst_makedirs": dst._makedirs,
-        "dst_rm_file": dst._rm_file,
         "same_storage": False,
     }
-    return tree_cp(path1, path2, **{**operations, **kwargs})
+    return _tree_cp(
+        TreeView(src), TreeView(dst), path1, path2, **{**operations, **kwargs}
+    )
 
 
 _FILES = [

@@ -1,4 +1,4 @@
-"""Tests of `flat_walk`, checked against `tree_walk` on the same flat storage."""
+"""Tests of `flat_walk`, checked against `_tree_walk` on the same flat storage."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import pytest
 
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.flat.walk import WalkState, flat_walk
-from fsspec_alt_strategies_impl.tree.walk import tree_walk
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl.tree.walk import _tree_walk
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 
 def _walk(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
@@ -49,13 +49,7 @@ async def test_finds_what_tree_walk_finds(
     )
     assert errors == []
     expected, _ = await _collect_with_errors(
-        tree_walk(
-            path,
-            ils=folder_ils(flat_fs),
-            topdown=topdown,
-            concurrency_limit=asyncio.Semaphore(32),
-            **kwargs,
-        )
+        _tree_walk(TreeView(flat_fs), path, topdown=topdown, **kwargs)
     )
     key = lambda f: f[0]  # noqa: E731
     assert sorted(folders, key=key) == sorted(expected, key=key)

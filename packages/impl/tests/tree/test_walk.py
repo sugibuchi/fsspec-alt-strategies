@@ -1,4 +1,4 @@
-"""Tests of `tree_walk`, and of ``_listings``, the engine under the tree strategies."""
+"""Tests of `_tree_walk`, and of ``_listings``, the engine under the tree strategies."""
 
 from __future__ import annotations
 
@@ -13,18 +13,26 @@ from fsspec_alt_strategies_impl.tree.walk import (
     WalkState,
     _chunks,
     _listings,
-    tree_walk,
+    _tree_walk,
 )
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl_testing import (
+    SimulatedFileSystem,
+    TreeView,
+    folder_ils,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_folder", "rm_tree", "cp_file", "mv_file"}
+"""The keyword arguments that replace a primitive of the filesystem."""
+
+
 def _walk(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`tree_walk` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {"concurrency_limit": asyncio.Semaphore(32), "ils": folder_ils(fs)}
-    return tree_walk(path, **{**operations, **kwargs})
+    """`_tree_walk` on a filesystem's own primitives, which ``kwargs`` may replace."""
+    view = TreeView(fs, **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()})
+    return _tree_walk(view, path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
