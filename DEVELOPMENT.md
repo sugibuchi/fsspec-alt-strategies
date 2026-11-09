@@ -61,6 +61,8 @@ The choices below shape the whole project. Keep to them, or change them on purpo
 - **Developers choose.** The library never picks a strategy. Each docstring says what it assumes of the storage, and
   when it wins or loses.
 - **Async first.** Strategies are async. Sync filesystems get them through the sync wrappers.
+- **Streaming.** A strategy acts on each part of a listing as it arrives, and never holds a whole folder or tree. Only
+  `_walk` holds a folder whole, as fsspec's `walk` answers a folder at a time.
 - **Observable and cancellable.** A `Monitor` sees each step of an operation, and can stop it through the operation's
   `OperationHandler`.
 
