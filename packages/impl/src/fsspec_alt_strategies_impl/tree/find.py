@@ -51,8 +51,8 @@ def _tree_find(
     Once cancelled, it lists no new folder, and yields the paths of the
     listings in flight.
 
-    Requests: one ``_ils`` per folder, as the filesystem's ``operation_limit`` allows. One
-    ``info`` more for ``path`` itself, if a file, or a folder with
+    Requests: one ``_ils`` per folder, as the filesystem's ``operation_limit``
+    allows. One ``info`` more for ``path`` itself, if a file, or a folder with
     ``withdirs``.
 
     ``path`` is the folder searched on ``fs``, by its ``_ils`` and ``_info``.

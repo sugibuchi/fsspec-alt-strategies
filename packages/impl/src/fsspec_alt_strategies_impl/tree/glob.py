@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """A glob that lists only the folders its pattern can match in.
 
-`_tree_glob` is an alternative to fsspec's ``_glob``, with the same matches. fsspec's
-finds every path under the pattern's literal root, as deep as the pattern goes,
-then filters them with a regular expression. `_tree_glob` walks the tree as `_tree_walk`
-does, and lists a folder only if the pattern can match in it.
+`_tree_glob` is an alternative to fsspec's ``_glob``, with the same matches.
+fsspec's finds every path under the pattern's literal root, as deep as the
+pattern goes, then filters them with a regular expression. `_tree_glob` walks
+the tree as `_tree_walk` does, and lists a folder only if the pattern can match
+in it.
 
 To decide, a folder's path is matched with the pattern's segments, one by one.
 A ``**`` matches any number of segments, so only those before the first ``**``
@@ -77,9 +78,10 @@ def _tree_glob(
     Once cancelled, it lists no new folder, and yields the matches of the
     listings in flight.
 
-    Requests: one ``_ils`` per folder a pattern can match in, as the filesystem's ``operation_limit`` allows. One ``info`` per pattern without wildcards,
-    and per literal root folder walked that a pattern matches, e.g. that of
-    ``data/**``.
+    Requests: one ``_ils`` per folder a pattern can match in, as the
+    filesystem's ``operation_limit`` allows. One ``info`` per pattern without
+    wildcards, and per literal root folder walked that a pattern matches, e.g.
+    that of ``data/**``.
 
     ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``_ils``
     takes them: a trailing "/" matches only folders. ``maxdepth`` is how deep

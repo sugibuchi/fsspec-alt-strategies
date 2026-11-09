@@ -153,9 +153,9 @@ class TransactionFile(io.RawIOBase):
     discarded. The garbage collector discards a file neither committed nor
     discarded, its commit failed or not, warning with a ResourceWarning. On a
     thread running an event loop, which must not wait, the discard runs on a
-    thread of its own. A discard failing
-    leaves what was staged, as if the process had died. So does the
-    interpreter shutting down, when no discard is tried.
+    thread of its own. A discard failing leaves what was staged, as if the
+    process had died. So does the interpreter shutting down, when no discard is
+    tried.
 
     Parameters
     ----------

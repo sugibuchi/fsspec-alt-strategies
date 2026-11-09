@@ -77,7 +77,8 @@ def _tree_walk(
     - with ``on_error="raise"``, the error of the first folder that failed to
       list.
 
-    Requests: one ``_ils`` per folder walked, as the filesystem's ``operation_limit`` allows.
+    Requests: one ``_ils`` per folder walked, as the filesystem's
+    ``operation_limit`` allows.
 
     ``path`` is the folder the walk starts from, listed by the ``_ils`` of
     ``fs``. ``maxdepth`` of 1 lists only ``path``. ``topdown`` puts a folder

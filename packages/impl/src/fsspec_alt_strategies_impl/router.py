@@ -98,14 +98,14 @@ class AsyncRoutingFileSystem(
 
     A copy or move between two paths of one storage is the inner filesystem's
     own: both paths route to the same inner filesystem. Between two storages,
-    it is the strategy of the source's family, as its profile's ``fs_type`` says:
-    `_tree_cp` or `_tree_mv`, `_flat_cp` or `_flat_mv`. Each file goes by
-    ``_cross_fs_cp_file`` or ``_cross_fs_mv_file``, which stream the data
-    unless a subclass overrides them, e.g. with a server-side copy. A source
-    of unknown ``fs_type``, or a call with ``maxdepth``, is copied by fsspec's
-    own copy, a file at a time.
-    A move between two storages deletes each source file once its copy
-    succeeds, and the source folders left empty.
+    it is the copy or move of the source's family, as its profile's ``fs_type``
+    says: that of `TreeFileSystem` or `FlatFileSystem`, walking or listing the
+    source as they do. Each file goes by ``_cross_fs_cp_file`` or
+    ``_cross_fs_mv_file``, which stream the data unless a subclass overrides
+    them, e.g. with a server-side copy. A source of unknown ``fs_type``, or a
+    call with ``maxdepth``, is copied by fsspec's own copy, a file at a time. A
+    move between two storages deletes each source file once its copy succeeds,
+    and the source folders left empty.
 
     Inner filesystems are async, on the router's loop: a sync one raises
     TypeError, and is to be wrapped, e.g. in a `SyncTreeWrapper`. A subclass

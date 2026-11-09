@@ -55,9 +55,10 @@ class FlatFileSystem(_BaseFileSystem):
     It suits flat storages, such as object stores, which list every key under a
     prefix in one paginated request. It overrides fsspec's ``_walk``,
     ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``_mv`` when
-    recursive, with `_flat_walk`, `_flat_find`, `_flat_du`, `_flat_glob`, `_flat_rm`,
-    `_flat_cp` and `_flat_mv`. Their answers are fsspec's, and their failures are
-    raised, a single one as it is, several in an ExceptionGroup.
+    recursive, with the flat strategies. These list every key under a prefix
+    with ``_iexpand``, and act on each key as it arrives. Their answers are
+    fsspec's, and their failures are raised, a single one as it is, several in
+    an ExceptionGroup.
 
     A subclass implements the storage's primitives:
 
@@ -79,9 +80,10 @@ class FlatFileSystem(_BaseFileSystem):
     - ``io_limit``, the reads and writes of data, by its files.
 
     ``storage_profile``, a `StorageProfile`, tells the strategies what the
-    storage does. With ``renames_files=True``, a recursive ``mv``, or one of
-    a single file, moves each key by ``_mv_file``, which a subclass then
-    overrides with its rename. Otherwise it copies each key, and deletes them in batches.
+    storage does. With ``renames_files=True``, a recursive ``mv``, or one of a
+    single file, moves each key by ``_mv_file``, which a subclass then
+    overrides with its rename. Otherwise it copies each key, and deletes them
+    in batches.
 
     Parameters
     ----------
@@ -159,8 +161,8 @@ class FlatFileSystem(_BaseFileSystem):
 
         ``prefix`` is raw text, e.g. "data/2024-". The entries are as ``_ls``
         gives them, a key ending with "/" being a folder's marker. They come in
-        order of their names, as object stores list them: `_flat_walk` counts
-        on it to know when a folder is done. Each key comes once: a key listed
+        order of their names, as object stores list them: ``_walk`` counts on
+        it to know when a folder is done. Each key comes once: a key listed
         twice is copied, moved, deleted or counted twice.
         """
 
@@ -352,10 +354,11 @@ class FlatFileSystem(_BaseFileSystem):
         maxdepth: int | None = None,
         **kwargs: Any,
     ) -> None:
-        """Move files, as fsspec's ``mv`` does: with `_flat_mv` when recursive.
+        """Move files, as fsspec's ``mv`` does: with the flat move when recursive.
 
-        A single file goes by `_flat_mv` too, recursive or not, so that it moves
-        by ``_mv_file`` where the profile's ``renames_files`` says it renames.
+        A single file goes by the flat move too, recursive or not, so that it
+        moves by ``_mv_file`` where the profile's ``renames_files`` says it
+        renames.
         """
         if path1 == path2:
             return

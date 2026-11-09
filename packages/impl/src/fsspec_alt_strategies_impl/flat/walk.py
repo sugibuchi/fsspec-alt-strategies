@@ -41,10 +41,10 @@ def _flat_walk(
     It yields each folder as ``(path, dirs, files)``, as `_tree_walk` does:
     ``path`` itself, then each folder below it. ``dirs`` and ``files`` map the
     names in the folder to their entries. The files are the keys, as
-    ``_iexpand`` gives them. The folders are derived from the keys, as fsspec's filesystems
-    derive them for object stores, and a key ending with "/" is a folder's
-    marker. A derived folder's entry has only its ``name``, ``size`` 0 and
-    ``type``.
+    ``_iexpand`` gives them. The folders are derived from the keys, as fsspec's
+    filesystems derive them for object stores, and a key ending with "/" is a
+    folder's marker. A derived folder's entry has only its ``name``, ``size`` 0
+    and ``type``.
 
     A folder is done once the listing has passed its keys. Without
     ``topdown``, each folder comes as soon as it is done, after all those

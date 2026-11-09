@@ -91,9 +91,9 @@ def _tree_rm(
     is given folders only. Each request holds a permit of the filesystem's
     ``operation_limit`` while it runs.
 
-    The filesystem's profile's ``implicit_folders=True`` saves the ``rm_folder`` of each
-    folder, as a folder goes with its last file. Such a folder is not yielded,
-    as one found already gone is not.
+    The filesystem's profile's ``implicit_folders=True`` saves the
+    ``rm_folder`` of each folder, as a folder goes with its last file. Such a
+    folder is not yielded, as one found already gone is not.
 
     The filesystem's primitives are called below by what they do: ``_ils`` is
     its ``_ils``, ``info`` its ``_info``, ``rm_file`` its ``_rm_file``, and

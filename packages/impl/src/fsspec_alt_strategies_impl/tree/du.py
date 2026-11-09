@@ -52,8 +52,8 @@ def _tree_du(
 
     Once cancelled, it lists no new folder, and counts the listings in flight.
 
-    Requests: one ``_ils`` per folder, as the filesystem's ``operation_limit`` allows. One
-    ``info`` for ``path``, if a file.
+    Requests: one ``_ils`` per folder, as the filesystem's ``operation_limit``
+    allows. One ``info`` for ``path``, if a file.
 
     ``path`` is the folder measured on ``fs``, by its ``_ils`` and ``_info``.
     ``maxdepth`` of 1 counts only the files in ``path``. ``ils_kwargs`` go to

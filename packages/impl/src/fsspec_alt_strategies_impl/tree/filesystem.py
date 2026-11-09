@@ -54,9 +54,10 @@ class TreeFileSystem(_BaseFileSystem):
     It suits storages with a hierarchical namespace, which list one folder per
     request, such as Azure Data Lake Storage Gen2. It overrides fsspec's
     ``_walk``, ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``_mv``
-    when recursive, with `_tree_walk`, `_tree_find`, `_tree_du`, `_tree_glob`,
-    `_tree_rm`, `_tree_cp` and `_tree_mv`. Their answers are fsspec's, and their
-    failures are raised, a single one as it is, several in an ExceptionGroup.
+    when recursive, with the tree strategies. These list many folders at once,
+    and act on each part of a listing as it arrives. Their answers are
+    fsspec's, and their failures are raised, a single one as it is, several in
+    an ExceptionGroup.
     A folder that fails to list is yielded empty by ``_walk``, as fsspec's
     ``walk`` yields it. ``on_error`` handles every folder's failure, where
     fsspec's applies it to the root only, as its walk recurses without it.
@@ -81,10 +82,10 @@ class TreeFileSystem(_BaseFileSystem):
     unknown, and the strategies then take the way right on any storage.
 
     A recursive ``mv``, or one of a single file, moves each file with
-    ``_mv_file``, which is fsspec's copy then delete. A subclass whose
-    storage renames a path in one request overrides it. If its rename moves a folder too, with all in it, the
-    profile's ``renames_folders=True`` says so: a recursive ``mv`` then moves
-    each folder whole where it can.
+    ``_mv_file``, which is fsspec's copy then delete. A subclass whose storage
+    renames a path in one request overrides it. If its rename moves a folder
+    too, with all in it, the profile's ``renames_folders=True`` says so: a
+    recursive ``mv`` then moves each folder whole where it can.
 
     Parameters
     ----------
@@ -371,10 +372,11 @@ class TreeFileSystem(_BaseFileSystem):
         maxdepth: int | None = None,
         **kwargs: Any,
     ) -> None:
-        """Move files, as fsspec's ``mv`` does: with `_tree_mv` when recursive.
+        """Move files, as fsspec's ``mv`` does: with the tree move when recursive.
 
-        A single file goes by `_tree_mv` too, recursive or not, so that it moves
-        by ``_mv_file``, the storage's rename where a subclass overrides it.
+        A single file goes by the tree move too, recursive or not, so that it
+        moves by ``_mv_file``, the storage's rename where a subclass overrides
+        it.
         """
         if path1 == path2:
             return

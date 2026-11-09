@@ -15,6 +15,9 @@ stay files, with Python's sync API.
 
 A `SyncFileAdapter` gives the same API to any other file object with Python's
 sync API, e.g. a storage SDK's own, running its blocking calls in a thread.
+
+This module depends on nothing else in the package: it imports `_async_file`
+only for type checking.
 """
 
 from __future__ import annotations

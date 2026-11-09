@@ -78,16 +78,14 @@ def _tree_cp(
     without ``maxdepth``: fsspec places them by the common prefix of the files
     found, which moves them when all are in one subfolder.
 
-    The destination is described by ``dst_fs`` and its
-    ``storage_profile``, unknown if it has none. Within
-    one storage, ``dst_fs`` is ``src_fs``, and ``same_storage`` is True:
-    a path copied onto itself, or under itself, is refused. Between two,
-    ``cp_file`` copies from one to the other, e.g. the router's
-    ``_cross_fs_cp_file``, and every byte may go through the caller. A path
-    may then go to the same path, or under it.
-    The copies run concurrently, so the destination's paths are created in
-    another order than the source's. A storage listing in creation order
-    shows it.
+    The destination is described by ``dst_fs`` and its ``storage_profile``,
+    unknown if it has none. Within one storage, ``dst_fs`` is ``src_fs``, and
+    ``same_storage`` is True: a path copied onto itself, or under itself, is
+    refused. Between two, ``cp_file`` copies from one to the other, e.g. the
+    router's ``_cross_fs_cp_file``, and every byte may go through the caller. A
+    path may then go to the same path, or under it. The copies run
+    concurrently, so the destination's paths are created in another order than
+    the source's. A storage listing in creation order shows it.
 
     Unlike fsspec's ``copy``, it keeps going past a failure, and reports each.
     A copy cancelled or failed leaves what was copied so far: it deletes
@@ -115,9 +113,8 @@ def _tree_cp(
     a ``cp_file`` between two storages too.
 
     The destination's profile's ``parents_required=False``, or
-    ``implicit_folders=True``,
-    saves the ``dst_makedirs`` of each folder with files, as their copies
-    create it.
+    ``implicit_folders=True``, saves the ``dst_makedirs`` of each folder with
+    files, as their copies create it.
 
     The primitives are called above by what they do: ``_ils`` and ``info`` are
     the source's ``_ils`` and ``_info``, ``dst_info``, ``dst_makedirs`` and

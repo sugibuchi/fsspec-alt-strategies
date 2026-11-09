@@ -50,10 +50,10 @@ def _flat_rm(
     The keys deeper are listed all the same, as a prefix lists every key
     under it, but kept.
 
-    The keys are grouped in batches of the filesystem's ``rm_batch_size``,
-    each deleted by one ``_rm_files``, while the listing goes on. The last batch, smaller, goes once
-    the listing ends. It yields each key once its batch is deleted, and the
-    error of each batch that failed, noting its keys.
+    The keys are grouped in batches of the filesystem's ``rm_batch_size``, each
+    deleted by one ``_rm_files``, while the listing goes on. The last batch,
+    smaller, goes once the listing ends. It yields each key once its batch is
+    deleted, and the error of each batch that failed, noting its keys.
 
     It wins over fsspec's ``_rm`` on large prefixes of flat storages: the
     deletions start after the first page of the listing, not after the last,
