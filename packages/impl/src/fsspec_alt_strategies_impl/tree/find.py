@@ -16,16 +16,12 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import FindState
 
-from ..common.filesystem import _with
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from .walk import _chunks, _Listing
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncGenerator, Callable
-
-    from ..common.types import _Ils, _Info
 
 __all__: list[str] = []
 
@@ -55,7 +51,7 @@ def _tree_find(
     Once cancelled, it lists no new folder, and yields the paths of the
     listings in flight.
 
-    Requests: one ``ils`` per folder, as the filesystem's ``operation_limit`` allows. One
+    Requests: one ``_ils`` per folder, as the filesystem's ``operation_limit`` allows. One
     ``info`` more for ``path`` itself, if a file, or a folder with
     ``withdirs``.
 
@@ -76,7 +72,7 @@ def _tree_find(
     Returns
     -------
     Operation
-        Yielding the ``ils`` entry of each path found, or the error of a folder
+        Yielding the ``_ils`` entry of each path found, or the error of a folder
         that failed to list. Its state is a `FindState`.
 
     Raises
@@ -89,19 +85,16 @@ def _tree_find(
     _tree_walk : The walk under it.
     """
     _check_maxdepth(maxdepth)
-    ils, info = _with(fs._ils, ils_kwargs or {}), fs._info
-    concurrency_limit = fs.operation_limit
 
     async def run(
         op: Operation[dict[str, Any], FindState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         root = _trim(path)
         steps = _find_listings(
-            ils,
-            info,
+            fs,
             root,
             maxdepth=maxdepth,
-            concurrency_limit=concurrency_limit,
+            ils_kwargs=ils_kwargs,
             stopping=op.cancelling,
             file_root=True,
             folder_root=withdirs and bool(root),
@@ -132,13 +125,12 @@ def _tree_find(
 
 
 async def _find_listings(
-    ils: _Ils,
-    info: _Info,
+    fs: Any,
     path: str,
     *,
     maxdepth: int | None = None,
     descend: Callable[[dict[str, Any]], bool] | None = None,
-    concurrency_limit: asyncio.Semaphore,
+    ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
     file_root: bool = False,
     folder_root: bool = False,
@@ -160,11 +152,11 @@ async def _find_listings(
     """
     root = _trim(path)
     listings = _chunks(
-        ils,
+        fs,
         root,
         maxdepth=maxdepth,
         descend=descend,
-        concurrency_limit=concurrency_limit,
+        ils_kwargs=ils_kwargs,
         stopping=stopping,
     )
 
@@ -176,36 +168,31 @@ async def _find_listings(
         except (FileNotFoundError, NotADirectoryError) as e:
             # Only the root's own listing raises them: any later one is yielded.
             if file_root and isinstance(e, NotADirectoryError):
-                async with concurrency_limit:
-                    entry = await info(root)
+                async with fs.operation_limit:
+                    entry = await fs._info(root)
                 yield _Listing(root, 0, [entry])
             return
 
         yield root_listing
         if root_listing.last:
-            async for listing in _root_entry(
-                info, root, folder_root, concurrency_limit, stopping
-            ):
+            async for listing in _root_entry(fs, root, folder_root, stopping):
                 yield listing
 
         async for listing in listings:
             yield listing
             if listing.folder == root and listing.last:
-                async for entry in _root_entry(
-                    info, root, folder_root, concurrency_limit, stopping
-                ):
+                async for entry in _root_entry(fs, root, folder_root, stopping):
                     yield entry
 
 
 async def _root_entry(
-    info: _Info,
+    fs: Any,
     root: str,
     folder_root: bool,
-    concurrency_limit: asyncio.Semaphore,
     stopping: Callable[[], object] | None,
 ) -> AsyncGenerator[_Listing]:
     """The root folder's own ``info`` entry, as a listing of depth 0, if asked."""
     if folder_root and not (stopping and stopping()):
-        async with concurrency_limit:
-            entry = await info(root)
+        async with fs.operation_limit:
+            entry = await fs._info(root)
         yield _Listing(root, 0, [entry])

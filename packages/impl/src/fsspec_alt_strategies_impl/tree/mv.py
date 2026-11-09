@@ -127,7 +127,7 @@ def _tree_mv(
     ``rm_folder`` of each source folder too, as a folder goes with its last
     file. Either saves the ``dst_makedirs`` before a folder is moved whole.
 
-    The primitives are called above by what they do: ``ils``, ``info`` and
+    The primitives are called above by what they do: ``_ils``, ``info`` and
     ``rm_folder`` are the source's ``_ils``, ``_info`` and ``_rmdir``,
     ``dst_info`` and ``dst_makedirs`` the destination's ``_info`` and
     ``_makedirs``.

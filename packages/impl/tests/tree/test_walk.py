@@ -18,7 +18,6 @@ from fsspec_alt_strategies_impl.tree.walk import (
 from fsspec_alt_strategies_impl_testing import (
     SimulatedFileSystem,
     TreeView,
-    folder_ils,
 )
 
 if TYPE_CHECKING:
@@ -290,17 +289,10 @@ def test_on_error_is_checked_at_once(any_fs: SimulatedFileSystem) -> None:
 async def test_listings_carry_folder_and_depth(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     # A trailing "/" is trimmed, as fsspec's _strip_protocol does.
-    async with aclosing(
-        _listings(folder_ils(any_fs), "data/", concurrency_limit=asyncio.Semaphore(32))
-    ) as listings:
+    async with aclosing(_listings(TreeView(any_fs), "data/")) as listings:
         first = await anext(listings)
     assert (first.folder, first.depth) == ("data", 1)
-    listings = {
-        lst.folder: lst
-        async for lst in _listings(
-            folder_ils(any_fs), "data", concurrency_limit=asyncio.Semaphore(32)
-        )
-    }
+    listings = {lst.folder: lst async for lst in _listings(TreeView(any_fs), "data")}
     assert [lst.depth for lst in listings.values()].count(3) == 4
 
 
@@ -310,10 +302,9 @@ async def test_bottom_up_listings_come_after_their_subfolders() -> None:
     folders = [
         lst.folder
         async for lst in _listings(
-            folder_ils(fs),
+            TreeView(fs, operation_limit=asyncio.Semaphore(2)),
             "data",
             topdown=False,
-            concurrency_limit=asyncio.Semaphore(2),
         )
     ]
     assert folders[-1] == "data"
@@ -340,9 +331,8 @@ async def test_chunks_stream_a_folder_in_parts() -> None:
     fs.add_file("data/sub/inner")
     listed: list[str] = []
     chunks = _chunks(
-        _streamed(fs, listed),
+        TreeView(fs, ils=_streamed(fs, listed), operation_limit=asyncio.Semaphore(4)),
         "data",
-        concurrency_limit=asyncio.Semaphore(4),
         chunk_size=2,
     )
     async with aclosing(chunks):
@@ -367,7 +357,7 @@ async def test_chunks_stream_a_folder_in_parts() -> None:
 async def test_chunks_of_an_empty_folder_are_one_part() -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     fs.add_dir("data")
-    chunks = _chunks(folder_ils(fs), "data", concurrency_limit=asyncio.Semaphore(4))
+    chunks = _chunks(TreeView(fs, operation_limit=asyncio.Semaphore(4)), "data")
     async with aclosing(chunks):
         parts = [part async for part in chunks]
     assert [(p.entries, p.first, p.last) for p in parts] == [([], True, True)]

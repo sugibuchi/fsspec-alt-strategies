@@ -112,7 +112,7 @@ def _tree_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests of
-    their `_tree_glob`. One ``ils`` per folder, one ``cp_file`` per file, and
+    their `_tree_glob`. One ``_ils`` per folder, one ``cp_file`` per file, and
     one ``dst_makedirs`` per destination folder with files or empty. A
     destination refusing to overwrite costs a ``dst_info``, a ``dst_rm_file``
     and a ``cp_file`` more per file it refused. The ``dst_info`` checks it is
@@ -125,7 +125,7 @@ def _tree_cp(
     saves the ``dst_makedirs`` of each folder with files, as their copies
     create it.
 
-    The primitives are called above by what they do: ``ils`` and ``info`` are
+    The primitives are called above by what they do: ``_ils`` and ``info`` are
     the source's ``_ils`` and ``_info``, ``dst_info``, ``dst_makedirs`` and
     ``dst_rm_file`` the destination's ``_info``, ``_makedirs`` and
     ``_rm_file``.

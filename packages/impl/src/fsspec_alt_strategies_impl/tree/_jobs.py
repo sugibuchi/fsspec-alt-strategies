@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 
     from ..common.jobs import _Roots
     from ..common.operation import Operation
-    from ..common.types import _Ils, _Info
     from .walk import _Listing
 
 
@@ -67,8 +66,6 @@ class _TreeJobs(_Jobs):
         super().__init__(fs.operation_limit, op)
 
         self.fs = fs
-        self.ils: _Ils = fs._ils
-        self.info: _Info = fs._info
         self.maxdepth = maxdepth
 
         # The folder roots a pattern matched: fsspec walks them one level less
@@ -112,11 +109,10 @@ class _TreeJobs(_Jobs):
         if not folders:
             return None
         return _chunks(
-            self.ils,
+            self.fs,
             folders,
             maxdepth=self.maxdepth,
             matched=self.matched,
-            concurrency_limit=self.concurrency_limit,
             stopping=self.op.cancelling,
         )
 

@@ -85,7 +85,7 @@ def _tree_rm(
     unknown. Iterating it raises FileNotFoundError if ``path`` does not exist,
     or matches nothing.
 
-    Requests: one ``ils`` per folder, one ``rm_file`` per file, and one
+    Requests: one ``_ils`` per folder, one ``rm_file`` per file, and one
     ``rm_folder`` per folder. Patterns, or a list, add the requests of their
     `_tree_glob`. With ``rm_tree``, a root deleted whole costs one ``rm_tree``
     instead. A single ``path`` then costs an ``info`` first, as ``rm_tree``
@@ -96,7 +96,7 @@ def _tree_rm(
     folder, as a folder goes with its last file. Such a folder is not yielded,
     as one found already gone is not.
 
-    The filesystem's primitives are called below by what they do: ``ils`` is
+    The filesystem's primitives are called below by what they do: ``_ils`` is
     its ``_ils``, ``info`` its ``_info``, ``rm_file`` its ``_rm_file``, and
     ``rm_folder`` its ``_rmdir``. A FileNotFoundError from ``rm_folder``
     counts as deleted, as object stores have no folders to delete.
@@ -194,7 +194,7 @@ class _Deletion(_TreeJobs):
         try:
             if not known:
                 async with self.concurrency_limit:
-                    if (await self.info(folder))["type"] != "directory":
+                    if (await self.fs._info(folder))["type"] != "directory":
                         return "file"
 
             async with self.concurrency_limit:

@@ -7,7 +7,7 @@ folder's ``(path, dirs, files)`` as its listing arrives, as fsspec's ``walk``
 gives them. A ``descend`` predicate prunes the folders it lists, as glob needs.
 
 Its engine, ``_chunks``, is the walk under the other tree strategies, such as
-find, rm and du. It streams each folder's listing in parts, as ``ils`` yields
+find, rm and du. It streams each folder's listing in parts, as ``_ils`` yields
 it, so that they act on a folder of hundreds of thousands of files as it is
 listed. ``_tree_walk`` gathers the parts, as fsspec's ``walk`` gives a folder
 whole.
@@ -16,9 +16,9 @@ It suits storages that list one folder per request, and those whose folders
 can be pruned. On object stores, one recursive listing usually costs fewer
 requests: `fsspec.asyn.AsyncFileSystem._find` there.
 
-The tree strategies take the filesystem they work on, and call its
-primitives, such as ``_ils``. The engines under them take the primitives as
-functions: see `common.types`.
+The tree strategies, and the engines under them, take the filesystem they
+work on, and call its primitives, such as ``_ils``, under its
+``operation_limit``.
 
 This module depends on `filesystem`, `jobs`, `operation` and `paths` of
 `common`.
@@ -33,15 +33,12 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from fsspec_alt_strategies.states import WalkState
 
-from ..common.filesystem import _with
 from ..common.jobs import _Queue
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Collection
-
-    from ..common.types import _Ils
 
 __all__: list[str] = []
 
@@ -61,7 +58,7 @@ def _tree_walk(
     It yields each folder listed as ``(path, dirs, files)``, as fsspec's
     ``walk`` does with ``detail=True``: ``path`` itself first, then each folder
     below it. ``dirs`` and ``files`` map the names in the folder to their
-    ``ils`` entries. An empty folder yields empty ones. The folders come in the
+    ``_ils`` entries. An empty folder yields empty ones. The folders come in the
     order their listings arrive, not in the tree's order. A folder that fails
     to list yields its error instead, and the walk goes on with the others.
     The error names its folder in its note, and as its ``folder`` attribute.
@@ -81,7 +78,7 @@ def _tree_walk(
     - with ``on_error="raise"``, the error of the first folder that failed to
       list.
 
-    Requests: one ``ils`` per folder walked, as the filesystem's ``operation_limit`` allows.
+    Requests: one ``_ils`` per folder walked, as the filesystem's ``operation_limit`` allows.
 
     Parameters
     ----------
@@ -95,7 +92,7 @@ def _tree_walk(
     topdown : bool
         Whether a folder comes before those below it, rather than after.
     descend : callable, optional
-        Called with the ``ils`` entry of each subfolder found. The walk lists it
+        Called with the ``_ils`` entry of each subfolder found. The walk lists it
         only if this returns True. All by default.
     on_error : {"omit", "raise"} or callable, optional
         What to do with the error of a folder that fails to list: yield it, if
@@ -123,20 +120,17 @@ def _tree_walk(
     if not (on_error in (None, "omit", "raise") or callable(on_error)):
         raise ValueError(f"on_error must be 'omit', 'raise' or callable: {on_error!r}")
 
-    ils = _with(fs._ils, ils_kwargs or {})
-    concurrency_limit = fs.operation_limit
-
     async def run(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
     ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
         listings = _listings(
-            ils,
+            fs,
             path,
             maxdepth=maxdepth,
             topdown=topdown,
             descend=descend,
             raise_on_error=on_error == "raise",
-            concurrency_limit=concurrency_limit,
+            ils_kwargs=ils_kwargs,
             stopping=op.cancelling,
         )
         state = op.state
@@ -166,11 +160,11 @@ class _Listing:
     """A part of a folder's listing, as ``_chunks`` yields it, or all of it.
 
     ``depth`` is 1 for the folder the walk started from, 2 for its subfolders,
-    and so on. ``entries`` are as ``ils`` gives them, without the folder itself,
+    and so on. ``entries`` are as ``_ils`` gives them, without the folder itself,
     and empty if the listing failed with ``error``.
 
     A folder's listing comes in parts, each of at most ``chunk_size`` entries,
-    as ``ils`` yields them: ``first`` on the first part, ``last`` on the last.
+    as ``_ils`` yields them: ``first`` on the first part, ``last`` on the last.
     So an empty folder is one part, both first and last, with no entries. A
     failed listing ends with its error, as its last part. ``_listings`` yields
     each folder whole: one part, both first and last.
@@ -192,14 +186,14 @@ _CHUNK_SIZE = 1000
 
 
 async def _chunks(
-    ils: _Ils,
+    fs: Any,
     path: str | Collection[str],
     *,
     maxdepth: int | None = None,
     matched: Collection[str] = (),
     descend: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
-    concurrency_limit: asyncio.Semaphore,
+    ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
     chunk_size: int = _CHUNK_SIZE,
 ) -> AsyncGenerator[_Listing]:
@@ -222,8 +216,8 @@ async def _chunks(
     ``_expand_path`` walks them.
 
     The parts of a folder come in order, but those of several folders mix, as
-    the listings run at once. Each listing holds a permit of
-    ``concurrency_limit`` while it runs.
+    the listings run at once. Each listing, by ``fs._ils`` with
+    ``ils_kwargs``, holds a permit of ``fs.operation_limit`` while it runs.
 
     Once ``stopping`` returns true, no new listing starts, and those in flight
     stop after their current part: a folder stopped so has no last part.
@@ -232,7 +226,7 @@ async def _chunks(
 
     roots = {_trim(p) for p in ([path] if isinstance(path, str) else path)}
     # The folders to list, each with its depth.
-    folders: _Queue[tuple[str, int]] = _Queue(concurrency_limit)
+    folders: _Queue[tuple[str, int]] = _Queue(fs.operation_limit)
     # The parts listed, a few at a time: a listing waits while they are full.
     parts: asyncio.Queue[_Listing] = asyncio.Queue(maxsize=16)
     # The subfolders found so far in each folder being listed, each listed once.
@@ -246,7 +240,13 @@ async def _chunks(
             folders.waiting.clear()
         await folders.start(
             lambda item: _produce(
-                ils, *item, item[0] in roots, parts, chunk_size, stopped
+                fs,
+                ils_kwargs or {},
+                *item,
+                item[0] in roots,
+                parts,
+                chunk_size,
+                stopped,
             )
         )
 
@@ -300,7 +300,8 @@ async def _next_part(
 
 
 async def _produce(
-    ils: _Ils,
+    fs: Any,
+    ils_kwargs: dict[str, Any],
     folder: str,
     depth: int,
     root: bool,
@@ -312,7 +313,7 @@ async def _produce(
     first = True
     chunk: list[dict[str, Any]] = []
     try:
-        entries = ils(folder)
+        entries = fs._ils(folder, **ils_kwargs)
         try:
             async for entry in entries:
                 if entry["name"].rstrip("/") == folder:
@@ -367,14 +368,14 @@ def _note(error: Exception, folder: str) -> None:
 
 
 async def _listings(
-    ils: _Ils,
+    fs: Any,
     path: str,
     *,
     maxdepth: int | None = None,
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
-    concurrency_limit: asyncio.Semaphore,
+    ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[_Listing]:
     """Walk a folder tree as `_tree_walk` does, yielding each folder's listing whole.
@@ -390,12 +391,12 @@ async def _listings(
     held: dict[str, list[dict[str, Any]]] = {}
     bottom_up = None if topdown else _BottomUp()
     chunks = _chunks(
-        ils,
+        fs,
         path,
         maxdepth=maxdepth,
         descend=descend,
         raise_on_error=raise_on_error,
-        concurrency_limit=concurrency_limit,
+        ils_kwargs=ils_kwargs,
         stopping=stopping,
     )
 

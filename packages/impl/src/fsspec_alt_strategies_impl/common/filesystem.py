@@ -14,7 +14,6 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 import asyncio
-import functools
 import io
 import os
 from abc import ABCMeta
@@ -248,15 +247,6 @@ async def _skip(f: Any, start: int, chunk_size: int) -> None:
         if not chunk:
             return  # Past the end: the read after answers nothing.
         skipped += len(chunk)
-
-
-def _with(func: Callable[..., Any], kwargs: dict[str, Any]) -> Callable[..., Any]:
-    """``func``, given ``kwargs`` too at each call, e.g. ``_ils`` with refresh=True.
-
-    fsspec's recursive methods pass their extra keyword arguments on to the
-    listing, which the strategies call with the path alone.
-    """
-    return functools.partial(func, **kwargs) if kwargs else func
 
 
 def _answer(entries: list[dict[str, Any]], detail: bool) -> Any:

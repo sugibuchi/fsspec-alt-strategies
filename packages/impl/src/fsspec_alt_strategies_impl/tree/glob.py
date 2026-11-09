@@ -27,17 +27,14 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import GlobState
 
-from ..common.filesystem import _with
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _inside, _Search
 from .find import _find_listings
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncGenerator, Sequence
 
-    from ..common.types import _Ils, _Info
     from .walk import _Listing
 
 __all__: list[str] = []
@@ -80,7 +77,7 @@ def _tree_glob(
     Once cancelled, it lists no new folder, and yields the matches of the
     listings in flight.
 
-    Requests: one ``ils`` per folder a pattern can match in, as the filesystem's ``operation_limit`` allows. One ``info`` per pattern without wildcards,
+    Requests: one ``_ils`` per folder a pattern can match in, as the filesystem's ``operation_limit`` allows. One ``info`` per pattern without wildcards,
     and per literal root folder walked that a pattern matches, e.g. that of
     ``data/**``.
 
@@ -101,7 +98,7 @@ def _tree_glob(
     Returns
     -------
     Operation
-        Yielding the ``ils`` entry of each path matched, or the error of a
+        Yielding the ``_ils`` entry of each path matched, or the error of a
         folder that failed to list. Its state is a `GlobState`.
 
     Raises
@@ -115,9 +112,6 @@ def _tree_glob(
     _tree_walk : The walk under it.
     """
     _check_maxdepth(maxdepth)
-    ils, info = _with(fs._ils, ils_kwargs or {}), fs._info
-    concurrency_limit = fs.operation_limit
-
     literals: list[str] = []
     searches: list[_Search] = []
     for pattern in [path] if isinstance(path, str) else path:
@@ -131,13 +125,16 @@ def _tree_glob(
         op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         found: set[str] = set()
-        async for entry in _infos(info, literals, concurrency_limit, op, found):
+        # Shared with the flat family, which is not ported yet: it takes the
+        # primitive and the limit.
+        infos = _infos(fs._info, literals, fs.operation_limit, op, found)
+        async for entry in infos:
             yield entry
 
         for root, group in _walks(searches):
             if op.cancelling():
                 return
-            walk = _walk(ils, info, root, group, concurrency_limit, op, found)
+            walk = _walk(fs, root, group, op, found, ils_kwargs)
             async for match in walk:
                 yield match
 
@@ -159,13 +156,12 @@ def _walks(searches: list[_Search]) -> list[tuple[str, list[_Search]]]:
 
 
 async def _walk(
-    ils: _Ils,
-    info: _Info,
+    fs: Any,
     root: str,
     searches: list[_Search],
-    concurrency_limit: asyncio.Semaphore,
     op: Operation[dict[str, Any], GlobState],
     found: set[str],
+    ils_kwargs: dict[str, Any] | None,
 ) -> AsyncGenerator[dict[str, Any] | Exception]:
     """The matches of patterns in one tree, walked from ``root``."""
     depths = [s.depth_from(root) for s in searches]
@@ -174,12 +170,11 @@ async def _walk(
     # nothing. Its find includes the root folder itself, which few patterns
     # match.
     steps = _find_listings(
-        ils,
-        info,
+        fs,
         root,
         maxdepth=None if None in depths else max(d for d in depths if d is not None),
         descend=lambda e: any(s.descend(e) for s in searches),
-        concurrency_limit=concurrency_limit,
+        ils_kwargs=ils_kwargs,
         stopping=op.cancelling,
         folder_root=bool(root)
         and any(s.matched({"name": root, "type": "directory"}) for s in searches),
