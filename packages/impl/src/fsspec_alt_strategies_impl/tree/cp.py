@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import CpState
 
+from ..common.filesystem import _profile_of
 from ..common.jobs import _Job
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
@@ -25,7 +26,6 @@ from ..common.placement import _Placement
 from ._jobs import _TreeJobs
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import Awaitable, Sequence
 
     from fsspec_alt_strategies.profile import StorageProfile
@@ -46,8 +46,6 @@ def _tree_cp(
     cp_file: _Request | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
-    profile: StorageProfile | None = None,
-    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[tuple[str, str], CpState]:
     """Copy a folder and everything in it, copying while the tree is walked.
 
@@ -86,7 +84,8 @@ def _tree_cp(
     without ``maxdepth``: fsspec places them by the common prefix of the files
     found, which moves them when all are in one subfolder.
 
-    The destination is described by ``destination`` and ``profile``. Within
+    The destination is described by ``destination`` and its
+    ``storage_profile``, unknown if it has none. Within
     one storage, ``destination`` is ``source``, and ``same_storage`` is True:
     a path copied onto itself, or under itself, is refused. Between two,
     ``cp_file`` copies from one to the other, e.g. the router's
@@ -118,10 +117,11 @@ def _tree_cp(
     destination refusing to overwrite costs a ``dst_info``, a ``dst_rm_file``
     and a ``cp_file`` more per file it refused. The ``dst_info`` checks it is
     a file, as ``dst_rm_file`` is given only paths known to be files. Each
-    request holds a permit of ``concurrency_limit`` while it runs, a
-    ``cp_file`` between two storages too.
+    request holds a permit of the source's ``operation_limit`` while it runs,
+    a ``cp_file`` between two storages too.
 
-    The profile's ``parents_required=False``, or ``implicit_folders=True``,
+    The destination's profile's ``parents_required=False``, or
+    ``implicit_folders=True``,
     saves the ``dst_makedirs`` of each folder with files, as their copies
     create it.
 
@@ -151,11 +151,7 @@ def _tree_cp(
     maxdepth : int, optional
         The deepest level to copy: 1 copies only the files in ``path1``. No
         limit by default.
-    profile : StorageProfile, optional
-        What the destination does: its ``storage_profile`` by default.
-    concurrency_limit : asyncio.Semaphore, optional
-        Held by each request while it runs, on either storage: the source's
-        ``operation_limit`` by default.
+
     Returns
     -------
     Operation
@@ -173,9 +169,7 @@ def _tree_cp(
     _tree_mv : The same, deleting the source as it goes.
     """
     _check_maxdepth(maxdepth)
-    options = _options(
-        source, destination, same_storage, maxdepth, profile, concurrency_limit
-    )
+    options = _options(source, destination, same_storage, maxdepth)
     cp_file = source._cp_file if cp_file is None else cp_file
     return Operation(
         lambda op: _Copy(path1, path2, cp_file=cp_file, op=op, **options).outcomes(),
@@ -188,19 +182,18 @@ def _options(
     destination: Any,
     same_storage: bool | None,
     maxdepth: int | None,
-    profile: StorageProfile | None,
-    concurrency_limit: asyncio.Semaphore | None,
 ) -> dict[str, Any]:
-    """The options of a copy or a move, each left None taken from its filesystem."""
+    """The options of a copy or a move, taken from its filesystems.
+
+    The profile is the destination's, as what a copy saves depends on where
+    it writes. Within one storage, it is the source's too.
+    """
     return {
         "source": source,
         "destination": destination,
         "same_storage": source is destination if same_storage is None else same_storage,
-        "profile": destination.storage_profile if profile is None else profile,
+        "profile": _profile_of(destination),
         "maxdepth": maxdepth,
-        "concurrency_limit": (
-            source.operation_limit if concurrency_limit is None else concurrency_limit
-        ),
     }
 
 
@@ -224,10 +217,9 @@ class _CopyOrMove(_TreeJobs):
         same_storage: bool,
         profile: StorageProfile,
         maxdepth: int | None,
-        concurrency_limit: asyncio.Semaphore,
         op: Operation[Any, Any],
     ) -> None:
-        super().__init__(source, concurrency_limit, op, maxdepth)
+        super().__init__(source, op, maxdepth)
 
         self.path1 = path1
         self.path2 = path2

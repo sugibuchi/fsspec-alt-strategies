@@ -33,6 +33,7 @@ from fsspec_alt_strategies.profile import StorageProfile
 from .common.filesystem import (
     _AbstractFileSystemMeta,
     _copy_errors,
+    _profile_of,
     _raise,
     _strip_only_protocol,
 )
@@ -315,7 +316,7 @@ class AsyncRoutingFileSystem(
             the path is above the storages.
         """
         target = self._target(path)
-        return _profile(target[0]) if target else StorageProfile()
+        return _profile_of(target[0]) if target else StorageProfile()
 
     # Routing.
 
@@ -984,7 +985,7 @@ class AsyncRoutingFileSystem(
         fsspec's own copy then runs. Each file goes by ``_cross_fs_cp_file``.
         The operation is returned not yet started.
         """
-        fs_type = _profile(fs1).fs_type
+        fs_type = _profile_of(fs1).fs_type
         if fs_type is None:
             return None
 
@@ -1000,7 +1001,6 @@ class AsyncRoutingFileSystem(
                 path2,
                 cp_file=self._across(fs1, fs2),
                 same_storage=False,
-                profile=_profile(fs2),
             )
         destination = self._destination(fs1, fs2)
         if fs_type == "flat":
@@ -1029,7 +1029,7 @@ class AsyncRoutingFileSystem(
         copies each key by ``_cross_fs_cp_file`` instead, and deletes the keys
         copied in batches, by its ``_rm_files``.
         """
-        fs_type = _profile(fs1).fs_type
+        fs_type = _profile_of(fs1).fs_type
         if fs_type is None:
             return None
 
@@ -1045,7 +1045,6 @@ class AsyncRoutingFileSystem(
                 path2,
                 mv_file=self._across(fs1, fs2, move=True),
                 same_storage=False,
-                profile=_profile(fs2),
             )
         destination = self._destination(fs1, fs2)
         if fs_type == "flat":
@@ -1078,7 +1077,7 @@ class AsyncRoutingFileSystem(
             "dst_info": fs2._info,
             "dst_makedirs": fs2._makedirs,
             "same_storage": False,
-            "profile": _profile(fs2),
+            "profile": _profile_of(fs2),
             "concurrency_limit": fs1.operation_limit,  # type: ignore[attr-defined]
         }
 
@@ -1152,9 +1151,3 @@ def _put_file(
             while chunk := local.read(fs.blocksize):
                 f.write(chunk)
                 callback.relative_update(len(chunk))
-
-
-def _profile(fs: Any) -> StorageProfile:
-    """A filesystem's `storage_profile`, or `StorageProfile()` if it has none."""
-    profile = getattr(fs, "storage_profile", None)
-    return profile if isinstance(profile, StorageProfile) else StorageProfile()

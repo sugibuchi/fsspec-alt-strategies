@@ -28,7 +28,6 @@ from .glob import _tree_glob
 from .walk import _chunks
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.jobs import _Roots
@@ -40,12 +39,11 @@ if TYPE_CHECKING:
 async def _expand(
     fs: Any,
     pattern: str | Sequence[str],
-    concurrency_limit: asyncio.Semaphore,
     maxdepth: int | None = None,
 ) -> tuple[_Roots, list[Exception]]:
     """The roots matching glob patterns, found with `_tree_glob`, and the errors found."""
     matches, errors = await _collect_with_errors(
-        _tree_glob(fs, pattern, maxdepth=maxdepth, concurrency_limit=concurrency_limit)
+        _tree_glob(fs, pattern, maxdepth=maxdepth)
     )
     return _roots_of(matches, errors, pattern), errors
 
@@ -53,7 +51,8 @@ async def _expand(
 class _TreeJobs(_Jobs):
     """The jobs of one operation, run while the tree of ``fs`` is walked.
 
-    ``fs`` is the filesystem walked, by its ``_ils`` and ``_info``. With
+    ``fs`` is the filesystem walked, by its ``_ils`` and ``_info``, each
+    request holding a permit of its ``operation_limit``. With
     ``maxdepth``, the walk lists no folder deeper than it, as fsspec's
     ``_expand_path`` finds paths. Each subfolder the walk leaves unlisted goes
     to `at_limit`, as fsspec finds it, but not what is in it.
@@ -62,11 +61,10 @@ class _TreeJobs(_Jobs):
     def __init__(
         self,
         fs: Any,
-        concurrency_limit: asyncio.Semaphore,
         op: Operation[Any, Any],
         maxdepth: int | None = None,
     ) -> None:
-        super().__init__(concurrency_limit, op)
+        super().__init__(fs.operation_limit, op)
 
         self.fs = fs
         self.ils: _Ils = fs._ils
@@ -96,9 +94,7 @@ class _TreeJobs(_Jobs):
 
     async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
         """The roots matching glob patterns, noting those a pattern matched."""
-        roots, errors = await _expand(
-            self.fs, pattern, self.concurrency_limit, self.maxdepth
-        )
+        roots, errors = await _expand(self.fs, pattern, self.maxdepth)
         self.found.extend(errors)
         if self.maxdepth is not None:
             named = [pattern] if isinstance(pattern, str) else pattern

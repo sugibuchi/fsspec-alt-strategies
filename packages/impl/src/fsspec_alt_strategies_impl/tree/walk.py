@@ -55,7 +55,6 @@ def _tree_walk(
     descend: Callable[[dict[str, Any]], bool] | None = None,
     on_error: Literal["omit", "raise"] | Callable[[Exception], object] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
-    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
     """Walk a folder tree, listing several folders at a time.
 
@@ -82,7 +81,7 @@ def _tree_walk(
     - with ``on_error="raise"``, the error of the first folder that failed to
       list.
 
-    Requests: one ``ils`` per folder walked, as ``concurrency_limit`` allows.
+    Requests: one ``ils`` per folder walked, as the filesystem's ``operation_limit`` allows.
 
     Parameters
     ----------
@@ -104,9 +103,6 @@ def _tree_walk(
         ending the walk, with "raise"; or call this with it, leaving it out.
     ils_kwargs : dict, optional
         Passed to each ``_ils``, as fsspec's ``walk`` passes its own on.
-    concurrency_limit : asyncio.Semaphore, optional
-        Held by each request while it runs: the filesystem's
-        ``operation_limit`` by default.
 
     Returns
     -------
@@ -128,8 +124,7 @@ def _tree_walk(
         raise ValueError(f"on_error must be 'omit', 'raise' or callable: {on_error!r}")
 
     ils = _with(fs._ils, ils_kwargs or {})
-    if concurrency_limit is None:
-        concurrency_limit = fs.operation_limit
+    concurrency_limit = fs.operation_limit
 
     async def run(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],

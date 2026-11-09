@@ -90,9 +90,20 @@ def _across(
         ),
         "same_storage": False,
     }
-    return _tree_cp(
-        TreeView(src), TreeView(dst), path1, path2, **{**operations, **kwargs}
+    # The limit is the source's, and the profile the destination's.
+    source = TreeView(
+        src,
+        **(
+            {"operation_limit": kwargs.pop("concurrency_limit")}
+            if "concurrency_limit" in kwargs
+            else {}
+        ),
     )
+    destination = TreeView(
+        dst,
+        **({"storage_profile": kwargs.pop("profile")} if "profile" in kwargs else {}),
+    )
+    return _tree_cp(source, destination, path1, path2, **{**operations, **kwargs})
 
 
 _FILES = [

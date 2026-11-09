@@ -50,7 +50,6 @@ def _tree_glob(
     maxdepth: int | None = None,
     withdirs: bool = True,
     ils_kwargs: dict[str, Any] | None = None,
-    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[dict[str, Any], GlobState]:
     """Find the paths matching glob patterns, listing only folders they can match in.
 
@@ -81,8 +80,7 @@ def _tree_glob(
     Once cancelled, it lists no new folder, and yields the matches of the
     listings in flight.
 
-    Requests: one ``ils`` per folder a pattern can match in, as
-    ``concurrency_limit`` allows. One ``info`` per pattern without wildcards,
+    Requests: one ``ils`` per folder a pattern can match in, as the filesystem's ``operation_limit`` allows. One ``info`` per pattern without wildcards,
     and per literal root folder walked that a pattern matches, e.g. that of
     ``data/**``.
 
@@ -99,9 +97,6 @@ def _tree_glob(
         Whether folders can match, as with fsspec's ``_glob``.
     ils_kwargs : dict, optional
         Passed to each ``_ils``, as fsspec's ``glob`` passes its own on.
-    concurrency_limit : asyncio.Semaphore, optional
-        Held by each request while it runs: the filesystem's
-        ``operation_limit`` by default.
 
     Returns
     -------
@@ -121,8 +116,7 @@ def _tree_glob(
     """
     _check_maxdepth(maxdepth)
     ils, info = _with(fs._ils, ils_kwargs or {}), fs._info
-    if concurrency_limit is None:
-        concurrency_limit = fs.operation_limit
+    concurrency_limit = fs.operation_limit
 
     literals: list[str] = []
     searches: list[_Search] = []

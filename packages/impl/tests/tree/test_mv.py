@@ -35,13 +35,24 @@ def _views(
     """The source and the destination, both ``fs``, with the primitives ``kwargs`` replace.
 
     The destination is the source unless a primitive of its own is replaced.
+    The limit is the source's, and the profile the destination's.
     """
-    source = TreeView(fs, **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()})
+    limit = {}
+    if "concurrency_limit" in kwargs:
+        limit["operation_limit"] = kwargs.pop("concurrency_limit")
+    profile = {}
+    if "profile" in kwargs:
+        profile["storage_profile"] = kwargs.pop("profile")
+
+    primitives = {k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()}
     replaced = {
         _DESTINATION[k]: kwargs.pop(k) for k in _DESTINATION.keys() & kwargs.keys()
     }
-    destination = TreeView(fs, **replaced) if replaced else source
-    return source, destination
+    if not replaced:
+        source = TreeView(fs, **primitives, **limit, **profile)
+        return source, source
+    source = TreeView(fs, **primitives, **limit)
+    return source, TreeView(fs, **replaced, **profile)
 
 
 def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:

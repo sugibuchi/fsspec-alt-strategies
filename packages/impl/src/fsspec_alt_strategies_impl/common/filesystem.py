@@ -206,6 +206,16 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
                     callback.relative_update(len(chunk))
 
 
+def _profile_of(fs: Any) -> StorageProfile:
+    """A filesystem's `storage_profile`, or `StorageProfile()` if it has none.
+
+    A destination may be any async filesystem, e.g. one of a router's, which
+    fsspec gives no profile: its storage is then unknown.
+    """
+    profile = getattr(fs, "storage_profile", None)
+    return profile if isinstance(profile, StorageProfile) else StorageProfile()
+
+
 def _strip_only_protocol(fs: AbstractFileSystem, path: str | Sequence[str]) -> Any:
     """A path, or paths, of ``fs`` without its protocol, keeping a trailing "/".
 

@@ -22,7 +22,6 @@ from ..common.paths import _check_maxdepth
 from .find import _find_listings
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncGenerator
 
 
@@ -35,7 +34,6 @@ def _tree_du(
     *,
     maxdepth: int | None = None,
     ils_kwargs: dict[str, Any] | None = None,
-    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[dict[str, Any], DuState]:
     """Measure a tree's size from its listings, listing several folders at a time.
 
@@ -55,7 +53,7 @@ def _tree_du(
 
     Once cancelled, it lists no new folder, and counts the listings in flight.
 
-    Requests: one ``ils`` per folder, as ``concurrency_limit`` allows. One
+    Requests: one ``ils`` per folder, as the filesystem's ``operation_limit`` allows. One
     ``info`` for ``path``, if a file.
 
     Parameters
@@ -69,9 +67,6 @@ def _tree_du(
         limit by default.
     ils_kwargs : dict, optional
         Passed to each ``_ils``, as fsspec's ``du`` passes its own on.
-    concurrency_limit : asyncio.Semaphore, optional
-        Held by each request while it runs: the filesystem's
-        ``operation_limit`` by default.
 
     Returns
     -------
@@ -90,8 +85,7 @@ def _tree_du(
     """
     _check_maxdepth(maxdepth)
     ils, info = _with(fs._ils, ils_kwargs or {}), fs._info
-    if concurrency_limit is None:
-        concurrency_limit = fs.operation_limit
+    concurrency_limit = fs.operation_limit
 
     async def run(
         op: Operation[dict[str, Any], DuState],

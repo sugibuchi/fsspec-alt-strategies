@@ -19,10 +19,17 @@ from fsspec_alt_strategies_impl_testing import (
 _PRIMITIVES = {"ils", "info", "rm_file", "rm_folder", "rm_tree", "cp_file", "mv_file"}
 """The keyword arguments that replace a primitive of the filesystem."""
 
+_SETTINGS = {"profile": "storage_profile", "concurrency_limit": "operation_limit"}
+"""The keyword arguments that set the filesystem's profile and limit, by its attribute."""
+
 
 def _glob(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`_tree_glob` on a filesystem's own primitives, which ``kwargs`` may replace."""
-    view = TreeView(fs, **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()})
+    view = TreeView(
+        fs,
+        **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()},
+        **{_SETTINGS[k]: kwargs.pop(k) for k in _SETTINGS.keys() & kwargs.keys()},
+    )
     return _tree_glob(view, path, **kwargs)
 
 

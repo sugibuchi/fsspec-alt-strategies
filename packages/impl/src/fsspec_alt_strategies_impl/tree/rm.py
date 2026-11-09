@@ -6,8 +6,8 @@
 whole tree first, then deletes each path. `_tree_rm` deletes each folder's files
 as soon as the folder is listed, and each folder once it is empty.
 
-This module depends on `_jobs`, and `jobs`, `operation` and `paths` of
-`common`.
+This module depends on `_jobs`, and `filesystem`, `jobs`, `operation` and
+`paths` of `common`.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import RmState
 
+from ..common.filesystem import _profile_of
 from ..common.jobs import _Job, _Roots
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
@@ -25,8 +26,6 @@ from ._jobs import _TreeJobs
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
-
-    from fsspec_alt_strategies.profile import StorageProfile
 
     from ..common.types import _Request
     from .walk import _Listing
@@ -39,8 +38,6 @@ def _tree_rm(
     path: str | Sequence[str],
     *,
     maxdepth: int | None = None,
-    profile: StorageProfile | None = None,
-    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[str, RmState]:
     """Delete a folder and everything in it, deleting while the tree is walked.
 
@@ -92,10 +89,10 @@ def _tree_rm(
     ``rm_folder`` per folder. Patterns, or a list, add the requests of their
     `_tree_glob`. With ``rm_tree``, a root deleted whole costs one ``rm_tree``
     instead. A single ``path`` then costs an ``info`` first, as ``rm_tree``
-    is given folders only. Each request holds a permit of
-    ``concurrency_limit`` while it runs.
+    is given folders only. Each request holds a permit of the filesystem's
+    ``operation_limit`` while it runs.
 
-    The profile's ``implicit_folders=True`` saves the ``rm_folder`` of each
+    The filesystem's profile's ``implicit_folders=True`` saves the ``rm_folder`` of each
     folder, as a folder goes with its last file. Such a folder is not yielded,
     as one found already gone is not.
 
@@ -115,11 +112,6 @@ def _tree_rm(
     maxdepth : int, optional
         The deepest level to delete: 1 deletes only what is in ``path``, and
         ``path`` if it is then empty. No limit by default.
-    profile : StorageProfile, optional
-        What the storage does: the filesystem's ``storage_profile`` by default.
-    concurrency_limit : asyncio.Semaphore, optional
-        Held by each request while it runs: the filesystem's
-        ``operation_limit`` by default.
 
     Returns
     -------
@@ -136,10 +128,8 @@ def _tree_rm(
     _tree_walk : The walk under it.
     """
     _check_maxdepth(maxdepth)
-    profile = fs.storage_profile if profile is None else profile
-    limit = fs.operation_limit if concurrency_limit is None else concurrency_limit
     return Operation(
-        lambda op: _Deletion(fs, path, profile, maxdepth, limit, op).outcomes(),
+        lambda op: _Deletion(fs, path, maxdepth, op).outcomes(),
         RmState(folders_deleted=0),
     )
 
@@ -151,12 +141,10 @@ class _Deletion(_TreeJobs):
         self,
         fs: Any,
         path: str | Sequence[str],
-        profile: StorageProfile,
         maxdepth: int | None,
-        concurrency_limit: asyncio.Semaphore,
         op: Operation[str, RmState],
     ) -> None:
-        super().__init__(fs, concurrency_limit, op, maxdepth)
+        super().__init__(fs, op, maxdepth)
 
         self.path = path
         self.rm_file: _Request = fs._rm_file
@@ -168,7 +156,7 @@ class _Deletion(_TreeJobs):
 
         # The roots deleted whole, yielded with the first step.
         self.whole: list[str] = []
-        self.implicit_folders = bool(profile.implicit_folders)
+        self.implicit_folders = bool(_profile_of(fs).implicit_folders)
         self.files_found = 0
         self.files_deleted = 0
         self.folders_deleted = 0

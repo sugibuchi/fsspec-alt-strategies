@@ -46,8 +46,6 @@ def _tree_mv(
     mv_file: _Request | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
-    profile: StorageProfile | None = None,
-    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[tuple[str, str], MvState]:
     """Move a folder and everything in it, moving while the tree is walked.
 
@@ -75,7 +73,8 @@ def _tree_mv(
     folder is created at the destination before files are moved into it, and
     for each empty folder.
 
-    The destination is described by ``destination`` and ``profile``. Within
+    The destination is described by ``destination`` and its
+    ``storage_profile``, unknown if it has none. Within
     one storage, ``destination`` is ``source``, and ``same_storage`` is True.
     Between two, ``mv_file`` copies a file to the other storage, then
     deletes it: e.g. the router's ``_cross_fs_mv_file``. A path may then go
@@ -119,9 +118,10 @@ def _tree_mv(
     ``renames_folders``, each folder root first costs a ``dst_info`` of its
     target, unless ``path2`` was found missing already, a ``dst_makedirs`` of
     its parent, and its ``mv_file``: a root moved whole costs nothing more.
-    Each request holds a permit of ``concurrency_limit`` while it runs.
+    Each request holds a permit of the source's ``operation_limit`` while it
+    runs.
 
-    The profile's ``parents_required=False`` saves the ``dst_makedirs`` of
+    The destination's profile's ``parents_required=False`` saves the ``dst_makedirs`` of
     each folder with files, as their moves create it. Its
     ``implicit_folders=True`` saves those, and within one storage the
     ``rm_folder`` of each source folder too, as a folder goes with its last
@@ -154,11 +154,6 @@ def _tree_mv(
     maxdepth : int, optional
         The deepest level to move: 1 moves only the files in ``path1``. No
         limit by default.
-    profile : StorageProfile, optional
-        What the destination does: its ``storage_profile`` by default.
-    concurrency_limit : asyncio.Semaphore, optional
-        Held by each request while it runs: the source's ``operation_limit``
-        by default.
 
     Returns
     -------
@@ -177,9 +172,7 @@ def _tree_mv(
     _tree_rm : The deletion it does as it goes.
     """
     _check_maxdepth(maxdepth)
-    options = _options(
-        source, destination, same_storage, maxdepth, profile, concurrency_limit
-    )
+    options = _options(source, destination, same_storage, maxdepth)
     mv_file = source._mv_file if mv_file is None else mv_file
     # A folder moved whole would take what is deeper than maxdepth along.
     renames_folders = (

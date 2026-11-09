@@ -37,7 +37,6 @@ def _tree_find(
     maxdepth: int | None = None,
     withdirs: bool = False,
     ils_kwargs: dict[str, Any] | None = None,
-    concurrency_limit: asyncio.Semaphore | None = None,
 ) -> Operation[dict[str, Any], FindState]:
     """Find the files in a tree, listing several folders at a time.
 
@@ -56,7 +55,7 @@ def _tree_find(
     Once cancelled, it lists no new folder, and yields the paths of the
     listings in flight.
 
-    Requests: one ``ils`` per folder, as ``concurrency_limit`` allows. One
+    Requests: one ``ils`` per folder, as the filesystem's ``operation_limit`` allows. One
     ``info`` more for ``path`` itself, if a file, or a folder with
     ``withdirs``.
 
@@ -73,9 +72,6 @@ def _tree_find(
         Whether to find folders too, ``path`` included.
     ils_kwargs : dict, optional
         Passed to each ``_ils``, as fsspec's ``find`` passes its own on.
-    concurrency_limit : asyncio.Semaphore, optional
-        Held by each request while it runs: the filesystem's
-        ``operation_limit`` by default.
 
     Returns
     -------
@@ -94,8 +90,7 @@ def _tree_find(
     """
     _check_maxdepth(maxdepth)
     ils, info = _with(fs._ils, ils_kwargs or {}), fs._info
-    if concurrency_limit is None:
-        concurrency_limit = fs.operation_limit
+    concurrency_limit = fs.operation_limit
 
     async def run(
         op: Operation[dict[str, Any], FindState],
