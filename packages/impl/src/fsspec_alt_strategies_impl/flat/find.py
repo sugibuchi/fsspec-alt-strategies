@@ -60,32 +60,13 @@ def _flat_find(
     ``withdirs``, holding a permit of the filesystem's ``operation_limit``.
     The listing holds none.
 
-    Parameters
-    ----------
-    fs : FlatFileSystem
-        The filesystem searched. Its ``_iexpand`` lists every key starting
-        with a prefix, in order of their names, each key once.
-    path : str
-        The folder to search, as ``_iexpand`` takes paths.
-    maxdepth : int, optional
-        The deepest level to find: 1 finds only the files in ``path``. No
-        limit by default. The listing still lists every key under it.
-    withdirs : bool
-        Whether to find folders too, ``path`` included.
+    ``path`` is the folder searched on ``fs``. Its ``_iexpand`` lists every
+    key starting with a prefix, in name order, each key once. ``maxdepth`` of
+    1 finds only the files in ``path``, though the listing still lists every
+    key under it. ``withdirs`` finds folders too, ``path`` included.
 
-    Returns
-    -------
-    Operation
-        Yielding the entry of each path found. Its state is a `FindState`.
-
-    Raises
-    ------
-    ValueError
-        If ``maxdepth`` is less than 1.
-
-    See Also
-    --------
-    _tree_find : The same, for storages listing one folder per request.
+    The operation yields the entry of each path found, and its state is a
+    `FindState`. The call raises ValueError if ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
 

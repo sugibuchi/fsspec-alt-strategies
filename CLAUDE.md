@@ -42,25 +42,29 @@ code: read it before adding a strategy.
 
 ### Strategies
 
-- Each strategy is a stateless function taking the storage's primitive operations as functions, never a filesystem,
-  e.g. `ils=fs._ils`. Filesystem classes only wrap them. File objects and `common.operation.Operation` are the only
-  classes with state.
-- A strategy never takes a high-level operation, such as `_find` or `_glob`: another strategy may have replaced it.
-  One needing another takes it as a parameter.
+- The abstract classes, `TreeFileSystem` and `FlatFileSystem`, and the wrappers are the API. Their recursive methods,
+  such as `_rm` and `_copy`, start a private strategy, e.g. `_tree_rm`, and answer as fsspec's method does.
+- A strategy takes the filesystem it works on, never its methods as functions: `_tree_rm(fs, path, maxdepth=...)`. A
+  copy or move takes `src_fs` and `dst_fs`, the same within one storage. It reads the primitives, `operation_limit`
+  and `storage_profile` from them.
+- The only function a strategy takes is a copy's or a move's `cp_file` or `mv_file`, a `common.jobs._Transfer`. The
+  router passes its copy of a file between two storages so. Between two storages it is required.
+- A strategy calls only a storage's primitives, such as `_ils`, `_info` and `_rm_file`, never a high-level method such
+  as `_find` or `_glob`: another strategy may have replaced it.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
-- Every strategy follows DEVELOPMENT.md's "The strategy API":
-  - a plain function, `strategy(paths, *, ils=..., ..., concurrency_limit=...)`, its operations keyword-only and
-    required, its limit an `asyncio.Semaphore`, returning an `Operation` that works as it is iterated;
+- Every strategy follows DEVELOPMENT.md's "Operations":
   - paths come without a protocol;
+  - it returns a private `Operation`, an `OperationHandler` working as it is iterated. No public method returns one:
+    callers watch operations with a `Monitor`, which stops one through its `OperationHandler`;
   - the operation yields what it did, mixed with an exception per failed path, each noting its path;
-  - it raises only errors ending the whole operation, such as a missing root;
+  - the call raises argument errors, and the iteration only errors ending the whole operation, such as a missing root;
   - its stopping mirrors `asyncio.Task`: `cancel()` starts nothing new but yields what is in flight, and `aclose()`
     stops at once, waiting for writes in flight. There are no callbacks and no result classes.
-- A strategy's name tells its family, e.g. `tree_rm`, never a bare `rm`: code using fsspec has those names already.
+- A strategy's name tells its family, e.g. `_tree_rm`, never a bare `_rm`: that is the method's name.
 - A strategy replacing an fsspec method answers as it does. Where it departs on purpose, its docstring says why.
-- What a storage does that fsspec leaves open is declared in `profile.StorageProfile`, never detected. A strategy
-  using it takes `profile=`, required, and `StorageProfile()` must be correct on any storage. Add a field only when a strategy saves requests
-  or data copied with it.
+- What a storage does that fsspec leaves open is declared in `profile.StorageProfile`, never detected. A strategy reads
+  it with `common.filesystem._profile_of`, so `StorageProfile()` must be correct on any storage. A copy or move reads
+  the destination's. Add a field only when a strategy saves requests or data copied with it.
 - The library never chooses a strategy for the developer. Each docstring says what the strategy assumes of the
   storage, and when it wins or loses.
 - Async first: write the async version, and a sync one only when asked.
@@ -71,14 +75,17 @@ code: read it before adding a strategy.
 - A family, such as `tree/` or `flat/`, never imports another. What two share goes in `common/`, a module per
   concern. What builds on both sits at the package's root: `wrapper.py` and `router.py`. The router imports a
   family only when copying or moving from a storage of it, as its profile's `fs_type` says.
+- A family's modules export nothing public but its filesystem class, in `filesystem.py`.
 - The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
-  folder in parts: never hold a folder's listing whole, except in `tree_walk`, which answers as fsspec's `walk`.
+  folder in parts: never hold a folder's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
 - Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
-- The flat strategies list with `iexpand(prefix)`, an async iterator of entries in name order, never pages: see
-  DEVELOPMENT.md's "The flat strategies". Those that only read derive folders with `flat._keys`.
-- The strategies changing a storage, in any family, run on `common.jobs._Jobs`. A copy or move builds on
-  `common.jobs._CopyJobs`, which places its paths.
+- The flat strategies list with `_iexpand(prefix)`, an async iterator of entries in name order, never pages: see
+  DEVELOPMENT.md's "The flat strategies". Those that only read derive folders with `flat._keys`. Those changing the
+  storage build on `flat._jobs._FlatJobs`.
+- The strategies changing a storage, in any family, run on `common.jobs._Jobs`, and start with `_Jobs.operation`. A
+  copy or move also builds on `common.jobs._CopyJobs`, which places its paths: `_CopyOrMove(_CopyJobs, _TreeJobs)`.
+  Their constructors take keywords only, and pass the rest on.
 
 ### Packages
 
@@ -88,9 +95,10 @@ code: read it before adding a strategy.
   strategies. Its `__init__.py` re-exports its public API.
 - The copied package imports itself only relatively, and depends only on fsspec, `fsspec_alt_strategies` and the
   standard library. Its `__init__.py` re-exports `monitored` only, and no other `__init__.py` re-exports anything.
-- Never move anything for tests only into `fsspec_alt_strategies_impl`. Only the CLI package may use click.
-- Each file in `packages/*/src/` starts with the SPDX license header. `test_copyable.py` checks this and the
-  import rules.
+- Never move anything for tests only into `fsspec_alt_strategies_impl`: it goes in
+  `fsspec_alt_strategies_impl_testing`. Only the CLI package may use click.
+- Each file in `packages/*/src/` starts with the SPDX license header, and a module docstring ending with the modules
+  it depends on. `test_copyable.py` checks the header and the import rules.
 - `_version.py` is written by hatch-vcs and git-ignored: never edit or commit it.
 
 ### Tests
@@ -98,7 +106,8 @@ code: read it before adding a strategy.
 - Test folders have no `__init__.py`. Never import one test file from another. The interface's tests never import
   the strategies.
 - Test strategies on `SimulatedFileSystem`, with the fixtures `flat_fs`, `hierarchical_fs` and `any_fs`, which runs a
-  test on both. Assert the requests made, from `fs.stats.calls`.
+  test on both. Start a strategy on a `TreeView` or `FlatView` of it, which replaces a primitive and sets the profile
+  and limit. Assert the requests made, from `fs.stats.calls`.
 - Test a strategy replacing an fsspec method against fsspec's own, e.g. `AsyncFileSystem._glob(fs, ...)`.
 
 ## Conventions

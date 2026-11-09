@@ -100,31 +100,13 @@ def _tree_rm(
     ``rm_folder`` its ``_rmdir``. A FileNotFoundError from ``rm_folder``
     counts as deleted, as object stores have no folders to delete.
 
-    Parameters
-    ----------
-    fs : TreeFileSystem
-        The filesystem to delete from.
-    path : str or sequence of str
-        The folder to delete, as ``_ils`` takes it. If it is a file, that file
-        is deleted. If it is a glob pattern, or a list of paths and patterns,
-        all they match is deleted.
-    maxdepth : int, optional
-        The deepest level to delete: 1 deletes only what is in ``path``, and
-        ``path`` if it is then empty. No limit by default.
+    ``path`` is the folder deleted from ``fs``, as its ``_ils`` takes it. A
+    file is deleted alone. A glob pattern, or a list of paths and patterns,
+    deletes all they match. ``maxdepth`` of 1 deletes only what is in
+    ``path``, and ``path`` if it is then empty.
 
-    Returns
-    -------
-    Operation
-        Yielding each path deleted, or an error. Its state is an `RmState`.
-
-    Raises
-    ------
-    ValueError
-        If ``maxdepth`` is less than 1.
-
-    See Also
-    --------
-    _tree_walk : The walk under it.
+    The operation yields each path deleted, or an error, and its state is an
+    `RmState`. The call raises ValueError if ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
     return _Deletion.operation(fs=fs, path=path, maxdepth=maxdepth)

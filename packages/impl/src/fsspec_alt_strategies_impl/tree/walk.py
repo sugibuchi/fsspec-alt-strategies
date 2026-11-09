@@ -79,41 +79,23 @@ def _tree_walk(
 
     Requests: one ``_ils`` per folder walked, as the filesystem's ``operation_limit`` allows.
 
-    Parameters
-    ----------
-    fs : TreeFileSystem
-        The filesystem walked: its ``_ils`` lists a folder, as an async
-        iterator of its entries.
-    path : str
-        The folder to start from, as ``_ils`` takes it.
-    maxdepth : int, optional
-        The deepest level to list: 1 lists only ``path``. No limit by default.
-    topdown : bool
-        Whether a folder comes before those below it, rather than after.
-    descend : callable, optional
-        Called with the ``_ils`` entry of each subfolder found. The walk lists it
-        only if this returns True. All by default.
-    on_error : {"omit", "raise"} or callable, optional
-        What to do with the error of a folder that fails to list: yield it, if
-        None, as every strategy does; leave it out, with "omit"; raise it,
-        ending the walk, with "raise"; or call this with it, leaving it out.
-    ils_kwargs : dict, optional
-        Passed to each ``_ils``, as fsspec's ``walk`` passes its own on.
+    ``path`` is the folder the walk starts from, listed by the ``_ils`` of
+    ``fs``. ``maxdepth`` of 1 lists only ``path``. ``topdown`` puts a folder
+    before those below it. ``descend``, called with the entry of each
+    subfolder found, lets the walk list it only if it returns True.
+    ``ils_kwargs`` go to each ``_ils``, as fsspec's ``walk`` passes its own on.
 
-    Returns
-    -------
-    Operation
-        Yielding ``(path, dirs, files)`` for each folder listed, or the error of
-        a folder that failed to list. Its state is a `WalkState`.
+    ``on_error`` says what becomes of the error of a folder that fails to
+    list:
 
-    Raises
-    ------
-    ValueError
-        If ``maxdepth`` is less than 1, or ``on_error`` is none of the above.
+    - None yields it, as every strategy does;
+    - "omit" leaves it out;
+    - "raise" raises it, ending the walk;
+    - a callable is called with it, and it is left out.
 
-    See Also
-    --------
-    _tree_find : The paths in a tree, from the same walk.
+    The operation yields ``(path, dirs, files)`` for each folder listed, or an
+    error, and its state is a `WalkState`. The call raises ValueError if
+    ``maxdepth`` is less than 1, or ``on_error`` is none of the above.
     """
     _check_maxdepth(maxdepth)
     if not (on_error in (None, "omit", "raise") or callable(on_error)):

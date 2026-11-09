@@ -55,32 +55,13 @@ def _tree_du(
     Requests: one ``_ils`` per folder, as the filesystem's ``operation_limit`` allows. One
     ``info`` for ``path``, if a file.
 
-    Parameters
-    ----------
-    fs : TreeFileSystem
-        The filesystem measured, by its ``_ils`` and ``_info``.
-    path : str
-        The folder to measure, as ``_ils`` takes it.
-    maxdepth : int, optional
-        The deepest level to measure: 1 counts only the files in ``path``. No
-        limit by default.
-    ils_kwargs : dict, optional
-        Passed to each ``_ils``, as fsspec's ``du`` passes its own on.
+    ``path`` is the folder measured on ``fs``, by its ``_ils`` and ``_info``.
+    ``maxdepth`` of 1 counts only the files in ``path``. ``ils_kwargs`` go to
+    each ``_ils``, as fsspec's ``du`` passes its own on.
 
-    Returns
-    -------
-    Operation
-        Yielding the ``_ils`` entry of each file counted, or the error of a
-        folder that failed to list. Its state is a `DuState`.
-
-    Raises
-    ------
-    ValueError
-        If ``maxdepth`` is less than 1.
-
-    See Also
-    --------
-    _tree_walk : The walk under it.
+    The operation yields the ``_ils`` entry of each file counted, or the error
+    of a folder that failed to list, and its state is a `DuState`. The call
+    raises ValueError if ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
 

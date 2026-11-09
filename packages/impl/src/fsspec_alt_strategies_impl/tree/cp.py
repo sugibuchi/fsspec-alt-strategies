@@ -124,43 +124,18 @@ def _tree_cp(
     ``dst_rm_file`` the destination's ``_info``, ``_makedirs`` and
     ``_rm_file``.
 
-    Parameters
-    ----------
-    src_fs : TreeFileSystem
-        The filesystem copied from.
-    dst_fs : AsyncFileSystem
-        The filesystem copied to: ``src_fs`` within one storage.
-    path1 : str or sequence of str
-        The folder or file to copy, a glob pattern, or a list of them, as
-        the source's ``_ils`` takes paths.
-    path2 : str
-        Where to copy it, as above.
-    cp_file : callable, optional
-        Copies a file to the destination, called as
-        ``cp_file(source, destination)``: the source's ``_cp_file`` by
-        default, which copies within one storage.
-    same_storage : bool, optional
-        Whether the destination is the source's storage: whether
-        ``dst_fs`` is ``src_fs`` by default.
-    maxdepth : int, optional
-        The deepest level to copy: 1 copies only the files in ``path1``. No
-        limit by default.
+    ``src_fs`` is the filesystem copied from, and ``dst_fs`` the one copied
+    to, ``src_fs`` again within one storage. ``path1`` is a folder, a file, a
+    glob pattern, or a list of them, as the source's ``_ils`` takes paths.
+    ``cp_file(source, destination)`` copies a file: the source's ``_cp_file``
+    by default, within one storage. ``same_storage`` is whether ``dst_fs`` is
+    ``src_fs``, unless given. ``maxdepth`` of 1 copies only the files in
+    ``path1``.
 
-    Returns
-    -------
-    Operation
-        Yielding ``(source, destination)`` for each file copied, or an error.
-        Its state is a `CpState`.
-
-    Raises
-    ------
-    ValueError
-        If ``maxdepth`` is less than 1, or ``cp_file`` is not given between two storages.
-
-    See Also
-    --------
-    _tree_walk : The walk under it.
-    _tree_mv : The same, deleting the source as it goes.
+    The operation yields ``(source, destination)`` for each file copied, or an
+    error, and its state is a `CpState`. The call raises ValueError if
+    ``maxdepth`` is less than 1, or ``cp_file`` is missing between two
+    storages. `_tree_mv` does the same, deleting the source as it goes.
     """
     _check_maxdepth(maxdepth)
     cp_file, same_storage = _transfer_of(

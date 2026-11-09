@@ -72,37 +72,16 @@ def _flat_walk(
     One ``_info`` for ``path``, if nothing is under it, holding a permit of
     the filesystem's ``operation_limit``. The listing holds none.
 
-    Parameters
-    ----------
-    fs : FlatFileSystem
-        The filesystem walked. Its ``_iexpand`` lists every key starting with a
-        prefix, in order of their names, each key once, as an object store
-        lists them.
-    path : str
-        The folder to start from, as ``_iexpand`` takes paths.
-    maxdepth : int, optional
-        The deepest level to walk: 1 yields only ``path``. No limit by default.
-    topdown : bool
-        Whether a folder comes before those below it, rather than after.
-    descend : callable, optional
-        Called with the entry of each subfolder found. It is walked only if
-        this returns True. All by default.
+    ``path`` is the folder the walk starts from on ``fs``. Its ``_iexpand``
+    lists every key starting with a prefix, in name order, each key once, as
+    an object store lists them. ``maxdepth`` of 1 yields only ``path``.
+    ``topdown`` puts a folder before those below it. ``descend``, called with
+    the entry of each subfolder found, lets the walk enter it only if it
+    returns True.
 
-    Returns
-    -------
-    Operation
-        Yielding ``(path, dirs, files)`` for each folder walked. Its state is a
-        `WalkState`.
-
-    Raises
-    ------
-    ValueError
-        If ``maxdepth`` is less than 1.
-
-    See Also
-    --------
-    _tree_walk : The same, for storages listing one folder per request.
-    _flat_find : The files under a prefix, as fsspec's ``_find`` finds them.
+    The operation yields ``(path, dirs, files)`` for each folder walked, and
+    its state is a `WalkState`. The call raises ValueError if ``maxdepth`` is
+    less than 1.
     """
     _check_maxdepth(maxdepth)
 

@@ -53,30 +53,13 @@ def _flat_du(
     One ``_info`` for ``path``, if nothing is under it, holding a permit of
     the filesystem's ``operation_limit``. The listing holds none.
 
-    Parameters
-    ----------
-    fs : FlatFileSystem
-        The filesystem measured. Its ``_iexpand`` lists every key starting
-        with a prefix, in order of their names, each key once.
-    path : str
-        The folder to measure, as ``_iexpand`` takes paths.
-    maxdepth : int, optional
-        The deepest level to measure: 1 counts only the files in ``path``. No
-        limit by default. The listing still lists every key under it.
+    ``path`` is the folder measured on ``fs``. Its ``_iexpand`` lists every
+    key starting with a prefix, in name order, each key once. ``maxdepth`` of
+    1 counts only the files in ``path``, though the listing still lists every
+    key under it.
 
-    Returns
-    -------
-    Operation
-        Yielding the entry of each file counted. Its state is a `DuState`.
-
-    Raises
-    ------
-    ValueError
-        If ``maxdepth`` is less than 1.
-
-    See Also
-    --------
-    _tree_du : The same, for storages listing one folder per request.
+    The operation yields the entry of each file counted, and its state is a
+    `DuState`. The call raises ValueError if ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
 

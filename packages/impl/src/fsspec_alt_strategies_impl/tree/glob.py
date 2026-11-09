@@ -81,35 +81,16 @@ def _tree_glob(
     and per literal root folder walked that a pattern matches, e.g. that of
     ``data/**``.
 
-    Parameters
-    ----------
-    fs : TreeFileSystem
-        The filesystem searched, by its ``_ils`` and ``_info``.
-    path : str or sequence of str
-        The pattern, or patterns, of paths as ``_ils`` takes them. A trailing
-        "/" matches only folders.
-    maxdepth : int, optional
-        How deep a ``**`` goes, as with fsspec's ``_glob``. No limit by default.
-    withdirs : bool
-        Whether folders can match, as with fsspec's ``_glob``.
-    ils_kwargs : dict, optional
-        Passed to each ``_ils``, as fsspec's ``glob`` passes its own on.
+    ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``_ils``
+    takes them: a trailing "/" matches only folders. ``maxdepth`` is how deep
+    a ``**`` goes, and ``withdirs`` whether folders can match, as with
+    fsspec's ``_glob``. ``ils_kwargs`` go to each ``_ils``, as fsspec's
+    ``glob`` passes its own on.
 
-    Returns
-    -------
-    Operation
-        Yielding the ``_ils`` entry of each path matched, or the error of a
-        folder that failed to list. Its state is a `GlobState`.
-
-    Raises
-    ------
-    ValueError
-        If ``maxdepth`` is less than 1, or a ``**`` is not a whole segment.
-
-    See Also
-    --------
-    _tree_find : Every path in a tree.
-    _tree_walk : The walk under it.
+    The operation yields the ``_ils`` entry of each path matched, or the error
+    of a folder that failed to list, and its state is a `GlobState`. The call
+    raises ValueError if ``maxdepth`` is less than 1, or a ``**`` is not a
+    whole segment.
     """
     _check_maxdepth(maxdepth)
     literals: list[str] = []

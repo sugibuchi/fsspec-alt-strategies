@@ -55,34 +55,14 @@ def _tree_find(
     ``info`` more for ``path`` itself, if a file, or a folder with
     ``withdirs``.
 
-    Parameters
-    ----------
-    fs : TreeFileSystem
-        The filesystem searched, by its ``_ils`` and ``_info``.
-    path : str
-        The folder to search, as ``_ils`` takes it.
-    maxdepth : int, optional
-        The deepest level to search: 1 finds only the files in ``path``. No
-        limit by default.
-    withdirs : bool
-        Whether to find folders too, ``path`` included.
-    ils_kwargs : dict, optional
-        Passed to each ``_ils``, as fsspec's ``find`` passes its own on.
+    ``path`` is the folder searched on ``fs``, by its ``_ils`` and ``_info``.
+    ``maxdepth`` of 1 finds only the files in ``path``. ``withdirs`` finds
+    folders too, ``path`` included. ``ils_kwargs`` go to each ``_ils``, as
+    fsspec's ``find`` passes its own on.
 
-    Returns
-    -------
-    Operation
-        Yielding the ``_ils`` entry of each path found, or the error of a folder
-        that failed to list. Its state is a `FindState`.
-
-    Raises
-    ------
-    ValueError
-        If ``maxdepth`` is less than 1.
-
-    See Also
-    --------
-    _tree_walk : The walk under it.
+    The operation yields the ``_ils`` entry of each path found, or the error
+    of a folder that failed to list, and its state is a `FindState`. The call
+    raises ValueError if ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
 

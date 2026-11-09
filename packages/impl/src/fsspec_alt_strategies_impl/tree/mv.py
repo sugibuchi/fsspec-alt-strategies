@@ -130,44 +130,20 @@ def _tree_mv(
     ``dst_info`` and ``dst_makedirs`` the destination's ``_info`` and
     ``_makedirs``.
 
-    Parameters
-    ----------
-    src_fs : TreeFileSystem
-        The filesystem moved from.
-    dst_fs : AsyncFileSystem
-        The filesystem moved to: ``src_fs`` within one storage.
-    path1 : str or sequence of str
-        The folder or file to move, a glob pattern, or a list of them, as
-        the source's ``_ils`` takes paths.
-    path2 : str
-        Where to move it, as above.
-    mv_file : callable, optional
-        Moves a file, called as ``mv_file(source, destination)``: the source's
-        ``_mv_file`` by default. fsspec's own copies, then deletes. A storage
-        renaming a path in one request overrides it so, and may move a folder
-        with it too, as the profile's ``renames_folders`` declares.
-    same_storage : bool, optional
-        Whether the destination is the source's storage: whether
-        ``dst_fs`` is ``src_fs`` by default.
-    maxdepth : int, optional
-        The deepest level to move: 1 moves only the files in ``path1``. No
-        limit by default.
+    ``src_fs`` is the filesystem moved from, and ``dst_fs`` the one moved to,
+    ``src_fs`` again within one storage. ``path1`` is a folder, a file, a glob
+    pattern, or a list of them, as the source's ``_ils`` takes paths.
+    ``mv_file(source, destination)`` moves a file: the source's ``_mv_file``
+    by default, within one storage. fsspec's own ``_mv_file`` copies, then
+    deletes. A storage renaming a path in one request overrides it so, and may
+    move a folder with it too, as the profile's ``renames_folders`` declares.
+    ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given.
+    ``maxdepth`` of 1 moves only the files in ``path1``.
 
-    Returns
-    -------
-    Operation
-        Yielding ``(source, destination)`` for each file and folder moved, or
-        an error. Its state is an `MvState`.
-
-    Raises
-    ------
-    ValueError
-        If ``maxdepth`` is less than 1, or ``mv_file`` is not given between two storages.
-
-    See Also
-    --------
-    _tree_cp : The same, keeping the source.
-    _tree_rm : The deletion it does as it goes.
+    The operation yields ``(source, destination)`` for each file and folder
+    moved, or an error, and its state is an `MvState`. The call raises
+    ValueError if ``maxdepth`` is less than 1, or ``mv_file`` is missing
+    between two storages. `_tree_cp` does the same, keeping the source.
     """
     _check_maxdepth(maxdepth)
     mv_file, same_storage = _transfer_of(

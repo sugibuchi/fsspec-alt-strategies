@@ -70,34 +70,15 @@ def _flat_glob(
     One ``_info`` per pattern without wildcards, each holding a permit of the
     filesystem's ``operation_limit``. The listings hold none.
 
-    Parameters
-    ----------
-    fs : FlatFileSystem
-        The filesystem searched. Its ``_iexpand`` lists every key starting
-        with a prefix, in order of their names, each key once.
-    path : str or sequence of str
-        The pattern, or patterns, of paths as ``_iexpand`` takes them. A
-        trailing "/" matches only folders.
-    maxdepth : int, optional
-        How deep a ``**`` goes, as with fsspec's ``_glob``. No limit by
-        default. The listing still lists every key under the prefix.
-    withdirs : bool
-        Whether folders can match, as with fsspec's ``_glob``.
+    ``path`` is a pattern, or patterns, of paths on ``fs``, as its
+    ``_iexpand`` takes them: a trailing "/" matches only folders. ``maxdepth``
+    is how deep a ``**`` goes, and ``withdirs`` whether folders can match, as
+    with fsspec's ``_glob``. The listing still lists every key under the
+    prefix.
 
-    Returns
-    -------
-    Operation
-        Yielding the entry of each path matched. Its state is a
-        `GlobState`.
-
-    Raises
-    ------
-    ValueError
-        If ``maxdepth`` is less than 1, or a ``**`` is not a whole segment.
-
-    See Also
-    --------
-    _tree_glob : The same, for storages listing one folder per request.
+    The operation yields the entry of each path matched, and its state is a
+    `GlobState`. The call raises ValueError if ``maxdepth`` is less than 1,
+    or a ``**`` is not a whole segment.
     """
     _check_maxdepth(maxdepth)
 

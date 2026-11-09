@@ -15,10 +15,9 @@ storage's namespace:
 - the `flat` family, in `flat/`, for storages with a flat namespace, keys whose folders are only prefixes, such as
   S3.
 
-Each family has the same strategies, named after it, e.g. `tree_rm` and `flat_rm`. They come in three forms:
+Each family replaces fsspec's recursive methods, such as `find`, `rm` and `copy`, with its strategies. They come in
+two forms:
 
-- **Functions**, such as `tree_rm` or `flat_find`, for built-in, specific strategies: you call one with the storage's
-  operations it uses.
 - **Abstract filesystem classes**, `TreeFileSystem` and `FlatFileSystem`, for a new filesystem implementation: you
   implement the storage's primitives, and the recursive methods are the strategies.
 - **Wrappers**, in `wrapper.py`, for existing filesystem implementations: they give a filesystem the strategies
@@ -71,13 +70,13 @@ Its command line copies it, with its `cli` extra. Run it from your project, with
 uv run --with "fsspec-alt-strategies-impl[cli]" fsspec-alt-strategies-impl copy src/mypkg/_contrib/strategy
 ```
 
-It copies the package as installed. It replaces a previous copy, and refuses any other folder that is not empty. Delete the modules you do not use afterwards.
+It copies the package as installed. It replaces a previous copy, and refuses any other folder that is not empty.
+Delete the modules you do not use afterwards.
 
 ### The modules to copy for each feature
 
 | Feature                         | Modules to copy                                                            |
 |---------------------------------|----------------------------------------------------------------------------|
-| A family's functions            | `tree/` or `flat/`, and `common/`                                          |
 | A family's abstract class       | `tree/` or `flat/`, and `common/`; `files/` for its file objects, if used  |
 | Wrappers and `monitored()`      | `wrapper.py`, `monitor.py`, `__init__.py`, `tree/`, `flat/`, `common/` and `files/` |
 | Monitor                         | Nothing: it is in the interface package                                    |
@@ -90,22 +89,6 @@ wrappers.
 ## Usage
 
 ### File tree operation strategies
-
-#### Functions
-
-A strategy is a plain function, taking the storage's operations it uses:
-
-```python
-import asyncio
-from fsspec_alt_strategies_impl.tree.find import tree_find
-
-find = tree_find("data", ils=fs._ils, info=fs._info, concurrency_limit=asyncio.Semaphore(32))
-async with find as op:
-    async for entry in op:
-        if isinstance(entry, Exception):
-            print("failed:", entry)
-print(op.state.found)
-```
 
 #### Abstract filesystem classes
 
@@ -129,6 +112,9 @@ class MyFileSystem(TreeFileSystem):
 fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
 ```
 
+The profile may also be a property, e.g. of the account the filesystem connects to. A method of fsspec's own can
+come back, e.g. `_rm = AsyncFileSystem._rm`, and a storage's native operation can override a method.
+
 #### Wrappers
 
 `monitored()` wraps a filesystem it knows as the family that suits it:
@@ -138,7 +124,7 @@ import fsspec
 from fsspec_alt_strategies_impl import monitored
 
 fs = monitored(fsspec.filesystem("file"))
-fs.rm("data/2024", recursive=True)  # Runs tree_rm.
+fs.rm("data/2024", recursive=True)  # Deletes by the tree family's strategy.
 ```
 
 The known filesystems are those in `known_implementations`, by class: the local filesystem, s3fs, gcsfs, adlfs,
@@ -185,7 +171,8 @@ print(fs.stats.calls)  # Counter({'delete': 1})
 
 ### Monitor
 
-A `Monitor` sees each operation behind fsspec's methods, on a filesystem running the strategies:
+A `Monitor` sees each operation behind fsspec's methods, on a filesystem running the strategies. It is given the
+operation's `OperationHandler`, to stop it:
 
 ```python
 from fsspec_alt_strategies import Monitor, monitoring

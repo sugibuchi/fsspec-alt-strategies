@@ -13,12 +13,12 @@ ruff, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
 | `.../states.py`                                         | The states the strategies report, e.g. `FindState`                         |
 | `.../wrapper.py`                                        | `known_implementations`: how each known filesystem class is wrapped        |
 | `packages/impl/src/fsspec_alt_strategies_impl/`         | The strategies, copied into projects                                       |
-| `.../tree/`, `.../flat/`                                | The two families: walk, find, du, glob, rm, cp, mv, and the abstract class |
-| `.../common/`                                           | Private machinery the families share                                       |
+| `.../tree/`, `.../flat/`                                | The two families: each one's abstract class and strategies                 |
+| `.../common/`                                           | What the families share: the base class, the jobs, operations and paths    |
 | `.../files/`                                            | File objects, their async adapters, and transactions                       |
 | `.../wrapper.py`, `.../monitor.py`                      | Wrappers of existing filesystems, and `monitored()`                        |
 | `.../router.py`                                         | `AsyncRoutingFileSystem`, spanning several storages                        |
-| `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem`, apart so that copies leave it out                   |
+| `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem` and its views, apart so that copies leave them out   |
 | `packages/impl/src/fsspec_alt_strategies_impl_cli/`     | The command line copying the strategies, with the `cli` extra              |
 | `packages/*/tests/`                                     | Each package's tests                                                       |
 | `packages/*/hatch_build.py`                             | Gives each package the root README.md as its PyPI readme                   |
@@ -43,6 +43,9 @@ CI runs ruff and pytest on every supported Python version. When writing tests:
 
 - Run strategies on `SimulatedFileSystem`, with the fixtures `flat_fs`, `hierarchical_fs`, or `any_fs` for both.
   `add_file` and `add_dir` set up files without requests.
+- Start a strategy on a `TreeView` or a `FlatView` of the simulator, e.g. `_tree_rm(TreeView(fs), "data")`. A view
+  gives the strategy the primitives it calls, and lets a test replace one, e.g. with one that fails. It also sets the
+  storage's `storage_profile` and `operation_limit`.
 - Assert the requests made, e.g. `fs.stats.calls == {"list": 1, "delete": 3}`: they are what a strategy is for.
 - Test a strategy replacing an fsspec method against fsspec's own, e.g. `AsyncFileSystem._glob(fs, ...)`.
 - `parents_required` and `overwrite` make the simulator fail as some storages do, to test profiles.
@@ -52,21 +55,20 @@ CI runs ruff and pytest on every supported Python version. When writing tests:
 
 The choices below shape the whole project. Keep to them, or change them on purpose.
 
-### Proposed: class first
+### Principles
 
-This section is a proposal under review. Once accepted and ported, it replaces "Principles" and "The strategy API"
-below.
+- **A third party.** The library offers alternatives to fsspec's algorithms, and never patches fsspec.
+- **Classes are the API.** The strategies are the recursive methods of two abstract filesystem classes, one per family.
+  A developer gets them by subclassing a class, or by wrapping an existing filesystem.
+- **Primitives only.** A strategy calls only a storage's primitives, such as `_ils`, `_info` and `_rm_file`, never
+  another strategy's method. So choosing one strategy never changes another.
+- **Developers choose.** The library never picks a strategy. Each docstring says what it assumes of the storage, and
+  when it wins or loses.
+- **Async first.** Strategies are async. Sync filesystems get them through the sync wrappers.
+- **Observable and cancellable.** A `Monitor` sees each step of an operation, and can stop it through the operation's
+  `OperationHandler`.
 
-The strategies are functions today, so that they could apply to any filesystem's methods. Two things now do that
-better:
-
-- the wrappers apply a family to an existing filesystem, by passing its primitives through;
-- a router holds the filesystems of both storages, so a copy between them can call each directly.
-
-So the abstract classes become the API, and the strategies become their methods. Passing operations as functions,
-e.g. `ils=fs._ils`, goes away.
-
-#### The classes
+### The classes
 
 ```text
 AsyncFileSystem                    fsspec's
@@ -82,121 +84,63 @@ AsyncRoutingFileSystem             router.py, holding filesystems of the above
 
 `_BaseFileSystem` holds what both families share:
 
-- the abstract primitives both need: `_info`, `_rm_file`, `_cp_file`, `_makedirs`, `open_async` and `_open`;
-- `_mv_file`, fsspec's copy and delete unless a subclass overrides it with the storage's rename;
-- `storage_profile`, a property a subclass may compute per instance, e.g. from the account it connects to;
-- the two limits, `operation_limit` and `io_limit`;
-- the running of operations: `Operation`, the monitors, and the job engine of `common/jobs.py`;
-- the data methods through `open_async`, the error grouping, and the sync methods fsspec does not make.
+- the two limits: `operation_limit` for the strategies' requests, `io_limit` for reads and writes of data;
+- `storage_profile`, required, a class field or a property computed per instance;
+- the data methods, `_cat_file`, `_pipe_file`, `_get_file` and `_put_file`, through `open_async`'s files;
+- the sync methods fsspec does not make, `mv` and `rmdir`.
 
-Each family adds its listing primitive, and its versions of fsspec's recursive methods:
+Each family declares the primitives its subclasses implement, and overrides fsspec's recursive methods:
 
-| Class            | Adds the primitives          | Overrides                                                |
-|------------------|------------------------------|----------------------------------------------------------|
-| `TreeFileSystem` | `_ils`, `_rmdir`, `_rm_tree` | `_walk`, `_find`, `_du`, `_glob`, `_rm`, `_copy`, `_mv` |
-| `FlatFileSystem` | `_iexpand`, `_rm_files`      | The same                                                 |
+| Class            | Its own primitives                        | Overrides                                                 |
+|------------------|-------------------------------------------|-----------------------------------------------------------|
+| `TreeFileSystem` | `_ils`, `_rmdir`, and `_rm_tree` optional | `_walk`, `_find`, `_du`, `_glob`, `_rm`, `_copy`, `_mv`   |
+| `FlatFileSystem` | `_iexpand`, `_rm_files`, `rm_batch_size`  | The same                                                  |
 
-`_rm_tree` stays optional. A wrapper is a family's class whose primitives are the wrapped filesystem's, as now.
+Both also take `_info`, `_rm_file`, `_cp_file`, `_makedirs`, `open_async` and `_open`. `_mv_file` is fsspec's copy and
+delete, unless a subclass overrides it with the storage's rename.
 
-#### Operations
+A method raises its strategy's failures: one as it is, several in an ExceptionGroup. `_walk` is the family's walk.
+The other methods stream each folder in parts, and only `_walk` holds a folder whole, as fsspec's `walk` answers a
+folder at a time.
 
-Each recursive method runs an operation object, made for the call:
+### Choosing
 
-- It is a private class of its family's module, e.g. `tree/rm.py`'s `_TreeRm`.
-- It takes the filesystems it works on, not their methods: `_TreeRm(fs, path, ...)`.
-- A copy or a move takes two: `_TreeCopy(source, destination, ...)`. Within one storage, both are the same.
-- It computes where each path goes in its own methods, as fsspec's `copy` does. `_Placement` went away, into `common.jobs._CopyJobs`.
-- Its outcomes still stream through `Operation`, which the monitors see, and which `cancel()` and `aclose()` stop.
+A developer chooses, per method:
 
-Private helpers stay functions where several operations share them: `tree.walk._chunks`, `tree.find._find_listings`,
-`common.jobs._Queue`, the patterns of `common/patterns.py`, and the paths of `common/paths.py`.
-
-#### Choosing
-
-A developer still chooses, per method:
-
-- a family, by subclassing its class or wrapping with it;
+- a family, by subclassing its class or wrapping a filesystem with it;
 - fsspec's own algorithm instead, by putting it back, e.g. `_rm = AsyncFileSystem._rm`;
-- a storage's native operation, by overriding the method.
+- a storage's native operation, by overriding the method, or `_rm_tree` for a recursive delete.
 
-The library still never chooses for them.
+`monitored(fs)` picks the wrapper of a filesystem from `known_implementations`, a table the developer may replace.
 
-#### The router
+### Operations
 
-A copy or move between two storages is the router's method. It takes the two inner filesystems from `_route`, and
-runs the source family's copy operation on them. The per-file hooks, `_cross_fs_cp_file` and `_cross_fs_mv_file`,
-stay the router's.
+Each recursive method starts a private strategy of its family, e.g. `tree/rm.py`'s `_tree_rm`:
 
-#### What changes for callers
-
-- The strategy functions, e.g. `tree_rm`, leave the public API. The classes and wrappers are the API.
-- `Operation` stays private: no method returns one. A caller watches and stops an operation through an
-  `OperationHandler`, such as a `Monitor`.
-- `_walk` is the family's walk, listing with `_ils` or `_iexpand`, as `tree_walk` and `flat_walk` do now.
-- The other recursive methods, e.g. `_glob`, `_copy` and `_mv`, keep streaming each folder in parts. Only `_walk`
-  holds a folder whole, as fsspec's `walk` answers a folder at a time.
-- This breaks 0.1.0's API: it is released as 0.2.0.
-
-The operation classes of both families share a base in `common/`. It holds what a copy or move does whatever the
-family, such as placing each path as fsspec's `copy` does.
-
-#### Porting
-
-1. Port the tree family, keeping its tests, which assert the requests made through `SimulatedFileSystem`.
-2. Port the flat family the same way.
-3. Port the router's copy and move between storages.
-4. Rewrite the docs and CLAUDE.md's rules on strategies, then remove this section.
-
-### Principles
-
-- **A third party.** The library offers alternatives to fsspec's algorithms, and never patches fsspec.
-- **Strategies are functions.** Each is stateless, and takes the storage's operations as functions, e.g. `ils=fs._ils`.
-  It works with any filesystem, without subclassing. File objects and `Operation` are the only classes with state.
-- **Developers choose.** The library never picks a strategy. Each docstring says what it assumes of the storage, and
-  when it wins or loses.
-- **Primitives only.** A strategy takes primitive operations, such as `ils`, `info` and `rm_file`, never another
-  strategy's method. So choosing one strategy never changes another.
-- **Async first.** Strategies are async. Sync filesystems get them through the sync wrappers.
-- **Observable and cancellable.** Long operations are iterated, so the caller sees each step and can stop it.
-
-### The strategy API
-
-Every strategy has the same shape, so that it is learnt once:
-
-```python
-rm = tree_rm(
-    "data/2024",
-    ils=fs._ils,
-    info=fs._info,
-    rm_file=fs._rm_file,
-    rm_folder=fs._rmdir,
-    profile=fs.storage_profile,
-    concurrency_limit=asyncio.Semaphore(32),
-)
-async with rm as op:
-    async for path in op:
-        if isinstance(path, Exception):
-            print("failed:", path)
-print(op.state.files_deleted)
-```
-
-- Paths come first, without a protocol. The operations and options are keyword-only.
-- The operations are required: a strategy guesses nothing. Only a native operation saving requests is optional, e.g.
-  `tree_rm`'s `rm_tree`.
-- A listing is an async iterator of entries: `ils(path)` for one folder in `tree/`, `iexpand(prefix)` for every key
-  under a prefix in `flat/`.
-- `concurrency_limit` is an `asyncio.Semaphore`, required. Sharing one limits several operations together.
+- It takes the filesystem it works on: `_tree_rm(fs, path, maxdepth=...)`. A copy or move takes two, `src_fs` and
+  `dst_fs`, which are the same within one storage.
+- It reads what it needs from the filesystem: the primitives, `operation_limit` and `storage_profile`.
+- It takes no function but one: a copy's or a move's `cp_file` or `mv_file`, a `_Transfer`. The router passes its
+  copy of a file between two storages so.
+- Paths come without a protocol.
 - Argument errors are raised by the call. Errors ending the whole operation, such as a missing root, are raised by
   the iteration.
 
-The `Operation` returned works as it is iterated, a few requests ahead of the caller:
+It returns an `Operation`, private, which works as it is iterated, a few requests ahead of the caller:
 
 - It yields what it did, mixed with an exception per failed path. Each exception notes its path.
-- Its `state` is a frozen dataclass of counts so far.
+- Its `state` is a frozen dataclass of counts so far, from `fsspec_alt_strategies.states`.
 - Its stopping follows `asyncio.Task`. `cancel()` starts nothing new, but yields what is in flight. `aclose()`, or
   leaving the loop, stops at once, waiting only for writes in flight.
 - It never swallows `CancelledError`.
 - It yields in the order the storage answers. A caller wanting fsspec's order sorts.
+
+The class runs it through `common/operation.py`, which tells the monitors:
+
+- A `Monitor` overrides `started`, `yielded` and `ended`, awaited where the operation runs.
+- `with monitoring(monitor):` watches every call within the block, sync calls included.
+- A monitor stops a call with `op.cancel()`. The call then raises `CallCancelled`.
+- fsspec's `callback=` is updated per path, as fsspec's own methods do.
 
 A strategy replacing an fsspec method answers as it does. Where it departs on purpose, its docstring says why:
 
@@ -207,24 +151,20 @@ A strategy replacing an fsspec method answers as it does. Where it departs on pu
 - With `maxdepth`, a move keeps the files deeper than the limit, and the folders holding them. fsspec's deletes the
   whole source.
 
-### Filesystem classes, wrappers and monitors
+### Jobs
 
-A strategy is attached in one of three ways:
+The strategies changing a storage run on `common/jobs.py`:
 
-- **By hand:** override fsspec's method, e.g. `_rm`, to call the strategy. fsspec builds the sync method from it.
-- **By subclassing** `TreeFileSystem` or `FlatFileSystem`. The subclass implements the primitives, such as `_ils`,
-  `_info`, `_rm_file` and `open_async`, which are abstract. It takes two limits: `operation_concurrency` for the
-  strategies, `io_concurrency` for data.
-- **By wrapping** an existing filesystem with a tree or flat wrapper, async or sync. `monitored(fs)` picks the wrapper
-  from `known_implementations`.
+- `_Jobs` finds what to change and does it at once, e.g. deleting each file as its folder is listed. Each request
+  holds a permit of the filesystem's `operation_limit`, through a `_Queue`.
+- `_TreeJobs` and `_FlatJobs` say where the items come from, in each family's `_jobs.py`.
+- `_CopyJobs` places each path of a copy or move, as fsspec's `copy` does, whatever the family.
 
-The classes raise a strategy's failures: one as it is, several in an ExceptionGroup. They run each operation through
-`common/operation.py`, which tells the monitors:
+A family's copy joins the two, e.g. `_CopyOrMove(_CopyJobs, _TreeJobs)`. Their constructors take keywords only, and
+pass on what they do not take, so either order works.
 
-- A `Monitor` overrides `started`, `yielded` and `ended`, awaited where the operation runs.
-- `with monitoring(monitor):` watches every call within the block, sync calls included.
-- A monitor stops a call with `op.cancel()`. The call then raises `CallCancelled`.
-- fsspec's `callback=` is updated per path, as fsspec's own methods do.
+A strategy's jobs say what an item queues, how a job runs, and what its outcome is. `_Jobs.operation(...)` makes the
+jobs and their `Operation` at once.
 
 ### Routers
 
@@ -236,9 +176,11 @@ implements three methods:
 - `_roots(path)` lists a folder above the storages.
 
 Within one storage, a call is that storage's own. Between two, a recursive copy or move runs the source family's
-strategy, chosen by the profile's `fs_type`. Without one, or with `maxdepth`, it is fsspec's copy, a file at a time.
-Each file goes through `_cross_fs_cp_file` or `_cross_fs_mv_file`. By
-default these stream the data through both storages' `open_async`; a subclass can use a server-side copy instead.
+strategy on the two inner filesystems, chosen by the source profile's `fs_type`. Without one, or with `maxdepth`, it
+is fsspec's copy, a file at a time.
+
+Each file goes through `_cross_fs_cp_file` or `_cross_fs_mv_file`. By default these stream the data through both
+storages' `open_async`. A subclass can use a server-side copy instead.
 
 The router imports a family only when copying from it. Its inner filesystems must be async, and `close()` closes them.
 Its transaction commits file by file, so it is not atomic across storages.
@@ -246,45 +188,48 @@ Its transaction commits file by file, so it is not atomic across storages.
 ### The tree strategies
 
 The tree strategies walk with a private engine, `tree.walk._chunks`. It lists many folders at once, and streams each
-folder in parts of at most 1000 entries. A huge folder is never held whole, except by `tree_walk`, which answers as
+folder in parts of at most 1000 entries. A huge folder is never held whole, except by `_tree_walk`, which answers as
 fsspec's `walk` does.
 
 They come in two layers:
 
-| Strategies                          | They send                         | They build on    |
-|-------------------------------------|-----------------------------------|------------------|
-| `tree_find`, `tree_du`, `tree_glob` | Listings, and one `info` at most  | `_find_listings` |
-| `tree_rm`, `tree_cp`, `tree_mv`     | Changes, as the listings come     | `_TreeJobs`      |
+| Strategies                             | They send                         | They build on    |
+|----------------------------------------|-----------------------------------|------------------|
+| `_tree_find`, `_tree_du`, `_tree_glob` | Listings, and one `_info` at most | `_find_listings` |
+| `_tree_rm`, `_tree_cp`, `_tree_mv`     | Changes, as the listings come     | `_TreeJobs`      |
 
-- The changes run on `common.jobs._Jobs`, along with the walk still in flight.
-- A copy or move builds on `common.jobs._CopyJobs`, which places its paths as fsspec's `copy` does.
-- A copy or move within one storage is a special case of one between two: `_tree_cp` takes one filesystem twice.
-- Patterns are expanded with `_tree_glob` first, as copies place paths from the common prefix of all matches.
+- The changes run along with the walk still in flight.
+- Patterns are expanded by the family's glob first, as copies place paths from the common prefix of all matches.
 
 ### The flat strategies
 
-The flat strategies list with `iexpand(prefix)`: every key under a prefix, at any depth, in name order, as object
+The flat strategies list with `_iexpand(prefix)`: every key under a prefix, at any depth, in name order, as object
 stores list them.
 
-- The prefix is raw text, so `flat_glob` lists only keys starting as its pattern does.
-- Name order tells when a folder is done, so `flat_walk` streams its folders. Each key is listed once.
-- Folders are derived from the keys. A key ending with "/" marks a folder.
-- `flat_rm` deletes in batches, with `rm_files`. `flat_mv` moves by `mv_file`, or copies and deletes in batches.
+- The prefix is raw text, so `_flat_glob` lists only keys starting as its pattern does.
+- Name order tells when a folder is done, so `_flat_walk` streams its folders. Each key is listed once.
+- Folders are derived from the keys, by `flat/_keys.py`. A key ending with "/" marks a folder.
+- `_flat_rm` deletes in batches of `rm_batch_size`, with `_rm_files`.
+- `_flat_mv` renames with `_mv_file` when the profile says the storage renames. Otherwise it copies, then deletes in
+  batches.
 - A listing error ends the operation: there is no other listing to go on with.
 
 ### Storage profiles
 
-A `StorageProfile` declares what a storage does that fsspec leaves open. A strategy is right on any storage, and a
-profile only saves requests:
+A `StorageProfile` declares what a storage does that fsspec leaves open. A strategy reads it from the filesystem's
+`storage_profile`, and one without counts as `StorageProfile()`. A strategy is right on any storage, and a profile only
+saves requests:
 
-| Field              | Saves                                                         |
-|--------------------|---------------------------------------------------------------|
-| `fs_type`          | The router's per-file fallback, by naming the family          |
-| `parents_required` | False: the `makedirs` of each destination folder              |
-| `implicit_folders` | True: those, and the deletion of each folder                  |
-| `renames_files`    | True: the data copied by `flat_mv`                            |
-| `renames_folders`  | True: every request in a folder moved whole by one `mv_file`  |
+| Field              | Saves                                                          |
+|--------------------|----------------------------------------------------------------|
+| `fs_type`          | The router's per-file fallback, by naming the family           |
+| `parents_required` | False: the `_makedirs` of each destination folder              |
+| `implicit_folders` | True: those, and the deletion of each folder                   |
+| `renames_files`    | True: the data copied by `_flat_mv`                            |
+| `renames_folders`  | True: every request in a folder moved whole by one `_mv_file`  |
 
+- A deletion reads the profile of the filesystem it deletes from.
+- A copy or move reads the destination's. `renames_files` and `renames_folders` count only within one storage.
 - A field left None is unknown, and the strategy takes the way right on any storage.
 - A wrong field gives wrong results. The library never detects a storage's behaviour: the developer declares it.
 - A field is added only when a strategy saves requests or data with it.

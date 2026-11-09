@@ -73,34 +73,19 @@ def _flat_rm(
     Each request but the listing holds a permit of the filesystem's
     ``operation_limit`` while it runs.
 
-    Parameters
-    ----------
-    fs : FlatFileSystem
-        The filesystem to delete from. Its ``_rm_files`` deletes several keys
-        in one request, e.g. by S3's DeleteObjects: a key missing is no error,
-        and it raises if any is not deleted, as the whole batch then fails.
-        Its ``rm_batch_size`` is the most keys of one ``_rm_files``.
-    path : str or sequence of str
-        The folder to delete, as ``_iexpand`` takes paths. If it is a file,
-        that file is deleted. If it is a glob pattern, or a list of paths and
-        patterns, all they match is deleted.
-    maxdepth : int, optional
-        The deepest level to delete: 1 deletes only the keys right in
-        ``path``. No limit by default.
+    ``path`` is the folder deleted from ``fs``, as its ``_iexpand`` takes
+    paths. A file is deleted alone. A glob pattern, or a list of paths and
+    patterns, deletes all they match. ``maxdepth`` of 1 deletes only the keys
+    right in ``path``.
 
-    Returns
-    -------
-    Operation
-        Yielding each key deleted, or an error. Its state is an `RmState`.
+    The filesystem's ``_rm_files`` deletes several keys in one request, e.g.
+    by S3's DeleteObjects. A key missing is no error, and it raises if any key
+    is not deleted, as the whole batch then fails. ``rm_batch_size`` is the
+    most keys of one ``_rm_files``.
 
-    Raises
-    ------
-    ValueError
-        If the filesystem's ``rm_batch_size``, or ``maxdepth``, is less than 1.
-
-    See Also
-    --------
-    _tree_rm : The same, for storages listing one folder per request.
+    The operation yields each key deleted, or an error, and its state is an
+    `RmState`. The call raises ValueError if ``rm_batch_size`` or ``maxdepth``
+    is less than 1.
     """
     _check_batch_size(fs.rm_batch_size)
     _check_maxdepth(maxdepth)

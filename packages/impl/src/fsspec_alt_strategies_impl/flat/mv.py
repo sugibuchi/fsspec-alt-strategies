@@ -97,43 +97,19 @@ def _flat_mv(
     Requests: as `_flat_cp`, with one ``_mv_file`` per key instead of its
     ``cp_file``, or with one ``_rm_files`` more per batch.
 
-    Parameters
-    ----------
-    src_fs : FlatFileSystem
-        The filesystem moved from.
-    dst_fs : AsyncFileSystem
-        The filesystem moved to: ``src_fs`` within one storage.
-    path1 : str or sequence of str
-        The folder or file to move, a glob pattern, or a list of them, as
-        the source's ``_iexpand`` takes paths.
-    path2 : str
-        Where to move it, as with `_flat_cp`.
-    cp_file : callable, optional
-        Copies a file to the destination, when moving by copies, called as
-        ``cp_file(source, destination)``: the source's ``_cp_file`` by
-        default, which copies within one storage.
-    same_storage : bool, optional
-        Whether the destination is the source's storage: whether
-        ``dst_fs`` is ``src_fs`` by default.
-    maxdepth : int, optional
-        The deepest level to move: 1 moves only the keys right in ``path1``.
-        No limit by default.
+    ``src_fs`` is the filesystem moved from, and ``dst_fs`` the one moved to,
+    ``src_fs`` again within one storage. ``path1`` is a folder, a file, a glob
+    pattern, or a list of them, as the source's ``_iexpand`` takes paths.
+    ``path2`` places them as `_flat_cp` does. ``cp_file(source,
+    destination)`` copies a file when the move copies: the source's
+    ``_cp_file`` by default, within one storage. ``same_storage`` is whether
+    ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 moves only the
+    keys right in ``path1``.
 
-    Returns
-    -------
-    Operation
-        Yielding ``(source, destination)`` for each key moved, or an error. Its
-        state is an `MvState`.
-
-    Raises
-    ------
-    ValueError
-        If the source's ``rm_batch_size``, or ``maxdepth``, is less than 1, or ``cp_file`` is not given between two storages.
-
-    See Also
-    --------
-    _flat_cp : The same, keeping the sources.
-    _tree_mv : The same, for storages listing one folder per request.
+    The operation yields ``(source, destination)`` for each key moved, or an
+    error, and its state is an `MvState`. The call raises ValueError if the
+    source's ``rm_batch_size`` or ``maxdepth`` is less than 1, or ``cp_file``
+    is missing between two storages.
     """
     _check_maxdepth(maxdepth)
     if same_storage is None:
