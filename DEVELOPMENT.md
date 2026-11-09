@@ -132,7 +132,9 @@ stay the router's.
 - The strategy functions, e.g. `tree_rm`, leave the public API. The classes and wrappers are the API.
 - `Operation` stays private: no method returns one. A caller watches and stops an operation through an
   `OperationHandler`, such as a `Monitor`.
-- `_walk` is the family's walk, listing with `_ils` or `_iexpand`: no other method streams a huge folder.
+- `_walk` is the family's walk, listing with `_ils` or `_iexpand`, as `tree_walk` and `flat_walk` do now.
+- The other recursive methods, e.g. `_glob`, `_copy` and `_mv`, keep streaming each folder in parts. Only `_walk`
+  holds a folder whole, as fsspec's `walk` answers a folder at a time.
 - This breaks 0.1.0's API: it is released as 0.2.0.
 
 The operation classes of both families share a base in `common/`. It holds what a copy or move does whatever the
