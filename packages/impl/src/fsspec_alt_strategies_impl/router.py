@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 
     from fsspec.callbacks import Callback
 
-    from .common.copying import _Transfer
+    from .common.jobs import _Transfer
     from .common.operation import Operation
 
 __all__ = ["AsyncRoutingFileSystem"]

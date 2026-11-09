@@ -31,7 +31,7 @@ from .cp import _CopyOrMove
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
 
-    from ..common.copying import _Transfer
+    from ..common.jobs import _Transfer
     from .walk import _Listing
 
 __all__: list[str] = []

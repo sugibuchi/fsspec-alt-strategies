@@ -105,7 +105,7 @@ Each recursive method runs an operation object, made for the call:
 - It is a private class of its family's module, e.g. `tree/rm.py`'s `_TreeRm`.
 - It takes the filesystems it works on, not their methods: `_TreeRm(fs, path, ...)`.
 - A copy or a move takes two: `_TreeCopy(source, destination, ...)`. Within one storage, both are the same.
-- It computes where each path goes in its own methods, as fsspec's `copy` does. `_Placement` went away, into `common.copying._Copying`.
+- It computes where each path goes in its own methods, as fsspec's `copy` does. `_Placement` went away, into `common.jobs._CopyJobs`.
 - Its outcomes still stream through `Operation`, which the monitors see, and which `cancel()` and `aclose()` stop.
 
 Private helpers stay functions where several operations share them: `tree.walk._chunks`, `tree.find._find_listings`,
@@ -257,7 +257,7 @@ They come in two layers:
 | `tree_rm`, `tree_cp`, `tree_mv`     | Changes, as the listings come     | `_TreeJobs`      |
 
 - The changes run on `common.jobs._Jobs`, along with the walk still in flight.
-- A copy or move builds on `common.copying._Copying`, which places its paths as fsspec's `copy` does.
+- A copy or move builds on `common.jobs._CopyJobs`, which places its paths as fsspec's `copy` does.
 - A copy or move within one storage is a special case of one between two: `_tree_cp` takes one filesystem twice.
 - Patterns are expanded with `_tree_glob` first, as copies place paths from the common prefix of all matches.
 

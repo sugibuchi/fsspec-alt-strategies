@@ -18,8 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import CpState
 
-from ..common.copying import _Copying
-from ..common.jobs import _Job
+from ..common.jobs import _CopyJobs, _Job
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
 from ._jobs import _FlatJobs
@@ -27,7 +26,7 @@ from ._jobs import _FlatJobs
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
-    from ..common.copying import _Transfer
+    from ..common.jobs import _Transfer
 
 __all__: list[str] = []
 
@@ -173,7 +172,7 @@ def _flat_cp(
     )
 
 
-class _CopyOrMove(_Copying, _FlatJobs):
+class _CopyOrMove(_CopyJobs, _FlatJobs):
     """The jobs of a copy or a move: a folder made where needed, and one per key.
 
     The keys listed are the source's, ``fs``. A key's job waits for its
