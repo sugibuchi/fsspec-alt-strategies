@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.states import FindState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.find import FindState, _flat_find
+from fsspec_alt_strategies_impl.flat.find import _flat_find
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 if TYPE_CHECKING:

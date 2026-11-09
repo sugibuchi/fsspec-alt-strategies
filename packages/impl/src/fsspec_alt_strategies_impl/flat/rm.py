@@ -7,7 +7,7 @@ fsspec's, and the object stores' own, list every key first, then delete them,
 in batches where the storage can. `_flat_rm` sends each batch as soon as the
 listing has given its keys.
 
-This module depends on `_jobs`, and `jobs`, `operation` and `paths` of `common`.
+This module depends on `_jobs`, and `jobs` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -18,12 +18,13 @@ from typing import TYPE_CHECKING, Any
 from fsspec_alt_strategies.states import RmState
 
 from ..common.jobs import _Job, _Roots
-from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ._jobs import _check_batch_size, _FlatJobs, _keys_of
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
+
+    from ..common.operation import Operation
 
 __all__: list[str] = []
 
@@ -104,10 +105,7 @@ def _flat_rm(
     _check_batch_size(fs.rm_batch_size)
     _check_maxdepth(maxdepth)
 
-    return Operation(
-        lambda op: _Deletion(fs=fs, path=path, maxdepth=maxdepth, op=op).outcomes(),
-        RmState(),
-    )
+    return _Deletion.operation(fs=fs, path=path, maxdepth=maxdepth)
 
 
 class _Deletion(_FlatJobs):

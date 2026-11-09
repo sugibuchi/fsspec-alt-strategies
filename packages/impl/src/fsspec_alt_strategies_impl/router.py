@@ -9,8 +9,8 @@ across two storages runs the source's family's strategy, as its profile's
 ``fs_type`` says, each file by ``_cross_fs_cp_file`` or ``_cross_fs_mv_file``,
 which stream the data through the two storages' files unless overridden.
 
-This module depends on `filesystem`, `operation`, `paths` and `types` of
-`common`. It imports `cp` and `mv` of a family only to copy or move from a
+This module depends on `filesystem`, `operation` and `paths` of `common`.
+It imports `cp` and `mv` of a family only to copy or move from a
 storage of it, so a copy may leave out the other family.
 """
 

@@ -20,8 +20,7 @@ The tree strategies, and the engines under them, take the filesystem they
 work on, and call its primitives, such as ``_ils``, under its
 ``operation_limit``.
 
-This module depends on `filesystem`, `jobs`, `operation` and `paths` of
-`common`.
+This module depends on `jobs`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations

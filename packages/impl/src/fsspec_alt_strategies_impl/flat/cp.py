@@ -7,8 +7,7 @@ fsspec's lists every key first, then copies them. `_flat_cp` copies each key
 as soon as the listing gives it. The destination may be another storage, flat
 or a tree: within one, it is the same filesystem given twice.
 
-This module depends on `_jobs`, and `copying`, `jobs`, `operation` and `paths`
-of `common`.
+This module depends on `_jobs`, and `jobs` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -16,17 +15,17 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from fsspec_alt_strategies.states import CpState
-
-from ..common.jobs import _CopyJobs, _Job
-from ..common.operation import Operation
+from ..common.jobs import _CopyJobs, _Job, _transfer_of
 from ..common.paths import _check_maxdepth
 from ._jobs import _FlatJobs
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
+    from fsspec_alt_strategies.states import CpState
+
     from ..common.jobs import _Transfer
+    from ..common.operation import Operation
 
 __all__: list[str] = []
 
@@ -146,7 +145,7 @@ def _flat_cp(
     Raises
     ------
     ValueError
-        If ``maxdepth`` is less than 1.
+        If ``maxdepth`` is less than 1, or ``cp_file`` is not given between two storages.
 
     See Also
     --------
@@ -154,21 +153,17 @@ def _flat_cp(
     _flat_mv : The same, deleting the sources as it goes.
     """
     _check_maxdepth(maxdepth)
-    cp_file = src_fs._cp_file if cp_file is None else cp_file
-    if same_storage is None:
-        same_storage = src_fs is dst_fs
-    return Operation(
-        lambda op: _Copy(
-            fs=src_fs,
-            dst_fs=dst_fs,
-            path1=path1,
-            path2=path2,
-            same_storage=same_storage,
-            maxdepth=maxdepth,
-            cp_file=cp_file,
-            op=op,
-        ).outcomes(),
-        CpState(),
+    cp_file, same_storage = _transfer_of(
+        src_fs, dst_fs, cp_file, same_storage, "cp_file"
+    )
+    return _Copy.operation(
+        fs=src_fs,
+        dst_fs=dst_fs,
+        path1=path1,
+        path2=path2,
+        same_storage=same_storage,
+        maxdepth=maxdepth,
+        cp_file=cp_file,
     )
 
 

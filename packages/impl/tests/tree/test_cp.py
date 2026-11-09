@@ -10,8 +10,9 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.states import CpState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.cp import CpState, _tree_cp
+from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl_testing import (
     SimulatedFileSystem,
     TreeView,
@@ -393,3 +394,22 @@ async def test_maxdepth_requests(hierarchical_fs: SimulatedFileSystem) -> None:
 async def test_maxdepth_below_1_is_refused(any_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="maxdepth"):
         _cp(any_fs, "data", "copied", maxdepth=0)
+
+
+async def test_a_list_yields_a_name_taken_when_the_rest_is_in_place(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    any_fs.add_file("a/x", b"a")
+    any_fs.add_file("b/x", b"b")
+    copied, errors = await _collect_with_errors(_cp(any_fs, ["a/x", "b/x"], "a"))
+    assert copied == []
+    assert [type(e) for e in errors] == [FileExistsError]
+    assert any_fs._file_data["a/x"].data == b"a"
+
+
+def test_a_copy_between_two_storages_needs_cp_file(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    other = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    with pytest.raises(ValueError, match="cp_file"):
+        _tree_cp(TreeView(hierarchical_fs), TreeView(other), "data", "copied")

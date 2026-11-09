@@ -125,8 +125,6 @@ def _tree_glob(
         op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         found: set[str] = set()
-        # Shared with the flat family, which is not ported yet: it takes the
-        # primitive and the limit.
         infos = _infos(fs, literals, op, found)
         async for entry in infos:
             yield entry

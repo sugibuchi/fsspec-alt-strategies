@@ -16,7 +16,7 @@ family finds what to copy, `_CopyJobs` where it goes. The two define no
 method in common, and their constructors take keywords and pass the rest on,
 so either order works.
 
-This module depends on `filesystem` and `paths`.
+This module depends on `filesystem`, `operation` and `paths`.
 """
 
 from __future__ import annotations
@@ -33,13 +33,12 @@ from fsspec.utils import common_prefix
 from fsspec_alt_strategies.states import CpState
 
 from .filesystem import _profile_of
+from .operation import Operation, _collect_with_errors
 from .paths import _trim
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
-    from typing import TypeAlias
-
-    from .operation import Operation
+    from typing import Self, TypeAlias
 
     _Transfer: TypeAlias = Callable[[str, str], Awaitable[None]]
     """How one file goes from a source path to a destination path.
@@ -49,6 +48,29 @@ if TYPE_CHECKING:
     """
 
 _T = TypeVar("_T")
+
+
+def _transfer_of(
+    src_fs: Any,
+    dst_fs: Any,
+    transfer: _Transfer | None,
+    same_storage: bool | None,
+    name: str,
+) -> tuple[_Transfer, bool]:
+    """How a copy or move sends each file, and whether it stays in one storage.
+
+    ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given. Within
+    one storage, a file goes by the source's own ``_cp_file`` or ``_mv_file``,
+    as ``name`` says, unless ``transfer`` is given. Between two, ``transfer``
+    is required: the source's own would write to the source.
+    """
+    if same_storage is None:
+        same_storage = src_fs is dst_fs
+    if transfer is None:
+        if not same_storage:
+            raise ValueError(f"{name} is required between two storages")
+        transfer = getattr(src_fs, f"_{name}")
+    return transfer, same_storage
 
 
 class _Job(NamedTuple):
@@ -177,9 +199,21 @@ class _Jobs(ABC):
     copy's.
     """
 
-    def __init__(self, *, fs: Any, op: Operation[Any, Any], **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        fs: Any,
+        op: Operation[Any, Any],
+        maxdepth: int | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.fs = fs
+        self.maxdepth = maxdepth
+
+        # The folder roots a pattern matched: fsspec walks them one level less
+        # deep than a path named, as its glob counted that level already.
+        self.matched: set[str] = set()
 
         # The source's requests, the jobs, and a pattern's glob share it.
         self.concurrency_limit: asyncio.Semaphore = fs.operation_limit
@@ -199,6 +233,22 @@ class _Jobs(ABC):
         # The source's next item, awaited along with the jobs.
         self.next: asyncio.Task[Any] | None = None
 
+    @classmethod
+    def operation(cls, **kwargs: Any) -> Operation[Any, Any]:
+        """An operation running new jobs of this class, made at once with ``kwargs``.
+
+        Made at once, the jobs give the operation its first state, e.g. whether
+        a move renames folders, as they read it from the profile once.
+        """
+        jobs: Self | None = None
+        op: Operation[Any, Any] = Operation(
+            lambda _: jobs.outcomes(),  # type: ignore[union-attr]
+            None,  # type: ignore[arg-type]  # The jobs' own, set below.
+        )
+        jobs = cls(op=op, **kwargs)
+        op.state = jobs.state()
+        return op
+
     @abstractmethod
     async def prepare(self) -> _Roots | None:
         """What to walk, or None if there is nothing to do."""
@@ -208,11 +258,23 @@ class _Jobs(ABC):
         """The operation's state now."""
 
     @abstractmethod
-    async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
-        """The roots matching glob patterns, found with the family's glob.
+    def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
+        """The family's glob of ``pattern`` on ``fs``, within ``maxdepth``."""
 
-        Its errors go to ``found``, yielded first.
+    async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
+        """The roots matching glob patterns, noting those a pattern matched.
+
+        The glob's errors go to ``found``, yielded first.
         """
+        matches, errors = await _collect_with_errors(self.glob(pattern))
+        roots = _roots_of(matches, errors, pattern)
+        self.found.extend(errors)
+
+        if self.maxdepth is not None:
+            named = [pattern] if isinstance(pattern, str) else pattern
+            literal = {_trim(p) for p in named if not has_magic(p)}
+            self.matched = {f for f in roots.folders if f not in literal}
+        return roots
 
     @abstractmethod
     def source(self, roots: _Roots) -> AsyncGenerator[Any] | None:
@@ -245,15 +307,18 @@ class _Jobs(ABC):
     async def outcomes(self) -> AsyncGenerator[Any]:
         """Yield each outcome, as the operation does, keeping its state up to date."""
         roots = await self.prepare()
-        if roots is None:
-            return
 
         try:
+            # Yielded even when there is nothing to do: e.g. a list copied onto
+            # itself but for a root whose name another one took.
             if self.found:
                 self.errors += len(self.found)
                 self.op.state = self.state()
                 for error in self.found:
                     yield error
+
+            if roots is None:
+                return
 
             async with aclosing(self.steps(roots)) as steps:
                 async for outcomes in steps:

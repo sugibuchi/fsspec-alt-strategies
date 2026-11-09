@@ -11,19 +11,15 @@ A glob pattern is expanded first, with `_flat_glob`, as fsspec's
 ``_expand_path`` expands it: the keys under its matching folders are then
 listed.
 
-This module depends on `_keys`, `find`, `glob`, and `jobs`, `operation` and
-`paths` of `common`.
+This module depends on `_keys`, `find`, `glob`, and `jobs` of `common`.
 """
 
 from __future__ import annotations
 
 from abc import abstractmethod
-from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
-from ..common.jobs import _Jobs, _roots_of
-from ..common.operation import _collect_with_errors
-from ..common.paths import _trim
+from ..common.jobs import _Jobs
 from ._keys import _close
 from .find import _within
 from .glob import _flat_glob
@@ -32,18 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.jobs import _Roots
-
-
-async def _expand(
-    fs: Any,
-    pattern: str | Sequence[str],
-    maxdepth: int | None = None,
-) -> tuple[_Roots, list[Exception]]:
-    """The roots matching glob patterns, found with `_flat_glob`, and the errors found."""
-    matches, errors = await _collect_with_errors(
-        _flat_glob(fs, pattern, maxdepth=maxdepth)
-    )
-    return _roots_of(matches, errors, pattern), errors
+    from ..common.operation import Operation
 
 
 def _check_batch_size(batch_size: int) -> None:
@@ -67,23 +52,8 @@ class _FlatJobs(_Jobs):
     fsspec's ``_expand_path`` finds paths. A prefix lists every key under it.
     """
 
-    def __init__(self, *, maxdepth: int | None = None, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.maxdepth = maxdepth
-
-        # The folder roots a pattern matched: fsspec takes them one level less
-        # deep than a path named, as its glob counted that level already.
-        self.matched: set[str] = set()
-
-    async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
-        """The roots matching glob patterns, noting those a pattern matched."""
-        roots, errors = await _expand(self.fs, pattern, self.maxdepth)
-        self.found.extend(errors)
-        if self.maxdepth is not None:
-            named = [pattern] if isinstance(pattern, str) else pattern
-            literal = {_trim(p) for p in named if not has_magic(p)}
-            self.matched = {f for f in roots.folders if f not in literal}
-        return roots
+    def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
+        return _flat_glob(self.fs, pattern, maxdepth=self.maxdepth)
 
     @abstractmethod
     def add(self, entry: dict[str, Any]) -> None:

@@ -10,8 +10,9 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.states import CpState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.cp import CpState, _flat_cp
+from fsspec_alt_strategies_impl.flat.cp import _flat_cp
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 # A flat storage's: its folders are implicit, and none is made.
@@ -260,3 +261,22 @@ async def test_maxdepth_requests(flat_fs: SimulatedFileSystem) -> None:
 async def test_maxdepth_below_1_is_refused(flat_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="maxdepth"):
         _cp(flat_fs, "data", "copied", maxdepth=0)
+
+
+async def test_a_list_yields_a_name_taken_when_the_rest_is_in_place(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    flat_fs.add_file("a/x", b"a")
+    flat_fs.add_file("b/x", b"b")
+    copied, errors = await _collect_with_errors(_cp(flat_fs, ["a/x", "b/x"], "a"))
+    assert copied == []
+    assert [type(e) for e in errors] == [FileExistsError]
+    assert flat_fs._file_data["a/x"].data == b"a"
+
+
+def test_a_copy_between_two_storages_needs_cp_file(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    other = SimulatedFileSystem(asynchronous=True)
+    with pytest.raises(ValueError, match="cp_file"):
+        _flat_cp(FlatView(flat_fs), FlatView(other), "data", "copied")

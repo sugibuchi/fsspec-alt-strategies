@@ -6,8 +6,9 @@ from typing import Any
 
 import pytest
 
+from fsspec_alt_strategies.states import WalkState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.walk import WalkState, _flat_walk
+from fsspec_alt_strategies_impl.flat.walk import _flat_walk
 from fsspec_alt_strategies_impl.tree.walk import _tree_walk
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem, TreeView
 

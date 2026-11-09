@@ -6,8 +6,8 @@
 whole tree first, then deletes each path. `_tree_rm` deletes each folder's files
 as soon as the folder is listed, and each folder once it is empty.
 
-This module depends on `_jobs`, and `filesystem`, `jobs`, `operation` and
-`paths` of `common`.
+This module depends on `_jobs`, and `filesystem`, `jobs` and `paths` of
+`common`.
 """
 
 from __future__ import annotations
@@ -20,13 +20,13 @@ from fsspec_alt_strategies.states import RmState
 
 from ..common.filesystem import _profile_of
 from ..common.jobs import _Job, _Roots
-from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
 from ._jobs import _TreeJobs
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 
+    from ..common.operation import Operation
     from .walk import _Listing
 
 __all__: list[str] = []
@@ -127,24 +127,16 @@ def _tree_rm(
     _tree_walk : The walk under it.
     """
     _check_maxdepth(maxdepth)
-    return Operation(
-        lambda op: _Deletion(fs, path, maxdepth, op).outcomes(),
-        RmState(folders_deleted=0),
-    )
+    return _Deletion.operation(fs=fs, path=path, maxdepth=maxdepth)
 
 
 class _Deletion(_TreeJobs):
     """The jobs of one `_tree_rm`: a deletion per file, then per folder."""
 
-    def __init__(
-        self,
-        fs: Any,
-        path: str | Sequence[str],
-        maxdepth: int | None,
-        op: Operation[str, RmState],
-    ) -> None:
-        super().__init__(fs=fs, op=op, maxdepth=maxdepth)
+    def __init__(self, *, path: str | Sequence[str], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
 
+        fs, maxdepth = self.fs, self.maxdepth
         self.path = path
         # A folder deleted whole would take what is deeper than maxdepth.
         self.rm_tree: Callable[[str], Awaitable[None]] | None = (

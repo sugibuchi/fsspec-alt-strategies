@@ -11,19 +11,15 @@ runs, and what its outcome is.
 A glob pattern is expanded first, as fsspec's ``_expand_path`` expands it:
 its matching folders are then walked at once.
 
-This module depends on `glob`, `walk`, and `jobs`, `operation` and `paths` of
-`common`.
+This module depends on `glob`, `walk`, and `jobs` of `common`.
 """
 
 from __future__ import annotations
 
 from abc import abstractmethod
-from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
-from ..common.jobs import _Jobs, _roots_of
-from ..common.operation import _collect_with_errors
-from ..common.paths import _trim
+from ..common.jobs import _Jobs
 from .glob import _tree_glob
 from .walk import _chunks
 
@@ -31,19 +27,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.jobs import _Roots
+    from ..common.operation import Operation
     from .walk import _Listing
-
-
-async def _expand(
-    fs: Any,
-    pattern: str | Sequence[str],
-    maxdepth: int | None = None,
-) -> tuple[_Roots, list[Exception]]:
-    """The roots matching glob patterns, found with `_tree_glob`, and the errors found."""
-    matches, errors = await _collect_with_errors(
-        _tree_glob(fs, pattern, maxdepth=maxdepth)
-    )
-    return _roots_of(matches, errors, pattern), errors
 
 
 class _TreeJobs(_Jobs):
@@ -56,13 +41,8 @@ class _TreeJobs(_Jobs):
     to `at_limit`, as fsspec finds it, but not what is in it.
     """
 
-    def __init__(self, *, maxdepth: int | None = None, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.maxdepth = maxdepth
-
-        # The folder roots a pattern matched: fsspec walks them one level less
-        # deep than a path named, as its glob counted that level already.
-        self.matched: set[str] = set()
 
         # The paths in each folder listed that are not done yet, for strategies
         # finishing a folder after all in it, as a deletion does. A folder with
@@ -81,15 +61,8 @@ class _TreeJobs(_Jobs):
         It returns what is done at once, if anything, e.g. a folder found gone.
         """
 
-    async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
-        """The roots matching glob patterns, noting those a pattern matched."""
-        roots, errors = await _expand(self.fs, pattern, self.maxdepth)
-        self.found.extend(errors)
-        if self.maxdepth is not None:
-            named = [pattern] if isinstance(pattern, str) else pattern
-            literal = {_trim(p) for p in named if not has_magic(p)}
-            self.matched = {f for f in roots.folders if f not in literal}
-        return roots
+    def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
+        return _tree_glob(self.fs, pattern, maxdepth=self.maxdepth)
 
     def unlisted(self, folder: str) -> bool:
         """Whether a root folder is at the depth limit already: a match, at 1."""

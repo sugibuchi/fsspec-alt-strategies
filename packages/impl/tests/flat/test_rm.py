@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.states import RmState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.rm import RmState, _flat_rm
+from fsspec_alt_strategies_impl.flat.rm import _flat_rm
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 if TYPE_CHECKING:

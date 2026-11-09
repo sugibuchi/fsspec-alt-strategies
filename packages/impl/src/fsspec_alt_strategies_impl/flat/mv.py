@@ -8,8 +8,8 @@ prefix first. `_flat_mv` moves each key as soon as the listing gives it: by
 one ``_mv_file``, or by a copy, deleting the copied keys in batches while the
 listing goes on.
 
-This module depends on `_jobs`, `cp`, and `filesystem`, `jobs`, `operation`
-and `paths` of `common`.
+This module depends on `_jobs`, `cp`, and `filesystem`, `jobs` and `paths`
+of `common`.
 """
 
 from __future__ import annotations
@@ -19,8 +19,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec_alt_strategies.states import MvState
 
 from ..common.filesystem import _profile_of
-from ..common.jobs import _Job
-from ..common.operation import Operation
+from ..common.jobs import _Job, _transfer_of
 from ..common.paths import _check_maxdepth
 from ._jobs import _check_batch_size, _keys_of
 from .cp import _Copy, _CopyOrMove
@@ -29,6 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
     from ..common.jobs import _Transfer
+    from ..common.operation import Operation
 
 __all__: list[str] = []
 
@@ -128,7 +128,7 @@ def _flat_mv(
     Raises
     ------
     ValueError
-        If the source's ``rm_batch_size``, or ``maxdepth``, is less than 1.
+        If the source's ``rm_batch_size``, or ``maxdepth``, is less than 1, or ``cp_file`` is not given between two storages.
 
     See Also
     --------
@@ -147,19 +147,14 @@ def _flat_mv(
         "maxdepth": maxdepth,
     }
 
-    # A rename wins only where the storage is known to rename.
+    # A rename wins only where the storage is known to rename. The choice is
+    # the only use of renames_files: the jobs read no other profile field.
     if same_storage and _profile_of(dst_fs).renames_files is True:
-        return Operation(
-            lambda op: _Rename(op=op, **options).outcomes(),
-            MvState(),
-        )
+        return _Rename.operation(**options)
 
     _check_batch_size(src_fs.rm_batch_size)
-    cp_file = src_fs._cp_file if cp_file is None else cp_file
-    return Operation(
-        lambda op: _Move(cp_file=cp_file, op=op, **options).outcomes(),
-        MvState(),
-    )
+    cp_file, _ = _transfer_of(src_fs, dst_fs, cp_file, same_storage, "cp_file")
+    return _Move.operation(cp_file=cp_file, **options)
 
 
 class _Rename(_CopyOrMove):

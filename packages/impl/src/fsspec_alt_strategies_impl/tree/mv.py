@@ -11,8 +11,7 @@ Where ``mv_file`` moves a folder too, in one request, as a storage's rename
 does, the profile says so. `_tree_mv` then moves each folder whole with it
 where it can, and walks only what it cannot move so.
 
-This module depends on `cp`, and `filesystem`, `jobs`, `operation` and
-`paths` of `common`.
+This module depends on `cp`, and `jobs` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -22,9 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
-from ..common.filesystem import _profile_of
-from ..common.jobs import _Job, _Roots
-from ..common.operation import Operation
+from ..common.jobs import _Job, _Roots, _transfer_of
 from ..common.paths import _check_maxdepth
 from .cp import _CopyOrMove
 
@@ -32,6 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
 
     from ..common.jobs import _Transfer
+    from ..common.operation import Operation
     from .walk import _Listing
 
 __all__: list[str] = []
@@ -164,7 +162,7 @@ def _tree_mv(
     Raises
     ------
     ValueError
-        If ``maxdepth`` is less than 1.
+        If ``maxdepth`` is less than 1, or ``mv_file`` is not given between two storages.
 
     See Also
     --------
@@ -172,25 +170,17 @@ def _tree_mv(
     _tree_rm : The deletion it does as it goes.
     """
     _check_maxdepth(maxdepth)
-    mv_file = src_fs._mv_file if mv_file is None else mv_file
-    if same_storage is None:
-        same_storage = src_fs is dst_fs
-    # A folder moved whole would take what is deeper than maxdepth along.
-    renames_folders = (
-        same_storage and bool(_profile_of(dst_fs).renames_folders) and maxdepth is None
+    mv_file, same_storage = _transfer_of(
+        src_fs, dst_fs, mv_file, same_storage, "mv_file"
     )
-    return Operation(
-        lambda op: _Move(
-            fs=src_fs,
-            dst_fs=dst_fs,
-            path1=path1,
-            path2=path2,
-            same_storage=same_storage,
-            maxdepth=maxdepth,
-            mv_file=mv_file,
-            op=op,
-        ).outcomes(),
-        MvState(folders_moved=0, roots_renamed=0 if renames_folders else None),
+    return _Move.operation(
+        fs=src_fs,
+        dst_fs=dst_fs,
+        path1=path1,
+        path2=path2,
+        same_storage=same_storage,
+        maxdepth=maxdepth,
+        mv_file=mv_file,
     )
 
 

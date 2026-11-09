@@ -10,8 +10,9 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.states import MvState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.mv import MvState, _tree_mv
+from fsspec_alt_strategies_impl.tree.mv import _tree_mv
 from fsspec_alt_strategies_impl_testing import (
     SimulatedFileSystem,
     TreeView,
@@ -56,10 +57,17 @@ def _views(
 
 
 def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
-    """`_tree_mv` within ``fs``, whose primitives ``kwargs`` may replace."""
+    """`_tree_mv` within ``fs``, whose primitives ``kwargs`` may replace.
+
+    With ``same_storage=False``, ``mv_file`` is the hook moving each file to
+    the other storage, not the source's primitive.
+    """
+    hook = {}
+    if kwargs.get("same_storage") is False and "mv_file" in kwargs:
+        hook["mv_file"] = kwargs.pop("mv_file")
     source, destination = _views(fs, kwargs)
     return _tree_mv(
-        source, destination, path1, path2, **{"same_storage": True, **kwargs}
+        source, destination, path1, path2, **{"same_storage": True, **hook, **kwargs}
     )
 
 

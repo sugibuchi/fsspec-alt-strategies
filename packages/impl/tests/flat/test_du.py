@@ -7,8 +7,9 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.states import DuState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.du import DuState, _flat_du
+from fsspec_alt_strategies_impl.flat.du import _flat_du
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 

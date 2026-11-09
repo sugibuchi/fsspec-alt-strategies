@@ -10,8 +10,9 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.states import RmState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.rm import RmState, _tree_rm
+from fsspec_alt_strategies_impl.tree.rm import _tree_rm
 from fsspec_alt_strategies_impl_testing import (
     SimulatedFileSystem,
     TreeView,

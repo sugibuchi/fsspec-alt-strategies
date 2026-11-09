@@ -8,9 +8,10 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.states import GlobState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.common.patterns import _Prefix
-from fsspec_alt_strategies_impl.tree.glob import GlobState, _tree_glob
+from fsspec_alt_strategies_impl.tree.glob import _tree_glob
 from fsspec_alt_strategies_impl_testing import (
     SimulatedFileSystem,
     TreeView,

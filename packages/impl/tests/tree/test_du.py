@@ -8,8 +8,9 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.states import DuState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.du import DuState, _tree_du
+from fsspec_alt_strategies_impl.tree.du import _tree_du
 from fsspec_alt_strategies_impl_testing import (
     SimulatedFileSystem,
     TreeView,

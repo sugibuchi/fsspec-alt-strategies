@@ -57,7 +57,7 @@ class _Toy(_Jobs):
     async def prepare(self) -> _Roots | None:
         return _Roots(["root"])
 
-    async def glob_roots(self, pattern: Any) -> _Roots:
+    def glob(self, pattern: Any) -> Any:
         raise NotImplementedError  # The toy takes no pattern.
 
     def state(self) -> State:
@@ -239,9 +239,9 @@ async def _missing(path: str) -> dict[str, Any]:
 
 
 class _Copy(_CopyJobs):
-    """A copy whose glob finds the roots given, and which copies nothing."""
+    """A copy whose glob yields the entries and errors given, and which copies nothing."""
 
-    def __init__(self, path1: str, path2: str, roots: _Roots) -> None:
+    def __init__(self, path1: Any, path2: str, found: list[Any]) -> None:
         storage = SimpleNamespace(operation_limit=asyncio.Semaphore(1), _info=_missing)
         super().__init__(
             fs=storage,
@@ -251,15 +251,19 @@ class _Copy(_CopyJobs):
             same_storage=True,
             op=Operation(lambda op: self.outcomes(), CpState()),
         )
-        self.roots = roots
+        self.globbed = found
 
-    async def glob_roots(self, pattern: Any) -> _Roots:
-        return self.roots
+    def glob(self, pattern: Any) -> Operation[Any, Any]:
+        async def entries() -> AsyncGenerator[Any]:
+            for item in self.globbed:
+                yield item
 
-    # The jobs, never run here: only the placing is.
+        return Operation(lambda op: entries(), State())
+
+    # The jobs, never run here: only the placing is, and its errors yielded.
 
     def source(self, roots: _Roots) -> Any:
-        raise NotImplementedError
+        return None  # Nothing to list.
 
     def fed(self, item: Any) -> list[Any]:
         raise NotImplementedError
@@ -277,18 +281,37 @@ class _Copy(_CopyJobs):
         raise NotImplementedError
 
 
+def _file(name: str) -> dict[str, Any]:
+    return {"name": name, "type": "file"}
+
+
+def _folder(name: str) -> dict[str, Any]:
+    return {"name": name, "type": "directory"}
+
+
 async def test_a_pattern_matching_only_errors_yields_them() -> None:
-    roots = _Roots([], [])
-    assert await _Copy("x*", "dest", roots).prepare() is roots
+    error = OSError("x")
+    copy = _Copy("x*", "dest", [error])
+    assert await _collect_with_errors(copy.op) == ([], [error])
+    assert copy.op.state.errors == 1
+
+
+async def test_errors_are_yielded_when_nothing_else_is_to_do() -> None:
+    # The first root is in place already, and the second's name is taken.
+    copy = _Copy(["a/x", "b/*"], "a", [_file("a/x"), _file("b/x")])
+    outcomes, errors = await _collect_with_errors(copy.op)
+    assert outcomes == []
+    assert [type(e) for e in errors] == [FileExistsError]
+    assert copy.op.state.errors == 1
 
 
 async def test_a_single_match_already_in_place_is_left() -> None:
-    copy = _Copy("a/*.txt", "a", _Roots([], ["a/x.txt"]))
+    copy = _Copy("a/*.txt", "a", [_file("a/x.txt")])
     assert await copy.prepare() is None
 
 
 async def test_matches_without_a_common_folder_go_under_the_destination() -> None:
-    copy = _Copy("*1", "dest", _Roots(["x1"], ["y1"]))
+    copy = _Copy("*1", "dest", [_folder("x1"), _file("y1")])
     assert await copy.prepare() is not None
     assert copy.prefix == ""
     assert (copy.target("x1/f"), copy.target("y1")) == ("dest/x1/f", "dest/y1")

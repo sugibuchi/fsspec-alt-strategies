@@ -9,8 +9,9 @@ import pytest
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.states import CpState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.cp import CpState, _flat_cp
+from fsspec_alt_strategies_impl.flat.cp import _flat_cp
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 
