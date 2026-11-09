@@ -78,7 +78,7 @@ code: read it before adding a strategy.
 - The flat strategies list with `iexpand(prefix)`, an async iterator of entries in name order, never pages: see
   DEVELOPMENT.md's "The flat strategies". Those that only read derive folders with `flat._keys`.
 - The strategies changing a storage, in any family, run on `common.jobs._Jobs`. A copy or move places its paths with
-  `common.placement._Placing`.
+  `common.placement._Placement`.
 
 ### Packages
 

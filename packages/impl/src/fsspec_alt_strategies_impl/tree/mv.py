@@ -363,7 +363,7 @@ class _Move(_CopyOrMove):
         target = self.target(source)
         parent = target.rpartition("/")[0]
 
-        if target not in self.missing:
+        if target not in self.placement.missing:
             try:
                 async with self.concurrency_limit:
                     await self.destination_info(target)

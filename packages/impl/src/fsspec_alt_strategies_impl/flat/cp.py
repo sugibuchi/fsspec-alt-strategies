@@ -21,7 +21,7 @@ from fsspec_alt_strategies.states import CpState
 from ..common.jobs import _Job
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
-from ..common.placement import _Placing
+from ..common.placement import _Placement
 from ._jobs import _FlatJobs
 
 if TYPE_CHECKING:
@@ -281,7 +281,7 @@ def flat_local_cp(
     )
 
 
-class _CopyOrMove(_Placing, _FlatJobs):
+class _CopyOrMove(_FlatJobs):
     """The jobs of a copy or a move: a folder made where needed, and one per key.
 
     A key's job waits for its destination folder, when the destination needs
@@ -289,6 +289,9 @@ class _CopyOrMove(_Placing, _FlatJobs):
     are remembered, and each is made once. A subclass says how a key goes, in
     `transfer_file`.
     """
+
+    verb = "copy"
+    doing = "Copying"
 
     def __init__(
         self,
@@ -313,7 +316,17 @@ class _CopyOrMove(_Placing, _FlatJobs):
         # iexpand and info are the source's. destination_info, makedirs and the
         # profile are the destination's.
         self.makedirs = makedirs
-        self._placing(destination_info, same_storage=same_storage)
+        self.destination_info = destination_info
+        self.placement = _Placement(
+            path1,
+            path2,
+            destination_info=destination_info,
+            same_storage=same_storage,
+            expand=self.glob_roots,
+            found=self.found,
+            verb=self.verb,
+            doing=self.doing,
+        )
 
         # Unknown, folders are made first. Implicit folders need none.
         self.implicit_folders = bool(profile.implicit_folders)
@@ -338,8 +351,12 @@ class _CopyOrMove(_Placing, _FlatJobs):
             files_copied=self.files_done,
         )
 
-    async def expand(self, pattern: str | Sequence[str]) -> _Roots:
-        return await self.glob_roots(pattern)
+    async def prepare(self) -> _Roots | None:
+        return await self.placement.prepare()
+
+    def target(self, path: str) -> str:
+        """Where a path goes."""
+        return self.placement.target(path)
 
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]

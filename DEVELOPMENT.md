@@ -162,7 +162,7 @@ They come in two layers:
 | `tree_rm`, `tree_cp`, `tree_mv`     | Changes, as the listings come     | `_TreeJobs`      |
 
 - The changes run on `common.jobs._Jobs`, along with the walk still in flight.
-- A copy or move places its paths with `common.placement._Placing`, as fsspec's `copy` does.
+- A copy or move places its paths with `common.placement._Placement`, as fsspec's `copy` does.
 - A copy or move within one storage is a special case of one between two: `tree_local_cp` passes one storage's
   operations twice, with `same_storage=True`.
 - Patterns are expanded with `tree_glob` first, as copies place paths from the common prefix of all matches.

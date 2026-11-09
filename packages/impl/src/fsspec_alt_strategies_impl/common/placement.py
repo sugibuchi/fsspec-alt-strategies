@@ -2,16 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Where a recursive copy or move puts each path, as fsspec's ``copy`` does.
 
-`_Placing` is mixed into the jobs of a copy, such as `tree_cp`'s or
+`_Placement` is held by the jobs of a copy, such as `tree_cp`'s or
 `flat_cp`'s. It finds the roots, and the place of each path under them. A
-family expands patterns with its own glob, in ``expand``.
+family expands patterns with its own glob, given as ``expand``.
 
 This module depends on `jobs` and `paths`.
 """
 
 from __future__ import annotations
 
-from abc import abstractmethod
 from glob import has_magic
 from typing import TYPE_CHECKING
 
@@ -21,35 +20,44 @@ from .jobs import _Roots
 from .paths import _trim
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from .types import _Info
 
 
-class _Placing:
+class _Placement:
     """Places the paths of a copy or a move, as fsspec's ``copy`` places them.
 
     A path under ``prefix`` goes to the same place under ``base``. For a list,
-    a path under a root of ``places`` goes there instead. A subclass sets
-    ``path1``, ``path2``, ``info`` and ``found``, the errors to yield first, and calls `_placing` first. ``info``
-    describes the destination too, unless `_placing` is given its own.
+    a path under a root of ``places`` goes there instead. `prepare` sets them,
+    and must be awaited before `target` is used.
+
+    Between two storages, ``same_storage`` is False: a path may then go to the
+    same path, or under it, as that is another storage's. ``expand`` finds the
+    roots matching glob patterns, with the family's glob. The errors found in
+    placing the roots go to ``found``, which the jobs yield first.
     """
 
-    verb = "copy"
-    doing = "Copying"
-    path1: str | Sequence[str]
-    path2: str
-    info: _Info
-    found: list[Exception]
-
-    def _placing(self, destination_info: _Info, *, same_storage: bool) -> None:
-        """Start placing paths, ``destination_info`` describing the destination's.
-
-        Between two storages, ``same_storage`` is False: a path may then go to
-        the same path, or under it, as that is another storage's.
-        """
+    def __init__(
+        self,
+        path1: str | Sequence[str],
+        path2: str,
+        *,
+        destination_info: _Info,
+        same_storage: bool,
+        expand: Callable[[str | Sequence[str]], Awaitable[_Roots]],
+        found: list[Exception],
+        verb: str = "copy",
+        doing: str = "Copying",
+    ) -> None:
+        self.path1 = path1
+        self.path2 = path2
         self.destination_info = destination_info
         self.same_storage = same_storage
+        self.expand = expand
+        self.found = found
+        self.verb = verb
+        self.doing = doing
 
         self.prefix = ""
         self.base = ""
@@ -60,10 +68,6 @@ class _Placing:
         # The destinations found missing, which need no asking again, e.g.
         # by a move renaming a root onto one.
         self.missing: set[str] = set()
-
-    @abstractmethod
-    async def expand(self, pattern: str | Sequence[str]) -> _Roots:
-        """The roots matching glob patterns, found with the family's glob."""
 
     async def prepare(self) -> _Roots | None:
         """Set where the paths go, as fsspec's ``copy`` places them."""

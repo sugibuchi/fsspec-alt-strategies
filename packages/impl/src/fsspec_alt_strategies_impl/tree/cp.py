@@ -21,7 +21,7 @@ from fsspec_alt_strategies.states import CpState
 from ..common.jobs import _Job
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
-from ..common.placement import _Placing
+from ..common.placement import _Placement
 from ._jobs import _TreeJobs
 
 if TYPE_CHECKING:
@@ -313,7 +313,7 @@ def tree_local_cp(
     )
 
 
-class _CopyOrMove(_Placing, _TreeJobs):
+class _CopyOrMove(_TreeJobs):
     """The jobs of a copy or a move: a folder made where needed, and one per file.
 
     A file's job waits for its destination folder, when the storage needs it.
@@ -353,7 +353,17 @@ class _CopyOrMove(_Placing, _TreeJobs):
         )
         self.implicit_folders = bool(profile.implicit_folders)
 
-        self._placing(destination_info, same_storage=same_storage)
+        self.destination_info = destination_info
+        self.placement = _Placement(
+            path1,
+            path2,
+            destination_info=destination_info,
+            same_storage=same_storage,
+            expand=self.glob_roots,
+            found=self.found,
+            verb=self.verb,
+            doing=self.doing,
+        )
 
         self.files_found = 0
         self.files_done = 0
@@ -373,8 +383,12 @@ class _CopyOrMove(_Placing, _TreeJobs):
             files_copied=self.files_done,
         )
 
-    async def expand(self, pattern: str | Sequence[str]) -> _Roots:
-        return await self.glob_roots(pattern)
+    async def prepare(self) -> _Roots | None:
+        return await self.placement.prepare()
+
+    def target(self, path: str) -> str:
+        """Where a path goes."""
+        return self.placement.target(path)
 
     def file_root(self, path: str) -> None:
         self.files_found += 1
