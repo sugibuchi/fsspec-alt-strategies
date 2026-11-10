@@ -351,6 +351,27 @@ async def test_a_dir_failing_to_move_whole_is_the_roots_error(
     assert await flat_fs._exists("data/README.md")
 
 
+async def test_a_root_not_renamed_at_once_is_walked(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    view = TreeView(
+        hierarchical_fs,
+        mv_file=hierarchical_fs._rename,
+        storage_profile=StorageProfile(renames_directories=True),
+    )
+    # Declared: no rename across the top directories, as across containers.
+    view._renames_between = (  # type: ignore[attr-defined]
+        lambda p1, p2: p1.split("/")[0] == p2.split("/")[0]
+    )
+    op = _tree_mv(view, view, "data", "moved", same_storage=True)
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert op.state.roots_renamed == 0
+    assert hierarchical_fs.stats.calls["rename"] == len(_FILES)
+    assert await hierarchical_fs._exists("moved/2023/01/part-0.parquet")
+
+
 async def test_unknown_no_dir_is_moved_whole(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:

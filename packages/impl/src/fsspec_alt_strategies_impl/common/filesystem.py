@@ -115,6 +115,17 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         """
         return self.storage_profile  # type: ignore[attr-defined, no-any-return]
 
+    def _renames_between(self, path1: str, path2: str) -> bool:
+        """Whether ``_mv_file`` renames a directory from ``path1`` to ``path2`` in one request.
+
+        Read only where the profile's ``renames_directories`` says the storage
+        renames directories: here, always. A subclass says where it cannot,
+        e.g. across containers or buckets, and a recursive ``mv`` then moves
+        that directory's files one by one. It sends no request: it is
+        declared from the paths.
+        """
+        return True
+
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
         return self

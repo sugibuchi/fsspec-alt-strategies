@@ -87,17 +87,19 @@ def _tree_mv(
     listing, not after the whole tree is listed twice.
 
     Within one storage, with the profile's ``renames_directories=True``,
-    ``mv_file`` moves a directory with all in it, in one request. Each directory root
-    is then moved whole by one ``mv_file``, where it can be, as a job among the
-    files' moves. That wins by far on storages renaming a directory at once, such
-    as Azure Data Lake Storage Gen2, HDFS or a local disk. A root goes whole
-    only to a destination that does not exist, as a rename onto an existing
-    path differs among storages. Into an existing directory, its contents merge,
-    and its files are moved one by one. So are those of ``path1`` ending with
-    "/", whose contents go onto ``path2``. A root whose move fails, e.g. across
-    containers, yields the error, with its cause, and stays where it is. A
-    root moved whole is yielded once, as ``(root, target)``: what is in it is
-    neither listed nor yielded.
+    ``mv_file`` moves a directory with all in it, in one request. Each
+    directory root is then moved whole by one ``mv_file``, where it can be, as
+    a job among the files' moves. That wins by far on storages renaming a
+    directory at once, such as Azure Data Lake Storage Gen2, HDFS or a local
+    disk. A root goes whole only to a destination that does not exist, as a
+    rename onto an existing path differs among storages. Into an existing
+    directory, its contents merge, and its files are moved one by one. So are
+    those of ``path1`` ending with "/", whose contents go onto ``path2``, and
+    those of a root the filesystem's ``_renames_between`` says it cannot
+    rename at once, e.g. across containers. A root whose move fails yields the
+    error, with its cause, and stays where it is. A root moved whole is
+    yielded once, as ``(root, target)``: what is in it is neither listed nor
+    yielded.
 
     With ``maxdepth``, it moves the files `_tree_cp` copies with it, and
     nothing is moved whole. A source directory is deleted once emptied, so those
@@ -251,6 +253,9 @@ class _Move(_CopyOrMove):
         only meet it again on each file.
         """
         target = self.target(source)
+        renames = getattr(self.fs, "_renames_between", None)
+        if renames is not None and not renames(source, target):
+            return False  # Declared not renamed at once, e.g. across containers.
         if target in self.missing:
             return True
 
