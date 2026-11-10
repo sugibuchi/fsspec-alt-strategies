@@ -68,7 +68,9 @@ class StorageProfile:
         Whether ``mv_file`` moves a directory too, with all in it, in one request,
         as a storage's rename does. Unknown by default, taken as False: a
         directory's files are moved one by one, as ``mv_file`` is called on files
-        only.
+        only. True holds between any two paths of the filesystem: a storage
+        whose rename stops at a boundary, e.g. containers, is several
+        filesystems under a router.
     deletes_directories : bool, optional
         Whether the filesystem's ``_rm_tree`` deletes a directory with all in
         it, in one request, as a storage's recursive delete does. It deletes a

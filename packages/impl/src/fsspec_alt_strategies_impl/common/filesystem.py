@@ -106,8 +106,9 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
                 "storage_profile must be set, to a StorageProfile, unless"
                 f" _load_storage_profile is overridden: {profile!r}"
             )
-        self._profile: StorageProfile | None = None
-        self._profile_lock = asyncio.Lock()
+        # Named apart from a subclass's own members.
+        self._storage_profile_loaded: StorageProfile | None = None
+        self._storage_profile_lock = asyncio.Lock()
 
         self.operation_concurrency = operation_concurrency
         self.io_concurrency = io_concurrency
@@ -133,10 +134,13 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         directories are real, rather than keep a copy of what it knows.
         A first call loads it while the others wait, then find it kept.
         """
-        async with self._profile_lock:
-            if self._profile is None:
-                self._profile = await self._load_storage_profile()
-            return self._profile
+        # Once kept, no call waits for the lock.
+        if (profile := self._storage_profile_loaded) is not None:
+            return profile
+        async with self._storage_profile_lock:
+            if self._storage_profile_loaded is None:
+                self._storage_profile_loaded = await self._load_storage_profile()
+            return self._storage_profile_loaded
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
