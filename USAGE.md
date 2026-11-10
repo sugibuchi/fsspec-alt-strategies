@@ -219,6 +219,9 @@ A subclass of an adaptive file implements the storage's requests, and leaves the
 - `AdaptiveWritableFile` implements `_upload_all`, for a small file, and the multipart upload's requests:
   `_start_multipart_upload`, `_upload_part`, `_complete_multipart_upload` and `_abort_multipart_upload`.
 
+An `AdaptiveWritableFile` opened with mode "xb" creates the file only if none is at the path. Its `exclusive` is then
+True, and the request making the file visible sends the storage's conditional write.
+
 #### Async file support
 
 A filesystem's `open_async` returns its own files through `AsyncFileAdapter`. It returns a sync file, such as an

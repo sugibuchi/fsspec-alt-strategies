@@ -534,6 +534,16 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     - The last part is the one given ``last``: with the file's size, as its
       ``end``. A storage where it makes the file visible completes nothing.
 
+    Mode "xb" creates the file only if none is at the path, and
+    ``exclusive`` is then True. The request making the file visible checks
+    it, so that no other writer can slip in: ``_upload_all``, or
+    ``_complete_multipart_upload``, or the last ``_upload_part`` where that
+    completes the file. It sends the storage's conditional write, e.g. S3's
+    or Azure's ``If-None-Match: *``, and raises FileExistsError if a file is
+    there. The upload is then aborted, and that file kept. A subclass whose
+    storage has no conditional write refuses "xb" when opened, rather than
+    check first, which would race.
+
     Some storages limit each request's size, e.g. to 1 MiB. ``max_request_size``
     declares it, and no ``_upload_all`` or ``_upload_part`` call exceeds it:
 
@@ -548,6 +558,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         The file's path, for messages.
     loop : asyncio.AbstractEventLoop
         The loop the uploads run on, e.g. the filesystem's ``loop``.
+    mode : {"wb", "xb"}, default "wb"
+        Whether the file replaces one at the path, or is created only if
+        none is there.
     concurrency_limit : asyncio.Semaphore, optional
         Held by each upload while it runs. Share one between files to limit
         their uploads, and so their memory, together. The file's own, of
@@ -570,8 +583,8 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     Raises
     ------
     ValueError
-        If ``spread`` is less than 1, or ``max_request_size`` less than
-        ``min_block_size``.
+        If ``mode`` is neither "wb" nor "xb", ``spread`` is less than 1, or
+        ``max_request_size`` less than ``min_block_size``.
 
     See Also
     --------
@@ -594,13 +607,14 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     """The most bytes a request may upload, if the storage limits it."""
 
     mode: str = "wb"
-    """The mode, as fsspec's files have it: only writing, from the start."""
+    """The mode, as fsspec's files have it: "wb", or "xb" to create only."""
 
     def __init__(
         self,
         path: str,
         loop: asyncio.AbstractEventLoop,
         *,
+        mode: str = "wb",
         concurrency_limit: asyncio.Semaphore | None = None,
         spread: int | None = None,
         min_block_size: int | None = None,
@@ -609,8 +623,12 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         sequential: bool | None = None,
         max_request_size: int | None = None,
     ) -> None:
+        if mode not in ("wb", "xb"):
+            raise ValueError(f"mode must be 'wb' or 'xb': {mode!r}")
+
         super().__init__(path, loop, concurrency_limit=concurrency_limit, spread=spread)
 
+        self.mode = mode
         self.min_block_size = min_block_size or self.min_block_size
         self.max_block_size = max(
             max_block_size or self.max_block_size, self.min_block_size
@@ -628,6 +646,11 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         self._pos = 0
         self._buffer = bytearray()
         self._multipart = False
+
+    @property
+    def exclusive(self) -> bool:
+        """Whether the file is created only if none is at the path: mode "xb"."""
+        return self.mode == "xb"
 
     # Leaving a with block by an exception aborts, as the garbage collector
     # does: the file is written whole, or not at all.
@@ -679,7 +702,11 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
 
     @abstractmethod
     async def _upload_all(self, data: bytes) -> None:
-        """Upload the whole file in one request."""
+        """Upload the whole file in one request.
+
+        With ``exclusive``, only if no file is at the path: else it raises
+        FileExistsError, keeping that file.
+        """
 
     @abstractmethod
     async def _start_multipart_upload(self) -> None:
@@ -692,12 +719,18 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         """Upload the part [start, end) of the file, the ``index``th from 0.
 
         Parts may be uploaded out of order. What this returns, such as an ETag,
-        is passed on to ``_complete_multipart_upload``.
+        is passed on to ``_complete_multipart_upload``. Where the ``last``
+        part completes the file, it checks ``exclusive`` as
+        ``_complete_multipart_upload`` does.
         """
 
     @abstractmethod
     async def _complete_multipart_upload(self, parts: list[Any]) -> None:
-        """Commit the parts uploaded, given what each upload returned, in order."""
+        """Commit the parts uploaded, given what each upload returned, in order.
+
+        With ``exclusive``, only if no file is at the path: else it raises
+        FileExistsError, keeping that file, and the upload is aborted.
+        """
 
     @abstractmethod
     async def _abort_multipart_upload(self) -> None:
