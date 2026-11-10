@@ -327,8 +327,10 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
 
     Its primitives, such as ``_ils``, ``_rm_file`` and ``_mv_file``, are the
     wrapped filesystem's, awaited on its loop. So are its data methods, such
-    as ``_cat_file``, and its files. So is ``_rm_tree``, a recursive delete,
-    when the wrapped one has it, e.g. as a `TreeFileSystem`. The wrapper runs
+    as ``_cat_file``, and its files. So is ``_rm_tree``, a recursive delete:
+    the wrapped one's ``_rm_tree``, e.g. as a `TreeFileSystem`, or else its
+    recursive ``_rm``. It is used where the profile's ``deletes_folders=True``
+    says it is one request. The wrapper runs
     on the same loop, sync or not as the wrapped one is.
 
     It wins on storages listing one folder per request, as `TreeFileSystem`
@@ -386,10 +388,13 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
             **kwargs,
         )
 
-        # Optional, as on a TreeFileSystem: left None, rm walks every folder.
-        rm_tree = getattr(fs, "_rm_tree", None)
+    async def _rm_tree(self, path: str) -> None:
+        # The wrapped one's own recursive delete, as deletes_folders declares.
+        rm_tree = getattr(self.fs, "_rm_tree", None)
         if rm_tree is not None:
-            self._rm_tree = rm_tree
+            await rm_tree(path)
+        else:
+            await self.fs._rm(path, recursive=True)
 
 
 class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
@@ -397,9 +402,11 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
 
     Its primitives, such as ``_ils``, ``_rm_file`` and ``_mv_file``, call the
     wrapped filesystem's, each in a thread, so that several run at once. Its
-    ``_mv_file`` is the wrapped one's ``mv``, e.g. a local rename. Its data
-    methods call the wrapped one's too, and its files are the wrapped one's,
-    awaited through a `SyncFileAdapter`.
+    ``_mv_file`` is the wrapped one's ``mv``, e.g. a local rename, and its
+    ``_rm_tree`` its recursive ``rm``, used where the profile's
+    ``deletes_folders=True`` says it is one request. Its data methods call the
+    wrapped one's too, and its files are the wrapped one's, awaited through a
+    `SyncFileAdapter`.
 
     It wins on storages listing one folder per request, such as a local disk
     or SFTP, as `TreeFileSystem` does. A filesystem unsafe to call from several
@@ -457,6 +464,10 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
             storage_profile=replace(storage_profile, fs_type="tree"),
             **kwargs,
         )
+
+    async def _rm_tree(self, path: str) -> None:
+        # The wrapped one's own recursive delete, as deletes_folders declares.
+        await self._run_in_thread(self.fs.rm, path, recursive=True)
 
 
 class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):

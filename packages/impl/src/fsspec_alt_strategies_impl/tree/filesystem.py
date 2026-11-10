@@ -40,7 +40,7 @@ from .walk import _tree_walk
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
     from fsspec_alt_strategies.profile import StorageProfile
 
@@ -69,7 +69,8 @@ class TreeFileSystem(_BaseFileSystem):
     ``io_limit`` as their concurrency limit, and ``_open``. ``_cat_file``,
     ``_pipe_file``, ``_get_file`` and ``_put_file`` read and write through
     ``open_async``'s files. It may implement ``_rm_tree`` too, a storage's
-    recursive delete of a folder, which a recursive ``rm`` then uses.
+    recursive delete of a folder, which a recursive ``rm`` uses where the
+    profile's ``deletes_folders=True`` says so.
 
     Two limits bound its requests, each an `asyncio.Semaphore` of its own:
 
@@ -132,14 +133,15 @@ class TreeFileSystem(_BaseFileSystem):
     storage_profile: StorageProfile
     """What the storage does, for the strategies: a subclass must set it."""
 
-    _rm_tree: Callable[[str], Awaitable[None]] | None = None
-    """Optional: deletes a folder with everything in it, in one request.
+    async def _rm_tree(self, path: str) -> None:
+        """Delete a folder with everything in it, in one request.
 
-    A subclass whose storage has a recursive delete defines it as
-    ``async def _rm_tree(self, path)``. A recursive ``rm`` then deletes each
-    folder root by it, and walks only the roots it fails on. Left None, every
-    folder is walked.
-    """
+        A subclass whose storage has a recursive delete implements it, and its
+        profile's ``deletes_folders=True`` says so. A recursive ``rm`` then
+        deletes each folder root by it, with no walk. It is called only then,
+        and on folders only.
+        """
+        raise NotImplementedError(f"{type(self).__name__} deletes no folder whole")
 
     def __init__(
         self,

@@ -68,6 +68,12 @@ class StorageProfile:
         as a storage's rename does. Unknown by default, taken as False: a
         folder's files are moved one by one, as ``mv_file`` is called on files
         only.
+    deletes_folders : bool, optional
+        Whether the filesystem's ``_rm_tree`` deletes a folder with all in
+        it, in one request, as a storage's recursive delete does. Unknown by
+        default, taken as False: a folder is walked, and what is in it deleted
+        one by one. Declared True, a failed ``_rm_tree`` is the folder's
+        failure, never walked.
 
     Raises
     ------
@@ -87,6 +93,7 @@ class StorageProfile:
     implicit_folders: bool | None = None
     renames_files: bool | None = None
     renames_folders: bool | None = None
+    deletes_folders: bool | None = None
 
     def __post_init__(self) -> None:
         if self.fs_type not in (None, "tree", "flat"):

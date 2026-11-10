@@ -316,6 +316,8 @@ async def test_rm_uses_a_recursive_delete_of_the_storage(
     inner: SimulatedFileSystem,
 ) -> None:
     class Deleting(_Tree):
+        storage_profile = StorageProfile(deletes_folders=True)
+
         async def _rm_tree(self, path: str) -> None:
             await self.inner._rm(path, recursive=True)
 

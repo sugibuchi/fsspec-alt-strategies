@@ -64,14 +64,16 @@ class KnownImplementation(TypedDict):
 
 known_implementations: dict[str, KnownImplementation] = {
     "fsspec.implementations.local.LocalFileSystem": {
-        # Its mv is a rename, of a folder too. A file's folder must exist, as
-        # auto_mkdir is off by default.
+        # Its mv is a rename, of a folder too, and its recursive rm one call,
+        # shutil.rmtree. A file's folder must exist, as auto_mkdir is off by
+        # default.
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=True,
             implicit_folders=False,
             renames_files=True,
             renames_folders=True,
+            deletes_folders=True,
         ),
         "operation_concurrency": 8,
         "io_concurrency": 4,
@@ -84,6 +86,7 @@ known_implementations: dict[str, KnownImplementation] = {
             implicit_folders=True,
             renames_files=False,
             renames_folders=False,
+            deletes_folders=False,
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
@@ -100,6 +103,7 @@ known_implementations: dict[str, KnownImplementation] = {
             implicit_folders=None,
             renames_files=False,
             renames_folders=False,
+            deletes_folders=False,
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
@@ -118,6 +122,7 @@ known_implementations: dict[str, KnownImplementation] = {
             implicit_folders=None,
             renames_files=False,
             renames_folders=False,
+            deletes_folders=False,
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
@@ -131,32 +136,36 @@ known_implementations: dict[str, KnownImplementation] = {
             implicit_folders=None,
             renames_files=False,
             renames_folders=False,
+            deletes_folders=False,
         ),
         "operation_concurrency": 4,
         "io_concurrency": 4,
     },
     "fsspec.implementations.sftp.SFTPFileSystem": {
-        # Its mv is a rename, of a folder too. A file's folder must exist.
+        # Its mv is a rename, of a folder too. A file's folder must exist. Its
+        # recursive rm walks the folder over the connection.
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=True,
             implicit_folders=False,
             renames_files=True,
             renames_folders=True,
+            deletes_folders=False,
         ),
         # One SSH channel, which paramiko does not share between threads.
         "operation_concurrency": 1,
         "io_concurrency": 1,
     },
     "fsspec.implementations.arrow.HadoopFileSystem": {
-        # Its mv is HDFS's rename, of a folder too. HDFS creates a file's
-        # missing parents.
+        # Its mv is HDFS's rename, of a folder too, and its recursive rm one
+        # delete. HDFS creates a file's missing parents.
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=False,
             implicit_folders=False,
             renames_files=True,
             renames_folders=True,
+            deletes_folders=True,
         ),
         "operation_concurrency": 8,
         "io_concurrency": 4,

@@ -24,7 +24,7 @@ from ..common.paths import _check_maxdepth
 from ._jobs import _TreeJobs
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Sequence
 
     from ..common.operation import Operation
     from .walk import _Listing
@@ -56,14 +56,15 @@ def _tree_rm(
 
     It loses on object stores, which list a whole tree in one paginated request:
     fsspec's ``_rm`` makes fewer requests there. On a storage deleting a folder
-    with everything in it in one request, that request wins: the filesystem
-    gives it as its ``_rm_tree``, called ``rm_tree`` below.
+    with everything in it in one request, that request wins: the profile's
+    ``deletes_folders=True`` says the filesystem's ``_rm_tree``, called
+    ``rm_tree`` below, sends it.
 
-    With ``rm_tree``, each folder root is first deleted whole by one
-    ``rm_tree``, with no walk. A root whose deletion fails, e.g. as the
-    storage refuses so large a folder, is walked and deleted file by file, as
-    without it. A real failure then shows on its files. A root deleted whole
-    is yielded once: what was in it is neither listed, yielded nor counted.
+    With ``deletes_folders``, each folder root is deleted whole by one
+    ``rm_tree``, with no walk. A root whose deletion fails yields the error,
+    with its cause, and is kept: nothing in it is walked. One found missing
+    is walked, which raises as without it. A root deleted whole is yielded
+    once: what was in it is neither listed, yielded nor counted.
 
     A glob pattern deletes each path it matches, and all in it, as fsspec's
     ``_rm`` with ``recursive=True`` does. So does a list of paths and
@@ -86,7 +87,7 @@ def _tree_rm(
 
     Requests: one ``_ils`` per folder, one ``rm_file`` per file, and one
     ``rm_folder`` per folder. Patterns, or a list, add the requests of their
-    `_tree_glob`. With ``rm_tree``, a root deleted whole costs one ``rm_tree``
+    `_tree_glob`. With ``deletes_folders``, a root costs one ``rm_tree``
     instead. A single ``path`` then costs an ``info`` first, as ``rm_tree``
     is given folders only. Each request holds a permit of the filesystem's
     ``operation_limit`` while it runs.
@@ -121,13 +122,12 @@ class _Deletion(_TreeJobs):
         fs, maxdepth = self.fs, self.maxdepth
         self.path = path
         # A folder deleted whole would take what is deeper than maxdepth.
-        self.rm_tree: Callable[[str], Awaitable[None]] | None = (
-            getattr(fs, "_rm_tree", None) if maxdepth is None else None
-        )
+        profile = _profile_of(fs)
+        self.deletes_folders = maxdepth is None and profile.deletes_folders is True
 
         # The roots deleted whole, yielded with the first step.
         self.whole: list[str] = []
-        self.implicit_folders = bool(_profile_of(fs).implicit_folders)
+        self.implicit_folders = bool(profile.implicit_folders)
         self.files_found = 0
         self.files_deleted = 0
         self.folders_deleted = 0
@@ -141,7 +141,7 @@ class _Deletion(_TreeJobs):
             roots = _Roots([self.path])
             known = False  # Of unknown kind, until asked.
 
-        if self.rm_tree is None or self.op.cancelling():
+        if not self.deletes_folders or self.op.cancelling():
             return roots
 
         sources = list(roots.folders)
@@ -149,18 +149,21 @@ class _Deletion(_TreeJobs):
         self.whole = [s for s, k in zip(sources, kinds, strict=True) if k == "whole"]
         self.folders_deleted = len(self.whole)
         files = [s for s, k in zip(sources, kinds, strict=True) if k == "file"]
+        self.found.extend(k for k in kinds if isinstance(k, Exception))
 
         return _Roots(
             [s for s, k in zip(sources, kinds, strict=True) if k == "walk"],
             [*roots.files, *files],
         )
 
-    async def delete_whole(self, folder: str, known: bool) -> str:
-        """Delete a root by one ``rm_tree``, and tell how it went: whole, file or walk.
+    async def delete_whole(self, folder: str, known: bool) -> str | Exception:
+        """Delete a root by one ``rm_tree``, and tell how it went: whole, file, walk or its error.
 
         A root of unknown kind is asked first, as ``rm_tree`` takes folders
-        only. A missing root, or a failed deletion, is walked instead: the walk
-        then raises, or shows the failure on the files.
+        only. A missing root is walked, which then raises as without
+        ``deletes_folders``. Any other failure is the root's: the profile
+        declares the storage deletes folders whole, so a walk would only hide
+        the cause.
         """
         try:
             if not known:
@@ -169,9 +172,13 @@ class _Deletion(_TreeJobs):
                         return "file"
 
             async with self.concurrency_limit:
-                await self.rm_tree(folder)  # type: ignore[misc]
-        except Exception:
+                await self.fs._rm_tree(folder)
+        except FileNotFoundError:
             return "walk"
+        except Exception as e:
+            # Yielded among paths, the error must tell its path itself.
+            e.add_note(f"Deleting {folder!r} failed.")
+            return e
 
         return "whole"
 

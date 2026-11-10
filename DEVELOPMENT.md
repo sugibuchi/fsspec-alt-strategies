@@ -107,7 +107,7 @@ A developer chooses, per method:
 
 - a family, by subclassing its class or wrapping a filesystem with it;
 - fsspec's own algorithm instead, by putting it back, e.g. `_rm = AsyncFileSystem._rm`;
-- a storage's native operation, by overriding the method, or `_rm_tree` for a recursive delete.
+- a storage's native operation, by overriding the method, or `_rm_tree` for a recursive delete, which `deletes_folders` declares.
 
 `monitored(fs)` picks the wrapper of a filesystem from `known_implementations`, a table the developer may replace.
 
@@ -221,10 +221,11 @@ saves requests:
 | Field              | Saves                                                          |
 |--------------------|----------------------------------------------------------------|
 | `fs_type`          | The router's per-file fallback, by naming the family           |
-| `parents_required` | False: the `_makedirs` of each destination folder              |
+| `parents_required` | False: the `_makedirs` of each destination folder written to   |
 | `implicit_folders` | True: those, and the deletion of each folder                   |
 | `renames_files`    | True: the data copied by `_flat_mv`                            |
 | `renames_folders`  | True: every request in a folder moved whole by one `_mv_file`  |
+| `deletes_folders`  | True: every request in a folder deleted whole by one `_rm_tree` |
 
 - A deletion reads the profile of the filesystem it deletes from.
 - A copy or move reads the destination's. `renames_files` and `renames_folders` count only within one storage.

@@ -15,10 +15,17 @@ from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
 _LIMITS: dict[str, Any] = {
     "operation_concurrency": 4,
     "io_concurrency": 2,
     "storage_profile": StorageProfile(),
+}
+# Declared to delete a folder whole, in one request.
+_DELETES: dict[str, Any] = {
+    **_LIMITS,
+    "storage_profile": StorageProfile(deletes_folders=True),
 }
 _FILES = ["data/2023/01/a.txt", "data/2023/02/b.txt", "data/2024/c.txt", "data/d.txt"]
 
@@ -85,8 +92,7 @@ async def test_an_async_filesystem_deletes_a_folder_by_its_rm_tree() -> None:
     inner = _RecursiveDelete(hierarchical=True, asynchronous=True)
     for path in _FILES:
         inner.add_file(path, path.encode())
-    tree = AsyncTreeWrapper(inner, **_LIMITS)
-    assert tree._rm_tree == inner._rm_tree
+    tree = AsyncTreeWrapper(inner, **_DELETES)
     inner.reset_stats()
     await tree._rm("data", recursive=True)
     # Its kind asked, then one deletion: no listing.
@@ -94,8 +100,38 @@ async def test_an_async_filesystem_deletes_a_folder_by_its_rm_tree() -> None:
     assert not inner._file_data
 
 
-def test_a_filesystem_without_rm_tree_leaves_it_none() -> None:
-    assert AsyncTreeWrapper(_simulated(), **_LIMITS)._rm_tree is None
+async def test_a_filesystem_without_rm_tree_deletes_by_its_recursive_rm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inner = _simulated()
+    called: list[tuple[str, bool]] = []
+
+    async def own_rm(path: str, recursive: bool = False, **kwargs: Any) -> None:
+        called.append((path, recursive))
+
+    monkeypatch.setattr(inner, "_rm", own_rm)
+    await AsyncTreeWrapper(inner, **_DELETES)._rm_tree("data")
+    assert called == [("data", True)]
+
+
+async def test_a_sync_filesystem_deletes_by_its_recursive_rm(tmp_path: Path) -> None:
+    local = LocalFileSystem()
+    root = local._strip_protocol(str(tmp_path))
+    local.makedirs(f"{root}/data/a")
+    local.pipe_file(f"{root}/data/a/x.txt", b"x")
+    tree = SyncTreeWrapper(local, asynchronous=True, **_DELETES)
+    await tree._rm(f"{root}/data", recursive=True)
+    assert not local.exists(f"{root}/data")
+
+
+async def test_rm_tree_is_unused_unless_declared() -> None:
+    inner = _RecursiveDelete(hierarchical=True, asynchronous=True)
+    for path in _FILES:
+        inner.add_file(path, path.encode())
+    inner.reset_stats()
+    await AsyncTreeWrapper(inner, **_LIMITS)._rm("data", recursive=True)
+    assert inner.stats.calls["delete"] > 1  # Walked, file by file.
+    assert not inner._file_data
 
 
 def test_wrappers_are_made_anew() -> None:

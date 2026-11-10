@@ -380,6 +380,10 @@ async def test_a_file_found_already_gone_is_not_yielded() -> None:
     assert not await fs._exists("data")
 
 
+# A storage declared to delete a folder whole, by its rm_tree.
+_DELETES = StorageProfile(deletes_folders=True)
+
+
 def _rm_tree(fs: SimulatedFileSystem, seen: list[str] | None = None) -> Any:
     """The storage's recursive delete, one request a folder, recording its paths."""
 
@@ -396,7 +400,9 @@ async def test_rm_tree_deletes_a_folder_whole(
 ) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.reset_stats()
-    op = _rm(hierarchical_fs, "data", rm_tree=_rm_tree(hierarchical_fs))
+    op = _rm(
+        hierarchical_fs, "data", rm_tree=_rm_tree(hierarchical_fs), profile=_DELETES
+    )
     deleted, errors = await _collect_with_errors(op)
     assert (deleted, errors) == (["data"], [])
     # Its kind asked, then one deletion: no listing.
@@ -414,7 +420,7 @@ async def test_rm_tree_is_given_folders_only(
     hierarchical_fs.reset_stats()
     rm_tree = _rm_tree(hierarchical_fs, seen)
     deleted, errors = await _collect_with_errors(
-        _rm(hierarchical_fs, "data/README.md", rm_tree=rm_tree)
+        _rm(hierarchical_fs, "data/README.md", rm_tree=rm_tree, profile=_DELETES)
     )
     assert (deleted, errors, seen) == (["data/README.md"], [], [])
     assert hierarchical_fs.stats.calls == {"info": 1, "delete": 1}
@@ -422,7 +428,7 @@ async def test_rm_tree_is_given_folders_only(
     hierarchical_fs.add_file("data/notes.md")
     hierarchical_fs.reset_stats()
     deleted, errors = await _collect_with_errors(
-        _rm(hierarchical_fs, "data/*", rm_tree=rm_tree)
+        _rm(hierarchical_fs, "data/*", rm_tree=rm_tree, profile=_DELETES)
     )
     assert errors == []
     assert sorted(seen) == ["data/2023", "data/2024"]
@@ -431,20 +437,45 @@ async def test_rm_tree_is_given_folders_only(
     assert "info" not in hierarchical_fs.stats.calls
 
 
-async def test_a_root_rm_tree_fails_on_is_walked(
+async def test_a_failed_rm_tree_is_the_roots_error(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
 
     async def refused(path: str) -> None:
-        raise PermissionError(path)  # E.g. a folder too large for the storage.
+        raise PermissionError(path)
 
-    deleted, errors = await _collect_with_errors(
-        _rm(hierarchical_fs, "data", rm_tree=refused)
-    )
-    assert errors == []
+    hierarchical_fs.reset_stats()
+    op = _rm(hierarchical_fs, "data", rm_tree=refused, profile=_DELETES)
+    deleted, errors = await _collect_with_errors(op)
+    # Its cause, not one failure per file: nothing is walked.
+    assert deleted == []
+    assert [type(e) for e in errors] == [PermissionError]
+    assert "Deleting 'data' failed." in errors[0].__notes__
+    assert hierarchical_fs.stats.calls == {"info": 1}
+    assert op.state.errors == 1
+    assert await hierarchical_fs._exists("data/README.md")
+
+
+async def test_a_missing_root_raises_as_without_rm_tree(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    rm_tree = _rm_tree(hierarchical_fs)
+    with pytest.raises(FileNotFoundError):
+        await _collect_with_errors(
+            _rm(hierarchical_fs, "missing", rm_tree=rm_tree, profile=_DELETES)
+        )
+
+
+async def test_rm_tree_is_unused_unless_declared(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    seen: list[str] = []
+    op = _rm(hierarchical_fs, "data", rm_tree=_rm_tree(hierarchical_fs, seen))
+    deleted, errors = await _collect_with_errors(op)
+    assert (seen, errors) == ([], [])
     assert set(_FILES) <= set(deleted)
-    assert not await hierarchical_fs._exists("data")
 
 
 async def test_rm_tree_sends_nothing_once_cancelled(
@@ -452,7 +483,9 @@ async def test_rm_tree_sends_nothing_once_cancelled(
 ) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.reset_stats()
-    op = _rm(hierarchical_fs, "data", rm_tree=_rm_tree(hierarchical_fs))
+    op = _rm(
+        hierarchical_fs, "data", rm_tree=_rm_tree(hierarchical_fs), profile=_DELETES
+    )
     op.cancel()
     assert await _collect_with_errors(op) == ([], [])
     assert hierarchical_fs.stats.calls == {}
@@ -523,7 +556,7 @@ async def test_maxdepth_deletes_the_folders_at_the_limit_if_empty(
     async def rm_tree(path: str) -> None:
         seen.append(path)
 
-    op = _rm(hierarchical_fs, "data", maxdepth=2, rm_tree=rm_tree)
+    op = _rm(hierarchical_fs, "data", maxdepth=2, rm_tree=rm_tree, profile=_DELETES)
     deleted, errors = await _collect_with_errors(op)
     # rm_tree would delete what is deeper too: it is never sent.
     assert seen == []
