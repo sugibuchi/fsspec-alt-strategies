@@ -526,7 +526,7 @@ async def test_cancel_yields_the_moves_sent() -> None:
     assert op.cancelled()
 
 
-async def test_a_target_failing_its_info_moves_file_by_file(
+async def test_a_target_failing_its_info_is_the_roots_error(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
@@ -546,13 +546,13 @@ async def test_a_target_failing_its_info_moves_file_by_file(
         mv_file=hierarchical_fs._rename,
         profile=profile,
     )
-    _, errors = await _collect_with_errors(op)
-    assert errors == []
-    # Not known free, the root is not moved whole.
-    assert op.state.roots_renamed == 0
-    assert op.state.files_moved == len(_FILES)
-    assert not await hierarchical_fs._exists("data")
-    assert await hierarchical_fs._exists("moved/data/2023/01/part-0.parquet")
+    moved, errors = await _collect_with_errors(op)
+    # Its cause, not one failure per file: nothing is walked.
+    assert moved == []
+    assert [type(e) for e in errors] == [PermissionError]
+    assert "Moving 'data' to 'moved/data' failed." in errors[0].__notes__
+    assert (op.state.roots_renamed, op.state.files_moved, op.state.errors) == (0, 0, 1)
+    assert await hierarchical_fs._exists("data/README.md")
 
 
 async def test_a_source_folder_found_already_gone_is_moved() -> None:

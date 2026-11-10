@@ -209,8 +209,8 @@ class _Move(_CopyOrMove):
         """Place the roots, and queue the move of each folder that can go whole: the rest are walked.
 
         A root can move whole to a target found missing. One whose target
-        exists merges into it, so it is walked, and so is one whose target
-        could not be asked: the walk then shows the failure on its files.
+        exists merges into it, so it is walked. One whose target could not be
+        asked yields that error, with its cause, and stays where it is.
         """
         roots = await super().prepare()
         if roots is None or not self.renames_folders:
@@ -223,6 +223,9 @@ class _Move(_CopyOrMove):
         free = await asyncio.gather(*(self.free(s) for s in sources))
         walked = []
         for root, ok in zip(sources, free, strict=True):
+            if isinstance(ok, Exception):
+                self.found.append(ok)
+                continue
             if not ok:
                 walked.append(root)
                 continue
@@ -237,8 +240,12 @@ class _Move(_CopyOrMove):
         self.roots_renamed = 0
         return _Roots(walked, roots.files)
 
-    async def free(self, source: str) -> bool:
-        """Whether a root's target is missing, so that the root can move there whole."""
+    async def free(self, source: str) -> bool | Exception:
+        """Whether a root's target is missing, so that the root can move there whole.
+
+        An error asking it is returned, noted: the root's, as its walk would
+        only meet it again on each file.
+        """
         target = self.target(source)
         if target in self.missing:
             return True
@@ -248,8 +255,9 @@ class _Move(_CopyOrMove):
                 await self.dst_fs._info(target)
         except FileNotFoundError:
             return True
-        except Exception:
-            return False
+        except Exception as e:
+            e.add_note(f"{self.doing} {source!r} to {target!r} failed.")
+            return e
         return False
 
     def add(self, listing: _Listing) -> list[Any] | None:
