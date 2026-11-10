@@ -227,7 +227,7 @@ saves requests:
 | `renames_directories`  | True: every request in a directory moved whole by one `_mv_file`  |
 | `deletes_directories`  | True: every request in a directory deleted whole by one `_rm_tree` |
 
-- A strategy awaits the profile once, when it starts, from the filesystem's `_storage_profile_of(path)`.
+- A filesystem has one profile, which never changes. A strategy awaits it with `_get_storage_profile()`, which loads it once, by `_load_storage_profile()` where a request finds it.
 - A deletion reads the profile of the filesystem it deletes from, for its first path.
 - A copy or move reads the destination's. `renames_files` and `renames_directories` count only within one storage.
 - A field left None is unknown, and the strategy takes the way right on any storage.

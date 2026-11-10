@@ -637,6 +637,9 @@ class TreeView:
         self.storage_profile = storage_profile or StorageProfile()
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
 
+    async def _get_storage_profile(self) -> StorageProfile:
+        return self.storage_profile
+
 
 class FlatView:
     """A filesystem as the flat strategies take it, its primitives replaceable.
@@ -681,3 +684,6 @@ class FlatView:
         self.storage_profile = storage_profile or StorageProfile()
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
         self.rm_batch_size = rm_batch_size
+
+    async def _get_storage_profile(self) -> StorageProfile:
+        return self.storage_profile

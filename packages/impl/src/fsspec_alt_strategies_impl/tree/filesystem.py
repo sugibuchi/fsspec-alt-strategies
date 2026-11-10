@@ -136,7 +136,7 @@ class TreeFileSystem(_BaseFileSystem):
     storage_profile: StorageProfile
     """What the storage does, for the strategies.
 
-    A subclass sets it, or overrides ``_storage_profile_of`` instead.
+    A subclass sets it, or overrides ``_load_storage_profile`` instead.
     """
 
     async def _rm_tree(self, path: str) -> None:

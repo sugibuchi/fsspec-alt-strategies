@@ -314,16 +314,6 @@ async def test_a_sync_filesystem_is_refused(router: _Router) -> None:
         await router._info("lake/memory/x")
 
 
-async def test_a_storages_profile(router: _Router) -> None:
-    assert (
-        await router._storage_profile_of("lake/flat/x")
-    ).implicit_directories is True
-    assert await router._storage_profile_of("lake/tree/x") == StorageProfile(
-        fs_type="tree"
-    )
-    assert await router._storage_profile_of("lake") == StorageProfile()
-
-
 # The primitives, each the storage's own.
 
 

@@ -54,12 +54,14 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     the concurrency, so that several filesystems share it, or else a new one,
     of the number given.
 
-    ``storage_profile``, a class field or a property, tells the strategies
-    what the storage does. One whose storage is unknown says so, with
-    ``StorageProfile()``. The strategies read it through
-    ``_storage_profile_of(path)``. A subclass overrides that instead where
-    the profile is found by a request, or differs by path, e.g. per bucket:
-    ``storage_profile`` is then not needed.
+    ``storage_profile`` tells the strategies what the storage does. It is one
+    for the whole filesystem, and never changes. One whose storage is unknown
+    says so, with ``StorageProfile()``. Where it is found by a request, e.g.
+    whether an account has a hierarchical namespace, a subclass overrides
+    ``_load_storage_profile`` instead. Either way, the strategies and the
+    subclass's primitives get it with ``await self._get_storage_profile()``.
+    A storage whose profile differs by path, e.g. per bucket, is several
+    filesystems under a router.
 
     Each family's class declares the abstract methods its subclasses implement,
     so that a reader finds them all in one place.
@@ -94,48 +96,51 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         super().__init__(*args, **kwargs)
 
-        # A profile found by a request needs no sync one beside it.
-        hook = type(self)._storage_profile_of
+        # A profile found by a request needs none set beside it.
+        load = type(self)._load_storage_profile
         profile = getattr(self, "storage_profile", None)
-        if hook is _BaseFileSystem._storage_profile_of and not isinstance(
+        if load is _BaseFileSystem._load_storage_profile and not isinstance(
             profile, StorageProfile
         ):
             raise ValueError(
                 "storage_profile must be set, to a StorageProfile, unless"
-                f" _storage_profile_of is overridden: {profile!r}"
+                f" _load_storage_profile is overridden: {profile!r}"
             )
+        self._profile_loading: asyncio.Future[StorageProfile] | None = None
 
         self.operation_concurrency = operation_concurrency
         self.io_concurrency = io_concurrency
         self.operation_limit = operation_limit
         self.io_limit = io_limit
 
-    async def _storage_profile_of(self, path: str) -> StorageProfile:
-        """The profile of the storage holding ``path``: here, ``storage_profile``.
+    async def _load_storage_profile(self) -> StorageProfile:
+        """Find the profile: here, ``storage_profile``.
 
-        A strategy awaits it once, when it starts: for a deletion, of its first
-        path, and for a copy or move, of its destination. So a call's paths
-        share one profile. A subclass overrides it where the profile is found
-        by a request, e.g. whether an account has a hierarchical namespace, or
-        differs by path, e.g. per bucket.
-
-        An override caches what it finds, so that a later call sends nothing.
-        The subclass's own primitives may then await it too, e.g. a ``_rmdir``
-        depending on the same namespace, rather than keep a second copy of
-        what it knows.
+        A subclass overrides it where the profile is found by a request, e.g.
+        whether an account has a hierarchical namespace. It is awaited once,
+        by `_get_storage_profile`, which keeps what it returns. One that cannot
+        tell yet raises, and is awaited again next time, or returns
+        ``StorageProfile()``, right on any storage, kept as any profile is.
         """
         return self.storage_profile  # type: ignore[attr-defined, no-any-return]
 
-    def _renames_between(self, path1: str, path2: str) -> bool:
-        """Whether ``_mv_file`` renames a directory from ``path1`` to ``path2`` in one request.
+    async def _get_storage_profile(self) -> StorageProfile:
+        """The profile, loaded once by `_load_storage_profile`, then kept.
 
-        Read only where the profile's ``renames_directories`` says the storage
-        renames directories: here, always. A subclass says where it cannot,
-        e.g. across containers or buckets, and a recursive ``mv`` then moves
-        that directory's files one by one. It sends no request: it is
-        declared from the paths.
+        The strategies await it once, when they start. The subclass's
+        primitives may await it too, e.g. a ``_rmdir`` depending on whether
+        directories are real, rather than keep a copy of what it knows.
+        Concurrent first calls share one load.
         """
-        return True
+        if self._profile_loading is None:
+            self._profile_loading = asyncio.ensure_future(self._load_storage_profile())
+        loading = self._profile_loading
+        try:
+            return await asyncio.shield(loading)
+        except Exception:
+            if self._profile_loading is loading:
+                self._profile_loading = None  # Failed: asked again next time.
+            raise
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
@@ -238,25 +243,6 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
                 while chunk := local.read(self.transfer_size):
                     await f.write(chunk)
                     callback.relative_update(len(chunk))
-
-
-async def _profile_of(fs: Any, path: str | Sequence[str]) -> StorageProfile:
-    """The profile of the storage holding ``path``, or `StorageProfile()` if none.
-
-    It awaits the filesystem's ``_storage_profile_of``, or reads its
-    ``storage_profile``. Of a list, the first path tells. A destination may be
-    any async filesystem, e.g. one of a router's, which fsspec gives no
-    profile: its storage is then unknown.
-    """
-    if not isinstance(path, str):
-        path = next(iter(path), "")
-
-    hook = getattr(fs, "_storage_profile_of", None)
-    if hook is not None:
-        profile = await hook(path)
-    else:
-        profile = getattr(fs, "storage_profile", None)
-    return profile if isinstance(profile, StorageProfile) else StorageProfile()
 
 
 def _strip_only_protocol(fs: AbstractFileSystem, path: str | Sequence[str]) -> Any:

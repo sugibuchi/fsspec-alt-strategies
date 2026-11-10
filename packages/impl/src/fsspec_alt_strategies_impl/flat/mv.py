@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
-from ..common.filesystem import _profile_of
 from ..common.jobs import _Job, _transfer_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
@@ -131,7 +130,7 @@ def _flat_mv(
         # A rename wins only where the storage is known to rename: the profile,
         # awaited, chooses the jobs.
         renames = (
-            same_storage and (await _profile_of(dst_fs, path2)).renames_files is True
+            same_storage and (await dst_fs._get_storage_profile()).renames_files is True
         )
         jobs: _CopyOrMove = (
             _Rename(op=op, **options)

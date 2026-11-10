@@ -28,12 +28,10 @@ from fsspec.callbacks import DEFAULT_CALLBACK
 from fsspec.spec import AbstractFileSystem
 
 from fsspec_alt_strategies.monitor import Call, Monitored, routing
-from fsspec_alt_strategies.profile import StorageProfile
 
 from .common.filesystem import (
     _AbstractFileSystemMeta,
     _copy_errors,
-    _profile_of,
     _raise,
     _strip_only_protocol,
 )
@@ -122,8 +120,8 @@ class AsyncRoutingFileSystem(
     own, written as they close. Neither does a copy between two storages,
     which streams through ``open_async``.
 
-    The router has no ``storage_profile``: each storage has its own,
-    ``_storage_profile_of`` tells it. Its only limit is ``transfer_limit``, the
+    The router has no ``storage_profile``: each storage has its own, which
+    its inner filesystem gives. Its only limit is ``transfer_limit``, the
     files copied across storages at once. The inner filesystems keep their
     own limits.
 
@@ -300,18 +298,6 @@ class AsyncRoutingFileSystem(
             close = getattr(fs, "close", None)
             if callable(close):
                 close()
-
-    async def _storage_profile_of(self, path: str) -> StorageProfile:
-        """The profile of the storage of ``path``: its inner filesystem's.
-
-        ``StorageProfile()`` if the inner filesystem has none, or the path is
-        above the storages.
-        """
-        target = self._target(path)
-        if target is None:
-            return StorageProfile()
-        fs, inner = target
-        return await _profile_of(fs, inner)
 
     # Routing.
 
@@ -977,7 +963,10 @@ class AsyncRoutingFileSystem(
         fsspec's own copy then runs. Each file goes by ``_cross_fs_cp_file``.
         The operation is returned not yet started.
         """
-        fs_type = (await _profile_of(fs1, path1)).fs_type
+        get = getattr(fs1, "_get_storage_profile", None)
+        if get is None:
+            return None  # A plain fsspec filesystem: fsspec's own copy.
+        fs_type = (await get()).fs_type
         if fs_type is None:
             return None
 
@@ -1023,7 +1012,10 @@ class AsyncRoutingFileSystem(
         copies each key by ``_cross_fs_cp_file`` instead, and deletes the keys
         copied in batches, by its ``_rm_files``.
         """
-        fs_type = (await _profile_of(fs1, path1)).fs_type
+        get = getattr(fs1, "_get_storage_profile", None)
+        if get is None:
+            return None  # A plain fsspec filesystem: fsspec's own copy.
+        fs_type = (await get()).fs_type
         if fs_type is None:
             return None
 

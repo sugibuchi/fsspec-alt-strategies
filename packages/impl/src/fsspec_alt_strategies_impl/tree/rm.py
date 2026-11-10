@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import RmState
 
-from ..common.filesystem import _profile_of
 from ..common.jobs import _Job, _Roots
 from ..common.paths import _check_maxdepth
 from ._jobs import _TreeJobs
@@ -127,7 +126,7 @@ class _Deletion(_TreeJobs):
         self.directories_deleted = 0
 
     async def setup(self) -> None:
-        profile = await _profile_of(self.fs, self.path)
+        profile = await self.fs._get_storage_profile()
         # A directory deleted whole would take what is deeper than maxdepth.
         self.deletes_directories = (
             self.maxdepth is None and profile.deletes_directories is True

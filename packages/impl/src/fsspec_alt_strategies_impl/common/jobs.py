@@ -33,7 +33,6 @@ from fsspec.utils import common_prefix
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.states import CpState
 
-from .filesystem import _profile_of
 from .operation import Operation, _collect_with_errors
 from .paths import _trim
 
@@ -503,7 +502,10 @@ class _CopyJobs(_Jobs):
         self.files_done = 0
 
     async def setup(self) -> None:
-        self.profile = await _profile_of(self.dst_fs, self.path2)
+        # Any async filesystem may be a router's destination: fsspec gives it
+        # no profile, so its storage is unknown.
+        get = getattr(self.dst_fs, "_get_storage_profile", None)
+        self.profile = await get() if get is not None else StorageProfile()
         # Unknown, directories are made first. Implicit directories need none.
         self.implicit_directories = bool(self.profile.implicit_directories)
         self.parents_required = (

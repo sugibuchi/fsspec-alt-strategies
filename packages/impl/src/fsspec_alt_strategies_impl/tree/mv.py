@@ -94,9 +94,10 @@ def _tree_mv(
     disk. A root goes whole only to a destination that does not exist, as a
     rename onto an existing path differs among storages. Into an existing
     directory, its contents merge, and its files are moved one by one. So are
-    those of ``path1`` ending with "/", whose contents go onto ``path2``, and
-    those of a root the filesystem's ``_renames_between`` says it cannot
-    rename at once, e.g. across containers. A root whose move fails yields the
+    those of ``path1`` ending with "/", whose contents go onto ``path2``. A
+    filesystem is one place renames work in: a storage where they stop, e.g.
+    at containers, is several filesystems under a router. A root whose move
+    fails yields the
     error, with its cause, and stays where it is. A root moved whole is
     yielded once, as ``(root, target)``: what is in it is neither listed nor
     yielded.
@@ -253,9 +254,6 @@ class _Move(_CopyOrMove):
         only meet it again on each file.
         """
         target = self.target(source)
-        renames = getattr(self.fs, "_renames_between", None)
-        if renames is not None and not renames(source, target):
-            return False  # Declared not renamed at once, e.g. across containers.
         if target in self.missing:
             return True
 

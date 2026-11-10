@@ -334,35 +334,34 @@ async def test_rm_uses_a_recursive_delete_of_the_storage(
     assert callback.value == 1
 
 
-async def test_the_profile_is_awaited_for_the_path_of_each_call(
+async def test_a_profile_found_by_a_request_is_loaded_once(
     inner: SimulatedFileSystem,
 ) -> None:
-    asked: list[str] = []
+    loads: list[int] = []
 
-    class PerPath(_Tree):
-        # E.g. a storage whose profile a request finds, per bucket.
-        async def _storage_profile_of(self, path: str) -> StorageProfile:
-            asked.append(path)
+    class Found(_Tree):
+        # E.g. whether an account has a hierarchical namespace.
+        async def _load_storage_profile(self) -> StorageProfile:
+            loads.append(1)
             await asyncio.sleep(0)
-            return StorageProfile(deletes_directories=path.startswith("data"))
+            if len(loads) == 1:
+                raise ConnectionError("not yet")  # Asked again next time.
+            return StorageProfile(deletes_directories=True)
 
         async def _rm_tree(self, path: str) -> None:
             await self.inner._rm(path, recursive=True)
 
-    fs = PerPath(inner, asynchronous=True)
-    await fs._copy("data", "copied", recursive=True)
-    # A copy asks of its destination, once.
-    assert asked == ["copied"]
+    fs = Found(inner, asynchronous=True)
+    with pytest.raises(ConnectionError):
+        await fs._get_storage_profile()
 
+    await fs._copy("data", "copied", recursive=True)
     inner.reset_stats()
     await fs._rm("data", recursive=True)
-    assert asked[-1] == "data"
     assert inner.stats.calls == {"delete": 1}  # Deleted whole, as declared.
-
-    inner.reset_stats()
-    await fs._rm("copied", recursive=True)
-    assert asked[-1] == "copied"
-    assert inner.stats.calls["delete"] > 1  # Walked: not declared there.
+    # Concurrent calls share the one load, kept after.
+    await asyncio.gather(*(fs._get_storage_profile() for _ in range(3)))
+    assert len(loads) == 2
 
 
 async def test_mkdir_makes_a_directory(fs: _Tree, inner: SimulatedFileSystem) -> None:
@@ -388,8 +387,8 @@ def test_a_profile_is_set_or_found_by_the_hook(inner: SimulatedFileSystem) -> No
         Unset(inner)
 
     class Found(Unset):
-        # E.g. found by a request: no sync profile beside it.
-        async def _storage_profile_of(self, path: str) -> StorageProfile:
+        # E.g. found by a request: none set beside it.
+        async def _load_storage_profile(self) -> StorageProfile:
             return StorageProfile(fs_type="tree")
 
     Found(inner)

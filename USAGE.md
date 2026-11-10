@@ -112,9 +112,9 @@ class MyFileSystem(TreeFileSystem):
 fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
 ```
 
-The profile may also be a property, e.g. of the account the filesystem connects to. Where it is found by a request,
-or differs by path, override `async def _storage_profile_of(self, path)`, e.g. to ask a bucket's kind once and cache
-it. A strategy awaits it once per call, for the path deleted from, or copied or moved to. A method of fsspec's own can
+A filesystem has one profile, which never changes. Where a request finds it, e.g. whether an account has a hierarchical
+namespace, override `async def _load_storage_profile(self)` instead: it is awaited once, and the profile kept. A storage
+whose behaviour differs by path, e.g. per bucket, is several filesystems under a router. A method of fsspec's own can
 come back, e.g. `_rm = AsyncFileSystem._rm`, and a storage's native operation can override a method.
 
 #### Wrappers
@@ -134,7 +134,7 @@ fsspec's memory, SFTP and HDFS filesystems. Each entry says its profile, whose 
 concurrency limits. The wrapper is async if the filesystem is. Pass your own table to `monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem the way
 right on every storage: as a tree, one request at a time, with nothing known of the storage.
 
-A filesystem whose profile is found at runtime, e.g. per bucket or per account, needs a wrapper of its own. It subclasses a wrapper, overriding `_storage_profile_of(path)`, and the primitives using the storage's native operations, such as `_mv_file` renaming a directory, or `_rm_tree`. The strategies then use them where the profile says so, streamed and monitored. Use such a wrapper directly: `monitored()` knows only the generic ones.
+A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper, overriding `_load_storage_profile()`, and the primitives using the storage's native operations, such as `_mv_file` renaming a directory, or `_rm_tree`. The strategies then use them where the profile says so, streamed and monitored. Use such a wrapper directly: `monitored()` knows only the generic ones.
 
 A wrapper is light and not cached: make one when you need it, and drop it after.
 
