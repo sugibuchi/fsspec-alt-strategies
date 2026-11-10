@@ -16,7 +16,7 @@ family finds what to copy, `_CopyJobs` where it goes. The two define no
 method in common, and their constructors take keywords and pass the rest on,
 so either order works.
 
-This module depends on `filesystem`, `operation` and `paths`.
+This module depends on `operation` and `paths`.
 """
 
 from __future__ import annotations

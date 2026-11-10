@@ -115,7 +115,7 @@ fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
 A filesystem has one profile, which never changes. Where a request finds it, e.g. whether an account has a hierarchical
 namespace, override `async def _load_storage_profile(self)` instead: it is awaited once, and the profile kept. A storage
 whose behaviour differs by path, e.g. per bucket, is several filesystems under a router. A method of fsspec's own can
-come back, e.g. `_rm = AsyncFileSystem._rm`, and a storage's native operation can override a method.
+come back, e.g. `_rm = AsyncFileSystem._rm`, and a storage's own operation can override a method.
 
 #### Wrappers
 
@@ -130,11 +130,15 @@ fs.rm("data/2024", recursive=True)  # Deletes by the tree family's strategy.
 ```
 
 The known filesystems are those in `known_implementations`, by class: the local filesystem, s3fs, gcsfs, adlfs,
-fsspec's memory, SFTP and HDFS filesystems. Each entry says its profile, whose s_type is its family, and its
-concurrency limits. The wrapper is async if the filesystem is. Pass your own table to `monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem the way
-right on every storage: as a tree, one request at a time, with nothing known of the storage.
+fsspec's memory, SFTP and HDFS filesystems. Each entry says its profile, whose `fs_type` is its family, and its
+concurrency limits. The wrapper is async if the filesystem is. Pass your own table to `monitored()`, or
+`wrap_unknown_fs=True` to wrap any other filesystem the way right on every storage. That is as a tree, one request at a
+time, with nothing known of the storage.
 
-A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper, overriding `_load_storage_profile()`, and the primitives using the storage's native operations, such as `_mv_file` renaming a directory, or `_rm_tree`. The strategies then use them where the profile says so, streamed and monitored. Use such a wrapper directly: `monitored()` knows only the generic ones.
+A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper,
+overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_file`
+renaming a directory, or `_rm_tree` deleting one whole. The strategies then use them where the profile says so,
+streamed and monitored. Use such a wrapper directly: `monitored()` knows only the generic ones.
 
 A wrapper is light and not cached: make one when you need it, and drop it after.
 

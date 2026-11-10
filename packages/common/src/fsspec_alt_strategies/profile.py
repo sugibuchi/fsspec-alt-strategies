@@ -7,8 +7,9 @@ parent directories, others raise FileNotFoundError. A strategy works on any of
 them, but sends fewer requests, or copies less data, when it knows.
 `StorageProfile` tells it.
 
-A strategy taking a ``profile`` requires one: `StorageProfile()` knows nothing.
-A filesystem wrapping strategies holds one for all its calls.
+A filesystem has one profile, which never changes. A strategy reads it from the
+filesystem it works on, or from the destination's for a copy or move.
+`StorageProfile()` knows nothing, and is right on any storage.
 
 The library never detects a storage's behaviour: the developer declares it. A
 field left None is unknown, and a strategy then takes the way that is right on
@@ -46,7 +47,7 @@ class StorageProfile:
         with ``_iexpand``, ``_rm_files`` and ``rm_batch_size``, as on a
         `FlatFileSystem`. A router copying or moving between two storages
         picks the source's strategies with it. Unknown by default: the router
-        falls back on fsspec's own copy.
+        then copies with fsspec's own copy.
     parents_required : bool, optional
         Whether writing a file into a missing directory fails, rather than
         creating its parents. Unknown by default, taken as True: directories are
@@ -71,10 +72,9 @@ class StorageProfile:
     deletes_directories : bool, optional
         Whether the filesystem's ``_rm_tree`` deletes a directory with all in
         it, in one request, as a storage's recursive delete does. It deletes a
-        file too. Unknown by
-        default, taken as False: a directory is walked, and what is in it deleted
-        one by one. Declared True, a failed ``_rm_tree`` is the directory's
-        failure, never walked.
+        file too. Unknown by default, taken as False: a directory is walked, and
+        what is in it deleted one by one. Declared True, a failed ``_rm_tree``
+        is the directory's failure, never walked.
 
     Raises
     ------

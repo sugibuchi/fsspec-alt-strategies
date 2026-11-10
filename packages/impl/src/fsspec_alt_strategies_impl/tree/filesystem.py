@@ -79,8 +79,9 @@ class TreeFileSystem(_BaseFileSystem):
     - ``io_limit``, the reads and writes of data, by its files.
 
     ``storage_profile``, a `StorageProfile`, tells the strategies what the
-    storage does. It is required: `StorageProfile()` says the storage is
-    unknown, and the strategies then take the way right on any storage.
+    storage does. It is required, unless ``_load_storage_profile`` is
+    overridden to find it with a request. `StorageProfile()` says the storage
+    is unknown, and the strategies then take the way right on any storage.
 
     A recursive ``mv``, or one of a single file, moves each file with
     ``_mv_file``, which is fsspec's copy then delete. A subclass whose storage
@@ -105,7 +106,8 @@ class TreeFileSystem(_BaseFileSystem):
     Raises
     ------
     ValueError
-        If a concurrency is less than 1, or ``storage_profile`` is not set.
+        If a concurrency is less than 1, or ``storage_profile`` is not set
+        while ``_load_storage_profile`` is not overridden.
 
     See Also
     --------

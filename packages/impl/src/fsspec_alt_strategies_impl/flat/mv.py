@@ -8,8 +8,8 @@ prefix first. `_flat_mv` moves each key as soon as the listing gives it: by
 one ``_mv_file``, or by a copy, deleting the copied keys in batches while the
 listing goes on.
 
-This module depends on `_jobs`, `cp`, and `filesystem`, `jobs` and `paths`
-of `common`.
+This module depends on `_jobs`, `cp`, and `jobs`, `operation` and `paths` of
+`common`.
 """
 
 from __future__ import annotations

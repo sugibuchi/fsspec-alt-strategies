@@ -83,7 +83,7 @@ AsyncRoutingFileSystem             router.py, holding filesystems of the above
 `_BaseFileSystem` holds what both families share:
 
 - the two limits: `operation_limit` for the strategies' requests, `io_limit` for reads and writes of data;
-- `storage_profile`, required, a class field or a property computed per instance;
+- the profile: `storage_profile`, or `async _load_storage_profile()` overridden to find it with a request;
 - the data methods, `_cat_file`, `_pipe_file`, `_get_file` and `_put_file`, through `open_async`'s files;
 - the sync methods fsspec does not make, `mv` and `rmdir`.
 
@@ -107,7 +107,8 @@ A developer chooses, per method:
 
 - a family, by subclassing its class or wrapping a filesystem with it;
 - fsspec's own algorithm instead, by putting it back, e.g. `_rm = AsyncFileSystem._rm`;
-- a storage's native operation, by overriding the method, or `_rm_tree` for a recursive delete, which `deletes_directories` declares.
+- a storage's own operation, by overriding the method;
+- a storage's recursive delete, by implementing `_rm_tree`, which `deletes_directories=True` declares.
 
 `monitored(fs)` picks the wrapper of a filesystem from `known_implementations`, a table the developer may replace.
 
@@ -174,8 +175,8 @@ implements three methods:
 - `_roots(path)` lists a directory above the storages.
 
 Within one storage, a call is that storage's own. Between two, a recursive copy or move runs the source family's
-strategy on the two inner filesystems, chosen by the source profile's `fs_type`. Without one, or with `maxdepth`, it
-is fsspec's copy, a file at a time.
+strategy on the two inner filesystems, chosen by the source profile's `fs_type`, with `maxdepth` too. Without one, it
+is fsspec's copy, a file at a time. A plain fsspec filesystem counts as one of unknown profile.
 
 Each file goes through `_cross_fs_cp_file` or `_cross_fs_mv_file`. By default these stream the data through both
 storages' `open_async`. A subclass can use a server-side copy instead.
@@ -214,21 +215,23 @@ stores list them.
 
 ### Storage profiles
 
-A `StorageProfile` declares what a storage does that fsspec leaves open. A strategy reads it from the filesystem's
-`storage_profile`, and one without counts as `StorageProfile()`. A strategy is right on any storage, and a profile only
-saves requests:
+A `StorageProfile` declares what a storage does that fsspec leaves open. A strategy is right on any storage, and a
+profile only saves requests:
 
-| Field              | Saves                                                          |
-|--------------------|----------------------------------------------------------------|
-| `fs_type`          | The router's per-file fallback, by naming the family           |
-| `parents_required` | False: the `_makedirs` of each destination directory written to   |
-| `implicit_directories` | True: those, and the deletion of each directory                   |
-| `renames_files`    | True: the data copied by `_flat_mv`                            |
-| `renames_directories`  | True: every request in a directory moved whole by one `_mv_file`  |
+| Field                  | Saves                                                              |
+|------------------------|--------------------------------------------------------------------|
+| `fs_type`              | The router's per-file fallback, by naming the family               |
+| `parents_required`     | False: the `_makedirs` of each destination directory written to    |
+| `implicit_directories` | True: those, and the deletion of each directory                    |
+| `renames_files`        | True: the data copied by `_flat_mv`                                |
+| `renames_directories`  | True: every request in a directory moved whole by one `_mv_file`   |
 | `deletes_directories`  | True: every request in a directory deleted whole by one `_rm_tree` |
 
-- A filesystem has one profile, which never changes. A strategy awaits it with `_get_storage_profile()`, which loads it once, by `_load_storage_profile()` where a request finds it.
-- A deletion reads the profile of the filesystem it deletes from, for its first path.
+- A filesystem has one profile, which never changes. It is `storage_profile`, or what `_load_storage_profile()`
+  finds with a request.
+- A strategy awaits it with `_get_storage_profile()`, in its jobs' `setup()`. That loads it once, under a lock.
+- Paths of one filesystem whose storages differ go to a router, each storage with a filesystem of its own.
+- A deletion reads the profile of the filesystem it deletes from.
 - A copy or move reads the destination's. `renames_files` and `renames_directories` count only within one storage.
 - A field left None is unknown, and the strategy takes the way right on any storage.
 - A wrong field gives wrong results. The library never detects a storage's behaviour: the developer declares it.

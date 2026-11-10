@@ -99,8 +99,9 @@ class FlatFileSystem(_BaseFileSystem):
     Raises
     ------
     ValueError
-        If a concurrency is less than 1, or ``storage_profile`` or
-        ``rm_batch_size`` is not set.
+        If a concurrency is less than 1, or ``rm_batch_size`` is not set. Also
+        if ``storage_profile`` is not set while ``_load_storage_profile`` is
+        not overridden.
 
     See Also
     --------

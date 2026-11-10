@@ -6,8 +6,7 @@
 whole tree first, then deletes each path. `_tree_rm` deletes each directory's files
 as soon as the directory is listed, and each directory once it is empty.
 
-This module depends on `_jobs`, and `filesystem`, `jobs` and `paths` of
-`common`.
+This module depends on `_jobs`, and `jobs` and `paths` of `common`.
 """
 
 from __future__ import annotations
