@@ -133,7 +133,10 @@ class FlatFileSystem(_BaseFileSystem):
     """The most keys ``_rm_files`` deletes in one request, e.g. 1000 on S3."""
 
     storage_profile: StorageProfile
-    """What the storage does, for the strategies: a subclass must set it."""
+    """What the storage does, for the strategies.
+
+    A subclass sets it, or overrides ``_storage_profile_of`` instead.
+    """
 
     def __init__(
         self,

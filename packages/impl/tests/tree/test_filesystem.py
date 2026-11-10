@@ -375,6 +375,24 @@ async def test_mkdir_makes_a_directory(fs: _Tree, inner: SimulatedFileSystem) ->
         await fs._mkdir("none/deep", create_parents=False)
     await fs._mkdir("new/other", create_parents=False)
     assert await inner._isdir("new/other")
+    inner.add_file("new/file", b"f")
+    with pytest.raises(NotADirectoryError):
+        await fs._mkdir("new/file/deep", create_parents=False)
+
+
+def test_a_profile_is_set_or_found_by_the_hook(inner: SimulatedFileSystem) -> None:
+    class Unset(_Tree):
+        storage_profile = None  # type: ignore[assignment]
+
+    with pytest.raises(ValueError, match="storage_profile"):
+        Unset(inner)
+
+    class Found(Unset):
+        # E.g. found by a request: no sync profile beside it.
+        async def _storage_profile_of(self, path: str) -> StorageProfile:
+            return StorageProfile(fs_type="tree")
+
+    Found(inner)
 
 
 async def test_failures_are_raised(fs: _Tree, inner: SimulatedFileSystem) -> None:

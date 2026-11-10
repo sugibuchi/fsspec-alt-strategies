@@ -55,10 +55,11 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     of the number given.
 
     ``storage_profile``, a class field or a property, tells the strategies
-    what the storage does. A subclass must set it: one whose storage is
-    unknown says so, with ``StorageProfile()``. The strategies read it through
-    ``_storage_profile_of(path)``, which a subclass overrides where the
-    profile is found by a request, or differs by path, e.g. per bucket.
+    what the storage does. One whose storage is unknown says so, with
+    ``StorageProfile()``. The strategies read it through
+    ``_storage_profile_of(path)``. A subclass overrides that instead where
+    the profile is found by a request, or differs by path, e.g. per bucket:
+    ``storage_profile`` is then not needed.
 
     Each family's class declares the abstract methods its subclasses implement,
     so that a reader finds them all in one place.
@@ -93,10 +94,15 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         super().__init__(*args, **kwargs)
 
+        # A profile found by a request needs no sync one beside it.
+        hook = type(self)._storage_profile_of
         profile = getattr(self, "storage_profile", None)
-        if not isinstance(profile, StorageProfile):
+        if hook is _BaseFileSystem._storage_profile_of and not isinstance(
+            profile, StorageProfile
+        ):
             raise ValueError(
-                f"storage_profile must be set, to a StorageProfile: {profile!r}"
+                "storage_profile must be set, to a StorageProfile, unless"
+                f" _storage_profile_of is overridden: {profile!r}"
             )
 
         self.operation_concurrency = operation_concurrency
@@ -110,8 +116,13 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         A strategy awaits it once, when it starts: for a deletion, of its first
         path, and for a copy or move, of its destination. So a call's paths
         share one profile. A subclass overrides it where the profile is found
-        by a request, e.g. whether an account has a hierarchical namespace,
-        caching it, or differs by path, e.g. per bucket.
+        by a request, e.g. whether an account has a hierarchical namespace, or
+        differs by path, e.g. per bucket.
+
+        An override caches what it finds, so that a later call sends nothing.
+        The subclass's own primitives may then await it too, e.g. a ``_rmdir``
+        depending on the same namespace, rather than keep a second copy of
+        what it knows.
         """
         return self.storage_profile  # type: ignore[attr-defined, no-any-return]
 

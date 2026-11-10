@@ -86,7 +86,10 @@ class TreeFileSystem(_BaseFileSystem):
     ``_mv_file``, which is fsspec's copy then delete. A subclass whose storage
     renames a path in one request overrides it. If its rename moves a directory
     too, with all in it, the profile's ``renames_directories=True`` says so: a
-    recursive ``mv`` then moves each directory whole where it can.
+    recursive ``mv`` then moves each directory whole where it can. The
+    strategies call ``_mv_file`` only where the destination's parent exists,
+    having made it: a rename need not make it. A caller outside the
+    strategies makes it too.
 
     Parameters
     ----------
@@ -131,7 +134,10 @@ class TreeFileSystem(_BaseFileSystem):
     """
 
     storage_profile: StorageProfile
-    """What the storage does, for the strategies: a subclass must set it."""
+    """What the storage does, for the strategies.
+
+    A subclass sets it, or overrides ``_storage_profile_of`` instead.
+    """
 
     async def _rm_tree(self, path: str) -> None:
         """Delete a directory with everything in it, in one request.
@@ -140,7 +146,9 @@ class TreeFileSystem(_BaseFileSystem):
         profile's ``deletes_directories=True`` says so. A recursive ``rm`` then
         deletes each root by it, with no walk. It is called only then. It takes
         a file too, which it deletes as ``_rm_file`` does, as a root may be
-        either.
+        either. A missing path raises FileNotFoundError, as a walk would find
+        it: a storage whose recursive delete succeeds on a missing path asks
+        first.
         """
         raise NotImplementedError(f"{type(self).__name__} deletes no directory whole")
 
@@ -221,14 +229,20 @@ class TreeFileSystem(_BaseFileSystem):
         """Create a directory, as fsspec's local ``mkdir`` does, by ``_makedirs``.
 
         fsspec's own does nothing. An existing path raises FileExistsError.
-        Without ``create_parents``, a missing parent raises FileNotFoundError.
+        Without ``create_parents``, a missing parent raises FileNotFoundError,
+        and one that is a file NotADirectoryError.
         """
         path = self._strip_protocol(path)
         if await self._exists(path):
             raise FileExistsError(path)
         parent = self._parent(path)
-        if not create_parents and parent and not await self._isdir(parent):
-            raise FileNotFoundError(parent)
+        if not create_parents and parent:
+            try:
+                kind = (await self._info(parent))["type"]
+            except FileNotFoundError:
+                raise FileNotFoundError(parent) from None
+            if kind != "directory":
+                raise NotADirectoryError(parent)
         await self._makedirs(path, exist_ok=True)
 
     @abstractmethod
