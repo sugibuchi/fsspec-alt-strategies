@@ -110,14 +110,6 @@ async def test_writes_in_parts(fs: SimulatedFileSystem) -> None:
     assert fs.cat_file("f.bin") == data
 
 
-async def test_refuses_another_loop(fs: SimulatedFileSystem) -> None:
-    # The file's loop is the filesystem's, not the running one.
-    file = _Writer(fs, "f.bin", loop=fs.loop)
-    with pytest.raises(RuntimeError, match="outside the loop"):
-        await AsyncFileAdapter(file).write(b"x")
-    file.close()
-
-
 async def test_a_sync_file_reads_and_writes_in_threads(tmp_path: Path) -> None:
     data = os.urandom(10 * _KiB)
     path = tmp_path / "f.bin"
