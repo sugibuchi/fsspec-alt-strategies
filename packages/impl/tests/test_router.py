@@ -545,6 +545,21 @@ async def test_copy_across_storages_tries_the_server_first() -> None:
     assert len(router.flat._file_data) == 3
 
 
+async def test_maxdepth_across_storages_runs_the_strategy() -> None:
+    router = _ServerCopying()
+    for path in [*_FILES, "data/top.txt"]:
+        router.tree.add_file(path, path.encode())
+    await router._copy("lake/tree/data", "lake/flat/copied", recursive=True, maxdepth=1)
+    # Each file by _cross_fs_cp_file, which fsspec's own copy never calls.
+    assert router.server_copies == [("data/top.txt", "copied/top.txt")]
+    assert sorted(router.flat._file_data) == ["copied/top.txt"]
+
+    await router._mv("lake/tree/data", "lake/flat/moved", recursive=True, maxdepth=1)
+    assert "moved/top.txt" in router.flat._file_data
+    # What is deeper stays, as _tree_mv keeps it.
+    assert sorted(router.tree._file_data) == sorted(_FILES)
+
+
 async def test_copy_from_a_plain_storage_is_fsspecs(router: _Router) -> None:
     await router._copy("lake/plain/data", "lake/tree/copied", recursive=True)
     assert router.tree._file_data["copied/a/1.txt"].data == b"data/a/1.txt"

@@ -102,8 +102,8 @@ class AsyncRoutingFileSystem(
     says: that of `TreeFileSystem` or `FlatFileSystem`, walking or listing the
     source as they do. Each file goes by ``_cross_fs_cp_file`` or
     ``_cross_fs_mv_file``, which stream the data unless a subclass overrides
-    them, e.g. with a server-side copy. A source of unknown ``fs_type``, or a
-    call with ``maxdepth``, is copied by fsspec's own copy, a file at a time. A
+    them, e.g. with a server-side copy, with ``maxdepth`` too. A source of
+    unknown ``fs_type`` is copied by fsspec's own copy, a file at a time. A
     move between two storages deletes each source file once its copy succeeds,
     and the source folders left empty.
 
@@ -870,10 +870,8 @@ class AsyncRoutingFileSystem(
                         **kwargs,
                     ),
                 )
-            elif (
-                recursive
-                and maxdepth is None
-                and (op := self._cross_fs_cp(fs1, sources, fs2, inner2))
+            elif recursive and (
+                op := self._cross_fs_cp(fs1, sources, fs2, inner2, maxdepth)
             ):
                 errors = await self._transferred(
                     op, fs1, sources, fs2, inner2, outers, path2, callback
@@ -947,10 +945,8 @@ class AsyncRoutingFileSystem(
                 await self._on(
                     fs1, sources, outer, fs1._rm(sources, recursive=recursive)
                 )
-            elif (
-                recursive
-                and maxdepth is None
-                and (op := self._cross_fs_mv(fs1, sources, fs2, inner2))
+            elif recursive and (
+                op := self._cross_fs_mv(fs1, sources, fs2, inner2, maxdepth)
             ):
                 errors = await self._transferred(
                     op,
@@ -978,6 +974,7 @@ class AsyncRoutingFileSystem(
         path1: str | list[str],
         fs2: AsyncFileSystem,
         path2: str,
+        maxdepth: int | None = None,
     ) -> Operation[tuple[str, str], Any] | None:
         """The recursive copy from ``fs1`` to ``fs2``, by the source's family, or None.
 
@@ -1001,6 +998,7 @@ class AsyncRoutingFileSystem(
                 path2,
                 cp_file=self._across(fs1, fs2),
                 same_storage=False,
+                maxdepth=maxdepth,
             )
         if fs_type == "flat":
             from .flat.cp import _flat_cp  # noqa: PLC0415
@@ -1012,6 +1010,7 @@ class AsyncRoutingFileSystem(
                 path2,
                 cp_file=self._across(fs1, fs2),
                 same_storage=False,
+                maxdepth=maxdepth,
             )
         return None
 
@@ -1021,6 +1020,7 @@ class AsyncRoutingFileSystem(
         path1: str | list[str],
         fs2: AsyncFileSystem,
         path2: str,
+        maxdepth: int | None = None,
     ) -> Operation[tuple[str, str], Any] | None:
         """The recursive move from ``fs1`` to ``fs2``, by the source's family, or None.
 
@@ -1044,6 +1044,7 @@ class AsyncRoutingFileSystem(
                 path2,
                 mv_file=self._across(fs1, fs2, move=True),
                 same_storage=False,
+                maxdepth=maxdepth,
             )
         if fs_type == "flat":
             from .flat.mv import _flat_mv  # noqa: PLC0415
@@ -1057,6 +1058,7 @@ class AsyncRoutingFileSystem(
                 path2,
                 cp_file=self._across(fs1, fs2),
                 same_storage=False,
+                maxdepth=maxdepth,
             )
         return None
 
