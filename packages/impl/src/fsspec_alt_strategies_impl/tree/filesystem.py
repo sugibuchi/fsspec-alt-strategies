@@ -167,6 +167,16 @@ class TreeFileSystem(_BaseFileSystem):
         The entries are as fsspec's ``_ls`` gives them with ``detail``: a
         storage listing a directory in pages yields each page's as it comes. A
         file yields itself, as fsspec's ``_ls`` lists it.
+
+        Each entry is a dict with at least:
+
+        - ``"name"``, the full path, without the protocol, a trailing "/"
+          being ignored;
+        - ``"type"``, "directory" or "file";
+        - ``"size"``, in bytes, 0 for a directory.
+
+        Other keys, such as a modification time, are passed on as they are.
+        A missing ``path`` raises FileNotFoundError, when the iteration starts.
         """
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
@@ -189,7 +199,13 @@ class TreeFileSystem(_BaseFileSystem):
 
     @abstractmethod
     async def _rmdir(self, path: str) -> None:
-        """Delete an empty directory."""
+        """Delete an empty directory.
+
+        A directory already gone raises FileNotFoundError, which the
+        strategies count as deleted: on a storage whose directories go with
+        their last file, it is. The profile's ``implicit_directories=True``
+        saves those requests.
+        """
 
     @abstractmethod
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
@@ -198,6 +214,22 @@ class TreeFileSystem(_BaseFileSystem):
     @abstractmethod
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
         """Create a directory and its parents, raising FileExistsError unless ``exist_ok``."""
+
+    async def _mkdir(
+        self, path: str, create_parents: bool = True, **kwargs: Any
+    ) -> None:
+        """Create a directory, as fsspec's local ``mkdir`` does, by ``_makedirs``.
+
+        fsspec's own does nothing. An existing path raises FileExistsError.
+        Without ``create_parents``, a missing parent raises FileNotFoundError.
+        """
+        path = self._strip_protocol(path)
+        if await self._exists(path):
+            raise FileExistsError(path)
+        parent = self._parent(path)
+        if not create_parents and parent and not await self._isdir(parent):
+            raise FileNotFoundError(parent)
+        await self._makedirs(path, exist_ok=True)
 
     @abstractmethod
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:

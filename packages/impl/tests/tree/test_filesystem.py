@@ -365,6 +365,18 @@ async def test_the_profile_is_awaited_for_the_path_of_each_call(
     assert inner.stats.calls["delete"] > 1  # Walked: not declared there.
 
 
+async def test_mkdir_makes_a_directory(fs: _Tree, inner: SimulatedFileSystem) -> None:
+    # fsspec's own _mkdir does nothing.
+    await fs._mkdir("new/deep")
+    assert await inner._isdir("new/deep")
+    with pytest.raises(FileExistsError):
+        await fs._mkdir("new/deep")
+    with pytest.raises(FileNotFoundError):
+        await fs._mkdir("none/deep", create_parents=False)
+    await fs._mkdir("new/other", create_parents=False)
+    assert await inner._isdir("new/other")
+
+
 async def test_failures_are_raised(fs: _Tree, inner: SimulatedFileSystem) -> None:
     async def refused(path: str, **kwargs: Any) -> None:
         if path == "data/README.md":
