@@ -50,7 +50,9 @@ class StorageProfile:
     parents_required : bool, optional
         Whether writing a file into a missing folder fails, rather than
         creating its parents. Unknown by default, taken as True: folders are
-        created before files are written into them.
+        created before files are written into them. It tells of writes only:
+        a rename's parent is always created first, as ``_mv_file`` is called
+        only where the destination's parent exists.
     implicit_folders : bool, optional
         Whether folders exist only through the files under them, with no
         entry of their own, as on object stores without a hierarchical

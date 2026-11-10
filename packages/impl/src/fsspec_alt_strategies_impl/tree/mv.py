@@ -118,11 +118,14 @@ def _tree_mv(
     Each request holds a permit of the source's ``operation_limit`` while it
     runs.
 
-    The destination's profile's ``parents_required=False`` saves the ``dst_makedirs`` of
-    each folder with files, as their moves create it. Its
+    A destination's parent is made before any rename, as ``mv_file`` is
+    called only where the parent exists. The destination's profile's
+    ``parents_required=False`` saves the ``dst_makedirs`` of each folder with
+    files only between two storages, or with ``renames_files=False``, where
+    ``mv_file`` writes, which creates the folder. Its
     ``implicit_folders=True`` saves those, and within one storage the
     ``rm_folder`` of each source folder too, as a folder goes with its last
-    file. Either saves the ``dst_makedirs`` before a folder is moved whole.
+    file. It alone saves the ``dst_makedirs`` before a folder is moved whole.
 
     The primitives are called above by what they do: ``_ils``, ``info`` and
     ``rm_folder`` are the source's ``_ils``, ``_info`` and ``_rmdir``,
@@ -179,6 +182,14 @@ class _Move(_CopyOrMove):
             and self.maxdepth is None
         )
         self.implicit_folders = self.same_storage and self.implicit_folders
+        # A rename makes no parent, as a write may: parents_required tells of
+        # writes only. Within one storage, mv_file may rename unless the
+        # profile says it does not, so its folder is made first.
+        self.parents_required = self.parents_required or (
+            self.same_storage
+            and not self.implicit_folders
+            and self.profile.renames_files is not False
+        )
         self.folders_moved = 0
 
         # The roots moved whole, yielded with the first step.
@@ -237,7 +248,8 @@ class _Move(_CopyOrMove):
                 return False  # Taken: the root merges into it.
 
         try:
-            if parent and self.parents_required:
+            # A rename, whose parent must exist: mv_file is not to make it.
+            if parent and not self.implicit_folders:
                 async with self.concurrency_limit:
                     await self.dst_fs._makedirs(parent, exist_ok=True)
 

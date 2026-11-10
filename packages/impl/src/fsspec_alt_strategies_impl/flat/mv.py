@@ -143,6 +143,13 @@ class _Rename(_CopyOrMove):
     verb = "move"
     doing = "Moving"
 
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+
+        # A rename makes no parent, as a write may: parents_required tells of
+        # writes only, and _mv_file is called only where the parent exists.
+        self.parents_required = not self.implicit_folders
+
     async def transfer_file(self, source: str, destination: str) -> None:
         try:
             await self.fs._mv_file(source, destination)

@@ -211,7 +211,8 @@ async def test_a_storage_moving_a_file_in_one_request(
 async def test_profile_saves_the_mkdirs(hierarchical_fs: SimulatedFileSystem) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.add_dir("data/empty")
-    profile = StorageProfile(parents_required=False)
+    # Its mv_file copies, then deletes: a write, which makes its folder.
+    profile = StorageProfile(parents_required=False, renames_files=False)
     await _collect_with_errors(_mv(hierarchical_fs, "data", "moved", profile=profile))
     # Only the empty folder needs one: the copies create the others.
     assert hierarchical_fs.stats.calls["mkdir"] == 1
@@ -373,12 +374,30 @@ async def test_a_storage_requiring_parents() -> None:
     assert errors == []
     assert await fs._exists("new/deep/moved/2023/01/part-0.parquet")
     # Wrongly declared, the profile makes each copy fail, and keeps the source.
-    wrong = StorageProfile(parents_required=False)
+    wrong = StorageProfile(parents_required=False, renames_files=False)
     _, errors = await _collect_with_errors(
         _mv(fs, "new/deep/moved", "elsewhere", profile=wrong)
     )
     assert {type(e) for e in errors} == {FileNotFoundError}
     assert await fs._exists("new/deep/moved/README.md")
+
+
+@pytest.mark.parametrize("renames_folders", [False, True])
+async def test_a_rename_gets_its_parent_where_a_write_needs_none(
+    renames_folders: bool,
+) -> None:
+    # As HDFS: a write creates its parents, a rename does not.
+    fs = SimulatedFileSystem(
+        hierarchical=True, parents_required=True, asynchronous=True
+    )
+    _tree(fs)
+    profile = StorageProfile(
+        parents_required=False, renames_files=True, renames_folders=renames_folders
+    )
+    op = _mv(fs, "data", "new/deep/moved", mv_file=fs._rename, profile=profile)
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert await fs._exists("new/deep/moved/2023/01/part-0.parquet")
 
 
 async def test_a_storage_refusing_to_overwrite() -> None:

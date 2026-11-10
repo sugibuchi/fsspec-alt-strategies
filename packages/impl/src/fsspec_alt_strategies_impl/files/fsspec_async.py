@@ -98,7 +98,6 @@ class AsyncFileAdapter:
         """The position, as fsspec's files keep it."""
         return self.file.tell()
 
-
     def readable(self) -> bool:
         return self.file.readable()
 
