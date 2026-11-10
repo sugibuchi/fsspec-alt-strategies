@@ -26,7 +26,6 @@ from abc import ABC, abstractmethod
 from collections import deque
 from contextlib import aclosing
 from glob import has_magic
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar
 
 from fsspec.utils import common_prefix
@@ -42,7 +41,6 @@ if TYPE_CHECKING:
         AsyncGenerator,
         Awaitable,
         Callable,
-        Mapping,
         Sequence,
     )
     from typing import Self, TypeAlias
@@ -104,18 +102,18 @@ class _Roots(NamedTuple):
     """Where an operation starts: what it walks, and what it handles alone.
 
     ``directories`` are walked, or listed, at once. A single path of unknown kind is
-    among them, as its listing tells. ``files`` are known files, e.g. glob
-    matches. ``entries`` are the matches' entries, by path, so that a copy
-    hands a file's on without asking it again.
+    among them, as its listing tells. ``files`` are the entries of known
+    files, e.g. glob matches, so that a copy hands each on without asking it
+    again.
     """
 
     directories: Sequence[str]
-    files: Sequence[str] = ()
-    entries: Mapping[str, dict[str, Any]] = MappingProxyType({})
+    files: Sequence[dict[str, Any]] = ()
 
-    def entry(self, path: str) -> dict[str, Any]:
-        """The entry of a file root, as its glob found it."""
-        return self.entries.get(path) or {"name": path, "type": "file"}
+    @property
+    def paths(self) -> list[str]:
+        """The paths of all the roots, the directories first."""
+        return [*self.directories, *(f["name"] for f in self.files)]
 
 
 def _roots_of(
@@ -132,8 +130,7 @@ def _roots_of(
         raise FileNotFoundError(pattern)
 
     directories: dict[str, None] = {}
-    files: list[str] = []
-    entries: dict[str, dict[str, Any]] = {}
+    files: list[dict[str, Any]] = []
 
     # Sorted, a directory comes before all in it.
     for entry in sorted(matches, key=lambda e: e["name"]):
@@ -141,13 +138,12 @@ def _roots_of(
         parts = name.split("/")
         if any("/".join(parts[:i]) in directories for i in range(1, len(parts))):
             continue
-        entries[name] = {**entry, "name": name}
         if entry["type"] == "directory":
             directories[name] = None
         else:
-            files.append(name)
+            files.append({**entry, "name": name})
 
-    return _Roots(list(directories), files, entries)
+    return _Roots(list(directories), files)
 
 
 class _Queue(Generic[_T]):
@@ -407,8 +403,8 @@ class _Jobs(ABC):
         self, roots: _Roots, source: AsyncGenerator[Any] | None
     ) -> list[Any]:
         """Queue the files' jobs, and take the source's first item: the first step."""
-        for path in roots.files:
-            self.file_root(roots.entry(path))
+        for entry in roots.files:
+            self.file_root(entry)
 
         if source is None:
             self.exhausted()
@@ -549,14 +545,14 @@ class _CopyJobs(_Jobs):
 
         if not isinstance(self.path1, str):
             roots = await self._place(destination)
-            sources = [*roots.directories, *roots.files]
+            sources = roots.paths
         elif has_magic(self.path1):
             roots = await self.glob_roots(self.path1)
-            sources = [*roots.directories, *roots.files]
+            sources = roots.paths
             if not sources:
                 return roots  # Only errors, in found, to yield.
             self.prefix = common_prefix(sources)
-            if sources == list(roots.files) and len(sources) == 1:
+            if not roots.directories and len(sources) == 1:
                 # A single file goes into the destination.
                 self.prefix = self.prefix.rpartition("/")[0]
             self.base = destination
@@ -588,10 +584,10 @@ class _CopyJobs(_Jobs):
         error is the root's own: what is in it is not copied either.
         """
         roots = await self.glob_roots(self.path1)
-        directories = set(roots.directories)
+        files = {f["name"]: f for f in roots.files}
         placed: dict[str, str] = {}
 
-        for source in sorted([*roots.directories, *roots.files]):
+        for source in sorted(roots.paths):
             name = source.rpartition("/")[2]
             target = f"{destination}/{name}" if destination else name
             if (other := placed.get(target)) is not None:
@@ -607,9 +603,8 @@ class _CopyJobs(_Jobs):
             self.places[source] = target
 
         return _Roots(
-            [s for s in self.places if s in directories],
-            [s for s in self.places if s not in directories],
-            roots.entries,
+            [s for s in self.places if s not in files],
+            [files[s] for s in self.places if s in files],
         )
 
     async def _base(self, root: str, destination: str) -> str:

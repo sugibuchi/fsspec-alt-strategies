@@ -118,7 +118,7 @@ def _tree_mv(
     ``cp_entry``, and one ``rm_dir`` per source directory. With
     ``renames_directories``, each directory root first costs a ``dst_info`` of its
     target, unless ``path2`` was found missing already. One moving whole then
-    costs an ``info`` of its own, for its entry, unless a pattern matched it, a
+    costs an ``info`` of its own, for its entry, a
     ``dst_makedirs`` of its parent, and its ``mv_entry``: nothing more.
     Each request holds a permit of the source's ``operation_limit`` while it
     runs.
@@ -228,7 +228,7 @@ class _Move(_CopyOrMove):
             return roots  # Its contents go onto path2, among what is there.
 
         sources = list(roots.directories)
-        whole = await asyncio.gather(*(self.whole(roots, s) for s in sources))
+        whole = await asyncio.gather(*(self.whole(s) for s in sources))
         walked = []
         for root, entry in zip(sources, whole, strict=True):
             if isinstance(entry, Exception):
@@ -248,14 +248,12 @@ class _Move(_CopyOrMove):
         self.roots_renamed = 0
         return roots._replace(directories=walked)
 
-    async def whole(
-        self, roots: _Roots, source: str
-    ) -> dict[str, Any] | Exception | None:
+    async def whole(self, source: str) -> dict[str, Any] | Exception | None:
         """A root's entry if it can move whole, as its target is missing, or None.
 
-        The entry is its pattern's match, or else asked, for ``mv_entry``. An
-        error asking either is returned, noted: the root's, as its walk would
-        only meet it again on each file.
+        The entry is asked, for ``mv_entry``. An error asking either is
+        returned, noted: the root's, as its walk would only meet it again on
+        each file.
         """
         target = self.target(source)
         try:
@@ -268,8 +266,6 @@ class _Move(_CopyOrMove):
                 else:
                     return None
 
-            if (entry := roots.entries.get(source)) is not None:
-                return entry
             async with self.concurrency_limit:
                 return {**await self.fs._info(source), "name": source}
         except Exception as e:

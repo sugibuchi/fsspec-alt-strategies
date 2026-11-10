@@ -221,7 +221,10 @@ def test_roots_of_leave_out_what_a_matching_dir_has() -> None:
         {"name": "d", "type": "file"},
     ]
     roots = _roots_of(matches, [], "*")
-    assert (list(roots.directories), list(roots.files)) == (["a", "c"], ["d"])
+    assert (list(roots.directories), [f["name"] for f in roots.files]) == (
+        ["a", "c"],
+        ["d"],
+    )
 
 
 def test_roots_of_nothing_raise_unless_errors_were_found() -> None:
