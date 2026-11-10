@@ -14,21 +14,22 @@ of `common`.
 
 from __future__ import annotations
 
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
 from ..common.filesystem import _profile_of
 from ..common.jobs import _Job, _transfer_of
+from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
 from ._jobs import _check_batch_size, _keys_of
 from .cp import _Copy, _CopyOrMove
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Sequence
 
     from ..common.jobs import _Transfer
-    from ..common.operation import Operation
 
 __all__: list[str] = []
 
@@ -123,14 +124,25 @@ def _flat_mv(
         "maxdepth": maxdepth,
     }
 
-    # A rename wins only where the storage is known to rename. The choice is
-    # the only use of renames_files: the jobs read no other profile field.
-    if same_storage and _profile_of(dst_fs).renames_files is True:
-        return _Rename.operation(**options)
-
     _check_batch_size(src_fs.rm_batch_size)
     cp_file, _ = _transfer_of(src_fs, dst_fs, cp_file, same_storage, "cp_file")
-    return _Move.operation(cp_file=cp_file, **options)
+
+    async def run(op: Operation[Any, MvState]) -> AsyncGenerator[Any]:
+        # A rename wins only where the storage is known to rename: the profile,
+        # awaited, chooses the jobs.
+        renames = (
+            same_storage and (await _profile_of(dst_fs, path2)).renames_files is True
+        )
+        jobs: _CopyOrMove = (
+            _Rename(op=op, **options)
+            if renames
+            else _Move(op=op, cp_file=cp_file, **options)
+        )
+        async with aclosing(jobs.outcomes()) as outcomes:
+            async for outcome in outcomes:
+                yield outcome
+
+    return Operation(run, MvState())
 
 
 class _Rename(_CopyOrMove):
@@ -143,8 +155,8 @@ class _Rename(_CopyOrMove):
     verb = "move"
     doing = "Moving"
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    async def setup(self) -> None:
+        await super().setup()
 
         # A rename makes no parent, as a write may: parents_required tells of
         # writes only, and _mv_file is called only where the parent exists.

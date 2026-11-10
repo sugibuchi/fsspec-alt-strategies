@@ -173,10 +173,16 @@ class _Move(_CopyOrMove):
         super().__init__(**kwargs)
 
         self.mv_file = mv_file
+        self.renames_directories = False  # Until setup reads the profile.
+        self.directories_moved = 0
+        self.roots_renamed: int | None = None
+
+    async def setup(self) -> None:
+        await super().setup()
 
         # The profile is the destination's: only within one storage does it
-        # tell how the source renames, or deletes its directories. A directory moved
-        # whole would take what is deeper than maxdepth along.
+        # tell how the source renames, or deletes its directories. A
+        # directory moved whole would take what is deeper than maxdepth along.
         self.renames_directories = (
             self.same_storage
             and bool(self.profile.renames_directories)
@@ -191,8 +197,6 @@ class _Move(_CopyOrMove):
             and not self.implicit_directories
             and self.profile.renames_files is not False
         )
-        self.directories_moved = 0
-
         self.roots_renamed = 0 if self.renames_directories else None
 
     def state(self) -> MvState:

@@ -123,7 +123,7 @@ class AsyncRoutingFileSystem(
     which streams through ``open_async``.
 
     The router has no ``storage_profile``: each storage has its own,
-    `storage_profile_of` tells it. Its only limit is ``transfer_limit``, the
+    ``_storage_profile_of`` tells it. Its only limit is ``transfer_limit``, the
     files copied across storages at once. The inner filesystems keep their
     own limits.
 
@@ -301,22 +301,17 @@ class AsyncRoutingFileSystem(
             if callable(close):
                 close()
 
-    def storage_profile_of(self, path: str) -> StorageProfile:
-        """The ``storage_profile`` of the storage of ``path``.
+    async def _storage_profile_of(self, path: str) -> StorageProfile:
+        """The profile of the storage of ``path``: its inner filesystem's.
 
-        Parameters
-        ----------
-        path : str
-            A path of the router.
-
-        Returns
-        -------
-        StorageProfile
-            The inner filesystem's, or ``StorageProfile()`` if it has none, or
-            the path is above the storages.
+        ``StorageProfile()`` if the inner filesystem has none, or the path is
+        above the storages.
         """
         target = self._target(path)
-        return _profile_of(target[0]) if target else StorageProfile()
+        if target is None:
+            return StorageProfile()
+        fs, inner = target
+        return await _profile_of(fs, inner)
 
     # Routing.
 
@@ -871,7 +866,7 @@ class AsyncRoutingFileSystem(
                     ),
                 )
             elif recursive and (
-                op := self._cross_fs_cp(fs1, sources, fs2, inner2, maxdepth)
+                op := await self._cross_fs_cp(fs1, sources, fs2, inner2, maxdepth)
             ):
                 errors = await self._transferred(
                     op, fs1, sources, fs2, inner2, outers, path2, callback
@@ -946,7 +941,7 @@ class AsyncRoutingFileSystem(
                     fs1, sources, outer, fs1._rm(sources, recursive=recursive)
                 )
             elif recursive and (
-                op := self._cross_fs_mv(fs1, sources, fs2, inner2, maxdepth)
+                op := await self._cross_fs_mv(fs1, sources, fs2, inner2, maxdepth)
             ):
                 errors = await self._transferred(
                     op,
@@ -968,7 +963,7 @@ class AsyncRoutingFileSystem(
 
         await self._each(await self._grouped(path1), mv, "Moving", clashes)
 
-    def _cross_fs_cp(
+    async def _cross_fs_cp(
         self,
         fs1: AsyncFileSystem,
         path1: str | list[str],
@@ -982,7 +977,7 @@ class AsyncRoutingFileSystem(
         fsspec's own copy then runs. Each file goes by ``_cross_fs_cp_file``.
         The operation is returned not yet started.
         """
-        fs_type = _profile_of(fs1).fs_type
+        fs_type = (await _profile_of(fs1, path1)).fs_type
         if fs_type is None:
             return None
 
@@ -1014,7 +1009,7 @@ class AsyncRoutingFileSystem(
             )
         return None
 
-    def _cross_fs_mv(
+    async def _cross_fs_mv(
         self,
         fs1: AsyncFileSystem,
         path1: str | list[str],
@@ -1028,7 +1023,7 @@ class AsyncRoutingFileSystem(
         copies each key by ``_cross_fs_cp_file`` instead, and deletes the keys
         copied in batches, by its ``_rm_files``.
         """
-        fs_type = _profile_of(fs1).fs_type
+        fs_type = (await _profile_of(fs1, path1)).fs_type
         if fs_type is None:
             return None
 

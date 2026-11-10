@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar
 
 from fsspec.utils import common_prefix
 
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.states import CpState
 
 from .filesystem import _profile_of
@@ -249,6 +250,10 @@ class _Jobs(ABC):
         op.state = jobs.state()
         return op
 
+    # A hook, not abstract: only the jobs reading a profile await it.
+    async def setup(self) -> None:  # noqa: B027
+        """Read what the jobs need of the storage before preparing, e.g. its profile."""
+
     @abstractmethod
     async def prepare(self) -> _Roots | None:
         """What to walk, or None if there is nothing to do."""
@@ -306,6 +311,8 @@ class _Jobs(ABC):
 
     async def outcomes(self) -> AsyncGenerator[Any]:
         """Yield each outcome, as the operation does, keeping its state up to date."""
+        await self.setup()
+        self.op.state = self.state()
         roots = await self.prepare()
 
         try:
@@ -475,15 +482,12 @@ class _CopyJobs(_Jobs):
         self.same_storage = same_storage
 
         # The profile is the destination's, as what a copy saves depends on
-        # where it writes. Within one storage, it is the source's too.
+        # where it writes. Within one storage, it is the source's too. Unknown
+        # until setup awaits it.
         self.dst_fs = dst_fs
-        self.profile = _profile_of(dst_fs)
-
-        # Unknown, directories are made first. Implicit directories need none.
-        self.implicit_directories = bool(self.profile.implicit_directories)
-        self.parents_required = (
-            self.profile.parents_required is not False and not self.implicit_directories
-        )
+        self.profile = StorageProfile()
+        self.implicit_directories = False
+        self.parents_required = True
 
         self.prefix = ""
         self.base = ""
@@ -497,6 +501,14 @@ class _CopyJobs(_Jobs):
 
         self.files_found = 0
         self.files_done = 0
+
+    async def setup(self) -> None:
+        self.profile = await _profile_of(self.dst_fs, self.path2)
+        # Unknown, directories are made first. Implicit directories need none.
+        self.implicit_directories = bool(self.profile.implicit_directories)
+        self.parents_required = (
+            self.profile.parents_required is not False and not self.implicit_directories
+        )
 
     def state(self) -> Any:
         return CpState(

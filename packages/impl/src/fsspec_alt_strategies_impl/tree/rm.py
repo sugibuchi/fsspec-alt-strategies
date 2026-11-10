@@ -118,18 +118,21 @@ class _Deletion(_TreeJobs):
     def __init__(self, *, path: str | Sequence[str], **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        fs, maxdepth = self.fs, self.maxdepth
         self.path = path
-        # A directory deleted whole would take what is deeper than maxdepth.
-        profile = _profile_of(fs)
-        self.deletes_directories = (
-            maxdepth is None and profile.deletes_directories is True
-        )
-
-        self.implicit_directories = bool(profile.implicit_directories)
+        # Unknown until setup reads the profile.
+        self.deletes_directories = False
+        self.implicit_directories = False
         self.files_found = 0
         self.files_deleted = 0
         self.directories_deleted = 0
+
+    async def setup(self) -> None:
+        profile = await _profile_of(self.fs, self.path)
+        # A directory deleted whole would take what is deeper than maxdepth.
+        self.deletes_directories = (
+            self.maxdepth is None and profile.deletes_directories is True
+        )
+        self.implicit_directories = bool(profile.implicit_directories)
 
     async def prepare(self) -> _Roots:
         """Find the roots: a glob's matches, or the path, of unknown kind.

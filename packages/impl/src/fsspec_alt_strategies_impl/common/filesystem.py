@@ -54,9 +54,11 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     the concurrency, so that several filesystems share it, or else a new one,
     of the number given.
 
-    ``storage_profile``, a class field, tells the strategies what the storage
-    does. A subclass must set it: one whose storage is unknown says so, with
-    ``StorageProfile()``.
+    ``storage_profile``, a class field or a property, tells the strategies
+    what the storage does. A subclass must set it: one whose storage is
+    unknown says so, with ``StorageProfile()``. The strategies read it through
+    ``_storage_profile_of(path)``, which a subclass overrides where the
+    profile is found by a request, or differs by path, e.g. per bucket.
 
     Each family's class declares the abstract methods its subclasses implement,
     so that a reader finds them all in one place.
@@ -101,6 +103,17 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         self.io_concurrency = io_concurrency
         self.operation_limit = operation_limit
         self.io_limit = io_limit
+
+    async def _storage_profile_of(self, path: str) -> StorageProfile:
+        """The profile of the storage holding ``path``: here, ``storage_profile``.
+
+        A strategy awaits it once, when it starts: for a deletion, of its first
+        path, and for a copy or move, of its destination. So a call's paths
+        share one profile. A subclass overrides it where the profile is found
+        by a request, e.g. whether an account has a hierarchical namespace,
+        caching it, or differs by path, e.g. per bucket.
+        """
+        return self.storage_profile  # type: ignore[attr-defined, no-any-return]
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
@@ -205,13 +218,22 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
                     callback.relative_update(len(chunk))
 
 
-def _profile_of(fs: Any) -> StorageProfile:
-    """A filesystem's `storage_profile`, or `StorageProfile()` if it has none.
+async def _profile_of(fs: Any, path: str | Sequence[str]) -> StorageProfile:
+    """The profile of the storage holding ``path``, or `StorageProfile()` if none.
 
-    A destination may be any async filesystem, e.g. one of a router's, which
-    fsspec gives no profile: its storage is then unknown.
+    It awaits the filesystem's ``_storage_profile_of``, or reads its
+    ``storage_profile``. Of a list, the first path tells. A destination may be
+    any async filesystem, e.g. one of a router's, which fsspec gives no
+    profile: its storage is then unknown.
     """
-    profile = getattr(fs, "storage_profile", None)
+    if not isinstance(path, str):
+        path = next(iter(path), "")
+
+    hook = getattr(fs, "_storage_profile_of", None)
+    if hook is not None:
+        profile = await hook(path)
+    else:
+        profile = getattr(fs, "storage_profile", None)
     return profile if isinstance(profile, StorageProfile) else StorageProfile()
 
 

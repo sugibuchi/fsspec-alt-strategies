@@ -63,8 +63,8 @@ code: read it before adding a strategy.
 - A strategy's name tells its family, e.g. `_tree_rm`, never a bare `_rm`: that is the method's name.
 - A strategy replacing an fsspec method answers as it does. Where it departs on purpose, its docstring says why.
 - What a storage does that fsspec leaves open is declared in `profile.StorageProfile`, never detected. A strategy reads
-  it with `common.filesystem._profile_of`, so `StorageProfile()` must be correct on any storage. A copy or move reads
-  the destination's. Add a field only when a strategy saves requests or data copied with it.
+  it with `await common.filesystem._profile_of(fs, path)`, in its jobs' `setup`, once per call, so
+  `StorageProfile()` must be correct on any storage. A copy or move reads the destination's. Add a field only when a strategy saves requests or data copied with it.
 - The library never chooses a strategy for the developer. Each docstring says what the strategy assumes of the
   storage, and when it wins or loses.
 - Async first: write the async version, and a sync one only when asked.

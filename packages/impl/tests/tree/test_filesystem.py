@@ -334,6 +334,37 @@ async def test_rm_uses_a_recursive_delete_of_the_storage(
     assert callback.value == 1
 
 
+async def test_the_profile_is_awaited_for_the_path_of_each_call(
+    inner: SimulatedFileSystem,
+) -> None:
+    asked: list[str] = []
+
+    class PerPath(_Tree):
+        # E.g. a storage whose profile a request finds, per bucket.
+        async def _storage_profile_of(self, path: str) -> StorageProfile:
+            asked.append(path)
+            await asyncio.sleep(0)
+            return StorageProfile(deletes_directories=path.startswith("data"))
+
+        async def _rm_tree(self, path: str) -> None:
+            await self.inner._rm(path, recursive=True)
+
+    fs = PerPath(inner, asynchronous=True)
+    await fs._copy("data", "copied", recursive=True)
+    # A copy asks of its destination, once.
+    assert asked == ["copied"]
+
+    inner.reset_stats()
+    await fs._rm("data", recursive=True)
+    assert asked[-1] == "data"
+    assert inner.stats.calls == {"delete": 1}  # Deleted whole, as declared.
+
+    inner.reset_stats()
+    await fs._rm("copied", recursive=True)
+    assert asked[-1] == "copied"
+    assert inner.stats.calls["delete"] > 1  # Walked: not declared there.
+
+
 async def test_failures_are_raised(fs: _Tree, inner: SimulatedFileSystem) -> None:
     async def refused(path: str, **kwargs: Any) -> None:
         if path == "data/README.md":

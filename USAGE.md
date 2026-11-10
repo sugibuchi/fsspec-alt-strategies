@@ -112,7 +112,9 @@ class MyFileSystem(TreeFileSystem):
 fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
 ```
 
-The profile may also be a property, e.g. of the account the filesystem connects to. A method of fsspec's own can
+The profile may also be a property, e.g. of the account the filesystem connects to. Where it is found by a request,
+or differs by path, override `async def _storage_profile_of(self, path)`, e.g. to ask a bucket's kind once and cache
+it. A strategy awaits it once per call, for the path deleted from, or copied or moved to. A method of fsspec's own can
 come back, e.g. `_rm = AsyncFileSystem._rm`, and a storage's native operation can override a method.
 
 #### Wrappers
