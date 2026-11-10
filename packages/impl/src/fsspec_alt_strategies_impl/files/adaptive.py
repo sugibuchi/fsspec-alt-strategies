@@ -513,11 +513,19 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     - A part that fails stops the writes, and closing aborts the upload. Either
       raises OSError, its cause the part's error. Any failure or cancellation
       while closing or force-flushing aborts too, as does a failed start.
-    - Leaving a ``with`` block by an exception uploads nothing: a small file is
-      never sent, and a multipart upload is aborted. So does a file the garbage
-      collector finds open. The file is written whole, or not at all: a
-      failed write leaves the file that was at the path, if any.
+    - Leaving a ``with`` block by an exception sends no more data: a small
+      file is never sent, and a multipart upload is aborted. So does a file the
+      garbage collector finds open.
     - An abort failing too adds a note to the error raised, never replacing it.
+
+    What a failed write leaves at the path is the storage's. The file only
+    decides which requests to send, and when. On a storage where an upload is
+    invisible until the request completing it, such as S3, Google Cloud
+    Storage or Azure, the file is written whole, or not at all, and a failed
+    write leaves the file that was there. On one where a file is visible while
+    it is written, e.g. DBFS's create, add-block and close, a failed write may
+    leave part of it, and the earlier file gone. A subclass's docstring says
+    which its storage is.
 
     Some storages take parts only in order, one at a time, e.g. Google Cloud
     Storage's resumable uploads, where each part but the last is a multiple of
@@ -535,14 +543,16 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
       ``end``. A storage where it makes the file visible completes nothing.
 
     Mode "xb" creates the file only if none is at the path, and
-    ``exclusive`` is then True. The request making the file visible checks
-    it, so that no other writer can slip in: ``_upload_all``, or
-    ``_complete_multipart_upload``, or the last ``_upload_part`` where that
-    completes the file. It sends the storage's conditional write, e.g. S3's
-    or Azure's ``If-None-Match: *``, and raises FileExistsError if a file is
-    there. The upload is then aborted, and that file kept. A subclass whose
-    storage has no conditional write refuses "xb" when opened, rather than
-    check first, which would race.
+    ``exclusive`` is then True. The subclass checks it with the storage's
+    means, raising FileExistsError if a file is there:
+
+    - best, by a conditional write in the request creating the file, e.g.
+      S3's or Azure's ``If-None-Match: *`` on the completion, or a create
+      refusing an existing path, so that no other writer can slip in;
+    - where the storage has none, by asking first, e.g. on opening, which
+      races with another writer. Its docstring then says so.
+
+    The upload is aborted after a refusal, as after any failure.
 
     Some storages limit each request's size, e.g. to 1 MiB. ``max_request_size``
     declares it, and no ``_upload_all`` or ``_upload_part`` call exceeds it:
@@ -653,7 +663,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         return self.mode == "xb"
 
     # Leaving a with block by an exception aborts, as the garbage collector
-    # does: the file is written whole, or not at all.
+    # does: no more data is sent.
 
     def __exit__(
         self, exc_type: object, exc: BaseException | None, *rest: object
@@ -704,8 +714,8 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     async def _upload_all(self, data: bytes) -> None:
         """Upload the whole file in one request.
 
-        With ``exclusive``, only if no file is at the path: else it raises
-        FileExistsError, keeping that file.
+        With ``exclusive``, it creates the file only if none is at the path,
+        as the storage allows: else it raises FileExistsError.
         """
 
     @abstractmethod
@@ -719,31 +729,28 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         """Upload the part [start, end) of the file, the ``index``th from 0.
 
         Parts may be uploaded out of order. What this returns, such as an ETag,
-        is passed on to ``_complete_multipart_upload``. Where the ``last``
-        part completes the file, it checks ``exclusive`` as
-        ``_complete_multipart_upload`` does.
+        is passed on to ``_complete_multipart_upload``.
         """
 
     @abstractmethod
     async def _complete_multipart_upload(self, parts: list[Any]) -> None:
         """Commit the parts uploaded, given what each upload returned, in order.
 
-        With ``exclusive``, only if no file is at the path: else it raises
-        FileExistsError, keeping that file, and the upload is aborted.
+        With ``exclusive``, where the storage checks it on completion, it
+        raises FileExistsError if a file is at the path.
         """
 
     @abstractmethod
     async def _abort_multipart_upload(self) -> None:
-        """Discard the parts uploaded, as far as the storage allows: best effort.
+        """Clean up an unfinished upload, as far as the storage allows: best effort.
 
-        A file already at the path stays as it was: an abort never deletes or
-        replaces it. Where the storage has a request discarding an unfinished
-        upload, e.g. S3's AbortMultipartUpload, the abort sends it. Where it
-        has none, the abort sends nothing, and the storage drops the parts
-        itself, e.g. Azure's uncommitted blocks, collected a week after the
-        last block. Either way nothing uploaded becomes visible. It may be
-        called after ``_start_multipart_upload`` failed, with nothing to
-        discard.
+        Where the storage has a request discarding an unfinished upload, e.g.
+        S3's AbortMultipartUpload, the abort sends it. Where it has none, the
+        abort sends nothing, and leaves it to the storage, e.g. Azure's
+        uncommitted blocks, collected a week after the last block. Where the
+        upload is invisible until completed, an abort never deletes or
+        replaces a file already at the path. It may be called after
+        ``_start_multipart_upload`` failed, with nothing to clean up.
         """
 
     # Finishing and aborting, for _AsyncFile.

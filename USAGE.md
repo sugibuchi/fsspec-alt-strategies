@@ -222,7 +222,13 @@ A subclass of an adaptive file implements the storage's requests, and leaves the
   `_start_multipart_upload`, `_upload_part`, `_complete_multipart_upload` and `_abort_multipart_upload`.
 
 An `AdaptiveWritableFile` opened with mode "xb" creates the file only if none is at the path. Its `exclusive` is then
-True, and the request making the file visible sends the storage's conditional write.
+True, and the subclass checks it by the storage's conditional write where there is one.
+
+The file decides which requests to send, and when. Whether a write is atomic is the storage's:
+
+- where an upload is invisible until completed, as on S3, Google Cloud Storage or Azure, a file is written whole, or not
+  at all;
+- where a file is visible while it is written, as on DBFS, a failed write may leave part of it.
 
 #### Async file support
 
@@ -250,7 +256,8 @@ strategy of file-level transactions. The package provides these:
 - `LocalBufferTransaction` writes to a local buffer, written to the file on commit. Other clients see nothing until
   then, but the file's bytes are held locally.
 - `AdaptiveWritableTransaction` holds back an adaptive file's last request, which makes it visible, until commit. It
-  costs nothing more than writing without a transaction.
+  costs nothing more than writing without a transaction, but needs a storage where an upload is invisible until
+  completed.
 
 A storage with a way of its own, such as a staged upload, subclasses `FileTransaction`.
 

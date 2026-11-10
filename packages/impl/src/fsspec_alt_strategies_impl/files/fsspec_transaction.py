@@ -543,6 +543,11 @@ class AdaptiveWritableTransaction(FileTransaction):
     ``_upload_all``, on that file only, so as to hold that request back.
     Discard aborts the multipart upload, or drops the small file.
 
+    It needs a storage where an upload is invisible until the request
+    completing it, such as S3, Google Cloud Storage or Azure. On one where a
+    file is visible while it is written, e.g. DBFS, it hides nothing: use a
+    `TempPathTransaction` there.
+
     It costs nothing more than writing the file without a transaction, and
     other clients see nothing until commit. A small file is held in memory
     until then. Uploaded parts take storage until commit: if the process dies
