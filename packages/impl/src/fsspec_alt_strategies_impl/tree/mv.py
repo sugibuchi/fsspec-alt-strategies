@@ -26,7 +26,7 @@ from ..common.paths import _check_maxdepth
 from .cp import _CopyOrMove
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Sequence
+    from collections.abc import Awaitable, Sequence
 
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
@@ -193,8 +193,6 @@ class _Move(_CopyOrMove):
         )
         self.folders_moved = 0
 
-        # The roots moved whole, each by one mv_file.
-        self.whole: list[str] = []
         self.roots_renamed = 0 if self.renames_folders else None
 
     def state(self) -> MvState:
@@ -208,7 +206,7 @@ class _Move(_CopyOrMove):
         )
 
     async def prepare(self) -> _Roots | None:
-        """Place the roots, and set apart the folders that can move whole: the rest are walked.
+        """Place the roots, and queue the move of each folder that can go whole: the rest are walked.
 
         A root can move whole to a target found missing. One whose target
         exists merges into it, so it is walked, and so is one whose target
@@ -223,10 +221,21 @@ class _Move(_CopyOrMove):
 
         sources = list(roots.folders)
         free = await asyncio.gather(*(self.free(s) for s in sources))
-        self.whole = [s for s, ok in zip(sources, free, strict=True) if ok]
-        self.roots_renamed = 0
+        walked = []
+        for root, ok in zip(sources, free, strict=True):
+            if not ok:
+                walked.append(root)
+                continue
 
-        return _Roots([f for f in roots.folders if f not in self.whole], roots.files)
+            # A job each, as a file's move, after its parent is made: a rename
+            # makes none, and mv_file is not to make it.
+            target = self.target(root)
+            parent = target.rpartition("/")[0]
+            job = _Job("rename", root, target)
+            self.queue(parent, "", [job], always=not self.implicit_folders)
+
+        self.roots_renamed = 0
+        return _Roots(walked, roots.files)
 
     async def free(self, source: str) -> bool:
         """Whether a root's target is missing, so that the root can move there whole."""
@@ -242,18 +251,6 @@ class _Move(_CopyOrMove):
         except Exception:
             return False
         return False
-
-    async def begin(
-        self, roots: _Roots, source: AsyncGenerator[_Listing] | None
-    ) -> list[Any]:
-        for root in self.whole:
-            # A job each, as a file's move, after its parent is made: a rename
-            # makes none, and mv_file is not to make it.
-            target = self.target(root)
-            job = _Job("rename", root, target)
-            parent = target.rpartition("/")[0]
-            self.queue(parent, "", [job], always=not self.implicit_folders)
-        return await super().begin(roots, source)
 
     def add(self, listing: _Listing) -> list[Any] | None:
         self.track(listing)

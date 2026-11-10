@@ -23,7 +23,7 @@ from ..common.paths import _check_maxdepth
 from ._jobs import _TreeJobs
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Sequence
+    from collections.abc import Awaitable, Sequence
 
     from ..common.operation import Operation
     from .walk import _Listing
@@ -130,23 +130,20 @@ class _Deletion(_TreeJobs):
         self.folders_deleted = 0
 
     async def prepare(self) -> _Roots:
-        """Find the roots: a glob's matches, or the path, of unknown kind."""
+        """Find the roots: a glob's matches, or the path, of unknown kind.
+
+        With deletes_folders, each folder root is queued for its rm_tree, as a
+        file's deletion, and none is walked: rm_tree takes files too.
+        """
         if not isinstance(self.path, str) or has_magic(self.path):
-            return await self.glob_roots(self.path)
-        return _Roots([self.path])
+            roots = await self.glob_roots(self.path)
+        else:
+            roots = _Roots([self.path])
 
-    def source(self, roots: _Roots) -> AsyncGenerator[_Listing] | None:
-        # Deleted whole, no folder is walked.
-        return None if self.deletes_folders else super().source(roots)
-
-    async def begin(
-        self, roots: _Roots, source: AsyncGenerator[_Listing] | None
-    ) -> list[Any]:
-        if self.deletes_folders:
-            # A job each, as a file's deletion: rm_tree takes files too.
-            self.waiting.extend(_Job("tree", f) for f in roots.folders)
-            roots = _Roots([], roots.files)
-        return await super().begin(roots, source)
+        if not self.deletes_folders:
+            return roots
+        self.waiting.extend(_Job("tree", f) for f in roots.folders)
+        return _Roots([], roots.files)
 
     def state(self) -> RmState:
         return RmState(
