@@ -515,7 +515,8 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
       while closing or force-flushing aborts too, as does a failed start.
     - Leaving a ``with`` block by an exception uploads nothing: a small file is
       never sent, and a multipart upload is aborted. So does a file the garbage
-      collector finds open. The file is written whole, or not at all.
+      collector finds open. The file is written whole, or not at all: a
+      failed write leaves the file that was at the path, if any.
     - An abort failing too adds a note to the error raised, never replacing it.
 
     Some storages take parts only in order, one at a time, e.g. Google Cloud
@@ -700,7 +701,17 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
 
     @abstractmethod
     async def _abort_multipart_upload(self) -> None:
-        """Discard the parts uploaded, leaving no file."""
+        """Discard the parts uploaded, as far as the storage allows: best effort.
+
+        A file already at the path stays as it was: an abort never deletes or
+        replaces it. Where the storage has a request discarding an unfinished
+        upload, e.g. S3's AbortMultipartUpload, the abort sends it. Where it
+        has none, the abort sends nothing, and the storage drops the parts
+        itself, e.g. Azure's uncommitted blocks, collected a week after the
+        last block. Either way nothing uploaded becomes visible. It may be
+        called after ``_start_multipart_upload`` failed, with nothing to
+        discard.
+        """
 
     # Finishing and aborting, for _AsyncFile.
 
