@@ -292,6 +292,24 @@ class SimulatedFileSystem(AsyncFileSystem):
             return {n: self._entry(n) for n in names}
         return names
 
+    async def _ils_recursive(self, path: str) -> AsyncIterator[dict[str, Any]]:
+        """List all below a directory, a page per request, as a recursive listing does.
+
+        It is no fsspec method: `dir_ils` lists with it for ``recursive=True``.
+        An object store lists only files, a hierarchical storage its directories
+        too. A file lists itself, and a missing path raises FileNotFoundError.
+        """
+        path = self._strip_protocol(path)
+        if path not in self._file_data and path not in self._dirs:
+            await self._request("list")
+            raise FileNotFoundError(path)
+
+        names = sorted(self._listing(path))
+        for start in range(0, max(len(names), 1), self.page_size):
+            await self._request("list")
+            for name in names[start : start + self.page_size]:
+                yield self._entry(name)
+
     async def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
         """List the files whose paths start with ``prefix``, as object stores do.
 
@@ -589,7 +607,13 @@ def dir_ils(fs: Any) -> Callable[[str], AsyncIterator[dict[str, Any]]]:
     it. ``fs._ls`` is looked up at each call, so that a test may replace it.
     """
 
-    async def ils(path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+    async def ils(
+        path: str, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            async for entry in fs._ils_recursive(path):
+                yield entry
+            return
         ls = getattr(fs, "_ls", fs)
         for entry in await ls(path, detail=True, **kwargs):
             yield entry

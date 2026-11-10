@@ -187,6 +187,11 @@ class TreeFileSystem(_BaseFileSystem):
 
         Other keys, such as a modification time, are passed on as they are.
         A missing ``path`` raises FileNotFoundError, when the iteration starts.
+
+        With ``recursive=True``, it lists all below ``path``, at any depth, in
+        any order, as the profile's ``lists_recursively=True`` declares. A
+        directory may be left out, as object stores list only files: the
+        strategies tell it from the paths below it.
         """
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:

@@ -13,8 +13,9 @@ listed. ``_tree_walk`` gathers the parts, as fsspec's ``walk`` gives a directory
 whole.
 
 It suits storages that list one directory per request, and those whose directories
-can be pruned. On object stores, one recursive listing usually costs fewer
-requests: `fsspec.asyn.AsyncFileSystem._find` there.
+can be pruned. A storage whose ``_ils`` lists a whole tree, as the profile's
+``lists_recursively`` declares, is listed so, a root per request, when nothing is
+pruned: its listing is split into the same parts.
 
 The tree strategies, and the engines under them, take the filesystem they
 work on, and call its primitives, such as ``_ils``, under its
@@ -203,10 +204,15 @@ async def _chunks(
 
     Once ``stopping`` returns true, no new listing starts, and those in flight
     stop after their current part: a directory stopped so has no last part.
+
+    With the profile's ``lists_recursively=True``, and no ``descend`` to prune
+    the tree, each root is listed whole by one recursive ``_ils``, split into
+    the same parts, as `_produce_tree` says.
     """
     _check_maxdepth(maxdepth)
 
     roots = {_trim(p) for p in ([path] if isinstance(path, str) else path)}
+    recursive = descend is None and await _lists_recursively(fs)
     # The directories to list, each with its depth.
     directories: _Queue[tuple[str, int]] = _Queue(fs.operation_limit)
     # The parts listed, a few at a time: a listing waits while they are full.
@@ -221,14 +227,20 @@ async def _chunks(
         if stopped():
             directories.waiting.clear()
         await directories.start(
-            lambda item: _produce(
-                fs,
-                ils_kwargs or {},
-                *item,
-                item[0] in roots,
-                parts,
-                chunk_size,
-                stopped,
+            lambda item: (
+                _produce_tree(
+                    fs, ils_kwargs or {}, *item, maxdepth, parts, chunk_size, stopped
+                )
+                if recursive
+                else _produce(
+                    fs,
+                    ils_kwargs or {},
+                    *item,
+                    item[0] in roots,
+                    parts,
+                    chunk_size,
+                    stopped,
+                )
             )
         )
 
@@ -248,7 +260,7 @@ async def _chunks(
                 if (part.directory in roots and part.first) or raise_on_error:
                     raise part.error
                 _note(part.error, part.directory)
-            elif maxdepth is None or part.depth < maxdepth:
+            elif not recursive and (maxdepth is None or part.depth < maxdepth):
                 directories.waiting.extend(_new_subdirs(part, descend, found))
 
             if part.last:
@@ -322,6 +334,126 @@ async def _produce(
         return
 
     await parts.put(_Listing(directory, depth, chunk, None, first, True))
+
+
+async def _lists_recursively(fs: Any) -> bool:
+    """Whether the profile of ``fs`` declares a recursive ``_ils``."""
+    get = getattr(fs, "_get_storage_profile", None)
+    return get is not None and (await get()).lists_recursively is True
+
+
+async def _produce_tree(
+    fs: Any,
+    ils_kwargs: dict[str, Any],
+    root: str,
+    root_depth: int,
+    maxdepth: int | None,
+    parts: asyncio.Queue[_Listing],
+    chunk_size: int,
+    stopped: Callable[[], bool],
+) -> None:
+    """List a tree by one recursive ``_ils``, putting each directory's parts as a walk would.
+
+    The entries come in any order, so each is held under its directory, and a
+    directory's last part comes only once the listing ends. A directory not
+    listed, as an object store lists only files, gets an entry in its parent
+    from the paths below it. A directory's entry always comes in a part before
+    any part of its own, as the strategies count what is in a directory by its
+    parent's listing.
+
+    Its parts hold at most ``chunk_size`` entries in all: once that many are
+    held, every directory's are put, parents first. What is deeper than
+    ``maxdepth`` is left out, as a walk would not list it.
+    """
+    tree = _Split(root, root_depth, maxdepth)
+    try:
+        entries = fs._ils(root, recursive=True, **ils_kwargs)
+        try:
+            async for entry in entries:
+                tree.add(entry)
+                if tree.count >= chunk_size:
+                    for part in tree.parts(last=False):
+                        await parts.put(part)
+                    if stopped():
+                        return
+        finally:
+            if (aclose := getattr(entries, "aclose", None)) is not None:
+                await aclose()
+    except Exception as e:
+        await parts.put(_Listing(root, root_depth, [], e, root in tree.first, True))
+        return
+
+    for part in tree.parts(last=True):
+        await parts.put(part)
+
+
+class _Split:
+    """A recursive listing's entries, held under their directories until put as parts."""
+
+    def __init__(self, root: str, root_depth: int, maxdepth: int | None) -> None:
+        self.root = root
+        self.maxdepth = maxdepth
+        self.held: dict[str, list[dict[str, Any]]] = {root: []}
+        self.depths: dict[str, int] = {root: root_depth}
+        self.first: set[str] = {root}  # The directories without a part put yet.
+        self.count = 0  # The entries held.
+
+    def add(self, entry: dict[str, Any]) -> None:
+        """Hold an entry under its directory, noting the directories it tells of."""
+        name = entry["name"].rstrip("/")
+        if name == self.root:
+            # A file lists itself. A directory may list its own marker.
+            if entry["type"] != "directory":
+                raise NotADirectoryError(self.root)
+            return
+        if not name.startswith(f"{self.root}/" if self.root else ""):
+            return  # Not below the root: no storage should list it.
+
+        parent = name.rpartition("/")[0]
+        self.known(parent)
+        if entry["type"] == "directory":
+            if name in self.depths:
+                return  # Known already, from a path below it.
+            self.note(name, parent)
+        self.hold(parent, entry)
+
+    def known(self, directory: str) -> None:
+        """Note a directory not listed, with an entry in its parent, parents first."""
+        if directory in self.depths:
+            return
+        parent = directory.rpartition("/")[0]
+        self.known(parent)
+        self.hold(parent, {"name": directory, "size": 0, "type": "directory"})
+        self.note(directory, parent)
+
+    def note(self, directory: str, parent: str) -> None:
+        self.depths[directory] = self.depths[parent] + 1
+        self.held[directory] = []
+        self.first.add(directory)
+
+    def deeper(self, directory: str) -> bool:
+        return self.maxdepth is not None and self.depths[directory] > self.maxdepth
+
+    def hold(self, directory: str, entry: dict[str, Any]) -> None:
+        if not self.deeper(directory):
+            self.held[directory].append(entry)
+            self.count += 1
+
+    def parts(self, *, last: bool) -> list[_Listing]:
+        """The parts of all held, parents first: their entries come before their own parts."""
+        parts = []
+        for directory in sorted(self.held, key=self.depths.__getitem__):
+            entries = self.held[directory]
+            if not (entries or last) or self.deeper(directory):
+                continue
+            first = directory in self.first
+            parts.append(
+                _Listing(directory, self.depths[directory], entries, None, first, last)
+            )
+            self.first.discard(directory)
+            self.held[directory] = []
+        self.count = 0
+        return parts
 
 
 def _new_subdirs(

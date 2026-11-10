@@ -77,6 +77,13 @@ class StorageProfile:
         file too. Unknown by default, taken as False: a directory is walked, and
         what is in it deleted one by one. Declared True, a failed ``_rm_tree``
         is the directory's failure, never walked.
+    lists_recursively : bool, optional
+        Whether the filesystem's ``_ils`` takes ``recursive=True``, listing all
+        below a directory in one paginated request, as a storage's recursive
+        listing does. Unknown by default, taken as False: a tree is listed a
+        directory per request. Declared True, the tree strategies that walk a
+        whole tree list it so, one root at a time, and those that prune it, such
+        as a glob, still list a directory per request.
 
     Raises
     ------
@@ -97,6 +104,7 @@ class StorageProfile:
     renames_files: bool | None = None
     renames_directories: bool | None = None
     deletes_directories: bool | None = None
+    lists_recursively: bool | None = None
 
     def __post_init__(self) -> None:
         if self.fs_type not in (None, "tree", "flat"):
