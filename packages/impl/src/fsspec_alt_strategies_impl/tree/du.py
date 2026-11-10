@@ -34,7 +34,7 @@ def _tree_du(
     maxdepth: int | None = None,
     ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[dict[str, Any], DuState]:
-    """Measure a tree's size from its listings, listing several folders at a time.
+    """Measure a tree's size from its listings, listing several directories at a time.
 
     It assumes that ``_ils`` gives each file's size, as fsspec's filesystems do.
     It yields the entry of each file counted, with its ``size``, as fsspec's
@@ -42,7 +42,7 @@ def _tree_du(
     fsspec's ``_du`` gives by default.
 
     A missing ``path`` measures nothing, as with fsspec's ``_du``. A file
-    measures itself. A folder that fails to list yields its error, and the rest
+    measures itself. A directory that fails to list yields its error, and the rest
     of the tree is still measured.
 
     It wins over fsspec's ``_du`` on any storage, as it sends no ``info`` per
@@ -50,17 +50,17 @@ def _tree_du(
     summing the sizes from fsspec's ``_find`` with ``detail=True`` makes fewer
     requests still.
 
-    Once cancelled, it lists no new folder, and counts the listings in flight.
+    Once cancelled, it lists no new directory, and counts the listings in flight.
 
-    Requests: one ``_ils`` per folder, as the filesystem's ``operation_limit``
+    Requests: one ``_ils`` per directory, as the filesystem's ``operation_limit``
     allows. One ``info`` for ``path``, if a file.
 
-    ``path`` is the folder measured on ``fs``, by its ``_ils`` and ``_info``.
+    ``path`` is the directory measured on ``fs``, by its ``_ils`` and ``_info``.
     ``maxdepth`` of 1 counts only the files in ``path``. ``ils_kwargs`` go to
     each ``_ils``, as fsspec's ``du`` passes its own on.
 
     The operation yields the ``_ils`` entry of each file counted, or the error
-    of a folder that failed to list, and its state is a `DuState`. The call
+    of a directory that failed to list, and its state is a `DuState`. The call
     raises ValueError if ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
@@ -83,9 +83,9 @@ def _tree_du(
                 files = [e for e in listing.entries if e["type"] != "directory"]
                 op.state = state = DuState(
                     errors=state.errors + (listing.error is not None),
-                    current=listing.folder,
-                    # Depth 0 is the root's own entry: no folder listed.
-                    folders_listed=state.folders_listed
+                    current=listing.directory,
+                    # Depth 0 is the root's own entry: no directory listed.
+                    directories_listed=state.directories_listed
                     + (listing.depth > 0 and listing.last),
                     files=state.files + len(files),
                     size=state.size + sum(e.get("size") or 0 for e in files),
@@ -97,4 +97,4 @@ def _tree_du(
                 for entry in files:
                     yield entry
 
-    return Operation(run, DuState(folders_listed=0))
+    return Operation(run, DuState(directories_listed=0))

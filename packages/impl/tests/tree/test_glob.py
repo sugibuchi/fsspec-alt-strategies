@@ -17,7 +17,7 @@ from fsspec_alt_strategies_impl_testing import (
     TreeView,
 )
 
-_PRIMITIVES = {"ils", "info", "rm_file", "rm_folder", "rm_tree", "cp_file", "mv_file"}
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_dir", "rm_tree", "cp_file", "mv_file"}
 """The keyword arguments that replace a primitive of the filesystem."""
 
 _SETTINGS = {"profile": "storage_profile", "concurrency_limit": "operation_limit"}
@@ -86,7 +86,7 @@ async def test_answers_as_fsspec(
     assert entries == list(expected.values())
 
 
-async def test_prunes_folders_the_pattern_cannot_match_in(
+async def test_prunes_dirs_the_pattern_cannot_match_in(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
@@ -94,7 +94,7 @@ async def test_prunes_folders_the_pattern_cannot_match_in(
     entries, _ = await _collect_with_errors(op)
     assert len(entries) == 6
     assert op.state == GlobState(
-        current=op.state.current, folders_listed=1 + 3 + 3 + 6, matched=6
+        current=op.state.current, directories_listed=1 + 3 + 3 + 6, matched=6
     )
     # data, the 3 tables, their 2024s: the 2023s are pruned.
     assert hierarchical_fs.stats.calls == {"list": 1 + 3 + 3 + 6}
@@ -144,7 +144,7 @@ async def test_several_patterns_answer_as_fsspecs_globs_together(
     ]
 
 
-async def test_several_patterns_list_shared_folders_once(
+async def test_several_patterns_list_shared_dirs_once(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
@@ -160,7 +160,7 @@ async def test_several_patterns_list_shared_folders_once(
     assert hierarchical_fs.stats.calls == {"list": 2 * (1 + 3 + 3 + 6)}
 
 
-async def test_lists_folders_concurrently_within_batch_size() -> None:
+async def test_lists_dirs_concurrently_within_batch_size() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(5):
         for j in range(5):
@@ -200,7 +200,7 @@ async def test_cancel_asks_for_no_more_plain_paths() -> None:
 
 
 class _Forbidding(SimulatedFileSystem):
-    """Refuses to list one folder, as a storage without permission would."""
+    """Refuses to list one directory, as a storage without permission would."""
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         if self._strip_protocol(path) == "data/sales":

@@ -70,9 +70,9 @@ def _flat_mv(
     ``cp_file`` copies to the other storage. ``_rm_files`` always deletes the
     source's.
 
-    A folder's marker, a key ending with "/", is moved too, but not yielded. In
+    A directory's marker, a key ending with "/", is moved too, but not yielded. In
     batches, it is deleted without being copied, as `_flat_cp` copies none: its
-    folder is made at the destination instead, as `_flat_cp` makes it.
+    directory is made at the destination instead, as `_flat_cp` makes it.
 
     With ``maxdepth``, it moves the keys `_flat_cp` copies with it, and no
     marker. fsspec's ``mv`` copies as its ``copy`` does with ``maxdepth``, but
@@ -98,7 +98,7 @@ def _flat_mv(
     ``cp_file``, or with one ``_rm_files`` more per batch.
 
     ``src_fs`` is the filesystem moved from, and ``dst_fs`` the one moved to,
-    ``src_fs`` again within one storage. ``path1`` is a folder, a file, a glob
+    ``src_fs`` again within one storage. ``path1`` is a directory, a file, a glob
     pattern, or a list of them, as the source's ``_iexpand`` takes paths.
     ``path2`` places them as `_flat_cp` does. ``cp_file(source,
     destination)`` copies a file when the move copies: the source's
@@ -137,7 +137,7 @@ class _Rename(_CopyOrMove):
     """The jobs of one `_flat_mv` by ``_mv_file``: one move per key.
 
     The source's ``_mv_file`` moves each key where a copy would put it. A
-    folder's marker is moved too, but not yielded.
+    directory's marker is moved too, but not yielded.
     """
 
     verb = "move"
@@ -148,7 +148,7 @@ class _Rename(_CopyOrMove):
 
         # A rename makes no parent, as a write may: parents_required tells of
         # writes only, and _mv_file is called only where the parent exists.
-        self.parents_required = not self.implicit_folders
+        self.parents_required = not self.implicit_directories
 
     async def transfer_file(self, source: str, destination: str) -> None:
         try:
@@ -169,7 +169,7 @@ class _Rename(_CopyOrMove):
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
         if name.endswith("/"):
-            # With maxdepth, folders stay, as fsspec's copy leaves them out.
+            # With maxdepth, directories stay, as fsspec's copy leaves them out.
             if self.maxdepth is None:
                 self.waiting.append(_Job("marker", name, self.target(name)))
             return
@@ -217,8 +217,8 @@ class _Move(_Copy):
             return
         if name.endswith("/"):
             if self.maxdepth is not None:
-                return  # Folders stay, as fsspec's copy leaves them out.
-            # A folder's marker: deleted, its folder made as _flat_cp makes it.
+                return  # Directories stay, as fsspec's copy leaves them out.
+            # A directory's marker: deleted, its directory made as _flat_cp makes it.
             self.copied[name] = None
             self.delete_later(name)
             super().add(entry)

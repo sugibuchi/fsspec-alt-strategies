@@ -224,7 +224,7 @@ async def test_extra_keyword_arguments_go_to_every_listing(
 
 
 class _Forbidding(SimulatedFileSystem):
-    """Refuses to list one folder, as a storage without permission would."""
+    """Refuses to list one directory, as a storage without permission would."""
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         if self._strip_protocol(path) == "data/2023":
@@ -233,7 +233,7 @@ class _Forbidding(SimulatedFileSystem):
 
 
 @pytest.mark.parametrize("on_error", ["omit", "callable", "raise"])
-async def test_walk_handles_a_failed_folder_as_fsspec(on_error: str) -> None:
+async def test_walk_handles_a_failed_dir_as_fsspec(on_error: str) -> None:
     inner = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(inner)
     fs = _Tree(inner, asynchronous=True)
@@ -249,11 +249,11 @@ async def test_walk_handles_a_failed_folder_as_fsspec(on_error: str) -> None:
     expected = [
         t async for t in AsyncFileSystem._walk(inner, "data", on_error=fsspec_handler)
     ]
-    # The failed folder too, yielded empty.
+    # The failed directory too, yielded empty.
     assert sorted(walked) == sorted(expected)
     assert ("data/2023", [], []) in walked
     # Unlike fsspec's, which passes on_error to the root's listing only, as its
-    # walk recurses without it: here every folder's failure reaches it.
+    # walk recurses without it: here every directory's failure reaches it.
     assert [type(e) for e in seen] == (
         [PermissionError] if on_error == "callable" else []
     )
@@ -277,9 +277,9 @@ async def test_recursive_rm_copy_and_mv(fs: _Tree, inner: SimulatedFileSystem) -
     assert not await inner._exists("moved")
 
 
-async def test_a_rename_moves_a_folder_whole(inner: SimulatedFileSystem) -> None:
+async def test_a_rename_moves_a_dir_whole(inner: SimulatedFileSystem) -> None:
     class Renaming(_Tree):
-        storage_profile = StorageProfile(renames_folders=True)
+        storage_profile = StorageProfile(renames_directories=True)
 
         async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
             await self.inner._rename(path1, path2)
@@ -316,7 +316,7 @@ async def test_rm_uses_a_recursive_delete_of_the_storage(
     inner: SimulatedFileSystem,
 ) -> None:
     class Deleting(_Tree):
-        storage_profile = StorageProfile(deletes_folders=True)
+        storage_profile = StorageProfile(deletes_directories=True)
 
         async def _rm_tree(self, path: str) -> None:
             await self.inner._rm(path, recursive=True)
@@ -498,7 +498,7 @@ async def test_fsspec_callback_counts_what_was_done(fs: _Tree) -> None:
     assert callback.value == 5  # The files copied.
     callback = Callback()
     await fs._rm("copied", recursive=True, callback=callback)
-    assert callback.value == 5 + 7  # The files and the folders deleted.
+    assert callback.value == 5 + 7  # The files and the directories deleted.
 
 
 async def test_fsspec_callback_counts_the_bytes_of_a_file(
@@ -546,8 +546,8 @@ def _twins() -> tuple[_Tree, SimulatedFileSystem, SimulatedFileSystem]:
 @pytest.mark.parametrize("maxdepth", [1, 2])
 async def test_rm_with_maxdepth_deletes_the_files_fsspecs_does(maxdepth: int) -> None:
     fs, inner, reference = _twins()
-    # The folders at the limit hold files, so deleting them fails, as fsspec's
-    # own fails: it sends its folders to _rm_file, which refuses them here.
+    # The directories at the limit hold files, so deleting them fails, as fsspec's
+    # own fails: it sends its directories to _rm_file, which refuses them here.
     with pytest.raises((OSError, ExceptionGroup)):
         await fs._rm("data", recursive=True, maxdepth=maxdepth)
     with pytest.raises(IsADirectoryError):
@@ -618,7 +618,7 @@ async def test_du_with_withdirs_is_fsspecs(
         assert await fs._du("data", total=total, withdirs=True) == expected
 
 
-async def test_walk_of_an_empty_folder(fs: _Tree, inner: SimulatedFileSystem) -> None:
+async def test_walk_of_an_empty_dir(fs: _Tree, inner: SimulatedFileSystem) -> None:
     inner.add_dir("empty")
     walked = [t async for t in fs._walk("empty")]
     assert walked == [t async for t in AsyncFileSystem._walk(inner, "empty")]

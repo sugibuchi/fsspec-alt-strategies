@@ -38,15 +38,15 @@ def _flat_rm(
     """Delete the keys under a prefix, in batches sent as the listing goes on.
 
     It deletes what fsspec's ``_rm`` with ``recursive=True`` deletes: the
-    keys under ``path``, or ``path`` itself if it is a file. A folder's
+    keys under ``path``, or ``path`` itself if it is a file. A directory's
     marker, a key ending with "/", is deleted as any key is. A glob pattern, or
     a list of paths and patterns, deletes all they match, as with fsspec's
     ``_rm``. They are matched as `_flat_glob` matches them, then the keys under
-    the folders matched are listed, one folder after another.
+    the directories matched are listed, one directory after another.
 
     With ``maxdepth``, it deletes the keys fsspec's ``_rm`` deletes with it:
     those at most ``maxdepth`` levels below ``path``, or below a pattern's
-    matches one level less. A folder's marker counts at its folder's level.
+    matches one level less. A directory's marker counts at its directory's level.
     The keys deeper are listed all the same, as a prefix lists every key
     under it, but kept.
 
@@ -59,7 +59,7 @@ def _flat_rm(
     deletions start after the first page of the listing, not after the last,
     and the keys are held a batch at a time. It sends the same requests as a
     storage deleting in batches of ``rm_batch_size``. It loses on storages with a
-    hierarchical namespace, whose folders a listing by prefix does not see:
+    hierarchical namespace, whose directories a listing by prefix does not see:
     `_tree_rm` suits those.
 
     Once cancelled, it takes nothing more from the listing, and sends no new
@@ -67,13 +67,13 @@ def _flat_rm(
     without yielding them. Iterating it raises FileNotFoundError if ``path``
     does not exist, or matches nothing. An error from the listing ends it too.
 
-    Requests: the pages of one ``_iexpand`` per folder, one after another, and
+    Requests: the pages of one ``_iexpand`` per directory, one after another, and
     one ``_rm_files`` per batch. One ``_info`` for ``path`` if nothing is
     under it. Patterns, or a list, add the requests of their `_flat_glob`.
     Each request but the listing holds a permit of the filesystem's
     ``operation_limit`` while it runs.
 
-    ``path`` is the folder deleted from ``fs``, as its ``_iexpand`` takes
+    ``path`` is the directory deleted from ``fs``, as its ``_iexpand`` takes
     paths. A file is deleted alone. A glob pattern, or a list of paths and
     patterns, deletes all they match. ``maxdepth`` of 1 deletes only the keys
     right in ``path``.

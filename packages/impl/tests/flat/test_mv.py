@@ -15,8 +15,8 @@ from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.flat.mv import _flat_mv
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
-# A flat storage's: its folders are implicit, and none is made.
-_FLAT = StorageProfile(implicit_folders=True)
+# A flat storage's: its directories are implicit, and none is made.
+_FLAT = StorageProfile(implicit_directories=True)
 
 
 async def _nothing(*args: Any, **kwargs: Any) -> None:

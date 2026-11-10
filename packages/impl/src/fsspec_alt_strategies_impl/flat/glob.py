@@ -3,8 +3,8 @@
 """A glob that lists only the keys starting as its pattern does.
 
 `_flat_glob` is an alternative to fsspec's ``_glob`` for flat storages, with the
-same matches. fsspec's finds every path under the pattern's literal folder,
-then filters them. A flat storage lists by any prefix, not only by folder: so
+same matches. fsspec's finds every path under the pattern's literal directory,
+then filters them. A flat storage lists by any prefix, not only by directory: so
 `_flat_glob` lists only the keys starting with the pattern's text before its
 first wildcard, e.g. ``data/2024-`` for ``data/2024-*.parquet``.
 
@@ -25,7 +25,7 @@ from fsspec_alt_strategies.states import GlobState
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _Search
-from ._keys import _close, _folder, _folders, _new
+from ._keys import _close, _dir, _dirs, _new
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
@@ -43,9 +43,9 @@ def _flat_glob(
     """Find the paths matching glob patterns, listing only the keys they can match.
 
     It matches what fsspec's ``_glob`` matches, with ``*``, ``?``, ``[...]`` and
-    ``**``, filtered with fsspec's own regular expression. The folders are
+    ``**``, filtered with fsspec's own regular expression. The directories are
     derived from the keys, as fsspec's filesystems derive them for object
-    stores, and a key ending with "/" is a folder's marker. A derived folder's
+    stores, and a key ending with "/" is a directory's marker. A derived directory's
     entry has only its ``name``, ``size`` 0 and ``type``.
 
     Each pattern lists the keys starting with its text before the first
@@ -60,8 +60,8 @@ def _flat_glob(
     first wildcard ends within a name, e.g. ``data/2024-*``: fsspec's lists all
     of ``data``. It wins too when the caller starts on the first matches, or
     the listing is large. It loses on storages with a hierarchical namespace,
-    whose empty folders a listing by prefix does not see, and which `_tree_glob`
-    prunes by folder.
+    whose empty directories a listing by prefix does not see, and which `_tree_glob`
+    prunes by directory.
 
     Once cancelled, it takes nothing more from the listings. An error from a
     listing ends the operation, raised by its iteration.
@@ -71,8 +71,8 @@ def _flat_glob(
     filesystem's ``operation_limit``. The listings hold none.
 
     ``path`` is a pattern, or patterns, of paths on ``fs``, as its
-    ``_iexpand`` takes them: a trailing "/" matches only folders. ``maxdepth``
-    is how deep a ``**`` goes, and ``withdirs`` whether folders can match, as
+    ``_iexpand`` takes them: a trailing "/" matches only directories. ``maxdepth``
+    is how deep a ``**`` goes, and ``withdirs`` whether directories can match, as
     with fsspec's ``_glob``. The listing still lists every key under the
     prefix.
 
@@ -130,7 +130,7 @@ async def _matches(
     found: set[str],
 ) -> AsyncGenerator[dict[str, Any]]:
     """The matches of patterns in one listing, noted in ``found``."""
-    # The folders of the key listed last.
+    # The directories of the key listed last.
     before: list[str] = []
 
     entries = fs._iexpand(prefix)
@@ -138,10 +138,10 @@ async def _matches(
         async for entry in entries:
             name = entry["name"]
 
-            # The folders the key implies, each once, then the key itself.
-            folders = _folders(name)
-            candidates = [_folder(f) for f in _new(folders, before)]
-            before = folders
+            # The directories the key implies, each once, then the key itself.
+            directories = _dirs(name)
+            candidates = [_dir(f) for f in _new(directories, before)]
+            before = directories
             if not name.endswith("/"):
                 candidates.append(entry)
 

@@ -8,7 +8,7 @@ keys. A subclass says what a key queues, how a job runs, and what its outcome
 is. The roots are listed one after another.
 
 A glob pattern is expanded first, with `_flat_glob`, as fsspec's
-``_expand_path`` expands it: the keys under its matching folders are then
+``_expand_path`` expands it: the keys under its matching directories are then
 listed.
 
 This module depends on `_keys`, `find`, `glob`, and `jobs` of `common`.
@@ -57,38 +57,38 @@ class _FlatJobs(_Jobs):
 
     @abstractmethod
     def add(self, entry: dict[str, Any]) -> None:
-        """Queue the jobs for a key: a file, or a folder's marker ending with "/"."""
+        """Queue the jobs for a key: a file, or a directory's marker ending with "/"."""
 
     def file_root(self, path: str) -> None:
         self.add({"name": path, "type": "file"})
 
     def source(self, roots: _Roots) -> AsyncGenerator[dict[str, Any]] | None:
-        """The keys under the root folders, if any, listed one after another."""
-        if not roots.folders:
+        """The keys under the root directories, if any, listed one after another."""
+        if not roots.directories:
             return None
-        return self._keys(roots.folders)
+        return self._keys(roots.directories)
 
     def fed(self, item: dict[str, Any]) -> list[Any]:
         self.current = item["name"]
         self.add(item)
         return []
 
-    async def _keys(self, folders: Sequence[str]) -> AsyncGenerator[dict[str, Any]]:
-        """The keys under each folder, as ``_iexpand`` lists them.
+    async def _keys(self, directories: Sequence[str]) -> AsyncGenerator[dict[str, Any]]:
+        """The keys under each directory, as ``_iexpand`` lists them.
 
-        A folder with nothing under it is asked for with ``_info``: a file is
+        A directory with nothing under it is asked for with ``_info``: a file is
         yielded as a key, and a missing one raises FileNotFoundError, ending the
         operation, as a missing root does.
         """
-        for folder in folders:
+        for directory in directories:
             depth = self.maxdepth
-            if depth is not None and folder in self.matched:
+            if depth is not None and directory in self.matched:
                 depth -= 1
                 if depth < 1:
                     continue  # At the limit already: nothing in it is taken.
 
             under = False
-            prefix = f"{folder}/" if folder else ""
+            prefix = f"{directory}/" if directory else ""
             entries = self.fs._iexpand(prefix)
             try:
                 async for entry in entries:
@@ -100,10 +100,10 @@ class _FlatJobs(_Jobs):
             finally:
                 await _close(entries)
 
-            if under or not folder:
+            if under or not directory:
                 continue
 
             async with self.concurrency_limit:
-                entry = await self.fs._info(folder)
+                entry = await self.fs._info(directory)
             if entry["type"] != "directory":
                 yield entry

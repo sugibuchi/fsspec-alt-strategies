@@ -213,7 +213,7 @@ async def test_closing_a_queue_gives_back_the_permit_its_waiter_got() -> None:
     assert limit._value == 1
 
 
-def test_roots_of_leave_out_what_a_matching_folder_has() -> None:
+def test_roots_of_leave_out_what_a_matching_dir_has() -> None:
     matches = [
         {"name": "a/b", "type": "file"},
         {"name": "a", "type": "directory"},
@@ -221,7 +221,7 @@ def test_roots_of_leave_out_what_a_matching_folder_has() -> None:
         {"name": "d", "type": "file"},
     ]
     roots = _roots_of(matches, [], "*")
-    assert (list(roots.folders), list(roots.files)) == (["a", "c"], ["d"])
+    assert (list(roots.directories), list(roots.files)) == (["a", "c"], ["d"])
 
 
 def test_roots_of_nothing_raise_unless_errors_were_found() -> None:
@@ -285,7 +285,7 @@ def _file(name: str) -> dict[str, Any]:
     return {"name": name, "type": "file"}
 
 
-def _folder(name: str) -> dict[str, Any]:
+def _dir(name: str) -> dict[str, Any]:
     return {"name": name, "type": "directory"}
 
 
@@ -310,8 +310,8 @@ async def test_a_single_match_already_in_place_is_left() -> None:
     assert await copy.prepare() is None
 
 
-async def test_matches_without_a_common_folder_go_under_the_destination() -> None:
-    copy = _Copy("*1", "dest", [_folder("x1"), _file("y1")])
+async def test_matches_without_a_common_dir_go_under_the_destination() -> None:
+    copy = _Copy("*1", "dest", [_dir("x1"), _file("y1")])
     assert await copy.prepare() is not None
     assert copy.prefix == ""
     assert (copy.target("x1/f"), copy.target("y1")) == ("dest/x1/f", "dest/y1")

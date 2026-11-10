@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""A recursive find that lists several folders at a time.
+"""A recursive find that lists several directories at a time.
 
 `_tree_find` is an alternative to fsspec's ``_find``, with the same paths. fsspec's
-walks a tree one folder at a time, unless the filesystem lists whole trees.
-`_tree_find` lists several folders at a time, as `_tree_walk` does.
+walks a tree one directory at a time, unless the filesystem lists whole trees.
+`_tree_find` lists several directories at a time, as `_tree_walk` does.
 
 This module depends on `walk`, and `operation` and `paths` of `common`.
 """
@@ -34,34 +34,34 @@ def _tree_find(
     withdirs: bool = False,
     ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[dict[str, Any], FindState]:
-    """Find the files in a tree, listing several folders at a time.
+    """Find the files in a tree, listing several directories at a time.
 
     It finds the paths fsspec's ``_find`` finds. A missing ``path`` finds
-    nothing, and a file finds itself. A folder that fails to list yields its
+    nothing, and a file finds itself. A directory that fails to list yields its
     error, and the rest of the tree is still searched.
 
-    It yields each path as its folder's listing arrives, so the paths are not
+    It yields each path as its directory's listing arrives, so the paths are not
     in order. fsspec's ``_find`` sorts them, by name. A storage listing a
-    folder twice, e.g. as a prefix and as its marker object, yields it twice.
+    directory twice, e.g. as a prefix and as its marker object, yields it twice.
 
-    It wins over fsspec's ``_find`` on storages that list one folder per request,
-    with many folders: their listings overlap. It loses on object stores, which
+    It wins over fsspec's ``_find`` on storages that list one directory per request,
+    with many directories: their listings overlap. It loses on object stores, which
     list a whole tree in one paginated request.
 
-    Once cancelled, it lists no new folder, and yields the paths of the
+    Once cancelled, it lists no new directory, and yields the paths of the
     listings in flight.
 
-    Requests: one ``_ils`` per folder, as the filesystem's ``operation_limit``
-    allows. One ``info`` more for ``path`` itself, if a file, or a folder with
+    Requests: one ``_ils`` per directory, as the filesystem's ``operation_limit``
+    allows. One ``info`` more for ``path`` itself, if a file, or a directory with
     ``withdirs``.
 
-    ``path`` is the folder searched on ``fs``, by its ``_ils`` and ``_info``.
+    ``path`` is the directory searched on ``fs``, by its ``_ils`` and ``_info``.
     ``maxdepth`` of 1 finds only the files in ``path``. ``withdirs`` finds
-    folders too, ``path`` included. ``ils_kwargs`` go to each ``_ils``, as
+    directories too, ``path`` included. ``ils_kwargs`` go to each ``_ils``, as
     fsspec's ``find`` passes its own on.
 
     The operation yields the ``_ils`` entry of each path found, or the error
-    of a folder that failed to list, and its state is a `FindState`. The call
+    of a directory that failed to list, and its state is a `FindState`. The call
     raises ValueError if ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
@@ -77,7 +77,7 @@ def _tree_find(
             ils_kwargs=ils_kwargs,
             stopping=op.cancelling,
             file_root=True,
-            folder_root=withdirs and bool(root),
+            dir_root=withdirs and bool(root),
         )
         state = op.state
 
@@ -88,9 +88,9 @@ def _tree_find(
                 ]
                 op.state = state = FindState(
                     errors=state.errors + (listing.error is not None),
-                    current=listing.folder,
-                    # Depth 0 is the root's own entry: no folder listed.
-                    folders_listed=state.folders_listed
+                    current=listing.directory,
+                    # Depth 0 is the root's own entry: no directory listed.
+                    directories_listed=state.directories_listed
                     + (listing.depth > 0 and listing.last),
                     found=state.found + len(found),
                 )
@@ -101,7 +101,7 @@ def _tree_find(
                 for entry in found:
                     yield entry
 
-    return Operation(run, FindState(folders_listed=0))
+    return Operation(run, FindState(directories_listed=0))
 
 
 async def _find_listings(
@@ -113,21 +113,21 @@ async def _find_listings(
     ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
     file_root: bool = False,
-    folder_root: bool = False,
+    dir_root: bool = False,
 ) -> AsyncGenerator[_Listing]:
     """Walk as the strategies that only read do, such as find, du and glob.
 
-    It yields each folder's listing in parts, as ``_chunks`` does, but treats ``path``
+    It yields each directory's listing in parts, as ``_chunks`` does, but treats ``path``
     itself as fsspec's ``_find`` and ``_glob`` do:
 
     - missing, it yields nothing;
     - a file, it yields the file's ``info`` entry if ``file_root``, else
       nothing;
-    - a folder, it yields the folder's own ``info`` entry after its listing's
-      last part, if ``folder_root`` and the walk is not stopping.
+    - a directory, it yields the directory's own ``info`` entry after its listing's
+      last part, if ``dir_root`` and the walk is not stopping.
 
     The root's own entry comes as a `_Listing` of depth 0, which is no listing.
-    So the strategies filter and count it as any entry, but count no folder
+    So the strategies filter and count it as any entry, but count no directory
     listed for it.
     """
     root = _trim(path)
@@ -155,24 +155,24 @@ async def _find_listings(
 
         yield root_listing
         if root_listing.last:
-            async for listing in _root_entry(fs, root, folder_root, stopping):
+            async for listing in _root_entry(fs, root, dir_root, stopping):
                 yield listing
 
         async for listing in listings:
             yield listing
-            if listing.folder == root and listing.last:
-                async for entry in _root_entry(fs, root, folder_root, stopping):
+            if listing.directory == root and listing.last:
+                async for entry in _root_entry(fs, root, dir_root, stopping):
                     yield entry
 
 
 async def _root_entry(
     fs: Any,
     root: str,
-    folder_root: bool,
+    dir_root: bool,
     stopping: Callable[[], object] | None,
 ) -> AsyncGenerator[_Listing]:
-    """The root folder's own ``info`` entry, as a listing of depth 0, if asked."""
-    if folder_root and not (stopping and stopping()):
+    """The root directory's own ``info`` entry, as a listing of depth 0, if asked."""
+    if dir_root and not (stopping and stopping()):
         async with fs.operation_limit:
             entry = await fs._info(root)
         yield _Listing(root, 0, [entry])

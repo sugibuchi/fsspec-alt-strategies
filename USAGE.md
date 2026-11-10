@@ -10,9 +10,9 @@ How to get the library's features, and how to use them. See the
 The strategies walk, find, glob, measure, delete, copy and move file trees. They come in two families, by a
 storage's namespace:
 
-- the `tree` family, in `tree/`, for storages with a hierarchical namespace, a tree of folders, such as Azure Data
+- the `tree` family, in `tree/`, for storages with a hierarchical namespace, a tree of directories, such as Azure Data
   Lake Storage Gen2, SFTP or HDFS;
-- the `flat` family, in `flat/`, for storages with a flat namespace, keys whose folders are only prefixes, such as
+- the `flat` family, in `flat/`, for storages with a flat namespace, keys whose directories are only prefixes, such as
   S3.
 
 Each family replaces fsspec's recursive methods, such as `find`, `rm` and `copy`, with its strategies. They come in
@@ -64,13 +64,13 @@ import each other relatively, so a copy works under any name. Keep their license
 
 It is also on PyPI, as `fsspec-alt-strategies-impl`, to try it before copying.
 
-Its command line copies it, with its `cli` extra. Run it from your project, with the folder to copy into:
+Its command line copies it, with its `cli` extra. Run it from your project, with the directory to copy into:
 
 ```bash
 uv run --with "fsspec-alt-strategies-impl[cli]" fsspec-alt-strategies-impl copy src/mypkg/_contrib/strategy
 ```
 
-It copies the package as installed. It replaces a previous copy, and refuses any other folder that is not empty.
+It copies the package as installed. It replaces a previous copy, and refuses any other directory that is not empty.
 Delete the modules you do not use afterwards.
 
 ### The modules to copy for each feature
@@ -104,7 +104,7 @@ class MyFileSystem(TreeFileSystem):
     protocol = "my"
     storage_profile = StorageProfile()  # Nothing known: right on any storage.
 
-    async def _ils(self, path, **kwargs): ...  # A folder's entries, as they come.
+    async def _ils(self, path, **kwargs): ...  # A directory's entries, as they come.
     async def _info(self, path, **kwargs): ...
     # ... and the other primitives each class declares abstract.
 
@@ -133,7 +133,7 @@ concurrency limits. The wrapper is async if the filesystem is. Pass your own tab
 right on every storage: as a tree, one request at a time, with nothing known of the storage.
 
 An entry's `native` lists the recursive methods passed to the filesystem as they are, e.g. `["mv"]`. Use it where the
-filesystem's own method uses the storage better, as gcsfs's `mv` renames a folder in a bucket with a hierarchical
+filesystem's own method uses the storage better, as gcsfs's `mv` renames a directory in a bucket with a hierarchical
 namespace. Such a call is not streamed by the strategies, and a monitor sees no step of it.
 
 A wrapper is light and not cached: make one when you need it, and drop it after.
@@ -142,9 +142,9 @@ A wrapper is light and not cached: make one when you need it, and drop it after.
 
 None of these is right for every storage, and the library never picks one for you.
 
-- **The family** follows the storage's namespace. A hierarchical namespace, a tree of folders, suits `tree`. A flat
-  namespace, keys whose folders are only prefixes, suits `flat`. An exception is a filesystem listing a flat namespace
-  one folder per request, such as adlfs on Azure Blob Storage: it suits `tree`.
+- **The family** follows the storage's namespace. A hierarchical namespace, a tree of directories, suits `tree`. A flat
+  namespace, keys whose directories are only prefixes, suits `flat`. An exception is a filesystem listing a flat namespace
+  one directory per request, such as adlfs on Azure Blob Storage: it suits `tree`.
 - **The profile** only saves requests, or data copied. A field left unknown is right on any storage. A field declared
   wrongly gives wrong results: declare only what you know.
 - **The concurrency limits** are yours to set. A filesystem unsafe to call from several threads, such as SFTP, needs
@@ -153,7 +153,7 @@ None of these is right for every storage, and the library never picks one for yo
 #### Costs to know
 
 - A flat wrapper lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix. That listing
-  is held in memory, and covers the prefix's whole folder. A subclass overriding `_iexpand` with the storage's own listing
+  is held in memory, and covers the prefix's whole directory. A subclass overriding `_iexpand` with the storage's own listing
   by prefix streams it instead.
 - `known_implementations` is shared by every copy in a project. Change it with care, or pass your own table.
 
@@ -280,7 +280,7 @@ with fs.transaction:
 
 - `_route(path)` gives the inner filesystem and its path, or None for a path above every storage;
 - `_outer(fs, path)` gives the router's path of an inner one;
-- `_roots(path)` lists a folder above the storages.
+- `_roots(path)` lists a directory above the storages.
 
 `transfer_concurrency` bounds the copies and moves between storages at a time. Override `_cross_fs_cp_file` or
 `_cross_fs_mv_file` for a storage with a faster way, such as a server-side copy.

@@ -76,7 +76,7 @@ class AsyncRoutingFileSystem(
       path above every storage, e.g. a catalog holding volumes.
     - ``_outer(fs, path)`` gives the router's path of an inner one, so that
       the names answered, e.g. by ``ls`` and ``find``, are the router's.
-    - ``_roots(path)`` lists a folder above the storages, as ``ls`` with
+    - ``_roots(path)`` lists a directory above the storages, as ``ls`` with
       ``detail=True`` does.
 
     ``_route`` is sync, as sync methods route too.
@@ -90,8 +90,8 @@ class AsyncRoutingFileSystem(
 
     Above the storages, ``ls`` answers from ``_roots``, and ``info`` from
     ``_root_info``, which a subclass may override. ``find``, ``du`` and
-    ``walk`` are fsspec's own walk, a folder after another, handing each
-    storage's folder to its filesystem. A glob whose literal prefix
+    ``walk`` are fsspec's own walk, a directory after another, handing each
+    storage's directory to its filesystem. A glob whose literal prefix
     routes goes whole to that filesystem. Another lists the prefix's roots, as
     fsspec's ``glob`` does. A change above the storages, e.g. ``rm`` of a
     catalog, raises PermissionError.
@@ -105,7 +105,7 @@ class AsyncRoutingFileSystem(
     them, e.g. with a server-side copy, with ``maxdepth`` too. A source of
     unknown ``fs_type`` is copied by fsspec's own copy, a file at a time. A
     move between two storages deletes each source file once its copy succeeds,
-    and the source folders left empty.
+    and the source directories left empty.
 
     Inner filesystems are async, on the router's loop: a sync one raises
     TypeError, and is to be wrapped, e.g. in a `SyncTreeWrapper`. A subclass
@@ -188,7 +188,7 @@ class AsyncRoutingFileSystem(
         """The inner filesystem of a path, and its path there, or None above them all.
 
         ``path`` is the router's, without the protocol. A trailing "/" is kept,
-        as it means a folder to a copy or a glob: the router puts it back on
+        as it means a directory to a copy or a glob: the router puts it back on
         the inner path if ``_route`` drops it. So may glob patterns: where
         the literal part routes, the pattern's must route to the same
         filesystem.
@@ -203,10 +203,10 @@ class AsyncRoutingFileSystem(
 
     @abstractmethod
     async def _roots(self, path: str) -> list[dict[str, Any]]:
-        """List a folder above the storages, as ``_ls`` with ``detail=True`` does.
+        """List a directory above the storages, as ``_ls`` with ``detail=True`` does.
 
         Each entry's name is the router's path. It raises FileNotFoundError
-        for a folder that does not exist.
+        for a directory that does not exist.
         """
 
     # What a subclass may override.
@@ -215,7 +215,7 @@ class AsyncRoutingFileSystem(
         """Describe a path above the storages, as ``_info`` does.
 
         ``path`` is the router's, without the protocol. Here, the root is a
-        bare folder entry, and any other path the entry of its name in
+        bare directory entry, and any other path the entry of its name in
         ``_roots`` of its parent. A subclass knowing more of them, e.g. the
         root's own entry, or one request describing a path, overrides it.
         It raises FileNotFoundError for a path that does not exist.
@@ -324,7 +324,7 @@ class AsyncRoutingFileSystem(
         """``_route`` of a path given to a method, refusing a sync filesystem.
 
         A trailing "/" of the path is kept on a non-empty inner path, as it
-        means a folder to a copy or a glob: ``_route`` need not keep it.
+        means a directory to a copy or a glob: ``_route`` need not keep it.
         """
         plain = _strip_only_protocol(self, path)
         target = self._route(plain)
@@ -595,7 +595,7 @@ class AsyncRoutingFileSystem(
             return False
 
         if target is None:
-            return False  # Above the storages, all are folders.
+            return False  # Above the storages, all are directories.
 
         fs, inner = target
         return await self._on(fs, inner, path, fs._isfile(inner))
@@ -607,7 +607,7 @@ class AsyncRoutingFileSystem(
         if fs1 is fs2:
             await self._on(fs1, inner1, path1, fs1._cp_file(inner1, inner2, **kwargs))
         elif await self._on(fs1, inner1, path1, fs1._isdir(inner1)):
-            # fsspec's copy gives folders too, which each filesystem makes.
+            # fsspec's copy gives directories too, which each filesystem makes.
             await self._on(fs2, inner2, path2, fs2._makedirs(inner2, exist_ok=True))
         else:
             copy_file = self._across(fs1, fs2)
@@ -901,7 +901,7 @@ class AsyncRoutingFileSystem(
         """Move, as fsspec's ``mv`` does: within a storage, or between two.
 
         Between two storages, each source file is deleted once copied, and the
-        source folders left empty once all are. A source whose copy failed is
+        source directories left empty once all are. A source whose copy failed is
         kept.
         """
         if path1 == path2:
@@ -1120,7 +1120,7 @@ def _put_file(
 ) -> None:
     """fsspec's ``put_file`` through ``open``, without its ``makedirs``.
 
-    A storage needs no folder for the files put in it, and fsspec's sync
+    A storage needs no directory for the files put in it, and fsspec's sync
     ``makedirs`` cannot run from a thread of an async router.
     """
     if os.path.isdir(lpath):

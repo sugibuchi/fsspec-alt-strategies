@@ -18,7 +18,7 @@ from fsspec_alt_strategies.states import FindState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
-from ._keys import _close, _folder, _folders, _new
+from ._keys import _close, _dir, _dirs, _new
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -36,20 +36,20 @@ def _flat_find(
     """Find the files under a prefix, from one listing streamed as it comes.
 
     It finds the paths fsspec's ``_find`` finds. A missing ``path`` finds
-    nothing, and a file finds itself. With ``withdirs``, the folders are
+    nothing, and a file finds itself. With ``withdirs``, the directories are
     derived from the keys, as fsspec's filesystems derive them for object
-    stores, and a key ending with "/" is a folder's marker. A derived folder's
+    stores, and a key ending with "/" is a directory's marker. A derived directory's
     entry has only its ``name``, ``size`` 0 and ``type``.
 
     It yields each path as its page of the listing arrives, so the first come
     after one request, not after the last. They come in the listing's order,
-    with each folder before its first key. fsspec's ``_find`` sorts them, by
+    with each directory before its first key. fsspec's ``_find`` sorts them, by
     name.
 
     It wins over fsspec's ``_find`` on large prefixes of flat storages: the
     caller starts on the first page, and holds one page at a time, not the
     whole listing. It sends the same listing requests. It loses on storages
-    with a hierarchical namespace, whose folders a listing by prefix does not
+    with a hierarchical namespace, whose directories a listing by prefix does not
     see when empty: `_tree_find` suits those.
 
     Once cancelled, it takes nothing more from the listing. An error from the
@@ -60,10 +60,10 @@ def _flat_find(
     ``withdirs``, holding a permit of the filesystem's ``operation_limit``.
     The listing holds none.
 
-    ``path`` is the folder searched on ``fs``. Its ``_iexpand`` lists every
+    ``path`` is the directory searched on ``fs``. Its ``_iexpand`` lists every
     key starting with a prefix, in name order, each key once. ``maxdepth`` of
     1 finds only the files in ``path``, though the listing still lists every
-    key under it. ``withdirs`` finds folders too, ``path`` included.
+    key under it. ``withdirs`` finds directories too, ``path`` included.
 
     The operation yields the entry of each path found, and its state is a
     `FindState`. The call raises ValueError if ``maxdepth`` is less than 1.
@@ -100,12 +100,12 @@ async def _find_entries(
     """The entries under ``path``, as fsspec's ``_find`` finds them.
 
     It yields each file under ``path`` as the listing gives it, and with
-    ``withdirs`` each folder once, derived from the keys. ``path`` itself is
+    ``withdirs`` each directory once, derived from the keys. ``path`` itself is
     treated as fsspec's ``_find`` treats it:
 
     - missing, it yields nothing;
     - a file, it yields the file's ``_info`` entry;
-    - a folder, it yields the folder's own ``_info`` entry with ``withdirs``,
+    - a directory, it yields the directory's own ``_info`` entry with ``withdirs``,
       unless stopping.
 
     Once ``stopping`` returns true, it takes no more from the listing. An error
@@ -115,7 +115,7 @@ async def _find_entries(
     prefix = f"{root}/" if root else ""
     under = False
 
-    # The folders of the key listed last.
+    # The directories of the key listed last.
     before: list[str] = []
 
     entries = fs._iexpand(prefix)
@@ -124,11 +124,11 @@ async def _find_entries(
             under = True
             name = entry["name"]
             if withdirs:
-                folders = _folders(name[len(prefix) :])
-                for folder in _new(folders, before):
-                    if _within(folder, maxdepth):
-                        yield _folder(prefix + folder)
-                before = folders
+                directories = _dirs(name[len(prefix) :])
+                for directory in _new(directories, before):
+                    if _within(directory, maxdepth):
+                        yield _dir(prefix + directory)
+                before = directories
             if not name.endswith("/") and _within(name[len(prefix) :], maxdepth):
                 yield entry
             if stopping is not None and stopping():
@@ -145,10 +145,10 @@ async def _find_entries(
     except FileNotFoundError:
         return
 
-    # A folder is found itself only with withdirs. A file is found itself only
+    # A directory is found itself only with withdirs. A file is found itself only
     # when nothing is under it, as fsspec's _find tells them apart.
-    is_folder = entry["type"] == "directory"
-    if (is_folder and withdirs) or (not is_folder and not under):
+    is_dir = entry["type"] == "directory"
+    if (is_dir and withdirs) or (not is_dir and not under):
         yield entry
 
 

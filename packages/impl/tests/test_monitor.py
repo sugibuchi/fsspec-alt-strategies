@@ -36,7 +36,7 @@ def test_a_monitored_filesystem_is_returned_as_it_is() -> None:
 
 def test_a_filesystem_is_wrapped_as_its_entry_says() -> None:
     fs = SimulatedFileSystem()
-    profile = StorageProfile(fs_type="flat", implicit_folders=True)
+    profile = StorageProfile(fs_type="flat", implicit_directories=True)
     flat = monitored(
         fs,
         {

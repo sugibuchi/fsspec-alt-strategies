@@ -16,7 +16,7 @@ from fsspec_alt_strategies_impl_testing import (
     TreeView,
 )
 
-_PRIMITIVES = {"ils", "info", "rm_file", "rm_folder", "rm_tree", "cp_file", "mv_file"}
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_dir", "rm_tree", "cp_file", "mv_file"}
 """The keyword arguments that replace a primitive of the filesystem."""
 
 _SETTINGS = {"profile": "storage_profile", "concurrency_limit": "operation_limit"}
@@ -74,10 +74,10 @@ async def test_entries_are_the_listings(any_fs: SimulatedFileSystem) -> None:
     async with _find(any_fs, "data") as op:
         entries = [e async for e in op]
     assert all(e["size"] == 10 for e in entries if e["name"].endswith(".parquet"))
-    # One listing per folder, and no _info.
+    # One listing per directory, and no _info.
     assert any_fs.stats.calls == {"list": 7}
     assert op.state == FindState(
-        current=op.state.current, folders_listed=7, found=len(entries)
+        current=op.state.current, directories_listed=7, found=len(entries)
     )
 
 
@@ -87,7 +87,7 @@ async def test_the_whole_filesystem(any_fs: SimulatedFileSystem) -> None:
     assert _names(entries) == await _fsspec_find(any_fs, "", withdirs=True)
 
 
-async def test_lists_folders_concurrently() -> None:
+async def test_lists_dirs_concurrently() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(20):
         fs.add_file(f"root/{i:02}/file")
@@ -121,7 +121,7 @@ class _Forbidding(SimulatedFileSystem):
         return await super()._ls(path, detail=detail, **kwargs)
 
 
-async def test_a_failed_folder_is_yielded() -> None:
+async def test_a_failed_dir_is_yielded() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
     async with _find(fs, "data") as op:

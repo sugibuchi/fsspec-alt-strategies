@@ -27,7 +27,7 @@ def _tree(fs: SimulatedFileSystem) -> None:
         for month in ("01", "02"):
             fs.add_file(f"data/{year}/{month}/part-0.parquet", b"x" * 10)
     fs.add_file("data/README.md")
-    fs.add_file("database.csv")  # Shares the text "data", not the folder.
+    fs.add_file("database.csv")  # Shares the text "data", not the directory.
 
 
 def _sorted(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -58,7 +58,7 @@ async def test_requests() -> None:
     op = _find(fs, "data")
     entries, _ = await _collect_with_errors(op)
     assert len(entries) == 5
-    # The 5 keys under data/, 2 a page: no info, and no listing per folder.
+    # The 5 keys under data/, 2 a page: no info, and no listing per directory.
     assert fs.stats.calls == {"list": 3}
     assert op.state == FindState(current=op.state.current, found=5)
 
@@ -82,7 +82,7 @@ async def test_yields_as_the_pages_come() -> None:
 
 
 def _listing(*names: str) -> Any:
-    """An ``iexpand`` of these keys, as a storage with folder markers lists them."""
+    """An ``iexpand`` of these keys, as a storage with directory markers lists them."""
 
     async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in names:
@@ -97,7 +97,7 @@ async def _info(path: str) -> dict[str, Any]:
     return {"name": path, "size": 0, "type": "directory"}
 
 
-async def test_markers_are_folders() -> None:
+async def test_markers_are_dirs() -> None:
     iexpand = _listing("data/", "data/empty/", "data/a/b.txt")
     entries, _ = await _collect_with_errors(
         _flat_find(FlatView(None, iexpand=iexpand, info=_info), "data", withdirs=True)

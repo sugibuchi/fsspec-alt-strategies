@@ -77,11 +77,11 @@ code: read it before adding a strategy.
   family only when copying or moving from a storage of it, as its profile's `fs_type` says.
 - A family's modules export nothing public but its filesystem class, in `filesystem.py`.
 - The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
-  folder in parts: never hold a folder's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
+  directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
 - Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
 - The flat strategies list with `_iexpand(prefix)`, an async iterator of entries in name order, never pages: see
-  DEVELOPMENT.md's "The flat strategies". Those that only read derive folders with `flat._keys`. Those changing the
+  DEVELOPMENT.md's "The flat strategies". Those that only read derive directories with `flat._keys`. Those changing the
   storage build on `flat._jobs._FlatJobs`.
 - The strategies changing a storage, in any family, run on `common.jobs._Jobs`, and start with `_Jobs.operation`. A
   copy or move also builds on `common.jobs._CopyJobs`, which places its paths: `_CopyOrMove(_CopyJobs, _TreeJobs)`.
@@ -103,7 +103,7 @@ code: read it before adding a strategy.
 
 ### Tests
 
-- Test folders have no `__init__.py`. Never import one test file from another. The interface's tests never import
+- Test directories have no `__init__.py`. Never import one test file from another. The interface's tests never import
   the strategies.
 - Test strategies on `SimulatedFileSystem`, with the fixtures `flat_fs`, `hierarchical_fs` and `any_fs`, which runs a
   test on both. Start a strategy on a `TreeView` or `FlatView` of it, which replaces a primitive and sets the profile

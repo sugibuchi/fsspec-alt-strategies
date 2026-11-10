@@ -40,7 +40,7 @@ def _flat_du(
     total, as fsspec's ``_du`` gives by default.
 
     A missing ``path`` measures nothing, as with fsspec's ``_du``. A file
-    measures itself. A key ending with "/" is a folder's marker, and not
+    measures itself. A key ending with "/" is a directory's marker, and not
     counted.
 
     It wins over fsspec's ``_du`` on any flat storage, as it sends no ``info``
@@ -53,7 +53,7 @@ def _flat_du(
     One ``_info`` for ``path``, if nothing is under it, holding a permit of
     the filesystem's ``operation_limit``. The listing holds none.
 
-    ``path`` is the folder measured on ``fs``. Its ``_iexpand`` lists every
+    ``path`` is the directory measured on ``fs``. Its ``_iexpand`` lists every
     key starting with a prefix, in name order, each key once. ``maxdepth`` of
     1 counts only the files in ``path``, though the listing still lists every
     key under it.

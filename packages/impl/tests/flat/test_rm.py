@@ -45,7 +45,7 @@ _FILES = [
 def _tree(fs: SimulatedFileSystem) -> None:
     for path in _FILES:
         fs.add_file(path)
-    fs.add_file("database.csv")  # Shares the text "data", not the folder.
+    fs.add_file("database.csv")  # Shares the text "data", not the directory.
     fs.add_file("other/kept")
 
 
@@ -223,12 +223,12 @@ async def test_maxdepth_requests(flat_fs: SimulatedFileSystem) -> None:
     assert op.state == RmState(current=op.state.current, files_found=1, files_deleted=1)
 
 
-async def test_maxdepth_1_of_a_pattern_lists_no_folder_matched(
+async def test_maxdepth_1_of_a_pattern_lists_no_dir_matched(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)
     deleted, _ = await _collect_with_errors(_rm(flat_fs, "data/*", maxdepth=1))
-    # fsspec's _expand_path takes the matches only: the folders are not expanded.
+    # fsspec's _expand_path takes the matches only: the directories are not expanded.
     assert deleted == ["data/README.md"]
     assert await flat_fs._exists("data/2023/01/part-0.parquet")
 

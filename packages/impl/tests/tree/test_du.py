@@ -14,10 +14,10 @@ from fsspec_alt_strategies_impl.tree.du import _tree_du
 from fsspec_alt_strategies_impl_testing import (
     SimulatedFileSystem,
     TreeView,
-    folder_ils,
+    dir_ils,
 )
 
-_PRIMITIVES = {"ils", "info", "rm_file", "rm_folder", "rm_tree", "cp_file", "mv_file"}
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_dir", "rm_tree", "cp_file", "mv_file"}
 """The keyword arguments that replace a primitive of the filesystem."""
 
 _SETTINGS = {"profile": "storage_profile", "concurrency_limit": "operation_limit"}
@@ -61,7 +61,7 @@ async def test_sends_no_info_per_file(any_fs: SimulatedFileSystem) -> None:
     op = _du(any_fs, "data")
     await _collect_with_errors(op)
     assert op.state == DuState(
-        current=op.state.current, folders_listed=7, files=5, size=221
+        current=op.state.current, directories_listed=7, files=5, size=221
     )
     assert any_fs.stats.calls == {"list": 7}
 
@@ -96,7 +96,7 @@ async def test_a_failed_listing_is_yielded_and_the_rest_counted() -> None:
             raise PermissionError(path)
         return await fs._ls(path, detail=detail, **kwargs)
 
-    op = _du(fs, "data", ils=folder_ils(ls))
+    op = _du(fs, "data", ils=dir_ils(ls))
     _, errors = await _collect_with_errors(op)
     assert [type(e) for e in errors] == [PermissionError]
     assert (op.state.errors, op.state.size) == (1, 201)

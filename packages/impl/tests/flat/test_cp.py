@@ -15,8 +15,8 @@ from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.flat.cp import _flat_cp
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
-# A flat storage's: its folders are implicit, and none is made.
-_FLAT = StorageProfile(implicit_folders=True)
+# A flat storage's: its directories are implicit, and none is made.
+_FLAT = StorageProfile(implicit_directories=True)
 
 
 async def _nothing(*args: Any, **kwargs: Any) -> None:
@@ -86,11 +86,11 @@ def _tree(fs: SimulatedFileSystem, prefix: str = "") -> None:
     ("path1", "path2"),
     [
         ("data", "copied"),  # Onto a new path.
-        ("data", "archive"),  # Into an existing folder.
-        ("data", "new/"),  # Into a folder, by its trailing "/".
-        ("data/", "archive"),  # Its contents onto an existing folder.
+        ("data", "archive"),  # Into an existing directory.
+        ("data", "new/"),  # Into a directory, by its trailing "/".
+        ("data/", "archive"),  # Its contents onto an existing directory.
         ("data/README.md", "copied.md"),  # A file, onto a new path.
-        ("data/README.md", "archive"),  # A file, into a folder.
+        ("data/README.md", "archive"),  # A file, into a directory.
     ],
 )
 async def test_places_as_fsspec(
@@ -103,7 +103,7 @@ async def test_places_as_fsspec(
     root = path1.rstrip("/")
     files = sorted(p for p in flat_fs._file_data if p.startswith(root + "/"))
     paths = [root, *files] if files else [root]
-    dest_is_dir = path2.endswith("/") or path2.rstrip("/") in flat_fs._folders
+    dest_is_dir = path2.endswith("/") or path2.rstrip("/") in flat_fs._dirs
     exists = dest_is_dir and not path1.endswith("/")
     expected = dict(zip(paths, other_paths(paths, path2, exists=exists), strict=True))
     data = {p: flat_fs._file_data[p].data for p in paths if p in flat_fs._file_data}
@@ -119,11 +119,11 @@ async def test_places_as_fsspec(
 @pytest.mark.parametrize(
     ("pattern", "path2"),
     [
-        ("data/*/01", "copied"),  # Folders, relative to their common prefix.
+        ("data/*/01", "copied"),  # Directories, relative to their common prefix.
         ("data/20*", "copied"),
         ("data/**/*.parquet", "copied"),  # Files only.
         ("data/*.md", "archive"),  # A single file goes into the destination.
-        ("data/2024/*", "copied/"),  # A single folder goes onto it.
+        ("data/2024/*", "copied/"),  # A single directory goes onto it.
     ],
 )
 async def test_a_pattern_places_as_fsspec(
@@ -141,7 +141,7 @@ async def test_a_pattern_places_as_fsspec(
     assert sorted(copied) == sorted((p, expected[p]) for p in files)
 
 
-async def test_a_list_keeps_the_trees_of_its_folders(
+async def test_a_list_keeps_the_trees_of_its_dirs(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)

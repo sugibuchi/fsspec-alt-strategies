@@ -22,10 +22,10 @@ _LIMITS: dict[str, Any] = {
     "io_concurrency": 2,
     "storage_profile": StorageProfile(),
 }
-# Declared to delete a folder whole, in one request.
+# Declared to delete a directory whole, in one request.
 _DELETES: dict[str, Any] = {
     **_LIMITS,
-    "storage_profile": StorageProfile(deletes_folders=True),
+    "storage_profile": StorageProfile(deletes_directories=True),
 }
 _FILES = ["data/2023/01/a.txt", "data/2023/02/b.txt", "data/2024/c.txt", "data/d.txt"]
 
@@ -82,13 +82,13 @@ def test_an_async_filesystem_on_its_own_loop() -> None:
 
 
 class _RecursiveDelete(SimulatedFileSystem):
-    """A storage deleting a folder whole, in one request."""
+    """A storage deleting a directory whole, in one request."""
 
     async def _rm_tree(self, path: str) -> None:
         await self._rm(path, recursive=True)
 
 
-async def test_an_async_filesystem_deletes_a_folder_by_its_rm_tree() -> None:
+async def test_an_async_filesystem_deletes_a_dir_by_its_rm_tree() -> None:
     inner = _RecursiveDelete(hierarchical=True, asynchronous=True)
     for path in _FILES:
         inner.add_file(path, path.encode())
@@ -161,12 +161,12 @@ def test_a_sync_filesystem_answers_as_fsspec(tmp_path: Path) -> None:
     assert local.exists(f"{root}/data/2024/c.txt")
 
 
-async def test_a_sync_filesystem_moves_a_folder_whole(tmp_path: Path) -> None:
+async def test_a_sync_filesystem_moves_a_dir_whole(tmp_path: Path) -> None:
     local, root = _local(tmp_path)
     tree = SyncTreeWrapper(
         local,
         asynchronous=True,
-        **{**_LIMITS, "storage_profile": StorageProfile(renames_folders=True)},
+        **{**_LIMITS, "storage_profile": StorageProfile(renames_directories=True)},
     )
     await tree._mv(f"{root}/data", f"{root}/moved", recursive=True)
     assert not local.exists(f"{root}/data")

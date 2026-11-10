@@ -1,18 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""A concurrent walk of a folder tree, a folder per listing request.
+"""A concurrent walk of a directory tree, a directory per listing request.
 
-`_tree_walk` lists folders breadth first, several at a time, and yields each
-folder's ``(path, dirs, files)`` as its listing arrives, as fsspec's ``walk``
-gives them. A ``descend`` predicate prunes the folders it lists, as glob needs.
+`_tree_walk` lists directories breadth first, several at a time, and yields each
+directory's ``(path, dirs, files)`` as its listing arrives, as fsspec's ``walk``
+gives them. A ``descend`` predicate prunes the directories it lists, as glob needs.
 
 Its engine, ``_chunks``, is the walk under the other tree strategies, such as
-find, rm and du. It streams each folder's listing in parts, as ``_ils`` yields
-it, so that they act on a folder of hundreds of thousands of files as it is
-listed. ``_tree_walk`` gathers the parts, as fsspec's ``walk`` gives a folder
+find, rm and du. It streams each directory's listing in parts, as ``_ils`` yields
+it, so that they act on a directory of hundreds of thousands of files as it is
+listed. ``_tree_walk`` gathers the parts, as fsspec's ``walk`` gives a directory
 whole.
 
-It suits storages that list one folder per request, and those whose folders
+It suits storages that list one directory per request, and those whose directories
 can be pruned. On object stores, one recursive listing usually costs fewer
 requests: `fsspec.asyn.AsyncFileSystem._find` there.
 
@@ -52,41 +52,41 @@ def _tree_walk(
     on_error: Literal["omit", "raise"] | Callable[[Exception], object] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
-    """Walk a folder tree, listing several folders at a time.
+    """Walk a directory tree, listing several directories at a time.
 
-    It yields each folder listed as ``(path, dirs, files)``, as fsspec's
-    ``walk`` does with ``detail=True``: ``path`` itself first, then each folder
-    below it. ``dirs`` and ``files`` map the names in the folder to their
-    ``_ils`` entries. An empty folder yields empty ones. The folders come in the
-    order their listings arrive, not in the tree's order. A folder that fails
+    It yields each directory listed as ``(path, dirs, files)``, as fsspec's
+    ``walk`` does with ``detail=True``: ``path`` itself first, then each directory
+    below it. ``dirs`` and ``files`` map the names in the directory to their
+    ``_ils`` entries. An empty directory yields empty ones. The directories come in the
+    order their listings arrive, not in the tree's order. A directory that fails
     to list yields its error instead, and the walk goes on with the others.
-    The error names its folder in its note, and as its ``folder`` attribute.
+    The error names its directory in its note, and as its ``directory`` attribute.
     ``on_error`` handles those errors as with fsspec's ``walk``, otherwise.
 
-    With ``topdown``, a folder comes before those below it. Without, it comes
+    With ``topdown``, a directory comes before those below it. Without, it comes
     after all of those below it, as fsspec's ``walk`` orders them. The
     listings run as concurrently either way, but bottom up holds back each
-    folder until its subtree is done. So a walk bottom up that is cancelled
-    leaves out the folders whose subtrees were not done.
+    directory until its subtree is done. So a walk bottom up that is cancelled
+    leaves out the directories whose subtrees were not done.
 
-    Once cancelled, it lists no new folder, and yields the folders of the
+    Once cancelled, it lists no new directory, and yields the directories of the
     listings in flight. Iterating it raises these errors, which end it:
 
     - FileNotFoundError, if ``path`` does not exist;
     - NotADirectoryError, if ``path`` is a file;
-    - with ``on_error="raise"``, the error of the first folder that failed to
+    - with ``on_error="raise"``, the error of the first directory that failed to
       list.
 
-    Requests: one ``_ils`` per folder walked, as the filesystem's
+    Requests: one ``_ils`` per directory walked, as the filesystem's
     ``operation_limit`` allows.
 
-    ``path`` is the folder the walk starts from, listed by the ``_ils`` of
-    ``fs``. ``maxdepth`` of 1 lists only ``path``. ``topdown`` puts a folder
+    ``path`` is the directory the walk starts from, listed by the ``_ils`` of
+    ``fs``. ``maxdepth`` of 1 lists only ``path``. ``topdown`` puts a directory
     before those below it. ``descend``, called with the entry of each
-    subfolder found, lets the walk list it only if it returns True.
+    subdirectory found, lets the walk list it only if it returns True.
     ``ils_kwargs`` go to each ``_ils``, as fsspec's ``walk`` passes its own on.
 
-    ``on_error`` says what becomes of the error of a folder that fails to
+    ``on_error`` says what becomes of the error of a directory that fails to
     list:
 
     - None yields it, as every strategy does;
@@ -94,7 +94,7 @@ def _tree_walk(
     - "raise" raises it, ending the walk;
     - a callable is called with it, and it is left out.
 
-    The operation yields ``(path, dirs, files)`` for each folder listed, or an
+    The operation yields ``(path, dirs, files)`` for each directory listed, or an
     error, and its state is a `WalkState`. The call raises ValueError if
     ``maxdepth`` is less than 1, or ``on_error`` is none of the above.
     """
@@ -121,41 +121,41 @@ def _tree_walk(
             async for listing in listings:
                 op.state = state = WalkState(
                     errors=state.errors + (listing.error is not None),
-                    current=listing.folder,
-                    folders_listed=state.folders_listed + 1,
+                    current=listing.directory,
+                    directories_listed=state.directories_listed + 1,
                     found=state.found + len(listing.entries),
                 )
 
                 if listing.error is None:
-                    yield _triples(listing.folder, listing.entries, detail=True)
+                    yield _triples(listing.directory, listing.entries, detail=True)
                 elif on_error is None:
                     yield listing.error
                 elif callable(on_error):
                     on_error(listing.error)
                 # Else "omit": left out.
 
-    return Operation(run, WalkState(folders_listed=0))
+    return Operation(run, WalkState(directories_listed=0))
 
 
 @dataclass(frozen=True, slots=True)
 class _Listing:
-    """A part of a folder's listing, as ``_chunks`` yields it, or all of it.
+    """A part of a directory's listing, as ``_chunks`` yields it, or all of it.
 
-    ``depth`` is 1 for the folder the walk started from, 2 for its subfolders,
-    and so on. ``entries`` are as ``_ils`` gives them, without the folder itself,
+    ``depth`` is 1 for the directory the walk started from, 2 for its subdirectories,
+    and so on. ``entries`` are as ``_ils`` gives them, without the directory itself,
     and empty if the listing failed with ``error``.
 
-    A folder's listing comes in parts, each of at most ``chunk_size`` entries,
+    A directory's listing comes in parts, each of at most ``chunk_size`` entries,
     as ``_ils`` yields them: ``first`` on the first part, ``last`` on the last.
-    So an empty folder is one part, both first and last, with no entries. A
+    So an empty directory is one part, both first and last, with no entries. A
     failed listing ends with its error, as its last part. ``_listings`` yields
-    each folder whole: one part, both first and last.
+    each directory whole: one part, both first and last.
 
     ``depth`` 0 is no listing, but the walk's root itself, as `_find_listings`
-    yields it: ``entries`` hold only the root's ``info`` entry, under ``folder``.
+    yields it: ``entries`` hold only the root's ``info`` entry, under ``directory``.
     """
 
-    folder: str
+    directory: str
     depth: int
     entries: list[dict[str, Any]]
     error: Exception | None = None
@@ -164,7 +164,7 @@ class _Listing:
 
 
 _CHUNK_SIZE = 1000
-"""The most entries of one part of a listing: a folder's are never all held."""
+"""The most entries of one part of a listing: a directory's are never all held."""
 
 
 async def _chunks(
@@ -179,39 +179,39 @@ async def _chunks(
     stopping: Callable[[], object] | None = None,
     chunk_size: int = _CHUNK_SIZE,
 ) -> AsyncGenerator[_Listing]:
-    """Walk a folder tree, yielding each folder's listing in parts, as they come.
+    """Walk a directory tree, yielding each directory's listing in parts, as they come.
 
     It is the walk under the strategies acting on what they find, such as rm
-    and find: a folder of hundreds of thousands of files is streamed, a part
-    at a time, never held whole. A subfolder is listed as soon as its entry
+    and find: a directory of hundreds of thousands of files is streamed, a part
+    at a time, never held whole. A subdirectory is listed as soon as its entry
     comes, while its parent's listing goes on.
 
-    ``path`` may be several folders, e.g. a glob's matches, walked at once, each
+    ``path`` may be several directories, e.g. a glob's matches, walked at once, each
     as a root. None may be inside another. A root's listing failing before its
     first part raises, as fsspec's walk does, since nothing has been done yet:
     FileNotFoundError, or NotADirectoryError for a file. Any other failed
-    listing is yielded as its last part, with its error, and its subfolders not
+    listing is yielded as its last part, with its error, and its subdirectories not
     listed yet are not walked. With ``raise_on_error``, it raises instead.
 
     The roots in ``matched`` start one level down, at depth 2: a pattern's
     matches are walked one level less deep than ``maxdepth``, as fsspec's
     ``_expand_path`` walks them.
 
-    The parts of a folder come in order, but those of several folders mix, as
+    The parts of a directory come in order, but those of several directories mix, as
     the listings run at once. Each listing, by ``fs._ils`` with
     ``ils_kwargs``, holds a permit of ``fs.operation_limit`` while it runs.
 
     Once ``stopping`` returns true, no new listing starts, and those in flight
-    stop after their current part: a folder stopped so has no last part.
+    stop after their current part: a directory stopped so has no last part.
     """
     _check_maxdepth(maxdepth)
 
     roots = {_trim(p) for p in ([path] if isinstance(path, str) else path)}
-    # The folders to list, each with its depth.
-    folders: _Queue[tuple[str, int]] = _Queue(fs.operation_limit)
+    # The directories to list, each with its depth.
+    directories: _Queue[tuple[str, int]] = _Queue(fs.operation_limit)
     # The parts listed, a few at a time: a listing waits while they are full.
     parts: asyncio.Queue[_Listing] = asyncio.Queue(maxsize=16)
-    # The subfolders found so far in each folder being listed, each listed once.
+    # The subdirectories found so far in each directory being listed, each listed once.
     found: dict[str, set[str]] = {}
 
     def stopped() -> bool:
@@ -219,8 +219,8 @@ async def _chunks(
 
     async def start() -> None:
         if stopped():
-            folders.waiting.clear()
-        await folders.start(
+            directories.waiting.clear()
+        await directories.start(
             lambda item: _produce(
                 fs,
                 ils_kwargs or {},
@@ -232,48 +232,48 @@ async def _chunks(
             )
         )
 
-    folders.waiting.extend(
+    directories.waiting.extend(
         (root, 2 if root in matched else 1) for root in sorted(roots)
     )
     await start()
 
     try:
-        while folders.waiting or folders.running or not parts.empty():
-            if (part := await _next_part(parts, folders)) is None:
+        while directories.waiting or directories.running or not parts.empty():
+            if (part := await _next_part(parts, directories)) is None:
                 await start()  # A listing ended, or a permit came: start more.
                 continue
 
             if part.error is not None:
                 # Raised here, it stops the walk before another listing starts.
-                if (part.folder in roots and part.first) or raise_on_error:
+                if (part.directory in roots and part.first) or raise_on_error:
                     raise part.error
-                _note(part.error, part.folder)
+                _note(part.error, part.directory)
             elif maxdepth is None or part.depth < maxdepth:
-                folders.waiting.extend(_new_subfolders(part, descend, found))
+                directories.waiting.extend(_new_subdirs(part, descend, found))
 
             if part.last:
-                found.pop(part.folder, None)
+                found.pop(part.directory, None)
 
             # Start the next listings before yielding, so that they run while
             # the caller handles this part.
             await start()
             yield part
     finally:
-        await folders.close()
+        await directories.close()
 
 
 async def _next_part(
-    parts: asyncio.Queue[_Listing], folders: _Queue[tuple[str, int]]
+    parts: asyncio.Queue[_Listing], directories: _Queue[tuple[str, int]]
 ) -> _Listing | None:
     """The next part listed, or None once a listing ends, or a permit comes, first."""
     getter = asyncio.ensure_future(parts.get())
     try:
         done, _ = await asyncio.wait(
-            [getter, *folders.pending()], return_when=asyncio.FIRST_COMPLETED
+            [getter, *directories.pending()], return_when=asyncio.FIRST_COMPLETED
         )
         for task in done:
             if task is not getter:
-                folders.pop(task)  # A listing's parts are all queued already.
+                directories.pop(task)  # A listing's parts are all queued already.
         return getter.result() if getter.done() else None
     finally:
         # A part not got yet stays in the queue: cancelling a get takes none.
@@ -284,31 +284,33 @@ async def _next_part(
 async def _produce(
     fs: Any,
     ils_kwargs: dict[str, Any],
-    folder: str,
+    directory: str,
     depth: int,
     root: bool,
     parts: asyncio.Queue[_Listing],
     chunk_size: int,
     stopped: Callable[[], bool],
 ) -> None:
-    """List a folder, putting its parts in ``parts`` as they come, its error last."""
+    """List a directory, putting its parts in ``parts`` as they come, its error last."""
     first = True
     chunk: list[dict[str, Any]] = []
     try:
-        entries = fs._ils(folder, **ils_kwargs)
+        entries = fs._ils(directory, **ils_kwargs)
         try:
             async for entry in entries:
-                if entry["name"].rstrip("/") == folder:
+                if entry["name"].rstrip("/") == directory:
                     # A file lists itself, as fsspec's _ls of a file does. Some
-                    # storages list a folder within itself too, e.g. as its
+                    # storages list a directory within itself too, e.g. as its
                     # marker object.
                     if entry["type"] != "directory" and root:
-                        raise NotADirectoryError(folder)
+                        raise NotADirectoryError(directory)
                     continue
 
                 chunk.append(entry)
                 if len(chunk) >= chunk_size:
-                    await parts.put(_Listing(folder, depth, chunk, None, first, False))
+                    await parts.put(
+                        _Listing(directory, depth, chunk, None, first, False)
+                    )
                     first, chunk = False, []
                     if stopped():
                         return
@@ -316,37 +318,35 @@ async def _produce(
             if (aclose := getattr(entries, "aclose", None)) is not None:
                 await aclose()
     except Exception as e:
-        await parts.put(_Listing(folder, depth, [], e, first, True))
+        await parts.put(_Listing(directory, depth, [], e, first, True))
         return
 
-    await parts.put(_Listing(folder, depth, chunk, None, first, True))
+    await parts.put(_Listing(directory, depth, chunk, None, first, True))
 
 
-def _new_subfolders(
+def _new_subdirs(
     part: _Listing,
     descend: Callable[[dict[str, Any]], bool] | None,
     found: dict[str, set[str]],
 ) -> list[tuple[str, int]]:
-    """The subfolders a part adds to list, with their depth, those found before left out.
+    """The subdirectories a part adds to list, with their depth, those found before left out.
 
-    Each comes once, though a storage may list a folder twice, e.g. with and
+    Each comes once, though a storage may list a directory twice, e.g. with and
     without its marker object, in two parts.
     """
-    seen = found.setdefault(part.folder, set())
-    new = [
-        s for s in dict.fromkeys(_subfolders(part.entries, descend)) if s not in seen
-    ]
+    seen = found.setdefault(part.directory, set())
+    new = [s for s in dict.fromkeys(_subdirs(part.entries, descend)) if s not in seen]
     seen.update(new)
     return [(s, part.depth + 1) for s in new]
 
 
-def _note(error: Exception, folder: str) -> None:
-    """Note its folder on a listing's error, yielded among folders.
+def _note(error: Exception, directory: str) -> None:
+    """Note its directory on a listing's error, yielded among directories.
 
     In its note for people, and as an attribute for code, e.g. fsspec's walk.
     """
-    error.add_note(f"Listing {folder!r} failed.")
-    error.folder = folder  # type: ignore[attr-defined]
+    error.add_note(f"Listing {directory!r} failed.")
+    error.directory = directory  # type: ignore[attr-defined]
 
 
 async def _listings(
@@ -360,14 +360,14 @@ async def _listings(
     ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[_Listing]:
-    """Walk a folder tree as `_tree_walk` does, yielding each folder's listing whole.
+    """Walk a directory tree as `_tree_walk` does, yielding each directory's listing whole.
 
-    It gathers the parts of `_chunks` into one listing per folder, as fsspec's
-    walk gives a folder at a time, so it holds each folder until it is done.
-    A failed listing comes as one, with its error and no entries. A folder
+    It gathers the parts of `_chunks` into one listing per directory, as fsspec's
+    walk gives a directory at a time, so it holds each directory until it is done.
+    A failed listing comes as one, with its error and no entries. A directory
     stopped before its last part is left out.
 
-    Bottom up, each folder waits for its subfolders, which are only all known
+    Bottom up, each directory waits for its subdirectories, which are only all known
     once its listing ends.
     """
     held: dict[str, list[dict[str, Any]]] = {}
@@ -384,33 +384,33 @@ async def _listings(
 
     async with aclosing(chunks):
         async for part in chunks:
-            entries = held.setdefault(part.folder, [])
+            entries = held.setdefault(part.directory, [])
             entries.extend(part.entries)
             if not part.last:
                 continue
 
-            del held[part.folder]
+            del held[part.directory]
             if part.error is not None:
-                listing = _Listing(part.folder, part.depth, [], part.error)
+                listing = _Listing(part.directory, part.depth, [], part.error)
             else:
-                listing = _Listing(part.folder, part.depth, entries)
+                listing = _Listing(part.directory, part.depth, entries)
 
             if bottom_up is None:
                 yield listing
                 continue
 
-            subfolders = []
+            subdirs = []
             if listing.error is None and (maxdepth is None or listing.depth < maxdepth):
-                subfolders = list(dict.fromkeys(_subfolders(listing.entries, descend)))
-            for ready in bottom_up.add(listing, subfolders):
+                subdirs = list(dict.fromkeys(_subdirs(listing.entries, descend)))
+            for ready in bottom_up.add(listing, subdirs):
                 yield ready
 
 
-def _subfolders(
+def _subdirs(
     entries: list[dict[str, Any]],
     descend: Callable[[dict[str, Any]], bool] | None,
 ) -> list[str]:
-    """The subfolders among entries to list next."""
+    """The subdirectories among entries to list next."""
     return [
         e["name"].rstrip("/")
         for e in entries
@@ -419,31 +419,31 @@ def _subfolders(
 
 
 class _BottomUp:
-    """Holds each listing back until the listings of its subfolders are out."""
+    """Holds each listing back until the listings of its subdirectories are out."""
 
     def __init__(self) -> None:
-        # Each listing held back, with how many of its subfolders are not out.
+        # Each listing held back, with how many of its subdirectories are not out.
         self.held: dict[str, tuple[_Listing, int]] = {}
         self.parents: dict[str, str] = {}
 
-    def add(self, listing: _Listing, subfolders: list[str]) -> list[_Listing]:
+    def add(self, listing: _Listing, subdirs: list[str]) -> list[_Listing]:
         """The listings ready once this one is in, deepest first."""
-        if subfolders:
-            self.held[listing.folder] = listing, len(subfolders)
-            self.parents.update(dict.fromkeys(subfolders, listing.folder))
+        if subdirs:
+            self.held[listing.directory] = listing, len(subdirs)
+            self.parents.update(dict.fromkeys(subdirs, listing.directory))
             return []
 
         ready = [listing]
-        folder = listing.folder
+        directory = listing.directory
 
         # A subtree done may complete its parent's, and so on up.
-        while (parent := self.parents.pop(folder, None)) is not None:
+        while (parent := self.parents.pop(directory, None)) is not None:
             held, remaining = self.held[parent]
             if remaining > 1:
                 self.held[parent] = held, remaining - 1
                 break
             del self.held[parent]
             ready.append(held)
-            folder = parent
+            directory = parent
 
         return ready

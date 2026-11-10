@@ -32,7 +32,7 @@ def test_copy_replaces_a_previous_copy(tmp_path: Path) -> None:
     assert not (target / "removed.py").exists()
 
 
-def test_copy_refuses_a_folder_that_is_no_copy(tmp_path: Path) -> None:
+def test_copy_refuses_a_dir_that_is_no_copy(tmp_path: Path) -> None:
     (tmp_path / "mine.py").write_text("")
     result = CliRunner().invoke(main, ["copy", str(tmp_path)])
     assert result.exit_code != 0

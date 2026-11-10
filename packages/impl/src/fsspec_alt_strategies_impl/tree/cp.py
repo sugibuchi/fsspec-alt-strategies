@@ -3,8 +3,8 @@
 """A recursive copy that walks the tree and copies while it walks.
 
 `_tree_cp` is an alternative to fsspec's recursive ``copy``. fsspec's lists the
-whole tree first, then copies each path. `_tree_cp` copies each folder's files
-as soon as the folder is listed. The destination may be another storage:
+whole tree first, then copies each path. `_tree_cp` copies each directory's files
+as soon as the directory is listed. The destination may be another storage:
 within one, it is the same filesystem given twice.
 
 This module depends on `_jobs`, and `jobs` and `paths` of `common`.
@@ -41,10 +41,10 @@ def _tree_cp(
     same_storage: bool | None = None,
     maxdepth: int | None = None,
 ) -> Operation[tuple[str, str], CpState]:
-    """Copy a folder and everything in it, copying while the tree is walked.
+    """Copy a directory and everything in it, copying while the tree is walked.
 
     It places the paths as fsspec's ``copy`` with ``recursive=True`` does. If
-    ``path2`` is an existing folder, or ends with "/", and ``path1`` does not
+    ``path2`` is an existing directory, or ends with "/", and ``path1`` does not
     end with "/", ``path1`` goes into it: ``path1/x`` becomes
     ``path2/<name of path1>/x``. Otherwise ``path1`` becomes ``path2``:
     ``path1/x`` becomes ``path2/x``. A file is copied the same way. Existing
@@ -54,29 +54,29 @@ def _tree_cp(
     fsspec's ``copy`` places them. Their paths below the matches' common
     prefix are kept under ``path2``, but a single file matched goes into
     ``path2``. The pattern is matched as `_tree_glob` matches it, then the
-    folders matched are walked at once.
+    directories matched are walked at once.
 
     A list of paths and patterns copies each path it names or matches into
     ``path2``, under its name, with all in it. That is how ``cp -r`` places
     them. fsspec's ``copy`` places the files named as this does. It also
-    flattens the folders' trees, though: each file in them goes straight into
+    flattens the directories' trees, though: each file in them goes straight into
     ``path2``. Two paths of the same name would go to the same place. The
     first, in path order, is copied, and each other yields a FileExistsError
     instead, as GNU's ``cp`` reports it. fsspec's ``copy`` overwrites one
     with the other. A path inside another one in the list is copied with that
     one only.
 
-    The tree is walked as `_tree_walk` walks it. Each folder's files are copied
-    as soon as the folder is listed, each by a ``cp_file``. A folder is
+    The tree is walked as `_tree_walk` walks it. Each directory's files are copied
+    as soon as the directory is listed, each by a ``cp_file``. A directory is
     created at the destination before files are copied into it, and for each
-    empty folder.
+    empty directory.
 
     With ``maxdepth``, it copies the files fsspec's ``copy`` copies with it:
     those at most ``maxdepth`` levels below ``path1``, or below a pattern's
-    matches one level less. Folders deeper are not listed. As fsspec's, it
-    then makes no empty folder. Unlike fsspec's, it places the files as
+    matches one level less. Directories deeper are not listed. As fsspec's, it
+    then makes no empty directory. Unlike fsspec's, it places the files as
     without ``maxdepth``: fsspec places them by the common prefix of the files
-    found, which moves them when all are in one subfolder.
+    found, which moves them when all are in one subdirectory.
 
     The destination is described by ``dst_fs`` and its ``storage_profile``,
     unknown if it has none. Within one storage, ``dst_fs`` is ``src_fs``, and
@@ -91,7 +91,7 @@ def _tree_cp(
     A copy cancelled or failed leaves what was copied so far: it deletes
     nothing.
 
-    It wins over fsspec's ``copy`` on storages that list one folder per
+    It wins over fsspec's ``copy`` on storages that list one directory per
     request. The copies then start after the first listing, not after the
     whole tree is listed. Between two storages, it wins over fsspec's way too,
     a ``get`` to local files then a ``put``: the data needs no local disk.
@@ -104,8 +104,8 @@ def _tree_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests of
-    their `_tree_glob`. One ``_ils`` per folder, one ``cp_file`` per file, and
-    one ``dst_makedirs`` per destination folder with files or empty. A
+    their `_tree_glob`. One ``_ils`` per directory, one ``cp_file`` per file, and
+    one ``dst_makedirs`` per destination directory with files or empty. A
     destination refusing to overwrite costs a ``dst_info``, a ``dst_rm_file``
     and a ``cp_file`` more per file it refused. The ``dst_info`` checks it is
     a file, as ``dst_rm_file`` is given only paths known to be files. Each
@@ -113,7 +113,7 @@ def _tree_cp(
     a ``cp_file`` between two storages too.
 
     The destination's profile's ``parents_required=False``, or
-    ``implicit_folders=True``, saves the ``dst_makedirs`` of each folder with
+    ``implicit_directories=True``, saves the ``dst_makedirs`` of each directory with
     files, as their copies create it.
 
     The primitives are called above by what they do: ``_ils`` and ``info`` are
@@ -122,7 +122,7 @@ def _tree_cp(
     ``_rm_file``.
 
     ``src_fs`` is the filesystem copied from, and ``dst_fs`` the one copied
-    to, ``src_fs`` again within one storage. ``path1`` is a folder, a file, a
+    to, ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
     glob pattern, or a list of them, as the source's ``_ils`` takes paths.
     ``cp_file(source, destination)`` copies a file: the source's ``_cp_file``
     by default, within one storage. ``same_storage`` is whether ``dst_fs`` is
@@ -150,20 +150,20 @@ def _tree_cp(
 
 
 class _CopyOrMove(_CopyJobs, _TreeJobs):
-    """The jobs of a copy or a move: a folder made where needed, and one per file.
+    """The jobs of a copy or a move: a directory made where needed, and one per file.
 
     The tree walked is the source's, ``fs``. A file's job waits for its
-    destination folder, when the storage needs it. A subclass says how a file
+    destination directory, when the storage needs it. A subclass says how a file
     goes, in `transfer_file`.
     """
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        # The copies waiting for their destination folder, by that folder.
+        # The copies waiting for their destination directory, by that directory.
         self.after_mkdir: dict[str, list[_Job]] = {}
 
-        # The destination folders made, or tried: a folder listed in several
+        # The destination directories made, or tried: a directory listed in several
         # parts is made once, and its later copies need not wait.
         self.made: set[str] = set()
 
@@ -181,27 +181,33 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
                 copies.append(_Job("copy", name, self.target(name)))
 
         if listing.first and listing.last and not listing.entries:
-            # An empty folder is made, whatever the storage. With maxdepth,
-            # fsspec's copy leaves out folders, and copies files only.
+            # An empty directory is made, whatever the storage. With maxdepth,
+            # fsspec's copy leaves out directories, and copies files only.
             if self.maxdepth is not None:
                 return None
-            self.queue(self.target(listing.folder), listing.folder, [], always=True)
+            self.queue(
+                self.target(listing.directory), listing.directory, [], always=True
+            )
         elif copies:
-            # A folder holding only folders needs no mkdir: theirs create it.
-            self.queue(self.target(listing.folder), listing.folder, copies)
+            # A directory holding only directories needs no mkdir: theirs create it.
+            self.queue(self.target(listing.directory), listing.directory, copies)
         return None
 
     def queue(
-        self, folder: str, source: str, copies: list[_Job], *, always: bool = False
+        self, directory: str, source: str, copies: list[_Job], *, always: bool = False
     ) -> None:
-        """Queue copies into a destination folder, made first if needed."""
-        if not folder or folder in self.made or not (always or self.parents_required):
+        """Queue copies into a destination directory, made first if needed."""
+        if (
+            not directory
+            or directory in self.made
+            or not (always or self.parents_required)
+        ):
             self.waiting.extend(copies)
             return
 
-        if folder not in self.after_mkdir:
-            self.waiting.append(_Job("mkdir", source, folder))
-        self.after_mkdir.setdefault(folder, []).extend(copies)
+        if directory not in self.after_mkdir:
+            self.waiting.append(_Job("mkdir", source, directory))
+        self.after_mkdir.setdefault(directory, []).extend(copies)
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
@@ -223,9 +229,9 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         # A file's error is noted where it happened, in transfer_file.
         if job.kind == "mkdir":
-            # Its copies, and those of the folder's later parts, are not sent:
+            # Its copies, and those of the directory's later parts, are not sent:
             # each would fail as it did.
-            error.add_note(f"Creating the folder {job.destination!r} failed.")
+            error.add_note(f"Creating the directory {job.destination!r} failed.")
         return [error]
 
 

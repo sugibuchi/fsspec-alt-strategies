@@ -43,7 +43,7 @@ def _flat_cp(
     """Copy the keys under a prefix, copying as the listing goes on.
 
     It places the paths as fsspec's ``copy`` with ``recursive=True`` does, as
-    `_tree_cp` places them: into ``path2`` if it is an existing folder or ends
+    `_tree_cp` places them: into ``path2`` if it is an existing directory or ends
     with "/", and ``path1`` does not end with "/", otherwise onto it. A glob
     pattern copies each path it matches, relative to the matches' common
     prefix. A list copies each path it names or matches into ``path2``, under
@@ -60,16 +60,16 @@ def _flat_cp(
     ``_cross_fs_cp_file``, and every byte may go through the caller. A path
     may then go to the same path, or under it.
 
-    Unless the profile says it needs none, a folder is made at the destination
-    before the first key copied into it, by one ``dst_makedirs``. A folder's
-    marker, a key ending with "/", is no file to copy: its folder is made at
+    Unless the profile says it needs none, a directory is made at the destination
+    before the first key copied into it, by one ``dst_makedirs``. A directory's
+    marker, a key ending with "/", is no file to copy: its directory is made at
     the destination instead, so that a tree keeps it even when empty, unless
-    the destination's folders are implicit.
+    the destination's directories are implicit.
 
     With ``maxdepth``, it copies the keys fsspec's ``copy`` copies with it:
     those at most ``maxdepth`` levels below ``path1``, or below a pattern's
     matches one level less. The keys deeper are listed, but not copied. As
-    fsspec's, it then makes no folder for a marker. It places the keys as
+    fsspec's, it then makes no directory for a marker. It places the keys as
     without ``maxdepth``, as `_tree_cp` does.
 
     The copies run concurrently, so the destination's keys are created in
@@ -78,14 +78,14 @@ def _flat_cp(
 
     Unlike fsspec's ``copy``, it keeps going past a failure, and reports each.
     A copy cancelled or failed leaves what was copied so far: it deletes
-    nothing. A folder failing to be made is reported, and the keys into it
+    nothing. A directory failing to be made is reported, and the keys into it
     are still copied, each reporting its own failure.
 
     It wins over fsspec's ``copy`` on large prefixes of flat storages: the
     copies start after the first page of the listing, not after the last.
     Between two storages, it wins over fsspec's way too, a ``get`` to local
     files then a ``put``: the data needs no local disk. It loses on sources
-    with a hierarchical namespace, whose folders a listing by prefix does not
+    with a hierarchical namespace, whose directories a listing by prefix does not
     see: `_tree_cp` suits those.
 
     Once cancelled, it takes nothing more from the listing, and starts no new
@@ -96,17 +96,17 @@ def _flat_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests
-    of their `_flat_glob`. The pages of one ``_iexpand`` per folder copied,
+    of their `_flat_glob`. The pages of one ``_iexpand`` per directory copied,
     one after another, one ``cp_file`` per key, and one ``dst_makedirs`` per
-    destination folder with keys or a marker. A destination refusing to
+    destination directory with keys or a marker. A destination refusing to
     overwrite costs a ``dst_info``, a ``dst_rm_file`` and a ``cp_file`` more
     per file it refused. Each request but the listing holds a permit of the
     source's ``operation_limit`` while it runs, a ``cp_file`` between two
     storages too.
 
     The destination's profile's ``parents_required=False``, or
-    ``implicit_folders=True``, saves the ``dst_makedirs`` of each folder with
-    keys, as their copies create it. ``implicit_folders=True`` saves those of
+    ``implicit_directories=True``, saves the ``dst_makedirs`` of each directory with
+    keys, as their copies create it. ``implicit_directories=True`` saves those of
     the markers too.
 
     The primitives are called above by what they do: ``_iexpand`` and
@@ -115,7 +115,7 @@ def _flat_cp(
     ``_makedirs`` and ``_rm_file``.
 
     ``src_fs`` is the filesystem copied from, and ``dst_fs`` the one copied
-    to, ``src_fs`` again within one storage. ``path1`` is a folder, a file, a
+    to, ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
     glob pattern, or a list of them, as the source's ``_iexpand`` takes paths.
     ``cp_file(source, destination)`` copies a file: the source's ``_cp_file``
     by default, within one storage. ``same_storage`` is whether ``dst_fs`` is
@@ -143,29 +143,29 @@ def _flat_cp(
 
 
 class _CopyOrMove(_CopyJobs, _FlatJobs):
-    """The jobs of a copy or a move: a folder made where needed, and one per key.
+    """The jobs of a copy or a move: a directory made where needed, and one per key.
 
     The keys listed are the source's, ``fs``. A key's job waits for its
-    destination folder, when the destination needs it. The keys of one folder
-    come apart in the listing, so the folders made are remembered, and each
+    destination directory, when the destination needs it. The keys of one directory
+    come apart in the listing, so the directories made are remembered, and each
     is made once. A subclass says how a key goes, in `transfer_file`.
     """
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        # The destination folders made, or tried: their keys need not wait.
+        # The destination directories made, or tried: their keys need not wait.
         self.made: set[str] = set()
 
-        # The copies waiting for their destination folder, by that folder.
+        # The copies waiting for their destination directory, by that directory.
         self.after_mkdir: dict[str, list[_Job]] = {}
 
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
         if name.endswith("/"):
-            # A folder's marker: a tree destination keeps the folder. With
-            # maxdepth, fsspec's copy leaves out folders, and copies files only.
-            if not self.implicit_folders and self.maxdepth is None:
+            # A directory's marker: a tree destination keeps the directory. With
+            # maxdepth, fsspec's copy leaves out directories, and copies files only.
+            if not self.implicit_directories and self.maxdepth is None:
                 self.queue(self.target(name.rstrip("/")), [], always=True)
             return
 
@@ -173,15 +173,21 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
         target = self.target(name)
         self.queue(target.rpartition("/")[0], [_Job("copy", name, target)])
 
-    def queue(self, folder: str, copies: list[_Job], *, always: bool = False) -> None:
-        """Queue copies into a destination folder, made first if needed."""
-        if not folder or folder in self.made or not (always or self.parents_required):
+    def queue(
+        self, directory: str, copies: list[_Job], *, always: bool = False
+    ) -> None:
+        """Queue copies into a destination directory, made first if needed."""
+        if (
+            not directory
+            or directory in self.made
+            or not (always or self.parents_required)
+        ):
             self.waiting.extend(copies)
             return
 
-        if folder not in self.after_mkdir:
-            self.waiting.append(_Job("mkdir", "", folder))
-        self.after_mkdir.setdefault(folder, []).extend(copies)
+        if directory not in self.after_mkdir:
+            self.waiting.append(_Job("mkdir", "", directory))
+        self.after_mkdir.setdefault(directory, []).extend(copies)
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
@@ -206,7 +212,7 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
             # The copies still go: each then reports its own failure, if any.
             self.made.add(job.destination)
             self.waiting.extend(self.after_mkdir.pop(job.destination))
-            error.add_note(f"Creating the folder {job.destination!r} failed.")
+            error.add_note(f"Creating the directory {job.destination!r} failed.")
 
         # A key's error is noted where it happened, in transfer_file.
         return [error]

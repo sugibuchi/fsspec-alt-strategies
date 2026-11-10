@@ -26,7 +26,7 @@ from ..common.filesystem import (
     _BaseFileSystem,
     _copy_errors,
     _du_answer,
-    _failed_folder,
+    _failed_dir,
     _raise,
     _strip_only_protocol,
 )
@@ -65,7 +65,7 @@ class FlatFileSystem(_BaseFileSystem):
     - ``_iexpand``, the listing by prefix, which fsspec has not;
     - ``_rm_files``, a deletion of several files in one request, with
       ``rm_batch_size``;
-    - ``_ils``, a folder's listing, which ``_ls`` and so fsspec's own methods
+    - ``_ils``, a directory's listing, which ``_ls`` and so fsspec's own methods
       list with, and ``_info``, ``_rm_file`` and ``_cp_file``;
     - ``open_async``, giving its files ``io_limit`` as their concurrency
       limit, and ``_open``.
@@ -160,9 +160,9 @@ class FlatFileSystem(_BaseFileSystem):
         """List every key starting with ``prefix``, as an async iterator of entries.
 
         ``prefix`` is raw text, e.g. "data/2024-". The entries are as ``_ls``
-        gives them, a key ending with "/" being a folder's marker. They come in
+        gives them, a key ending with "/" being a directory's marker. They come in
         order of their names, as object stores list them: ``_walk`` counts on
-        it to know when a folder is done. Each key comes once: a key listed
+        it to know when a directory is done. Each key comes once: a key listed
         twice is copied, moved, deleted or counted twice.
         """
 
@@ -177,17 +177,17 @@ class FlatFileSystem(_BaseFileSystem):
 
     @abstractmethod
     def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
-        """List one folder, as an async iterator of its entries, for fsspec's own methods.
+        """List one directory, as an async iterator of its entries, for fsspec's own methods.
 
         The entries are as fsspec's ``_ls`` gives them with ``detail``: the
-        files in the folder, and its subfolders, e.g. by an object store's
+        files in the directory, and its subdirectories, e.g. by an object store's
         listing with a delimiter, a page at a time. A file yields itself, as
         fsspec's ``_ls`` lists it. The strategies never call it: they list
         with ``_iexpand``.
         """
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
-        """List a folder, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names."""
+        """List a directory, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names."""
         entries = [entry async for entry in self._ils(path, **kwargs)]
         return entries if detail else [e["name"] for e in entries]
 
@@ -235,13 +235,13 @@ class FlatFileSystem(_BaseFileSystem):
 
         async with aclosing(
             _with_monitors(walk, Call(self._unwrapped(), "walk", path))
-        ) as folders:
+        ) as directories:
             try:
-                async for item in folders:
-                    folder, dirs, files = item
+                async for item in directories:
+                    directory, dirs, files = item
                     if not detail:
                         dirs, files = list(dirs), list(files)
-                    yield folder, dirs, files
+                    yield directory, dirs, files
             except NotADirectoryError:
                 # fsspec's walk of a file yields the file, under no name.
                 entry = await self._info(root)
@@ -249,7 +249,7 @@ class FlatFileSystem(_BaseFileSystem):
             except OSError as e:
                 # The listing's error ends the walk: fsspec's on_error handles
                 # it as a failure to list the root.
-                yield _failed_folder(root, e, on_error, detail)
+                yield _failed_dir(root, e, on_error, detail)
 
     async def _find(
         self,

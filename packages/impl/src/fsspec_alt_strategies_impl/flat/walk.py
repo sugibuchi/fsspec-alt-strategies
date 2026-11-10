@@ -3,10 +3,10 @@
 """A walk of the keys under a prefix, from one listing streamed as it comes.
 
 `_flat_walk` is the counterpart of `_tree_walk` for flat storages. fsspec's
-``walk`` lists one folder per request, even on object stores, which can list
+``walk`` lists one directory per request, even on object stores, which can list
 all the keys under a prefix at once. `_flat_walk` makes that one listing, and
-derives the folders from the keys. As the keys come in order, those in a
-folder come together: the folder is done once the listing has passed them.
+derives the directories from the keys. As the keys come in order, those in a
+directory come together: the directory is done once the listing has passed them.
 
 This module depends on `_keys`, and `operation` and `paths` of `common`.
 """
@@ -20,7 +20,7 @@ from fsspec_alt_strategies.states import WalkState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
-from ._keys import _close, _folder, _folders
+from ._keys import _close, _dir, _dirs
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -38,28 +38,28 @@ def _flat_walk(
 ) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
     """Walk the keys under a prefix, from one listing streamed as it comes.
 
-    It yields each folder as ``(path, dirs, files)``, as `_tree_walk` does:
-    ``path`` itself, then each folder below it. ``dirs`` and ``files`` map the
-    names in the folder to their entries. The files are the keys, as
-    ``_iexpand`` gives them. The folders are derived from the keys, as fsspec's
+    It yields each directory as ``(path, dirs, files)``, as `_tree_walk` does:
+    ``path`` itself, then each directory below it. ``dirs`` and ``files`` map the
+    names in the directory to their entries. The files are the keys, as
+    ``_iexpand`` gives them. The directories are derived from the keys, as fsspec's
     filesystems derive them for object stores, and a key ending with "/" is a
-    folder's marker. A derived folder's entry has only its ``name``, ``size`` 0
+    directory's marker. A derived directory's entry has only its ``name``, ``size`` 0
     and ``type``.
 
-    A folder is done once the listing has passed its keys. Without
-    ``topdown``, each folder comes as soon as it is done, after all those
-    below it, as fsspec's ``walk`` orders them. With ``topdown``, a folder
+    A directory is done once the listing has passed its keys. Without
+    ``topdown``, each directory comes as soon as it is done, after all those
+    below it, as fsspec's ``walk`` orders them. With ``topdown``, a directory
     comes before those below it, but ``path`` is done only once the listing
     ends: so all of them come then. A walk that is cancelled leaves out the
-    folders not done.
+    directories not done.
 
-    ``maxdepth`` and ``descend`` leave folders out, but save no request: the
+    ``maxdepth`` and ``descend`` leave directories out, but save no request: the
     listing gives all the keys under ``path`` anyway.
 
-    It wins over fsspec's ``walk`` on flat storages, with many folders: one
+    It wins over fsspec's ``walk`` on flat storages, with many directories: one
     listing, of as many pages as there are keys, rather than a listing per
-    folder. It loses on storages with a hierarchical namespace, whose empty
-    folders a listing by prefix does not see: `_tree_walk` suits those.
+    directory. It loses on storages with a hierarchical namespace, whose empty
+    directories a listing by prefix does not see: `_tree_walk` suits those.
 
     Once cancelled, it takes nothing more from the listing. Iterating it raises
     these errors, which end it:
@@ -72,14 +72,14 @@ def _flat_walk(
     One ``_info`` for ``path``, if nothing is under it, holding a permit of
     the filesystem's ``operation_limit``. The listing holds none.
 
-    ``path`` is the folder the walk starts from on ``fs``. Its ``_iexpand``
+    ``path`` is the directory the walk starts from on ``fs``. Its ``_iexpand``
     lists every key starting with a prefix, in name order, each key once, as
     an object store lists them. ``maxdepth`` of 1 yields only ``path``.
-    ``topdown`` puts a folder before those below it. ``descend``, called with
-    the entry of each subfolder found, lets the walk enter it only if it
+    ``topdown`` puts a directory before those below it. ``descend``, called with
+    the entry of each subdirectory found, lets the walk enter it only if it
     returns True.
 
-    The operation yields ``(path, dirs, files)`` for each folder walked, and
+    The operation yields ``(path, dirs, files)`` for each directory walked, and
     its state is a `WalkState`. The call raises ValueError if ``maxdepth`` is
     less than 1.
     """
@@ -88,7 +88,7 @@ def _flat_walk(
     async def run(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
     ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]]]:
-        folders = _folders_done(
+        directories = _dirs_done(
             fs,
             path,
             maxdepth=maxdepth,
@@ -96,29 +96,29 @@ def _flat_walk(
             stopping=op.cancelling,
         )
 
-        # Top down, the folders done, held until the listing ends.
+        # Top down, the directories done, held until the listing ends.
         held: list[tuple[str, list[dict[str, Any]]]] = []
 
-        async with aclosing(folders):
-            async for folder, entries in folders:
+        async with aclosing(directories):
+            async for directory, entries in directories:
                 if topdown:
-                    held.append((folder, entries))
+                    held.append((directory, entries))
                     continue
 
                 op.state = WalkState(
-                    current=folder, found=op.state.found + len(entries)
+                    current=directory, found=op.state.found + len(entries)
                 )
-                yield _triples(folder, entries, detail=True)
+                yield _triples(directory, entries, detail=True)
 
-        # By name, so that each folder comes before those below it.
-        for folder, entries in sorted(held):
-            op.state = WalkState(current=folder, found=op.state.found + len(entries))
-            yield _triples(folder, entries, detail=True)
+        # By name, so that each directory comes before those below it.
+        for directory, entries in sorted(held):
+            op.state = WalkState(current=directory, found=op.state.found + len(entries))
+            yield _triples(directory, entries, detail=True)
 
     return Operation(run, WalkState())
 
 
-async def _folders_done(
+async def _dirs_done(
     fs: Any,
     path: str,
     *,
@@ -126,18 +126,18 @@ async def _folders_done(
     descend: Callable[[dict[str, Any]], bool] | None,
     stopping: Callable[[], object],
 ) -> AsyncGenerator[tuple[str, list[dict[str, Any]]]]:
-    """Each folder walked with its entries, as soon as it is done: bottom up.
+    """Each directory walked with its entries, as soon as it is done: bottom up.
 
-    The folders open, those the listing is in, are ``path`` and its subfolders
+    The directories open, those the listing is in, are ``path`` and its subdirectories
     down to the key listed last. A key not under the deepest one closes it: the
     keys come in order, so none under it comes later. A walk stopped leaves
-    out the folders still open.
+    out the directories still open.
     """
     root = _trim(path)
     prefix = f"{root}/" if root else ""
     under = False
 
-    # The folders open, the root first, each with its entries so far.
+    # The directories open, the root first, each with its entries so far.
     open_: list[tuple[str, list[dict[str, Any]]]] = [(root, [])]
 
     keys = fs._iexpand(prefix)
@@ -173,26 +173,26 @@ def _add(
     maxdepth: int | None,
     descend: Callable[[dict[str, Any]], bool] | None,
 ) -> None:
-    """Add a key to the walk: the folders it implies first seen, then itself.
+    """Add a key to the walk: the directories it implies first seen, then itself.
 
-    The folders already open are the key's parents. Each new one goes into
+    The directories already open are the key's parents. Each new one goes into
     its parent's entries, and is opened unless ``maxdepth`` or ``descend``
-    leaves out what is in it. A key in a folder left out adds nothing more.
+    leaves out what is in it. A key in a directory left out adds nothing more.
     """
     if not relative:
         return  # The root's own marker.
 
-    for folder in _folders(relative)[len(open_) - 1 :]:
-        full = prefix + folder
+    for directory in _dirs(relative)[len(open_) - 1 :]:
+        full = prefix + directory
         entries = open_[-1][1]
         last = entries[-1] if entries else None
         if last is not None and last["name"] == full and last["type"] == "directory":
-            return  # In a folder left out, seen with a key before.
+            return  # In a directory left out, seen with a key before.
 
-        entry = _folder(full)
+        entry = _dir(full)
         entries.append(entry)
 
-        depth = folder.count("/") + 1
+        depth = directory.count("/") + 1
         if (maxdepth is not None and depth >= maxdepth) or (
             descend is not None and not descend(entry)
         ):

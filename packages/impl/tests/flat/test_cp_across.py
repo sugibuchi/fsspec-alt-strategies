@@ -128,10 +128,10 @@ def _tree(fs: SimulatedFileSystem, prefix: str = "") -> None:
     ("path1", "path2", "dst_dirs"),
     [
         ("data", "copied", []),  # Onto a new path.
-        ("data", "archive", ["archive"]),  # Into an existing folder.
-        ("data", "new/", []),  # Into a folder, by its trailing "/".
-        ("data/", "archive", ["archive"]),  # Its contents onto a folder.
-        ("data/README.md", "archive", ["archive"]),  # A file, into a folder.
+        ("data", "archive", ["archive"]),  # Into an existing directory.
+        ("data", "new/", []),  # Into a directory, by its trailing "/".
+        ("data/", "archive", ["archive"]),  # Its contents onto a directory.
+        ("data/README.md", "archive", ["archive"]),  # A file, into a directory.
         ("data", "data", []),  # The same path, on another storage.
     ],
 )
@@ -145,8 +145,8 @@ async def test_places_as_fsspec(
     # From an object store, to each kind of destination.
     src, dst = flat_fs, any_fs
     _tree(src, "bucket/")
-    for folder in dst_dirs:
-        dst.add_file(f"bucket/{folder}/old", b"")
+    for directory in dst_dirs:
+        dst.add_file(f"bucket/{directory}/old", b"")
     path1, path2 = f"bucket/{path1}", f"bucket/{path2}"
     root = path1.rstrip("/")
     files = sorted(p for p in src._file_data if p.startswith(root + "/"))
@@ -192,14 +192,14 @@ async def test_requests_to_a_tree(flat_fs: SimulatedFileSystem) -> None:
     assert op.state == CpState(current=op.state.current, files_found=4, files_copied=4)
     # One listing, and the reads in blocks of 4 bytes: 27 or 14 bytes each.
     assert flat_fs.stats.calls == {"list": 1, "read": 3 * 7 + 4}
-    # A folder made once for each folder with keys, however its keys come.
+    # A directory made once for each directory with keys, however its keys come.
     assert dst.stats.calls == {"info": 1, "mkdir": 4, "write": 4}
 
 
 async def test_requests_to_an_object_store(flat_fs: SimulatedFileSystem) -> None:
     dst = SimulatedFileSystem(asynchronous=True)
     _tree(flat_fs)
-    profile = StorageProfile(implicit_folders=True)
+    profile = StorageProfile(implicit_directories=True)
     _, errors = await _collect_with_errors(
         _across(flat_fs, dst, "data", "copied/", profile=profile)
     )
@@ -208,7 +208,7 @@ async def test_requests_to_an_object_store(flat_fs: SimulatedFileSystem) -> None
     assert dst._file_data["copied/data/README.md"].data == b"data/README.md"
 
 
-async def test_a_marker_makes_its_folder() -> None:
+async def test_a_marker_makes_its_dir() -> None:
     keys = {"data/": b"", "data/empty/": b"", "data/a.txt": b"a"}
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     written: list[tuple[str, str]] = []
@@ -243,8 +243,8 @@ async def test_a_marker_makes_its_folder() -> None:
     )
     assert errors == []
     assert copied == written == [("data/a.txt", "copied/a.txt")]
-    assert "copied/empty" in dst._folders
-    # The markers' folders only: the key's needs none, by the profile.
+    assert "copied/empty" in dst._dirs
+    # The markers' directories only: the key's needs none, by the profile.
     assert dst.stats.calls == {"info": 1, "mkdir": 2, "write": 1}
 
 
@@ -287,9 +287,9 @@ async def test_failures_are_yielded_and_the_rest_is_copied(
     )
     assert sorted(e.__notes__[0] for e in errors) == [
         "Copying 'data/README.md' to 'copied/README.md' failed.",
-        "Creating the folder 'copied/2023/02' failed.",
+        "Creating the directory 'copied/2023/02' failed.",
     ]
-    # The folder failed, but its key is still copied, as the storage allows.
+    # The directory failed, but its key is still copied, as the storage allows.
     assert len(copied) == 3
     assert "copied/README.md" not in dst._file_data
 
@@ -311,7 +311,7 @@ async def test_cancel_yields_the_copies_sent() -> None:
         dst,
         "root",
         "copied",
-        profile=StorageProfile(implicit_folders=True),
+        profile=StorageProfile(implicit_directories=True),
         concurrency_limit=asyncio.Semaphore(3),
     )
     copied = []

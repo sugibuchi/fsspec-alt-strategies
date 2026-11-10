@@ -15,7 +15,7 @@ def _tree(fs: SimulatedFileSystem) -> None:
     fs.add_file("a/b/c/3.txt", b"three")
 
 
-# --- Files and folders ------------------------------------------------------
+# --- Files and directories ------------------------------------------------------
 
 
 async def test_read_and_list(any_fs: SimulatedFileSystem) -> None:
@@ -55,17 +55,17 @@ async def test_write_and_copy(any_fs: SimulatedFileSystem) -> None:
     assert any_fs.stats.calls == {"write": 1, "copy": 1, "read": 1}
 
 
-async def test_flat_folders_exist_only_with_files(flat_fs: SimulatedFileSystem) -> None:
+async def test_flat_dirs_exist_only_with_files(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
     await flat_fs._mkdir("empty")
     assert not await flat_fs._exists("empty")
     await flat_fs._rm_file("a/b/c/3.txt")
     assert not await flat_fs._exists("a/b/c")
-    with pytest.raises(ValueError, match="no empty folders"):
+    with pytest.raises(ValueError, match="no empty directories"):
         flat_fs.add_dir("empty")
 
 
-async def test_hierarchical_folders_are_real(
+async def test_hierarchical_dirs_are_real(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
@@ -121,7 +121,7 @@ async def test_flat_rm_lists_then_deletes_each_file(
     assert await flat_fs._ls("", detail=False) == []
 
 
-async def test_hierarchical_rm_deletes_a_folder_at_once(
+async def test_hierarchical_rm_deletes_a_dir_at_once(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)

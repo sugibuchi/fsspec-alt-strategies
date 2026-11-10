@@ -171,7 +171,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         **kwargs: Any,
     ) -> None:
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
-            return  # A folder, which fsspec's get makes itself.
+            return  # A directory, which fsspec's get makes itself.
 
         f = await self.open_async(rpath, "rb", **kwargs)
         async with f:
@@ -194,7 +194,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         **kwargs: Any,
     ) -> None:
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
-            return  # A folder: a storage needs none for the files put in it.
+            return  # A directory: a storage needs none for the files put in it.
 
         f = await self.open_async(rpath, "xb" if mode == "create" else "wb", **kwargs)
         async with f:
@@ -219,7 +219,7 @@ def _strip_only_protocol(fs: AbstractFileSystem, path: str | Sequence[str]) -> A
     """A path, or paths, of ``fs`` without its protocol, keeping a trailing "/".
 
     The strategies take paths without a protocol. A trailing "/" means
-    something to some, e.g. a glob of folders only, or a copy into a folder.
+    something to some, e.g. a glob of directories only, or a copy into a directory.
     """
     if not isinstance(path, str):
         return [_strip_only_protocol(fs, p) for p in path]
@@ -281,15 +281,15 @@ def _raise(errors: list[Exception], doing: str) -> None:
         raise ExceptionGroup(f"{doing} failed for {len(errors)} paths", errors)
 
 
-def _failed_folder(
-    folder: str,
+def _failed_dir(
+    directory: str,
     error: Exception,
     on_error: str | Callable[[Exception], Any],
     detail: bool,
 ) -> tuple[str, Any, Any]:
-    """What fsspec's ``walk`` yields for a folder that failed to list, the root too."""
+    """What fsspec's ``walk`` yields for a directory that failed to list, the root too."""
     if on_error == "raise":
         raise error
     if callable(on_error):
         on_error(error)
-    return (folder, {}, {}) if detail else (folder, [], [])
+    return (directory, {}, {}) if detail else (directory, [], [])

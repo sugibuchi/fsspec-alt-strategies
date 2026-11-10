@@ -18,7 +18,7 @@ from fsspec_alt_strategies_impl_testing import (
     TreeView,
 )
 
-_PRIMITIVES = {"ils", "info", "rm_file", "rm_folder", "rm_tree", "cp_file", "mv_file"}
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_dir", "rm_tree", "cp_file", "mv_file"}
 """The keyword arguments that replace a primitive of the filesystem."""
 
 
@@ -90,9 +90,9 @@ def _expected(fs: SimulatedFileSystem, path1: str, path2: str) -> dict[str, str]
     """Where fsspec's copy puts each file under ``path1``, from its own rules."""
     root = path1.rstrip("/")
     files = sorted(p for p in fs._file_data if p.startswith(root + "/"))
-    # fsspec expands the source with the folder itself first, as here.
+    # fsspec expands the source with the directory itself first, as here.
     paths = [root, *files] if files else [root]
-    dest_is_dir = path2.endswith("/") or path2.rstrip("/") in fs._folders
+    dest_is_dir = path2.endswith("/") or path2.rstrip("/") in fs._dirs
     exists = dest_is_dir and not path1.endswith("/")
     return dict(zip(paths, other_paths(paths, path2, exists=exists), strict=True))
 
@@ -101,12 +101,12 @@ def _expected(fs: SimulatedFileSystem, path1: str, path2: str) -> dict[str, str]
     ("path1", "path2"),
     [
         ("data", "moved"),  # Onto a new path.
-        ("data", "archive"),  # Into an existing folder.
-        ("data", "new/"),  # Into a folder, by its trailing "/".
-        ("data/", "archive"),  # Its contents onto an existing folder.
+        ("data", "archive"),  # Into an existing directory.
+        ("data", "new/"),  # Into a directory, by its trailing "/".
+        ("data/", "archive"),  # Its contents onto an existing directory.
         ("data/2023", "data/2025"),  # Within the same parent.
         ("data/README.md", "renamed.md"),  # A file, onto a new path.
-        ("data/README.md", "archive"),  # A file, into a folder.
+        ("data/README.md", "archive"),  # A file, into a directory.
     ],
 )
 async def test_places_as_fsspec(
@@ -150,7 +150,7 @@ async def test_a_list_moves_each_under_its_name(any_fs: SimulatedFileSystem) -> 
     assert await any_fs._exists("moved/2023/02/part-0.parquet")
     assert await any_fs._exists("moved/01/part-0.parquet")
     assert any_fs._file_data["moved/other.txt"].data == b"other"
-    assert ("data/2023", "moved/2023") in moved  # The folder, once empty.
+    assert ("data/2023", "moved/2023") in moved  # The directory, once empty.
     assert not await any_fs._exists("data/2023")
     assert not await any_fs._exists("data/2024/01")
     assert not await any_fs._exists("other.txt")
@@ -175,17 +175,17 @@ async def test_requests(hierarchical_fs: SimulatedFileSystem) -> None:
     hierarchical_fs.add_dir("data/empty")
     op = _mv(hierarchical_fs, "data", "moved")
     moved, _ = await _collect_with_errors(op)
-    # 4 files, and 7 folders: data, 2023, its 01 and 02, 2024 and its 01, empty.
+    # 4 files, and 7 directories: data, 2023, its 01 and 02, 2024 and its 01, empty.
     assert op.state == MvState(
-        current=op.state.current, files_found=4, files_moved=4, folders_moved=7
+        current=op.state.current, files_found=4, files_moved=4, directories_moved=7
     )
     assert len(moved) == 4 + 7
     assert moved[-1] == ("data", "moved")
     assert hierarchical_fs.stats.calls == {
-        "info": 1,  # Whether "moved" is a folder.
+        "info": 1,  # Whether "moved" is a directory.
         "list": 7,
-        # The folders with files, and the empty one: 2023 and 2024 hold only
-        # folders, which create them.
+        # The directories with files, and the empty one: 2023 and 2024 hold only
+        # directories, which create them.
         "mkdir": 5,
         # fsspec's _mv_file: a copy, then a deletion.
         "copy": 4,
@@ -204,28 +204,28 @@ async def test_a_storage_moving_a_file_in_one_request(
     # One request per file, where a copy and a deletion took two.
     assert hierarchical_fs.stats.calls["rename"] == 4
     assert "copy" not in hierarchical_fs.stats.calls
-    assert hierarchical_fs.stats.calls["delete"] == 6  # The folders only.
+    assert hierarchical_fs.stats.calls["delete"] == 6  # The directories only.
     assert await hierarchical_fs._exists("moved/2023/01/part-0.parquet")
 
 
 async def test_profile_saves_the_mkdirs(hierarchical_fs: SimulatedFileSystem) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.add_dir("data/empty")
-    # Its mv_file copies, then deletes: a write, which makes its folder.
+    # Its mv_file copies, then deletes: a write, which makes its directory.
     profile = StorageProfile(parents_required=False, renames_files=False)
     await _collect_with_errors(_mv(hierarchical_fs, "data", "moved", profile=profile))
-    # Only the empty folder needs one: the copies create the others.
+    # Only the empty directory needs one: the copies create the others.
     assert hierarchical_fs.stats.calls["mkdir"] == 1
     assert await hierarchical_fs._exists("moved/empty")
 
 
-async def test_implicit_folders_save_the_folder_requests(
+async def test_implicit_dirs_save_the_dir_requests(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)
     sent: list[str] = []
 
-    async def rm_folder(path: str) -> None:
+    async def rm_dir(path: str) -> None:
         sent.append(f"rmdir {path}")  # Requests a real object store may send.
         await flat_fs._rmdir(path)
 
@@ -233,25 +233,25 @@ async def test_implicit_folders_save_the_folder_requests(
         sent.append(f"mkdir {path}")
         await flat_fs._makedirs(path, exist_ok=exist_ok)
 
-    unknown = _mv(flat_fs, "data", "moved", rm_folder=rm_folder, dst_makedirs=makedirs)
+    unknown = _mv(flat_fs, "data", "moved", rm_dir=rm_dir, dst_makedirs=makedirs)
     moved_unknown, _ = await _collect_with_errors(unknown)
-    assert sent  # Unknown, each folder is made, then deleted.
+    assert sent  # Unknown, each directory is made, then deleted.
 
     sent.clear()
-    profile = StorageProfile(implicit_folders=True)
+    profile = StorageProfile(implicit_directories=True)
     op = _mv(
         flat_fs,
         "moved",
         "data",
-        rm_folder=rm_folder,
+        rm_dir=rm_dir,
         dst_makedirs=makedirs,
         profile=profile,
     )
     moved, errors = await _collect_with_errors(op)
     assert (sent, errors) == ([], [])
-    # The same outcome: the folders moved too, as one found already gone is.
+    # The same outcome: the directories moved too, as one found already gone is.
     assert len(moved) == len(moved_unknown)
-    assert op.state.folders_moved == unknown.state.folders_moved == 6
+    assert op.state.directories_moved == unknown.state.directories_moved == 6
     assert sorted(p for p in flat_fs._file_data if p.startswith("data/")) == _FILES
 
 
@@ -260,11 +260,11 @@ def _files(fs: SimulatedFileSystem) -> dict[str, bytes]:
 
 
 def _renaming(fs: SimulatedFileSystem) -> dict[str, Any]:
-    """A storage's rename as mv_file, declared to move folders too."""
-    return {"mv_file": fs._rename, "profile": StorageProfile(renames_folders=True)}
+    """A storage's rename as mv_file, declared to move directories too."""
+    return {"mv_file": fs._rename, "profile": StorageProfile(renames_directories=True)}
 
 
-async def test_a_folder_moves_whole(hierarchical_fs: SimulatedFileSystem) -> None:
+async def test_a_dir_moves_whole(hierarchical_fs: SimulatedFileSystem) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.add_dir("data/empty")
     expected = {
@@ -276,12 +276,12 @@ async def test_a_folder_moves_whole(hierarchical_fs: SimulatedFileSystem) -> Non
     assert await _collect_with_errors(op) == ([("data", "moved")], [])
     # Where path2 goes, found free, then the rename: nothing is listed.
     assert hierarchical_fs.stats.calls == {"info": 1, "rename": 1}
-    assert op.state == MvState(current="data", folders_moved=0, roots_renamed=1)
+    assert op.state == MvState(current="data", directories_moved=0, roots_renamed=1)
     assert _files(hierarchical_fs) == expected
     assert await hierarchical_fs._isdir("moved/empty")
 
 
-async def test_each_folder_of_a_list_moves_whole(
+async def test_each_dir_of_a_list_moves_whole(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
@@ -297,7 +297,7 @@ async def test_each_folder_of_a_list_moves_whole(
         ("data/2023", "archive/2023"),
         ("data/README.md", "archive/README.md"),
     ]
-    # The folder whole; the file by its own mv_file, as ever.
+    # The directory whole; the file by its own mv_file, as ever.
     assert op.state.roots_renamed == 1
     assert hierarchical_fs.stats.calls["rename"] == 2
     assert await hierarchical_fs._exists("archive/2023/01/part-0.parquet")
@@ -335,12 +335,12 @@ async def test_a_merge_moves_file_by_file(
         assert hierarchical_fs._file_data[taken].data == b"kept"
 
 
-async def test_a_folder_failing_to_move_whole_is_the_roots_error(
+async def test_a_dir_failing_to_move_whole_is_the_roots_error(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)
-    # Wrongly declared: fsspec's _mv_file copies a file, and fails on a folder.
-    profile = StorageProfile(renames_folders=True)
+    # Wrongly declared: fsspec's _mv_file copies a file, and fails on a directory.
+    profile = StorageProfile(renames_directories=True)
     op = _mv(flat_fs, "data", "moved", profile=profile)
     moved, errors = await _collect_with_errors(op)
     # Its cause, not one failure per file: nothing is walked.
@@ -351,7 +351,7 @@ async def test_a_folder_failing_to_move_whole_is_the_roots_error(
     assert await flat_fs._exists("data/README.md")
 
 
-async def test_unknown_no_folder_is_moved_whole(
+async def test_unknown_no_dir_is_moved_whole(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
@@ -362,9 +362,9 @@ async def test_unknown_no_folder_is_moved_whole(
     assert hierarchical_fs.stats.calls["rename"] == len(_FILES)
 
 
-def test_implicit_folders_cannot_require_parents() -> None:
+def test_implicit_dirs_cannot_require_parents() -> None:
     with pytest.raises(ValueError, match="parents_required"):
-        StorageProfile(implicit_folders=True, parents_required=True)
+        StorageProfile(implicit_directories=True, parents_required=True)
 
 
 async def test_a_storage_requiring_parents() -> None:
@@ -384,9 +384,9 @@ async def test_a_storage_requiring_parents() -> None:
     assert await fs._exists("new/deep/moved/README.md")
 
 
-@pytest.mark.parametrize("renames_folders", [False, True])
+@pytest.mark.parametrize("renames_directories", [False, True])
 async def test_a_rename_gets_its_parent_where_a_write_needs_none(
-    renames_folders: bool,
+    renames_directories: bool,
 ) -> None:
     # As HDFS: a write creates its parents, a rename does not.
     fs = SimulatedFileSystem(
@@ -394,7 +394,9 @@ async def test_a_rename_gets_its_parent_where_a_write_needs_none(
     )
     _tree(fs)
     profile = StorageProfile(
-        parents_required=False, renames_files=True, renames_folders=renames_folders
+        parents_required=False,
+        renames_files=True,
+        renames_directories=renames_directories,
     )
     op = _mv(fs, "data", "new/deep/moved", mv_file=fs._rename, profile=profile)
     _, errors = await _collect_with_errors(op)
@@ -461,20 +463,20 @@ async def test_a_move_failing_midway_is_reported() -> None:
     assert await fs._exists("moved/README.md")
 
 
-async def test_a_source_folder_failing_to_go_is_reported() -> None:
+async def test_a_source_dir_failing_to_go_is_reported() -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     _tree(fs)
 
-    async def rm_folder(path: str) -> None:
+    async def rm_dir(path: str) -> None:
         if path == "data/2023/01":
             raise PermissionError(path)
         await fs._rmdir(path)
 
-    op = _mv(fs, "data", "moved", rm_folder=rm_folder)
+    op = _mv(fs, "data", "moved", rm_dir=rm_dir)
     moved, errors = await _collect_with_errors(op)
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].__notes__ == ["Deleting the folder 'data/2023/01' failed."]
-    # Its files moved; it and the folders above it stay.
+    assert errors[0].__notes__ == ["Deleting the directory 'data/2023/01' failed."]
+    # Its files moved; it and the directories above it stay.
     assert await fs._exists("moved/2023/01/part-0.parquet")
     assert await fs._exists("data/2023/01")
     assert ("data", "moved") not in moved
@@ -537,7 +539,7 @@ async def test_a_target_failing_its_info_is_the_roots_error(
             raise PermissionError(path)
         return await hierarchical_fs._info(path, **kwargs)
 
-    profile = StorageProfile(renames_folders=True)
+    profile = StorageProfile(renames_directories=True)
     op = _mv(
         hierarchical_fs,
         "data",
@@ -555,18 +557,16 @@ async def test_a_target_failing_its_info_is_the_roots_error(
     assert await hierarchical_fs._exists("data/README.md")
 
 
-async def test_a_source_folder_found_already_gone_is_moved() -> None:
+async def test_a_source_dir_found_already_gone_is_moved() -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     _tree(fs)
 
-    async def rm_folder(path: str) -> None:
+    async def rm_dir(path: str) -> None:
         await fs._rmdir(path)
         if path == "data/2023/01":
             raise FileNotFoundError(path)  # Deleted by another meanwhile.
 
-    moved, errors = await _collect_with_errors(
-        _mv(fs, "data", "moved", rm_folder=rm_folder)
-    )
+    moved, errors = await _collect_with_errors(_mv(fs, "data", "moved", rm_dir=rm_dir))
     assert errors == []
     assert ("data/2023/01", "moved/2023/01") in moved
     assert ("data", "moved") in moved
@@ -590,7 +590,7 @@ async def test_moves_to_another_storage(hierarchical_fs: SimulatedFileSystem) ->
         dst_makedirs=dst._makedirs,
         same_storage=False,
         # The destination's: it says nothing of how the source renames.
-        profile=StorageProfile(renames_folders=True),
+        profile=StorageProfile(renames_directories=True),
     )
     _, errors = await _collect_with_errors(op)
     assert errors == []
@@ -612,13 +612,13 @@ def _shallow(fs: SimulatedFileSystem) -> None:
     ("path1", "path2"),
     [("data", "moved"), ("data", "archive"), ("data/*", "moved")],
 )
-@pytest.mark.parametrize("renames_folders", [False, True])
+@pytest.mark.parametrize("renames_directories", [False, True])
 async def test_maxdepth_moves_what_fsspecs_copy_copies(
     hierarchical_fs: SimulatedFileSystem,
     path1: str,
     path2: str,
     maxdepth: int,
-    renames_folders: bool,
+    renames_directories: bool,
 ) -> None:
     fs = hierarchical_fs
     reference = SimulatedFileSystem(hierarchical=True, asynchronous=True)
@@ -638,21 +638,21 @@ async def test_maxdepth_moves_what_fsspecs_copy_copies(
             await reference._rm_file(path)
 
     kwargs: dict[str, Any] = {}
-    if renames_folders:
+    if renames_directories:
         kwargs = {
             "mv_file": fs._rename,
-            "profile": StorageProfile(renames_folders=True),
+            "profile": StorageProfile(renames_directories=True),
         }
     _, errors = await _collect_with_errors(
         _mv(fs, path1, path2, maxdepth=maxdepth, **kwargs)
     )
     assert errors == []
     assert _files(fs) == _files(reference)
-    # A folder keeping a file deeper than maxdepth stays where it was.
+    # A directory keeping a file deeper than maxdepth stays where it was.
     assert await fs._exists("bucket/data/2023/01/y.txt")
 
 
-async def test_maxdepth_keeps_the_folders_not_emptied(
+async def test_maxdepth_keeps_the_dirs_not_emptied(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _shallow(hierarchical_fs)
@@ -666,7 +666,7 @@ async def test_maxdepth_keeps_the_folders_not_emptied(
         "bucket/data/b.txt",
     ]
     hierarchical_fs.stats.calls.pop("info")
-    # No folder is deleted: 2023 keeps 01, data keeps 2023 and the empty one,
+    # No directory is deleted: 2023 keeps 01, data keeps 2023 and the empty one,
     # which is not made at the destination, as fsspec's copy makes none.
     assert hierarchical_fs.stats.calls == {
         "list": 3,

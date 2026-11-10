@@ -88,12 +88,12 @@ class _Job(NamedTuple):
 class _Roots(NamedTuple):
     """Where an operation starts: what it walks, and what it handles alone.
 
-    ``folders`` are walked, or listed, at once. A single path of unknown kind is
+    ``directories`` are walked, or listed, at once. A single path of unknown kind is
     among them, as its listing tells. ``files`` are known files, e.g. glob
     matches.
     """
 
-    folders: Sequence[str]
+    directories: Sequence[str]
     files: Sequence[str] = ()
 
 
@@ -104,27 +104,27 @@ def _roots_of(
 ) -> _Roots:
     """The roots of a glob's matches, as fsspec's ``_expand_path`` finds them.
 
-    A match inside a folder that matches is left out: walking the folder finds
+    A match inside a directory that matches is left out: walking the directory finds
     it. Matching nothing raises FileNotFoundError, as fsspec does.
     """
     if not matches and not errors:
         raise FileNotFoundError(pattern)
 
-    folders: dict[str, None] = {}
+    directories: dict[str, None] = {}
     files: list[str] = []
 
-    # Sorted, a folder comes before all in it.
+    # Sorted, a directory comes before all in it.
     for entry in sorted(matches, key=lambda e: e["name"]):
         name = entry["name"].rstrip("/")
         parts = name.split("/")
-        if any("/".join(parts[:i]) in folders for i in range(1, len(parts))):
+        if any("/".join(parts[:i]) in directories for i in range(1, len(parts))):
             continue
         if entry["type"] == "directory":
-            folders[name] = None
+            directories[name] = None
         else:
             files.append(name)
 
-    return _Roots(list(folders), files)
+    return _Roots(list(directories), files)
 
 
 class _Queue(Generic[_T]):
@@ -211,7 +211,7 @@ class _Jobs(ABC):
         self.fs = fs
         self.maxdepth = maxdepth
 
-        # The folder roots a pattern matched: fsspec walks them one level less
+        # The directory roots a pattern matched: fsspec walks them one level less
         # deep than a path named, as its glob counted that level already.
         self.matched: set[str] = set()
 
@@ -238,7 +238,7 @@ class _Jobs(ABC):
         """An operation running new jobs of this class, made at once with ``kwargs``.
 
         Made at once, the jobs give the operation its first state, e.g. whether
-        a move renames folders, as they read it from the profile once.
+        a move renames directories, as they read it from the profile once.
         """
         jobs: Self | None = None
         op: Operation[Any, Any] = Operation(
@@ -273,12 +273,12 @@ class _Jobs(ABC):
         if self.maxdepth is not None:
             named = [pattern] if isinstance(pattern, str) else pattern
             literal = {_trim(p) for p in named if not has_magic(p)}
-            self.matched = {f for f in roots.folders if f not in literal}
+            self.matched = {f for f in roots.directories if f not in literal}
         return roots
 
     @abstractmethod
     def source(self, roots: _Roots) -> AsyncGenerator[Any] | None:
-        """The items found in the root folders, if any: e.g. their listings."""
+        """The items found in the root directories, if any: e.g. their listings."""
 
     @abstractmethod
     def fed(self, item: Any) -> list[Any]:
@@ -479,10 +479,10 @@ class _CopyJobs(_Jobs):
         self.dst_fs = dst_fs
         self.profile = _profile_of(dst_fs)
 
-        # Unknown, folders are made first. Implicit folders need none.
-        self.implicit_folders = bool(self.profile.implicit_folders)
+        # Unknown, directories are made first. Implicit directories need none.
+        self.implicit_directories = bool(self.profile.implicit_directories)
         self.parents_required = (
-            self.profile.parents_required is not False and not self.implicit_folders
+            self.profile.parents_required is not False and not self.implicit_directories
         )
 
         self.prefix = ""
@@ -512,10 +512,10 @@ class _CopyJobs(_Jobs):
 
         if not isinstance(self.path1, str):
             roots = await self._place(destination)
-            sources = [*roots.folders, *roots.files]
+            sources = [*roots.directories, *roots.files]
         elif has_magic(self.path1):
             roots = await self.glob_roots(self.path1)
-            sources = [*roots.folders, *roots.files]
+            sources = [*roots.directories, *roots.files]
             if not sources:
                 return roots  # Only errors, in found, to yield.
             self.prefix = common_prefix(sources)
@@ -551,10 +551,10 @@ class _CopyJobs(_Jobs):
         error is the root's own: what is in it is not copied either.
         """
         roots = await self.glob_roots(self.path1)
-        folders = set(roots.folders)
+        directories = set(roots.directories)
         placed: dict[str, str] = {}
 
-        for source in sorted([*roots.folders, *roots.files]):
+        for source in sorted([*roots.directories, *roots.files]):
             name = source.rpartition("/")[2]
             target = f"{destination}/{name}" if destination else name
             if (other := placed.get(target)) is not None:
@@ -570,8 +570,8 @@ class _CopyJobs(_Jobs):
             self.places[source] = target
 
         return _Roots(
-            [s for s in self.places if s in folders],
-            [s for s in self.places if s not in folders],
+            [s for s in self.places if s in directories],
+            [s for s in self.places if s not in directories],
         )
 
     async def _base(self, root: str, destination: str) -> str:
@@ -611,7 +611,7 @@ class _CopyJobs(_Jobs):
         """Copy a file by ``cp_file``, replacing a file there the destination keeps.
 
         A destination refusing to overwrite, as fsspec's copy does not, costs
-        an ``_info``, an ``_rm_file`` and a copy more. A folder there is no file
+        an ``_info``, an ``_rm_file`` and a copy more. A directory there is no file
         to replace: ``_rm_file`` takes files only. The job holds its permit
         already. An error raised notes its paths, as it is yielded among paths.
         """

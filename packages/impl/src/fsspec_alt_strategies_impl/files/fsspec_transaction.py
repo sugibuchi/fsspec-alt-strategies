@@ -395,8 +395,8 @@ def _temp_path(path: str) -> str:
 class TempPathTransaction(FileTransaction):
     """A file written to a temporary path, renamed to its own on commit.
 
-    The temporary path is in the file's folder, hidden by a leading ".", so
-    that a rename stays within one folder, container or bucket. Starting the
+    The temporary path is in the file's directory, hidden by a leading ".", so
+    that a rename stays within one directory, container or bucket. Starting the
     staging opens a file there, and ending it closes it, which writes it in
     full. Commit renames it, and discard deletes it.
 

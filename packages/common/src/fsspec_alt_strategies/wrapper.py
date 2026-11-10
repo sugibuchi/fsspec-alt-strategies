@@ -57,53 +57,53 @@ class KnownImplementation(TypedDict):
     Each is "mv", "rm", "copy", "find", "glob" or "du": the others run the
     family's strategies. One suits a filesystem whose own method uses the
     storage better than any strategy can, e.g. gcsfs's ``mv``, which renames a
-    folder where the bucket allows it. Such a call is not streamed by the
+    directory where the bucket allows it. Such a call is not streamed by the
     strategies, and a monitor sees no step of it.
     """
 
 
 known_implementations: dict[str, KnownImplementation] = {
     "fsspec.implementations.local.LocalFileSystem": {
-        # Its mv is a rename, of a folder too, and its recursive rm one call,
-        # shutil.rmtree. A file's folder must exist, as auto_mkdir is off by
+        # Its mv is a rename, of a directory too, and its recursive rm one call,
+        # shutil.rmtree. A file's directory must exist, as auto_mkdir is off by
         # default.
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=True,
-            implicit_folders=False,
+            implicit_directories=False,
             renames_files=True,
-            renames_folders=True,
-            deletes_folders=True,
+            renames_directories=True,
+            deletes_directories=True,
         ),
         "operation_concurrency": 8,
         "io_concurrency": 4,
     },
     "s3fs.core.S3FileSystem": {
-        # Folders are prefixes. Its mv is a copy, then a delete.
+        # Directories are prefixes. Its mv is a copy, then a delete.
         "storage_profile": StorageProfile(
             fs_type="flat",
             parents_required=False,
-            implicit_folders=True,
+            implicit_directories=True,
             renames_files=False,
-            renames_folders=False,
-            deletes_folders=False,
+            renames_directories=False,
+            deletes_directories=False,
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
         "rm_batch_size": 1000,
     },
     "gcsfs.core.GCSFileSystem": {
-        # A bucket with a hierarchical namespace has folders of its own: one
+        # A bucket with a hierarchical namespace has directories of its own: one
         # class serves both kinds of bucket, so that is unknown. Its _mv renames
-        # a folder in such a bucket, but the wrapper moves by _mv_file, which
+        # a directory in such a bucket, but the wrapper moves by _mv_file, which
         # is fsspec's copy, then a delete.
         "storage_profile": StorageProfile(
             fs_type="flat",
             parents_required=False,
-            implicit_folders=None,
+            implicit_directories=None,
             renames_files=False,
-            renames_folders=False,
-            deletes_folders=False,
+            renames_directories=False,
+            deletes_directories=False,
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
@@ -111,61 +111,61 @@ known_implementations: dict[str, KnownImplementation] = {
         "rm_batch_size": 100,
     },
     "adlfs.spec.AzureBlobFileSystem": {
-        # Its ls lists one folder per request, with walk_blobs and a delimiter,
-        # with a hierarchical namespace or without. Its folders are real with
+        # Its ls lists one directory per request, with walk_blobs and a delimiter,
+        # with a hierarchical namespace or without. Its directories are real with
         # one, prefixes without, and one class serves both: unknown. It has no
         # move of its own, so its mv is fsspec's copy, then a delete, even with
         # a hierarchical namespace.
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=False,
-            implicit_folders=None,
+            implicit_directories=None,
             renames_files=False,
-            renames_folders=False,
-            deletes_folders=False,
+            renames_directories=False,
+            deletes_directories=False,
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
     },
     "fsspec.implementations.memory.MemoryFileSystem": {
-        # Its folders are made by mkdir, or implied by the files in them: a
+        # Its directories are made by mkdir, or implied by the files in them: a
         # mix, so unknown. Its mv is a copy, then a delete.
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=False,
-            implicit_folders=None,
+            implicit_directories=None,
             renames_files=False,
-            renames_folders=False,
-            deletes_folders=False,
+            renames_directories=False,
+            deletes_directories=False,
         ),
         "operation_concurrency": 4,
         "io_concurrency": 4,
     },
     "fsspec.implementations.sftp.SFTPFileSystem": {
-        # Its mv is a rename, of a folder too. A file's folder must exist. Its
-        # recursive rm walks the folder over the connection.
+        # Its mv is a rename, of a directory too. A file's directory must exist. Its
+        # recursive rm walks the directory over the connection.
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=True,
-            implicit_folders=False,
+            implicit_directories=False,
             renames_files=True,
-            renames_folders=True,
-            deletes_folders=False,
+            renames_directories=True,
+            deletes_directories=False,
         ),
         # One SSH channel, which paramiko does not share between threads.
         "operation_concurrency": 1,
         "io_concurrency": 1,
     },
     "fsspec.implementations.arrow.HadoopFileSystem": {
-        # Its mv is HDFS's rename, of a folder too, and its recursive rm one
+        # Its mv is HDFS's rename, of a directory too, and its recursive rm one
         # delete. HDFS creates a file's missing parents.
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=False,
-            implicit_folders=False,
+            implicit_directories=False,
             renames_files=True,
-            renames_folders=True,
-            deletes_folders=True,
+            renames_directories=True,
+            deletes_directories=True,
         ),
         "operation_concurrency": 8,
         "io_concurrency": 4,
