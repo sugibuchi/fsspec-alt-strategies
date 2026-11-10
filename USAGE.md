@@ -134,9 +134,7 @@ fsspec's memory, SFTP and HDFS filesystems. Each entry says its profile, whose 
 concurrency limits. The wrapper is async if the filesystem is. Pass your own table to `monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem the way
 right on every storage: as a tree, one request at a time, with nothing known of the storage.
 
-An entry's `native` lists the recursive methods passed to the filesystem as they are, e.g. `["mv"]`. Use it where the
-filesystem's own method uses the storage better, as gcsfs's `mv` renames a directory in a bucket with a hierarchical
-namespace. Such a call is not streamed by the strategies, and a monitor sees no step of it.
+A filesystem whose profile is found at runtime, e.g. per bucket or per account, needs a wrapper of its own. It subclasses a wrapper, overriding `_storage_profile_of(path)`, and the primitives using the storage's native operations, such as `_mv_file` renaming a directory, or `_rm_tree`. The strategies then use them where the profile says so, streamed and monitored. Use such a wrapper directly: `monitored()` knows only the generic ones.
 
 A wrapper is light and not cached: make one when you need it, and drop it after.
 

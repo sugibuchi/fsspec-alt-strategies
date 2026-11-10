@@ -30,14 +30,6 @@ costs twice:
 A subclass overriding ``_iexpand`` with the storage's own listing by prefix,
 e.g. from its SDK, streams it page by page, and lists only the prefix.
 
-``native`` names the recursive methods passed to the wrapped filesystem as
-they are, instead of the family's strategies, e.g. ``["mv"]`` for gcsfs, whose
-``mv`` renames a directory where the bucket allows it. Such a call keeps the
-wrapped filesystem's behaviour:
-
-- it may not stream, e.g. where it falls back to fsspec's own algorithm;
-- a monitor sees no step of it, and cannot cancel it.
-
 This module depends on `sync_client` of `common`, `filesystem` of `tree` and
 of `flat`, and `files.fsspec_async`.
 """
@@ -55,7 +47,7 @@ from .flat.filesystem import FlatFileSystem
 from .tree.filesystem import TreeFileSystem
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Collection
+    from collections.abc import AsyncIterator
 
     from fsspec.asyn import AsyncFileSystem
     from fsspec.spec import AbstractFileSystem
@@ -64,16 +56,9 @@ if TYPE_CHECKING:
 
 __all__ = ["AsyncFlatWrapper", "AsyncTreeWrapper", "SyncFlatWrapper", "SyncTreeWrapper"]
 
-_NATIVE = frozenset({"mv", "rm", "copy", "find", "glob", "du"})
-"""The recursive methods a wrapper may pass to the wrapped filesystem as they are."""
-
 
 class _FileSystemWrapper:
-    """The filesystem wrapped, and its paths, as the wrapper's own.
-
-    The recursive methods named in ``native`` are the wrapped filesystem's:
-    the others are the family's strategies.
-    """
+    """The filesystem wrapped, and its paths, as the wrapper's own."""
 
     # Made on demand, and dropped after: fsspec keeps none.
     cachable = False
@@ -84,53 +69,12 @@ class _FileSystemWrapper:
         fs: Any,
         *,
         storage_profile: StorageProfile,
-        native: Collection[str] = (),
         **kwargs: Any,
     ) -> None:
-        if unknown := set(native) - _NATIVE:
-            raise ValueError(
-                f"native names no recursive method a wrapper passes on: {sorted(unknown)}"
-            )
-
         self.fs = fs
         # A wrapper's storage is the one it wraps: its profile comes with it.
         self.storage_profile = storage_profile
-        self.native = frozenset(native)
         super().__init__(**kwargs)
-
-    async def _native(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        """Call the wrapped filesystem's own ``name``, e.g. its ``_mv`` for "mv"."""
-        raise NotImplementedError
-
-    async def _mv(self, *args: Any, **kwargs: Any) -> Any:
-        if "mv" in self.native:
-            return await self._native("mv", *args, **kwargs)
-        return await super()._mv(*args, **kwargs)  # type: ignore[misc]
-
-    async def _rm(self, *args: Any, **kwargs: Any) -> Any:
-        if "rm" in self.native:
-            return await self._native("rm", *args, **kwargs)
-        return await super()._rm(*args, **kwargs)  # type: ignore[misc]
-
-    async def _copy(self, *args: Any, **kwargs: Any) -> Any:
-        if "copy" in self.native:
-            return await self._native("copy", *args, **kwargs)
-        return await super()._copy(*args, **kwargs)  # type: ignore[misc]
-
-    async def _find(self, *args: Any, **kwargs: Any) -> Any:
-        if "find" in self.native:
-            return await self._native("find", *args, **kwargs)
-        return await super()._find(*args, **kwargs)  # type: ignore[misc]
-
-    async def _glob(self, *args: Any, **kwargs: Any) -> Any:
-        if "glob" in self.native:
-            return await self._native("glob", *args, **kwargs)
-        return await super()._glob(*args, **kwargs)  # type: ignore[misc]
-
-    async def _du(self, *args: Any, **kwargs: Any) -> Any:
-        if "du" in self.native:
-            return await self._native("du", *args, **kwargs)
-        return await super()._du(*args, **kwargs)  # type: ignore[misc]
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} of {self.fs!r}>"
@@ -178,9 +122,6 @@ class _AsyncFileSystemWrapper(_FileSystemWrapper):
         if not fs.asynchronous:
             kwargs.setdefault("loop", fs.loop)
         super().__init__(fs, **kwargs)
-
-    async def _native(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        return await getattr(self.fs, f"_{name}")(*args, **kwargs)
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         return await self.fs._ls(path, detail=detail, **kwargs)
@@ -255,9 +196,6 @@ class _SyncFileSystemWrapper(SyncClientSupport, _FileSystemWrapper):
         if all(isinstance(c, int) for c in concurrencies):
             return sum(concurrencies)
         return None
-
-    async def _native(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        return await self._run_in_thread(getattr(self.fs, name), *args, **kwargs)
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         return await self._run_in_thread(self.fs.ls, path, detail=detail, **kwargs)
@@ -348,9 +286,6 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
         A semaphore is used as it is, shared with what else holds it.
     storage_profile : StorageProfile
         What the storage does. ``StorageProfile()`` if it is unknown.
-    native : collection of str, optional
-        The recursive methods passed to the wrapped filesystem as they are:
-        "mv", "rm", "copy", "find", "glob" or "du". None by default.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`.
 
@@ -425,9 +360,6 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
         A semaphore is used as it is, shared with what else holds it.
     storage_profile : StorageProfile
         What the storage does. ``StorageProfile()`` if it is unknown.
-    native : collection of str, optional
-        The recursive methods passed to the wrapped filesystem as they are:
-        "mv", "rm", "copy", "find", "glob" or "du". None by default.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
@@ -498,9 +430,6 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
         A semaphore is used as it is, shared with what else holds it.
     storage_profile : StorageProfile
         What the storage does. ``StorageProfile()`` if it is unknown.
-    native : collection of str, optional
-        The recursive methods passed to the wrapped filesystem as they are:
-        "mv", "rm", "copy", "find", "glob" or "du". None by default.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`.
 
@@ -592,9 +521,6 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
         A semaphore is used as it is, shared with what else holds it.
     storage_profile : StorageProfile
         What the storage does. ``StorageProfile()`` if it is unknown.
-    native : collection of str, optional
-        The recursive methods passed to the wrapped filesystem as they are:
-        "mv", "rm", "copy", "find", "glob" or "du". None by default.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 

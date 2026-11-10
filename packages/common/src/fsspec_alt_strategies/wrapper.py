@@ -6,8 +6,7 @@
 copy of the strategies wraps it:
 
 - its `StorageProfile`, whose ``fs_type`` picks a tree or a flat wrapper;
-- its concurrency limits, and a flat wrapper's batch of deletions;
-- the recursive methods passed to the filesystem as they are, if any.
+- its concurrency limits, and a flat wrapper's batch of deletions.
 
 Whether the wrapper is async is not declared: it is async if the filesystem
 is an ``AsyncFileSystem``. The strategies' ``monitored`` reads the table, or a
@@ -23,12 +22,9 @@ This module depends on `profile`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, NotRequired, TypedDict
+from typing import NotRequired, TypedDict
 
 from .profile import StorageProfile
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 __all__ = ["KnownImplementation", "known_implementations"]
 
@@ -50,16 +46,6 @@ class KnownImplementation(TypedDict):
 
     rm_batch_size: NotRequired[int]
     """A flat wrapper's batch of deletions, e.g. 1000 on S3."""
-
-    native: NotRequired[Sequence[str]]
-    """The recursive methods the wrapper passes to the filesystem as they are.
-
-    Each is "mv", "rm", "copy", "find", "glob" or "du": the others run the
-    family's strategies. One suits a filesystem whose own method uses the
-    storage better than any strategy can, e.g. gcsfs's ``mv``, which renames a
-    directory where the bucket allows it. Such a call is not streamed by the
-    strategies, and a monitor sees no step of it.
-    """
 
 
 known_implementations: dict[str, KnownImplementation] = {

@@ -115,7 +115,6 @@ def monitored(
         "operation_concurrency": entry["operation_concurrency"],
         "io_concurrency": entry["io_concurrency"],
         "storage_profile": entry["storage_profile"],
-        "native": entry.get("native", ()),
     }
     if fs_type == "flat":
         options["rm_batch_size"] = entry["rm_batch_size"]

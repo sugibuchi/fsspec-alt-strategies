@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import threading
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -65,57 +64,3 @@ async def test_a_sync_filesystem_makes_a_dir_and_dates_a_file(
     local.pipe_file(f"{root}/f.txt", b"f")
     assert tree.created(f"{root}/f.txt") == local.created(f"{root}/f.txt")
     assert tree.modified(f"{root}/f.txt") == local.modified(f"{root}/f.txt")
-
-
-# The methods passed on as they are, by native.
-
-
-async def test_a_native_method_is_the_wrapped_filesystems_own(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    inner = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    inner.add_file("a/x", b"x")
-    called: list[tuple[str, str]] = []
-
-    async def own_mv(path1: str, path2: str, **kwargs: Any) -> None:
-        called.append((path1, path2))
-
-    # fsspec's AsyncFileSystem has no _mv: gcsfs's is its own, as this one.
-    monkeypatch.setattr(inner, "_mv", own_mv, raising=False)
-    tree = AsyncTreeWrapper(inner, native=["mv"], **_LIMITS)
-    await tree._mv("a", "b", recursive=True)
-    assert called == [("a", "b")]
-    assert inner.stats.calls == {}  # No strategy ran.
-
-
-async def test_a_method_not_native_runs_the_strategy() -> None:
-    inner = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    inner.add_file("a/x", b"x")
-    tree = AsyncTreeWrapper(inner, native=["rm"], **_LIMITS)
-    await tree._mv("a", "b", recursive=True)
-    assert await inner._exists("b/x")
-    assert not await inner._exists("a/x")
-
-
-async def test_a_sync_filesystem_runs_its_native_method_in_a_thread(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    local = LocalFileSystem()
-    root = local._strip_protocol(str(tmp_path))
-    threads: list[str] = []
-
-    def own_du(path: str, **kwargs: Any) -> int:
-        threads.append(threading.current_thread().name)
-        return 7
-
-    # fsspec caches the local filesystem: the patch must be undone.
-    monkeypatch.setattr(local, "du", own_du)
-    tree = SyncTreeWrapper(local, asynchronous=True, native=["du"], **_LIMITS)
-    assert await tree._du(root) == 7
-    assert threads != [threading.main_thread().name]
-
-
-def test_native_names_only_recursive_methods() -> None:
-    inner = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    with pytest.raises(ValueError, match="cat"):
-        AsyncTreeWrapper(inner, native=["mv", "cat"], **_LIMITS)
