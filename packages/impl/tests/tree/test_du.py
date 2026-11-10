@@ -1,4 +1,4 @@
-"""Tests of `tree_du`, checked against fsspec's own ``_du``."""
+"""Tests of `_tree_du`, checked against fsspec's own ``_du``."""
 
 from __future__ import annotations
 
@@ -8,19 +8,30 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.states import DuState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.du import DuState, tree_du
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl.tree.du import _tree_du
+from fsspec_alt_strategies_impl_testing import (
+    SimulatedFileSystem,
+    TreeView,
+    dir_ils,
+)
+
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_dir", "rm_tree", "cp_file", "mv_file"}
+"""The keyword arguments that replace a primitive of the filesystem."""
+
+_SETTINGS = {"profile": "storage_profile", "concurrency_limit": "operation_limit"}
+"""The keyword arguments that set the filesystem's profile and limit, by its attribute."""
 
 
 def _du(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`tree_du` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "ils": folder_ils(fs),
-        "info": fs._info,
-    }
-    return tree_du(path, **{**operations, **kwargs})
+    """`_tree_du` on a filesystem's own primitives, which ``kwargs`` may replace."""
+    view = TreeView(
+        fs,
+        **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()},
+        **{_SETTINGS[k]: kwargs.pop(k) for k in _SETTINGS.keys() & kwargs.keys()},
+    )
+    return _tree_du(view, path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
@@ -50,7 +61,7 @@ async def test_sends_no_info_per_file(any_fs: SimulatedFileSystem) -> None:
     op = _du(any_fs, "data")
     await _collect_with_errors(op)
     assert op.state == DuState(
-        current=op.state.current, folders_listed=7, files=5, size=221
+        current=op.state.current, directories_listed=7, files=5, size=221
     )
     assert any_fs.stats.calls == {"list": 7}
 
@@ -85,7 +96,7 @@ async def test_a_failed_listing_is_yielded_and_the_rest_counted() -> None:
             raise PermissionError(path)
         return await fs._ls(path, detail=detail, **kwargs)
 
-    op = _du(fs, "data", ils=folder_ils(ls))
+    op = _du(fs, "data", ils=dir_ils(ls))
     _, errors = await _collect_with_errors(op)
     assert [type(e) for e in errors] == [PermissionError]
     assert (op.state.errors, op.state.size) == (1, 201)

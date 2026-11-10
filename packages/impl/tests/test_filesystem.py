@@ -16,7 +16,7 @@ from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.filesystem import (
     _BaseFileSystem,
     _copy_errors,
-    _failed_folder,
+    _failed_dir,
     _raise,
     _strip_only_protocol,
 )
@@ -139,8 +139,8 @@ async def test_a_range_of_an_unseekable_file_skips_its_start() -> None:
     assert await cat(fs, "f", start=6, end=2) == b""
 
 
-async def test_a_local_folder_is_no_transfer(tmp_path: Path) -> None:
-    # Both return before opening a file: fsspec makes local folders itself.
+async def test_a_local_dir_is_no_transfer(tmp_path: Path) -> None:
+    # Both return before opening a file: fsspec makes local directories itself.
     tree = SyncTreeWrapper(MemoryFileSystem(), asynchronous=True, **_LIMITS)
     assert await _BaseFileSystem._get_file(tree, "/w/a", str(tmp_path)) is None
     assert await _BaseFileSystem._put_file(tree, str(tmp_path), "/w/a") is None
@@ -165,14 +165,14 @@ def test_errors_are_raised_alone_or_in_a_group() -> None:
         _raise([OSError("a"), OSError("b")], "Deleting")
 
 
-def test_a_folder_failing_to_list_is_raised_reported_or_empty() -> None:
+def test_a_dir_failing_to_list_is_raised_reported_or_empty() -> None:
     error = OSError("a")
     with pytest.raises(OSError, match=r"^a$"):
-        _failed_folder("a", error, "raise", detail=False)
+        _failed_dir("a", error, "raise", detail=False)
     reported: list[Exception] = []
-    assert _failed_folder("a", error, reported.append, detail=True) == ("a", {}, {})
+    assert _failed_dir("a", error, reported.append, detail=True) == ("a", {}, {})
     assert reported == [error]
-    assert _failed_folder("a", error, "omit", detail=False) == ("a", [], [])
+    assert _failed_dir("a", error, "omit", detail=False) == ("a", [], [])
 
 
 class _Flat(AsyncFlatWrapper):
@@ -186,7 +186,7 @@ class _Flat(AsyncFlatWrapper):
 @pytest.mark.parametrize("method", ["_copy", "_mv"])
 @pytest.mark.parametrize("recursive", [False, True])
 @pytest.mark.parametrize("path", ["data/a/1.txt", "data/a/1.*", ["data/a/1.txt"]])
-async def test_a_file_copied_or_moved_into_a_missing_folder(
+async def test_a_file_copied_or_moved_into_a_missing_dir(
     family: str, method: str, recursive: bool, path: str | list[str]
 ) -> None:
     sim = SimulatedFileSystem(hierarchical=family == "tree", asynchronous=True)

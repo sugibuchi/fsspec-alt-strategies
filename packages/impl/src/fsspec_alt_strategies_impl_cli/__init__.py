@@ -38,7 +38,7 @@ def main() -> None:
 def copy(target: Path) -> None:
     """Copy the installed strategies into TARGET, replacing a previous copy.
 
-    TARGET is a folder of your package, e.g. src/mypkg/_contrib/strategy. It
+    TARGET is a directory of your package, e.g. src/mypkg/_contrib/strategy. It
     must be missing, empty, or a previous copy: one holding _version.py.
     """
     source = Path(fsspec_alt_strategies_impl.__file__).parent

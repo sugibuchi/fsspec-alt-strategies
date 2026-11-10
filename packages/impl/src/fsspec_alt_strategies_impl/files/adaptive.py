@@ -513,10 +513,19 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     - A part that fails stops the writes, and closing aborts the upload. Either
       raises OSError, its cause the part's error. Any failure or cancellation
       while closing or force-flushing aborts too, as does a failed start.
-    - Leaving a ``with`` block by an exception uploads nothing: a small file is
-      never sent, and a multipart upload is aborted. So does a file the garbage
-      collector finds open. The file is written whole, or not at all.
+    - Leaving a ``with`` block by an exception sends no more data: a small
+      file is never sent, and a multipart upload is aborted. So does a file the
+      garbage collector finds open.
     - An abort failing too adds a note to the error raised, never replacing it.
+
+    What a failed write leaves at the path is the storage's. The file only
+    decides which requests to send, and when. On a storage where an upload is
+    invisible until the request completing it, such as S3, Google Cloud
+    Storage or Azure, the file is written whole, or not at all, and a failed
+    write leaves the file that was there. On one where a file is visible while
+    it is written, e.g. DBFS's create, add-block and close, a failed write may
+    leave part of it, and the earlier file gone. A subclass's docstring says
+    which its storage is.
 
     Some storages take parts only in order, one at a time, e.g. Google Cloud
     Storage's resumable uploads, where each part but the last is a multiple of
@@ -533,6 +542,18 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     - The last part is the one given ``last``: with the file's size, as its
       ``end``. A storage where it makes the file visible completes nothing.
 
+    Mode "xb" creates the file only if none is at the path, and
+    ``exclusive`` is then True. The subclass checks it with the storage's
+    means, raising FileExistsError if a file is there:
+
+    - best, by a conditional write in the request creating the file, e.g.
+      S3's or Azure's ``If-None-Match: *`` on the completion, or a create
+      refusing an existing path, so that no other writer can slip in;
+    - where the storage has none, by asking first, e.g. on opening, which
+      races with another writer. Its docstring then says so.
+
+    The upload is aborted after a refusal, as after any failure.
+
     Some storages limit each request's size, e.g. to 1 MiB. ``max_request_size``
     declares it, and no ``_upload_all`` or ``_upload_part`` call exceeds it:
 
@@ -547,6 +568,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         The file's path, for messages.
     loop : asyncio.AbstractEventLoop
         The loop the uploads run on, e.g. the filesystem's ``loop``.
+    mode : {"wb", "xb"}, default "wb"
+        Whether the file replaces one at the path, or is created only if
+        none is there.
     concurrency_limit : asyncio.Semaphore, optional
         Held by each upload while it runs. Share one between files to limit
         their uploads, and so their memory, together. The file's own, of
@@ -569,8 +593,8 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     Raises
     ------
     ValueError
-        If ``spread`` is less than 1, or ``max_request_size`` less than
-        ``min_block_size``.
+        If ``mode`` is neither "wb" nor "xb", ``spread`` is less than 1, or
+        ``max_request_size`` less than ``min_block_size``.
 
     See Also
     --------
@@ -593,13 +617,14 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     """The most bytes a request may upload, if the storage limits it."""
 
     mode: str = "wb"
-    """The mode, as fsspec's files have it: only writing, from the start."""
+    """The mode, as fsspec's files have it: "wb", or "xb" to create only."""
 
     def __init__(
         self,
         path: str,
         loop: asyncio.AbstractEventLoop,
         *,
+        mode: str = "wb",
         concurrency_limit: asyncio.Semaphore | None = None,
         spread: int | None = None,
         min_block_size: int | None = None,
@@ -608,8 +633,12 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         sequential: bool | None = None,
         max_request_size: int | None = None,
     ) -> None:
+        if mode not in ("wb", "xb"):
+            raise ValueError(f"mode must be 'wb' or 'xb': {mode!r}")
+
         super().__init__(path, loop, concurrency_limit=concurrency_limit, spread=spread)
 
+        self.mode = mode
         self.min_block_size = min_block_size or self.min_block_size
         self.max_block_size = max(
             max_block_size or self.max_block_size, self.min_block_size
@@ -628,8 +657,13 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         self._buffer = bytearray()
         self._multipart = False
 
+    @property
+    def exclusive(self) -> bool:
+        """Whether the file is created only if none is at the path: mode "xb"."""
+        return self.mode == "xb"
+
     # Leaving a with block by an exception aborts, as the garbage collector
-    # does: the file is written whole, or not at all.
+    # does: no more data is sent.
 
     def __exit__(
         self, exc_type: object, exc: BaseException | None, *rest: object
@@ -678,7 +712,11 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
 
     @abstractmethod
     async def _upload_all(self, data: bytes) -> None:
-        """Upload the whole file in one request."""
+        """Upload the whole file in one request.
+
+        With ``exclusive``, it creates the file only if none is at the path,
+        as the storage allows: else it raises FileExistsError.
+        """
 
     @abstractmethod
     async def _start_multipart_upload(self) -> None:
@@ -696,11 +734,24 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
 
     @abstractmethod
     async def _complete_multipart_upload(self, parts: list[Any]) -> None:
-        """Commit the parts uploaded, given what each upload returned, in order."""
+        """Commit the parts uploaded, given what each upload returned, in order.
+
+        With ``exclusive``, where the storage checks it on completion, it
+        raises FileExistsError if a file is at the path.
+        """
 
     @abstractmethod
     async def _abort_multipart_upload(self) -> None:
-        """Discard the parts uploaded, leaving no file."""
+        """Clean up an unfinished upload, as far as the storage allows: best effort.
+
+        Where the storage has a request discarding an unfinished upload, e.g.
+        S3's AbortMultipartUpload, the abort sends it. Where it has none, the
+        abort sends nothing, and leaves it to the storage, e.g. Azure's
+        uncommitted blocks, collected a week after the last block. Where the
+        upload is invisible until completed, an abort never deletes or
+        replaces a file already at the path. It may be called after
+        ``_start_multipart_upload`` failed, with nothing to clean up.
+        """
 
     # Finishing and aborting, for _AsyncFile.
 

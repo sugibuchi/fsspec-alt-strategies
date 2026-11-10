@@ -29,7 +29,7 @@ def inner() -> SimulatedFileSystem:
     fs = SimulatedFileSystem(asynchronous=True)
     for path in _FILES:
         fs.add_file(path, path.encode())
-    fs.add_file("database.csv")  # Shares the text "data", not the folder.
+    fs.add_file("database.csv")  # Shares the text "data", not the directory.
     return fs
 
 

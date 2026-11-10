@@ -1,29 +1,25 @@
-"""Tests of `flat_find`, checked against fsspec's own ``_find``."""
+"""Tests of `_flat_find`, checked against fsspec's own ``_find``."""
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.states import FindState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.find import FindState, flat_find
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.flat.find import _flat_find
+from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
 def _find(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
-    """`flat_find` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "iexpand": fs._iexpand,
-        "info": fs._info,
-    }
-    return flat_find(path, **{**operations, **kwargs})
+    """`_flat_find` on ``fs``, whose ``iexpand`` or ``info`` ``kwargs`` may replace."""
+    primitives = {k: kwargs.pop(k) for k in ("iexpand", "info") if k in kwargs}
+    return _flat_find(FlatView(fs, **primitives), path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
@@ -31,7 +27,7 @@ def _tree(fs: SimulatedFileSystem) -> None:
         for month in ("01", "02"):
             fs.add_file(f"data/{year}/{month}/part-0.parquet", b"x" * 10)
     fs.add_file("data/README.md")
-    fs.add_file("database.csv")  # Shares the text "data", not the folder.
+    fs.add_file("database.csv")  # Shares the text "data", not the directory.
 
 
 def _sorted(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -62,7 +58,7 @@ async def test_requests() -> None:
     op = _find(fs, "data")
     entries, _ = await _collect_with_errors(op)
     assert len(entries) == 5
-    # The 5 keys under data/, 2 a page: no info, and no listing per folder.
+    # The 5 keys under data/, 2 a page: no info, and no listing per directory.
     assert fs.stats.calls == {"list": 3}
     assert op.state == FindState(current=op.state.current, found=5)
 
@@ -86,7 +82,7 @@ async def test_yields_as_the_pages_come() -> None:
 
 
 def _listing(*names: str) -> Any:
-    """An ``iexpand`` of these keys, as a storage with folder markers lists them."""
+    """An ``iexpand`` of these keys, as a storage with directory markers lists them."""
 
     async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in names:
@@ -101,16 +97,10 @@ async def _info(path: str) -> dict[str, Any]:
     return {"name": path, "size": 0, "type": "directory"}
 
 
-async def test_markers_are_folders() -> None:
+async def test_markers_are_dirs() -> None:
     iexpand = _listing("data/", "data/empty/", "data/a/b.txt")
     entries, _ = await _collect_with_errors(
-        flat_find(
-            "data",
-            iexpand=iexpand,
-            info=_info,
-            withdirs=True,
-            concurrency_limit=asyncio.Semaphore(32),
-        )
+        _flat_find(FlatView(None, iexpand=iexpand, info=_info), "data", withdirs=True)
     )
     assert _sorted(entries) == [
         {"name": "data", "size": 0, "type": "directory"},
@@ -119,9 +109,7 @@ async def test_markers_are_folders() -> None:
         {"name": "data/empty", "size": 0, "type": "directory"},
     ]
     files, _ = await _collect_with_errors(
-        flat_find(
-            "data", iexpand=iexpand, info=_info, concurrency_limit=asyncio.Semaphore(32)
-        )
+        _flat_find(FlatView(None, iexpand=iexpand, info=_info), "data")
     )
     assert [e["name"] for e in files] == ["data/a/b.txt"]
 
@@ -131,9 +119,7 @@ async def test_an_error_of_the_listing_ends_it() -> None:
         yield {"name": "data/a", "size": 1, "type": "file"}
         raise PermissionError(prefix)
 
-    op = flat_find(
-        "data", iexpand=iexpand, info=_info, concurrency_limit=asyncio.Semaphore(32)
-    )
+    op = _flat_find(FlatView(None, iexpand=iexpand, info=_info), "data")
     with pytest.raises(PermissionError):
         await _collect_with_errors(op)
 

@@ -26,18 +26,18 @@ from ..common.filesystem import (
     _BaseFileSystem,
     _copy_errors,
     _du_answer,
-    _failed_folder,
+    _failed_dir,
     _raise,
     _strip_only_protocol,
 )
 from ..common.operation import _collect_with_monitors, _with_monitors
-from .cp import flat_local_cp
-from .du import flat_du
-from .find import flat_find
-from .glob import flat_glob
-from .mv import flat_local_mv
-from .rm import flat_rm
-from .walk import flat_walk
+from .cp import _flat_cp
+from .du import _flat_du
+from .find import _flat_find
+from .glob import _flat_glob
+from .mv import _flat_mv
+from .rm import _flat_rm
+from .walk import _flat_walk
 
 if TYPE_CHECKING:
     import asyncio
@@ -55,16 +55,17 @@ class FlatFileSystem(_BaseFileSystem):
     It suits flat storages, such as object stores, which list every key under a
     prefix in one paginated request. It overrides fsspec's ``_walk``,
     ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``_mv`` when
-    recursive, with `flat_walk`, `flat_find`, `flat_du`, `flat_glob`, `flat_rm`,
-    `flat_cp` and `flat_mv`. Their answers are fsspec's, and their failures are
-    raised, a single one as it is, several in an ExceptionGroup.
+    recursive, with the flat strategies. These list every key under a prefix
+    with ``_iexpand``, and act on each key as it arrives. Their answers are
+    fsspec's, and their failures are raised, a single one as it is, several in
+    an ExceptionGroup.
 
     A subclass implements the storage's primitives:
 
     - ``_iexpand``, the listing by prefix, which fsspec has not;
     - ``_rm_files``, a deletion of several files in one request, with
       ``rm_batch_size``;
-    - ``_ils``, a folder's listing, which ``_ls`` and so fsspec's own methods
+    - ``_ils``, a directory's listing, which ``_ls`` and so fsspec's own methods
       list with, and ``_info``, ``_rm_file`` and ``_cp_file``;
     - ``open_async``, giving its files ``io_limit`` as their concurrency
       limit, and ``_open``.
@@ -79,9 +80,10 @@ class FlatFileSystem(_BaseFileSystem):
     - ``io_limit``, the reads and writes of data, by its files.
 
     ``storage_profile``, a `StorageProfile`, tells the strategies what the
-    storage does. With ``renames_files=True``, a recursive ``mv``, or one of
-    a single file, moves each key by ``_mv_file``, which a subclass then
-    overrides with its rename. Otherwise it copies each key, and deletes them in batches.
+    storage does. With ``renames_files=True``, a recursive ``mv``, or one of a
+    single file, moves each key by ``_mv_file``, which a subclass then
+    overrides with its rename. Otherwise it copies each key, and deletes them
+    in batches.
 
     Parameters
     ----------
@@ -97,8 +99,9 @@ class FlatFileSystem(_BaseFileSystem):
     Raises
     ------
     ValueError
-        If a concurrency is less than 1, or ``storage_profile`` or
-        ``rm_batch_size`` is not set.
+        If a concurrency is less than 1, or ``rm_batch_size`` is not set. Also
+        if ``storage_profile`` is not set while ``_load_storage_profile`` is
+        not overridden.
 
     See Also
     --------
@@ -131,7 +134,10 @@ class FlatFileSystem(_BaseFileSystem):
     """The most keys ``_rm_files`` deletes in one request, e.g. 1000 on S3."""
 
     storage_profile: StorageProfile
-    """What the storage does, for the strategies: a subclass must set it."""
+    """What the storage does, for the strategies.
+
+    A subclass sets it, or overrides ``_load_storage_profile`` instead.
+    """
 
     def __init__(
         self,
@@ -158,9 +164,9 @@ class FlatFileSystem(_BaseFileSystem):
         """List every key starting with ``prefix``, as an async iterator of entries.
 
         ``prefix`` is raw text, e.g. "data/2024-". The entries are as ``_ls``
-        gives them, a key ending with "/" being a folder's marker. They come in
-        order of their names, as object stores list them: `flat_walk` counts
-        on it to know when a folder is done. Each key comes once: a key listed
+        gives them, a key ending with "/" being a directory's marker. They come in
+        order of their names, as object stores list them: ``_walk`` counts on
+        it to know when a directory is done. Each key comes once: a key listed
         twice is copied, moved, deleted or counted twice.
         """
 
@@ -175,17 +181,17 @@ class FlatFileSystem(_BaseFileSystem):
 
     @abstractmethod
     def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
-        """List one folder, as an async iterator of its entries, for fsspec's own methods.
+        """List one directory, as an async iterator of its entries, for fsspec's own methods.
 
         The entries are as fsspec's ``_ls`` gives them with ``detail``: the
-        files in the folder, and its subfolders, e.g. by an object store's
+        files in the directory, and its subdirectories, e.g. by an object store's
         listing with a delimiter, a page at a time. A file yields itself, as
         fsspec's ``_ls`` lists it. The strategies never call it: they list
         with ``_iexpand``.
         """
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
-        """List a folder, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names."""
+        """List a directory, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names."""
         entries = [entry async for entry in self._ils(path, **kwargs)]
         return entries if detail else [e["name"] for e in entries]
 
@@ -229,24 +235,17 @@ class FlatFileSystem(_BaseFileSystem):
     ) -> AsyncGenerator[tuple[str, Any, Any]]:
         detail = kwargs.pop("detail", False)
         root = self._strip_protocol(path)
-        walk = flat_walk(
-            root,
-            iexpand=self._iexpand,
-            info=self._info,
-            maxdepth=maxdepth,
-            topdown=topdown,
-            concurrency_limit=self.operation_limit,
-        )
+        walk = _flat_walk(self, root, maxdepth=maxdepth, topdown=topdown)
 
         async with aclosing(
             _with_monitors(walk, Call(self._unwrapped(), "walk", path))
-        ) as folders:
+        ) as directories:
             try:
-                async for item in folders:
-                    folder, dirs, files = item
+                async for item in directories:
+                    directory, dirs, files = item
                     if not detail:
                         dirs, files = list(dirs), list(files)
-                    yield folder, dirs, files
+                    yield directory, dirs, files
             except NotADirectoryError:
                 # fsspec's walk of a file yields the file, under no name.
                 entry = await self._info(root)
@@ -254,7 +253,7 @@ class FlatFileSystem(_BaseFileSystem):
             except OSError as e:
                 # The listing's error ends the walk: fsspec's on_error handles
                 # it as a failure to list the root.
-                yield _failed_folder(root, e, on_error, detail)
+                yield _failed_dir(root, e, on_error, detail)
 
     async def _find(
         self,
@@ -265,13 +264,11 @@ class FlatFileSystem(_BaseFileSystem):
     ) -> Any:
         detail = kwargs.pop("detail", False)
         entries, _ = await _collect_with_monitors(
-            flat_find(
+            _flat_find(
+                self,
                 self._strip_protocol(path),
-                iexpand=self._iexpand,
-                info=self._info,
                 maxdepth=maxdepth,
                 withdirs=withdirs,
-                concurrency_limit=self.operation_limit,
             ),
             Call(self._unwrapped(), "find", path),
         )
@@ -285,13 +282,7 @@ class FlatFileSystem(_BaseFileSystem):
                 path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
             )
 
-        op = flat_du(
-            self._strip_protocol(path),
-            iexpand=self._iexpand,
-            info=self._info,
-            maxdepth=maxdepth,
-            concurrency_limit=self.operation_limit,
-        )
+        op = _flat_du(self, self._strip_protocol(path), maxdepth=maxdepth)
 
         entries, _ = await _collect_with_monitors(
             op, Call(self._unwrapped(), "du", path)
@@ -301,13 +292,11 @@ class FlatFileSystem(_BaseFileSystem):
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
         detail = kwargs.pop("detail", False)
         entries, _ = await _collect_with_monitors(
-            flat_glob(
+            _flat_glob(
+                self,
                 _strip_only_protocol(self, path),
-                iexpand=self._iexpand,
-                info=self._info,
                 maxdepth=maxdepth,
                 withdirs=kwargs.pop("withdirs", True),
-                concurrency_limit=self.operation_limit,
             ),
             Call(self._unwrapped(), "glob", path),
         )
@@ -326,15 +315,7 @@ class FlatFileSystem(_BaseFileSystem):
             return
 
         _, errors = await _collect_with_monitors(
-            flat_rm(
-                _strip_only_protocol(self, path),
-                iexpand=self._iexpand,
-                info=self._info,
-                rm_files=self._rm_files,
-                batch_size=self.rm_batch_size,
-                maxdepth=maxdepth,
-                concurrency_limit=self.operation_limit,
-            ),
+            _flat_rm(self, _strip_only_protocol(self, path), maxdepth=maxdepth),
             Call(self._unwrapped(), "rm", path),
             kwargs.get("callback"),
         )
@@ -357,17 +338,12 @@ class FlatFileSystem(_BaseFileSystem):
             return
 
         _, errors = await _collect_with_monitors(
-            flat_local_cp(
+            _flat_cp(
+                self,
+                self,
                 _strip_only_protocol(self, path1),
                 _strip_only_protocol(self, path2),
-                iexpand=self._iexpand,
-                info=self._info,
-                cp_file=self._cp_file,
-                makedirs=self._makedirs,
-                rm_file=self._rm_file,
-                profile=self.storage_profile,
                 maxdepth=maxdepth,
-                concurrency_limit=self.operation_limit,
             ),
             Call(self._unwrapped(), "copy", path1, path2),
             kwargs.get("callback"),
@@ -382,10 +358,11 @@ class FlatFileSystem(_BaseFileSystem):
         maxdepth: int | None = None,
         **kwargs: Any,
     ) -> None:
-        """Move files, as fsspec's ``mv`` does: with `flat_mv` when recursive.
+        """Move files, as fsspec's ``mv`` does: with the flat move when recursive.
 
-        A single file goes by `flat_mv` too, recursive or not, so that it moves
-        by ``_mv_file`` where the profile's ``renames_files`` says it renames.
+        A single file goes by the flat move too, recursive or not, so that it
+        moves by ``_mv_file`` where the profile's ``renames_files`` says it
+        renames.
         """
         if path1 == path2:
             return
@@ -397,20 +374,12 @@ class FlatFileSystem(_BaseFileSystem):
             return
 
         _, errors = await _collect_with_monitors(
-            flat_local_mv(
+            _flat_mv(
+                self,
+                self,
                 _strip_only_protocol(self, path1),
                 _strip_only_protocol(self, path2),
-                iexpand=self._iexpand,
-                info=self._info,
-                mv_file=self._mv_file,
-                cp_file=self._cp_file,
-                rm_files=self._rm_files,
-                batch_size=self.rm_batch_size,
-                makedirs=self._makedirs,
-                rm_file=self._rm_file,
-                profile=self.storage_profile,
                 maxdepth=maxdepth,
-                concurrency_limit=self.operation_limit,
             ),
             Call(self._unwrapped(), "mv", path1, path2),
             kwargs.get("callback"),

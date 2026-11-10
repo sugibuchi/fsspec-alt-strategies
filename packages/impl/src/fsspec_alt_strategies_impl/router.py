@@ -9,8 +9,8 @@ across two storages runs the source's family's strategy, as its profile's
 ``fs_type`` says, each file by ``_cross_fs_cp_file`` or ``_cross_fs_mv_file``,
 which stream the data through the two storages' files unless overridden.
 
-This module depends on `filesystem`, `operation`, `paths` and `types` of
-`common`. It imports `cp` and `mv` of a family only to copy or move from a
+This module depends on `filesystem`, `operation` and `paths` of `common`.
+It imports `cp` and `mv` of a family only to copy or move from a
 storage of it, so a copy may leave out the other family.
 """
 
@@ -28,7 +28,6 @@ from fsspec.callbacks import DEFAULT_CALLBACK
 from fsspec.spec import AbstractFileSystem
 
 from fsspec_alt_strategies.monitor import Call, Monitored, routing
-from fsspec_alt_strategies.profile import StorageProfile
 
 from .common.filesystem import (
     _AbstractFileSystemMeta,
@@ -50,8 +49,8 @@ if TYPE_CHECKING:
 
     from fsspec.callbacks import Callback
 
+    from .common.jobs import _Transfer
     from .common.operation import Operation
-    from .common.types import _Request
 
 __all__ = ["AsyncRoutingFileSystem"]
 
@@ -75,7 +74,7 @@ class AsyncRoutingFileSystem(
       path above every storage, e.g. a catalog holding volumes.
     - ``_outer(fs, path)`` gives the router's path of an inner one, so that
       the names answered, e.g. by ``ls`` and ``find``, are the router's.
-    - ``_roots(path)`` lists a folder above the storages, as ``ls`` with
+    - ``_roots(path)`` lists a directory above the storages, as ``ls`` with
       ``detail=True`` does.
 
     ``_route`` is sync, as sync methods route too.
@@ -89,22 +88,22 @@ class AsyncRoutingFileSystem(
 
     Above the storages, ``ls`` answers from ``_roots``, and ``info`` from
     ``_root_info``, which a subclass may override. ``find``, ``du`` and
-    ``walk`` are fsspec's own walk, a folder after another, handing each
-    storage's folder to its filesystem. A glob whose literal prefix
+    ``walk`` are fsspec's own walk, a directory after another, handing each
+    storage's directory to its filesystem. A glob whose literal prefix
     routes goes whole to that filesystem. Another lists the prefix's roots, as
     fsspec's ``glob`` does. A change above the storages, e.g. ``rm`` of a
     catalog, raises PermissionError.
 
     A copy or move between two paths of one storage is the inner filesystem's
     own: both paths route to the same inner filesystem. Between two storages,
-    it is the strategy of the source's family, as its profile's ``fs_type`` says:
-    `tree_cp` or `tree_mv`, `flat_cp` or `flat_mv`. Each file goes by
-    ``_cross_fs_cp_file`` or ``_cross_fs_mv_file``, which stream the data
-    unless a subclass overrides them, e.g. with a server-side copy. A source
-    of unknown ``fs_type``, or a call with ``maxdepth``, is copied by fsspec's
-    own copy, a file at a time.
-    A move between two storages deletes each source file once its copy
-    succeeds, and the source folders left empty.
+    it is the copy or move of the source's family, as its profile's ``fs_type``
+    says: that of `TreeFileSystem` or `FlatFileSystem`, walking or listing the
+    source as they do. Each file goes by ``_cross_fs_cp_file`` or
+    ``_cross_fs_mv_file``, which stream the data unless a subclass overrides
+    them, e.g. with a server-side copy, with ``maxdepth`` too. A source of
+    unknown ``fs_type`` is copied by fsspec's own copy, a file at a time. A
+    move between two storages deletes each source file once its copy succeeds,
+    and the source directories left empty.
 
     Inner filesystems are async, on the router's loop: a sync one raises
     TypeError, and is to be wrapped, e.g. in a `SyncTreeWrapper`. A subclass
@@ -121,8 +120,8 @@ class AsyncRoutingFileSystem(
     own, written as they close. Neither does a copy between two storages,
     which streams through ``open_async``.
 
-    The router has no ``storage_profile``: each storage has its own,
-    `storage_profile_of` tells it. Its only limit is ``transfer_limit``, the
+    The router has no ``storage_profile``: each storage has its own, which
+    its inner filesystem gives. Its only limit is ``transfer_limit``, the
     files copied across storages at once. The inner filesystems keep their
     own limits.
 
@@ -187,7 +186,7 @@ class AsyncRoutingFileSystem(
         """The inner filesystem of a path, and its path there, or None above them all.
 
         ``path`` is the router's, without the protocol. A trailing "/" is kept,
-        as it means a folder to a copy or a glob: the router puts it back on
+        as it means a directory to a copy or a glob: the router puts it back on
         the inner path if ``_route`` drops it. So may glob patterns: where
         the literal part routes, the pattern's must route to the same
         filesystem.
@@ -202,10 +201,10 @@ class AsyncRoutingFileSystem(
 
     @abstractmethod
     async def _roots(self, path: str) -> list[dict[str, Any]]:
-        """List a folder above the storages, as ``_ls`` with ``detail=True`` does.
+        """List a directory above the storages, as ``_ls`` with ``detail=True`` does.
 
         Each entry's name is the router's path. It raises FileNotFoundError
-        for a folder that does not exist.
+        for a directory that does not exist.
         """
 
     # What a subclass may override.
@@ -214,7 +213,7 @@ class AsyncRoutingFileSystem(
         """Describe a path above the storages, as ``_info`` does.
 
         ``path`` is the router's, without the protocol. Here, the root is a
-        bare folder entry, and any other path the entry of its name in
+        bare directory entry, and any other path the entry of its name in
         ``_roots`` of its parent. A subclass knowing more of them, e.g. the
         root's own entry, or one request describing a path, overrides it.
         It raises FileNotFoundError for a path that does not exist.
@@ -300,30 +299,13 @@ class AsyncRoutingFileSystem(
             if callable(close):
                 close()
 
-    def storage_profile_of(self, path: str) -> StorageProfile:
-        """The ``storage_profile`` of the storage of ``path``.
-
-        Parameters
-        ----------
-        path : str
-            A path of the router.
-
-        Returns
-        -------
-        StorageProfile
-            The inner filesystem's, or ``StorageProfile()`` if it has none, or
-            the path is above the storages.
-        """
-        target = self._target(path)
-        return _profile(target[0]) if target else StorageProfile()
-
     # Routing.
 
     def _target(self, path: str) -> tuple[AsyncFileSystem, str] | None:
         """``_route`` of a path given to a method, refusing a sync filesystem.
 
         A trailing "/" of the path is kept on a non-empty inner path, as it
-        means a folder to a copy or a glob: ``_route`` need not keep it.
+        means a directory to a copy or a glob: ``_route`` need not keep it.
         """
         plain = _strip_only_protocol(self, path)
         target = self._route(plain)
@@ -594,7 +576,7 @@ class AsyncRoutingFileSystem(
             return False
 
         if target is None:
-            return False  # Above the storages, all are folders.
+            return False  # Above the storages, all are directories.
 
         fs, inner = target
         return await self._on(fs, inner, path, fs._isfile(inner))
@@ -606,7 +588,7 @@ class AsyncRoutingFileSystem(
         if fs1 is fs2:
             await self._on(fs1, inner1, path1, fs1._cp_file(inner1, inner2, **kwargs))
         elif await self._on(fs1, inner1, path1, fs1._isdir(inner1)):
-            # fsspec's copy gives folders too, which each filesystem makes.
+            # fsspec's copy gives directories too, which each filesystem makes.
             await self._on(fs2, inner2, path2, fs2._makedirs(inner2, exist_ok=True))
         else:
             copy_file = self._across(fs1, fs2)
@@ -869,10 +851,8 @@ class AsyncRoutingFileSystem(
                         **kwargs,
                     ),
                 )
-            elif (
-                recursive
-                and maxdepth is None
-                and (op := self._cross_fs_cp(fs1, sources, fs2, inner2))
+            elif recursive and (
+                op := await self._cross_fs_cp(fs1, sources, fs2, inner2, maxdepth)
             ):
                 errors = await self._transferred(
                     op, fs1, sources, fs2, inner2, outers, path2, callback
@@ -902,7 +882,7 @@ class AsyncRoutingFileSystem(
         """Move, as fsspec's ``mv`` does: within a storage, or between two.
 
         Between two storages, each source file is deleted once copied, and the
-        source folders left empty once all are. A source whose copy failed is
+        source directories left empty once all are. A source whose copy failed is
         kept.
         """
         if path1 == path2:
@@ -946,10 +926,8 @@ class AsyncRoutingFileSystem(
                 await self._on(
                     fs1, sources, outer, fs1._rm(sources, recursive=recursive)
                 )
-            elif (
-                recursive
-                and maxdepth is None
-                and (op := self._cross_fs_mv(fs1, sources, fs2, inner2))
+            elif recursive and (
+                op := await self._cross_fs_mv(fs1, sources, fs2, inner2, maxdepth)
             ):
                 errors = await self._transferred(
                     op,
@@ -971,12 +949,13 @@ class AsyncRoutingFileSystem(
 
         await self._each(await self._grouped(path1), mv, "Moving", clashes)
 
-    def _cross_fs_cp(
+    async def _cross_fs_cp(
         self,
         fs1: AsyncFileSystem,
         path1: str | list[str],
         fs2: AsyncFileSystem,
         path2: str,
+        maxdepth: int | None = None,
     ) -> Operation[tuple[str, str], Any] | None:
         """The recursive copy from ``fs1`` to ``fs2``, by the source's family, or None.
 
@@ -984,43 +963,48 @@ class AsyncRoutingFileSystem(
         fsspec's own copy then runs. Each file goes by ``_cross_fs_cp_file``.
         The operation is returned not yet started.
         """
-        fs_type = _profile(fs1).fs_type
+        get = getattr(fs1, "_get_storage_profile", None)
+        if get is None:
+            return None  # A plain fsspec filesystem: fsspec's own copy.
+        fs_type = (await get()).fs_type
         if fs_type is None:
             return None
 
         # A family's strategies are imported only when used, so that a copy may
         # leave out the other family.
-        destination = self._destination(fs1, fs2)
         if fs_type == "tree":
-            from .tree.cp import tree_cp  # noqa: PLC0415
+            from .tree.cp import _tree_cp  # noqa: PLC0415
 
-            return tree_cp(
+            return _tree_cp(
+                fs1,
+                fs2,
                 path1,
                 path2,
-                ils=fs1._ils,
                 cp_file=self._across(fs1, fs2),
-                dst_rm_file=fs2._rm_file,
-                **destination,
+                same_storage=False,
+                maxdepth=maxdepth,
             )
         if fs_type == "flat":
-            from .flat.cp import flat_cp  # noqa: PLC0415
+            from .flat.cp import _flat_cp  # noqa: PLC0415
 
-            return flat_cp(
+            return _flat_cp(
+                fs1,
+                fs2,
                 path1,
                 path2,
-                iexpand=fs1._iexpand,  # type: ignore[attr-defined]
                 cp_file=self._across(fs1, fs2),
-                dst_rm_file=fs2._rm_file,
-                **destination,
+                same_storage=False,
+                maxdepth=maxdepth,
             )
         return None
 
-    def _cross_fs_mv(
+    async def _cross_fs_mv(
         self,
         fs1: AsyncFileSystem,
         path1: str | list[str],
         fs2: AsyncFileSystem,
         path2: str,
+        maxdepth: int | None = None,
     ) -> Operation[tuple[str, str], Any] | None:
         """The recursive move from ``fs1`` to ``fs2``, by the source's family, or None.
 
@@ -1028,60 +1012,46 @@ class AsyncRoutingFileSystem(
         copies each key by ``_cross_fs_cp_file`` instead, and deletes the keys
         copied in batches, by its ``_rm_files``.
         """
-        fs_type = _profile(fs1).fs_type
+        get = getattr(fs1, "_get_storage_profile", None)
+        if get is None:
+            return None  # A plain fsspec filesystem: fsspec's own copy.
+        fs_type = (await get()).fs_type
         if fs_type is None:
             return None
 
         # A family's strategies are imported only when used, so that a copy may
         # leave out the other family.
-        destination = self._destination(fs1, fs2)
         if fs_type == "tree":
-            from .tree.mv import tree_mv  # noqa: PLC0415
+            from .tree.mv import _tree_mv  # noqa: PLC0415
 
-            return tree_mv(
+            return _tree_mv(
+                fs1,
+                fs2,
                 path1,
                 path2,
-                ils=fs1._ils,
                 mv_file=self._across(fs1, fs2, move=True),
-                rm_folder=fs1._rmdir,
-                **destination,
+                same_storage=False,
+                maxdepth=maxdepth,
             )
         if fs_type == "flat":
-            from .flat.mv import flat_mv  # noqa: PLC0415
+            from .flat.mv import _flat_mv  # noqa: PLC0415
 
-            return flat_mv(
+            # By copies, the keys copied deleted in batches by the source's
+            # _rm_files: two storages never rename.
+            return _flat_mv(
+                fs1,
+                fs2,
                 path1,
                 path2,
-                iexpand=fs1._iexpand,  # type: ignore[attr-defined]
                 cp_file=self._across(fs1, fs2),
-                rm_files=fs1._rm_files,  # type: ignore[attr-defined]
-                batch_size=fs1.rm_batch_size,  # type: ignore[attr-defined]
-                dst_rm_file=fs2._rm_file,
-                **destination,
+                same_storage=False,
+                maxdepth=maxdepth,
             )
         return None
 
-    def _destination(
-        self, fs1: AsyncFileSystem, fs2: AsyncFileSystem
-    ) -> dict[str, Any]:
-        """What a copy or move from ``fs1`` to ``fs2`` takes of both, but the listing.
-
-        Each file holds a permit of ``transfer_limit``, so the strategy's
-        ``concurrency_limit`` is the source's own: the same semaphore would
-        deadlock.
-        """
-        return {
-            "info": fs1._info,
-            "dst_info": fs2._info,
-            "dst_makedirs": fs2._makedirs,
-            "same_storage": False,
-            "profile": _profile(fs2),
-            "concurrency_limit": fs1.operation_limit,  # type: ignore[attr-defined]
-        }
-
     def _across(
         self, fs1: AsyncFileSystem, fs2: AsyncFileSystem, *, move: bool = False
-    ) -> _Request:
+    ) -> _Transfer:
         """A file's copy, or move, from ``fs1`` to ``fs2``, under ``transfer_limit``."""
         hook = self._cross_fs_mv_file if move else self._cross_fs_cp_file
 
@@ -1137,7 +1107,7 @@ def _put_file(
 ) -> None:
     """fsspec's ``put_file`` through ``open``, without its ``makedirs``.
 
-    A storage needs no folder for the files put in it, and fsspec's sync
+    A storage needs no directory for the files put in it, and fsspec's sync
     ``makedirs`` cannot run from a thread of an async router.
     """
     if os.path.isdir(lpath):
@@ -1149,9 +1119,3 @@ def _put_file(
             while chunk := local.read(fs.blocksize):
                 f.write(chunk)
                 callback.relative_update(len(chunk))
-
-
-def _profile(fs: Any) -> StorageProfile:
-    """A filesystem's `storage_profile`, or `StorageProfile()` if it has none."""
-    profile = getattr(fs, "storage_profile", None)
-    return profile if isinstance(profile, StorageProfile) else StorageProfile()

@@ -10,15 +10,14 @@ How to get the library's features, and how to use them. See the
 The strategies walk, find, glob, measure, delete, copy and move file trees. They come in two families, by a
 storage's namespace:
 
-- the `tree` family, in `tree/`, for storages with a hierarchical namespace, a tree of folders, such as Azure Data
+- the `tree` family, in `tree/`, for storages with a hierarchical namespace, a tree of directories, such as Azure Data
   Lake Storage Gen2, SFTP or HDFS;
-- the `flat` family, in `flat/`, for storages with a flat namespace, keys whose folders are only prefixes, such as
+- the `flat` family, in `flat/`, for storages with a flat namespace, keys whose directories are only prefixes, such as
   S3.
 
-Each family has the same strategies, named after it, e.g. `tree_rm` and `flat_rm`. They come in three forms:
+Each family replaces fsspec's recursive methods, such as `find`, `rm` and `copy`, with its strategies. They come in
+two forms:
 
-- **Functions**, such as `tree_rm` or `flat_find`, for built-in, specific strategies: you call one with the storage's
-  operations it uses.
 - **Abstract filesystem classes**, `TreeFileSystem` and `FlatFileSystem`, for a new filesystem implementation: you
   implement the storage's primitives, and the recursive methods are the strategies.
 - **Wrappers**, in `wrapper.py`, for existing filesystem implementations: they give a filesystem the strategies
@@ -65,19 +64,19 @@ import each other relatively, so a copy works under any name. Keep their license
 
 It is also on PyPI, as `fsspec-alt-strategies-impl`, to try it before copying.
 
-Its command line copies it, with its `cli` extra. Run it from your project, with the folder to copy into:
+Its command line copies it, with its `cli` extra. Run it from your project, with the directory to copy into:
 
 ```bash
 uv run --with "fsspec-alt-strategies-impl[cli]" fsspec-alt-strategies-impl copy src/mypkg/_contrib/strategy
 ```
 
-It copies the package as installed. It replaces a previous copy, and refuses any other folder that is not empty. Delete the modules you do not use afterwards.
+It copies the package as installed. It replaces a previous copy, and refuses any other directory that is not empty.
+Delete the modules you do not use afterwards.
 
 ### The modules to copy for each feature
 
 | Feature                         | Modules to copy                                                            |
 |---------------------------------|----------------------------------------------------------------------------|
-| A family's functions            | `tree/` or `flat/`, and `common/`                                          |
 | A family's abstract class       | `tree/` or `flat/`, and `common/`; `files/` for its file objects, if used  |
 | Wrappers and `monitored()`      | `wrapper.py`, `monitor.py`, `__init__.py`, `tree/`, `flat/`, `common/` and `files/` |
 | Monitor                         | Nothing: it is in the interface package                                    |
@@ -90,22 +89,6 @@ wrappers.
 ## Usage
 
 ### File tree operation strategies
-
-#### Functions
-
-A strategy is a plain function, taking the storage's operations it uses:
-
-```python
-import asyncio
-from fsspec_alt_strategies_impl.tree.find import tree_find
-
-find = tree_find("data", ils=fs._ils, info=fs._info, concurrency_limit=asyncio.Semaphore(32))
-async with find as op:
-    async for entry in op:
-        if isinstance(entry, Exception):
-            print("failed:", entry)
-print(op.state.found)
-```
 
 #### Abstract filesystem classes
 
@@ -121,13 +104,18 @@ class MyFileSystem(TreeFileSystem):
     protocol = "my"
     storage_profile = StorageProfile()  # Nothing known: right on any storage.
 
-    async def _ils(self, path, **kwargs): ...  # A folder's entries, as they come.
+    async def _ils(self, path, **kwargs): ...  # A directory's entries, as they come.
     async def _info(self, path, **kwargs): ...
     # ... and the other primitives each class declares abstract.
 
 
 fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
 ```
+
+A filesystem has one profile, which never changes. Where a request finds it, e.g. whether an account has a hierarchical
+namespace, override `async def _load_storage_profile(self)` instead: it is awaited once, and the profile kept. A storage
+whose behaviour differs by path, e.g. per bucket, is several filesystems under a router. A method of fsspec's own can
+come back, e.g. `_rm = AsyncFileSystem._rm`, and a storage's own operation can override a method.
 
 #### Wrappers
 
@@ -138,13 +126,19 @@ import fsspec
 from fsspec_alt_strategies_impl import monitored
 
 fs = monitored(fsspec.filesystem("file"))
-fs.rm("data/2024", recursive=True)  # Runs tree_rm.
+fs.rm("data/2024", recursive=True)  # Deletes by the tree family's strategy.
 ```
 
 The known filesystems are those in `known_implementations`, by class: the local filesystem, s3fs, gcsfs, adlfs,
-fsspec's memory, SFTP and HDFS filesystems. Each entry says its family, whether it is async, its concurrency limits
-and its profile. Pass your own table to `monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem the way
-right on every storage: as a tree, one request at a time, with nothing known of the storage.
+fsspec's memory, SFTP and HDFS filesystems. Each entry says its profile, whose `fs_type` is its family, and its
+concurrency limits. The wrapper is async if the filesystem is. Pass your own table to `monitored()`, or
+`wrap_unknown_fs=True` to wrap any other filesystem the way right on every storage. That is as a tree, one request at a
+time, with nothing known of the storage.
+
+A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper,
+overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_file`
+renaming a directory, or `_rm_tree` deleting one whole. The strategies then use them where the profile says so,
+streamed and monitored. Use such a wrapper directly: `monitored()` knows only the generic ones.
 
 A wrapper is light and not cached: make one when you need it, and drop it after.
 
@@ -152,9 +146,9 @@ A wrapper is light and not cached: make one when you need it, and drop it after.
 
 None of these is right for every storage, and the library never picks one for you.
 
-- **The family** follows the storage's namespace. A hierarchical namespace, a tree of folders, suits `tree`. A flat
-  namespace, keys whose folders are only prefixes, suits `flat`. An exception is a filesystem listing a flat namespace
-  one folder per request, such as adlfs on Azure Blob Storage: it suits `tree`.
+- **The family** follows the storage's namespace. A hierarchical namespace, a tree of directories, suits `tree`. A flat
+  namespace, keys whose directories are only prefixes, suits `flat`. An exception is a filesystem listing a flat namespace
+  one directory per request, such as adlfs on Azure Blob Storage: it suits `tree`.
 - **The profile** only saves requests, or data copied. A field left unknown is right on any storage. A field declared
   wrongly gives wrong results: declare only what you know.
 - **The concurrency limits** are yours to set. A filesystem unsafe to call from several threads, such as SFTP, needs
@@ -163,7 +157,7 @@ None of these is right for every storage, and the library never picks one for yo
 #### Costs to know
 
 - A flat wrapper lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix. That listing
-  is held in memory, and covers the prefix's whole folder. A subclass overriding `_iexpand` with the storage's own listing
+  is held in memory, and covers the prefix's whole directory. A subclass overriding `_iexpand` with the storage's own listing
   by prefix streams it instead.
 - `known_implementations` is shared by every copy in a project. Change it with care, or pass your own table.
 
@@ -185,7 +179,8 @@ print(fs.stats.calls)  # Counter({'delete': 1})
 
 ### Monitor
 
-A `Monitor` sees each operation behind fsspec's methods, on a filesystem running the strategies:
+A `Monitor` sees each operation behind fsspec's methods, on a filesystem running the strategies. It is given the
+operation's `OperationHandler`, to stop it:
 
 ```python
 from fsspec_alt_strategies import Monitor, monitoring
@@ -228,6 +223,15 @@ A subclass of an adaptive file implements the storage's requests, and leaves the
 - `AdaptiveWritableFile` implements `_upload_all`, for a small file, and the multipart upload's requests:
   `_start_multipart_upload`, `_upload_part`, `_complete_multipart_upload` and `_abort_multipart_upload`.
 
+An `AdaptiveWritableFile` opened with mode "xb" creates the file only if none is at the path. Its `exclusive` is then
+True, and the subclass checks it by the storage's conditional write where there is one.
+
+The file decides which requests to send, and when. Whether a write is atomic is the storage's:
+
+- where an upload is invisible until completed, as on S3, Google Cloud Storage or Azure, a file is written whole, or not
+  at all;
+- where a file is visible while it is written, as on DBFS, a failed write may leave part of it.
+
 #### Async file support
 
 A filesystem's `open_async` returns its own files through `AsyncFileAdapter`. It returns a sync file, such as an
@@ -254,7 +258,8 @@ strategy of file-level transactions. The package provides these:
 - `LocalBufferTransaction` writes to a local buffer, written to the file on commit. Other clients see nothing until
   then, but the file's bytes are held locally.
 - `AdaptiveWritableTransaction` holds back an adaptive file's last request, which makes it visible, until commit. It
-  costs nothing more than writing without a transaction.
+  costs nothing more than writing without a transaction, but needs a storage where an upload is invisible until
+  completed.
 
 A storage with a way of its own, such as a staged upload, subclasses `FileTransaction`.
 
@@ -286,7 +291,7 @@ with fs.transaction:
 
 - `_route(path)` gives the inner filesystem and its path, or None for a path above every storage;
 - `_outer(fs, path)` gives the router's path of an inner one;
-- `_roots(path)` lists a folder above the storages.
+- `_roots(path)` lists a directory above the storages.
 
 `transfer_concurrency` bounds the copies and moves between storages at a time. Override `_cross_fs_cp_file` or
 `_cross_fs_mv_file` for a storage with a faster way, such as a server-side copy.

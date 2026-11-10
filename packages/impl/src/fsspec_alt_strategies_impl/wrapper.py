@@ -19,12 +19,12 @@ chooses the wrapper: none is chosen for a filesystem.
 
 fsspec has no listing by prefix, which the flat strategies list with. A flat
 wrapper's ``_iexpand`` lists with the wrapped filesystem's ``find`` of the
-prefix's folder, which object stores answer in one paginated listing. That
+prefix's directory, which object stores answer in one paginated listing. That
 costs twice:
 
 - ``find`` returns the whole listing at once, so the strategies start only
   once all of it has arrived, and it is held in memory, not streamed.
-- It lists the prefix's whole folder: for "data/2024-", all of "data/", the
+- It lists the prefix's whole directory: for "data/2024-", all of "data/", the
   keys not starting with the prefix then left out.
 
 A subclass overriding ``_iexpand`` with the storage's own listing by prefix,
@@ -265,11 +265,13 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
 
     Its primitives, such as ``_ils``, ``_rm_file`` and ``_mv_file``, are the
     wrapped filesystem's, awaited on its loop. So are its data methods, such
-    as ``_cat_file``, and its files. So is ``_rm_tree``, a recursive delete,
-    when the wrapped one has it, e.g. as a `TreeFileSystem`. The wrapper runs
+    as ``_cat_file``, and its files. So is ``_rm_tree``, a recursive delete:
+    the wrapped one's ``_rm_tree``, e.g. as a `TreeFileSystem`, or else its
+    recursive ``_rm``. It is used where the profile's ``deletes_directories=True``
+    says it is one request. The wrapper runs
     on the same loop, sync or not as the wrapped one is.
 
-    It wins on storages listing one folder per request, as `TreeFileSystem`
+    It wins on storages listing one directory per request, as `TreeFileSystem`
     does. It is not cached: each is new, and may be dropped once used.
 
     Parameters
@@ -321,10 +323,13 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
             **kwargs,
         )
 
-        # Optional, as on a TreeFileSystem: left None, rm walks every folder.
-        rm_tree = getattr(fs, "_rm_tree", None)
+    async def _rm_tree(self, path: str) -> None:
+        # The wrapped one's own recursive delete, as deletes_directories declares.
+        rm_tree = getattr(self.fs, "_rm_tree", None)
         if rm_tree is not None:
-            self._rm_tree = rm_tree
+            await rm_tree(path)
+        else:
+            await self.fs._rm(path, recursive=True)
 
 
 class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
@@ -332,11 +337,13 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
 
     Its primitives, such as ``_ils``, ``_rm_file`` and ``_mv_file``, call the
     wrapped filesystem's, each in a thread, so that several run at once. Its
-    ``_mv_file`` is the wrapped one's ``mv``, e.g. a local rename. Its data
-    methods call the wrapped one's too, and its files are the wrapped one's,
-    awaited through a `SyncFileAdapter`.
+    ``_mv_file`` is the wrapped one's ``mv``, e.g. a local rename, and its
+    ``_rm_tree`` its recursive ``rm``, used where the profile's
+    ``deletes_directories=True`` says it is one request. Its data methods call the
+    wrapped one's too, and its files are the wrapped one's, awaited through a
+    `SyncFileAdapter`.
 
-    It wins on storages listing one folder per request, such as a local disk
+    It wins on storages listing one directory per request, such as a local disk
     or SFTP, as `TreeFileSystem` does. A filesystem unsafe to call from several
     threads needs both concurrencies at 1. It is not cached: each is new, and
     may be dropped once used.
@@ -367,7 +374,7 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
     ...     local,
     ...     operation_concurrency=8,
     ...     io_concurrency=4,
-    ...     storage_profile=StorageProfile(renames_folders=True),
+    ...     storage_profile=StorageProfile(renames_directories=True),
     ... )
     >>> tree.mv("data/2024", "archive/2024", recursive=True)
     """
@@ -390,6 +397,10 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
             **kwargs,
         )
 
+    async def _rm_tree(self, path: str) -> None:
+        # The wrapped one's own recursive delete, as deletes_directories declares.
+        await self._run_in_thread(self.fs.rm, path, recursive=True)
+
 
 class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
     """An async filesystem, as a `FlatFileSystem`: its recursive methods the flat strategies.
@@ -399,7 +410,7 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
     as ``_cat_file``, and its files. The wrapper runs on the same loop, sync or
     not as the wrapped one is.
 
-    Its ``_iexpand`` lists with the wrapped one's ``_find`` of the prefix's folder,
+    Its ``_iexpand`` lists with the wrapped one's ``_find`` of the prefix's directory,
     and its ``_rm_files`` deletes with its ``_rm``, as s3fs deletes a batch in
     one request. It wins on object stores, as `FlatFileSystem` does. It is not
     cached: each is new, and may be dropped once used.
@@ -491,7 +502,7 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
     wrapped one's too, and its files are the wrapped one's, awaited through a
     `SyncFileAdapter`.
 
-    Its ``_iexpand`` lists with the wrapped one's ``find`` of the prefix's folder,
+    Its ``_iexpand`` lists with the wrapped one's ``find`` of the prefix's directory,
     and its ``_rm_files`` deletes with its ``rm``. A filesystem unsafe to call
     from several threads needs both concurrencies at 1. It is not cached: each
     is new, and may be dropped once used.

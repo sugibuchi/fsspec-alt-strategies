@@ -1,4 +1,4 @@
-"""Tests of `tree_cp` between two storages, copying a tree between two storages."""
+"""Tests of `_tree_cp` between two storages, copying a tree between two storages."""
 
 from __future__ import annotations
 
@@ -9,9 +9,10 @@ import pytest
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.states import CpState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.cp import CpState, tree_cp
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl.tree.cp import _tree_cp
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 
 class _Reader:
@@ -83,21 +84,27 @@ def _across(
     path2: str,
     **kwargs: Any,
 ) -> Any:
-    """`tree_cp` between two filesystems, streaming each file."""
+    """`_tree_cp` between two filesystems, streaming each file."""
     operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "profile": StorageProfile(),
-        "ils": folder_ils(src),
-        "info": src._info,
         "cp_file": streaming_copy(
             _opener(src, _Reader), _opener(dst, _Writer), block_size=4
         ),
-        "dst_info": dst._info,
-        "dst_makedirs": dst._makedirs,
-        "dst_rm_file": dst._rm_file,
         "same_storage": False,
     }
-    return tree_cp(path1, path2, **{**operations, **kwargs})
+    # The limit is the source's, and the profile the destination's.
+    source = TreeView(
+        src,
+        **(
+            {"operation_limit": kwargs.pop("concurrency_limit")}
+            if "concurrency_limit" in kwargs
+            else {}
+        ),
+    )
+    destination = TreeView(
+        dst,
+        **({"storage_profile": kwargs.pop("profile")} if "profile" in kwargs else {}),
+    )
+    return _tree_cp(source, destination, path1, path2, **{**operations, **kwargs})
 
 
 _FILES = [
@@ -117,10 +124,10 @@ def _tree(fs: SimulatedFileSystem, prefix: str = "") -> None:
     ("path1", "path2", "dst_dirs"),
     [
         ("data", "copied", []),  # Onto a new path.
-        ("data", "archive", ["archive"]),  # Into an existing folder.
-        ("data", "new/", []),  # Into a folder, by its trailing "/".
-        ("data/", "archive", ["archive"]),  # Its contents onto a folder.
-        ("data/README.md", "archive", ["archive"]),  # A file, into a folder.
+        ("data", "archive", ["archive"]),  # Into an existing directory.
+        ("data", "new/", []),  # Into a directory, by its trailing "/".
+        ("data/", "archive", ["archive"]),  # Its contents onto a directory.
+        ("data/README.md", "archive", ["archive"]),  # A file, into a directory.
         ("data", "data", []),  # The same path, on another storage.
     ],
 )
@@ -129,8 +136,8 @@ async def test_places_as_fsspec(
 ) -> None:
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     _tree(any_fs, "bucket/")
-    for folder in dst_dirs:
-        dst.add_dir(f"bucket/{folder}")
+    for directory in dst_dirs:
+        dst.add_dir(f"bucket/{directory}")
     path1, path2 = f"bucket/{path1}", f"bucket/{path2}"
     root = path1.rstrip("/")
     files = sorted(p for p in any_fs._file_data if p.startswith(root + "/"))
@@ -182,12 +189,12 @@ async def test_requests_on_each_side(hierarchical_fs: SimulatedFileSystem) -> No
     assert dst.stats.calls == {"info": 1, "mkdir": 5, "write": 4}
 
 
-async def test_a_flat_destination_needs_no_folders(
+async def test_a_flat_destination_needs_no_dirs(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     dst = SimulatedFileSystem(asynchronous=True)
     _tree(hierarchical_fs)
-    profile = StorageProfile(implicit_folders=True)
+    profile = StorageProfile(implicit_directories=True)
     _, errors = await _collect_with_errors(
         _across(hierarchical_fs, dst, "data", "copied/", profile=profile)
     )
@@ -246,7 +253,7 @@ async def test_cancel_yields_the_copies_sent() -> None:
     dst = SimulatedFileSystem(asynchronous=True)
     for i in range(10):
         src.add_file(f"root/file-{i}", b"x")
-    profile = StorageProfile(implicit_folders=True)
+    profile = StorageProfile(implicit_directories=True)
     op = _across(
         src,
         dst,

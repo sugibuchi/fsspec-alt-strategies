@@ -445,6 +445,52 @@ class _Writer(AdaptiveWritableFile):
         self.requests.append("abort")
 
 
+class _Exclusive(_Writer):
+    """A storage's conditional write: with exclusive, only where no file is."""
+
+    async def _refuse_if_there(self) -> None:
+        if self.exclusive and await self.fs._exists(self.path):
+            raise FileExistsError(self.path)
+
+    async def _upload_all(self, data: bytes) -> None:
+        await self._refuse_if_there()
+        await super()._upload_all(data)
+
+    async def _complete_multipart_upload(self, parts: list[Any]) -> None:
+        await self._refuse_if_there()
+        await super()._complete_multipart_upload(parts)
+
+
+@pytest.mark.parametrize("size", [1 * _KiB, 40 * _KiB])
+async def test_xb_creates_a_file_only_where_none_is(
+    flat_fs: SimulatedFileSystem, size: int
+) -> None:
+    data = os.urandom(size)
+    async with _Exclusive(flat_fs, "new.bin", mode="xb") as f:
+        assert (f.mode, f.exclusive) == ("xb", True)
+        await f._write(data)
+    assert await flat_fs._cat_file("new.bin") == data
+
+    flat_fs.add_file("old.bin", b"old")
+    f = _Exclusive(flat_fs, "old.bin", mode="xb")
+    await f._write(data)
+    with pytest.raises(FileExistsError):
+        await f.aclose()
+    # The file there is kept, and a multipart upload aborted.
+    assert await flat_fs._cat_file("old.bin") == b"old"
+    assert ("abort" in f.requests) == (size > 8 * _KiB)
+
+
+async def test_a_writable_file_takes_only_wb_or_xb(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    f = _Writer(flat_fs, "f.bin")
+    assert (f.mode, f.exclusive) == ("wb", False)
+    await f.aclose()
+    with pytest.raises(ValueError, match="mode"):
+        _Writer(flat_fs, "f.bin", mode="ab")
+
+
 async def test_sequential_may_be_chosen_when_the_upload_starts(
     flat_fs: SimulatedFileSystem,
 ) -> None:

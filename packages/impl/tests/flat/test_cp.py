@@ -1,4 +1,4 @@
-"""Tests of `flat_cp`, placing paths as fsspec's ``copy`` does."""
+"""Tests of `_flat_cp`, placing paths as fsspec's ``copy`` does."""
 
 from __future__ import annotations
 
@@ -10,32 +10,62 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.utils import other_paths
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.states import CpState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.cp import CpState, flat_cp
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.flat.cp import _flat_cp
+from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
-# A flat storage's: its folders are implicit, and none is made.
-_FLAT = StorageProfile(implicit_folders=True)
+# A flat storage's: its directories are implicit, and none is made.
+_FLAT = StorageProfile(implicit_directories=True)
 
 
 async def _nothing(*args: Any, **kwargs: Any) -> None:
     pass
 
 
-def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
-    """`flat_cp` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "iexpand": fs._iexpand,
-        "info": fs._info,
-        "cp_file": fs._cp_file,
-        "dst_info": fs._info,
-        "dst_makedirs": fs._makedirs,
-        "dst_rm_file": fs._rm_file,
-        "same_storage": True,
-        "profile": _FLAT,
+_SOURCE = {"iexpand", "info", "rm_files", "mv_file"}
+"""The keyword arguments that replace a primitive of the source."""
+
+_DESTINATION = {
+    "dst_info": "info",
+    "dst_makedirs": "makedirs",
+    "dst_rm_file": "rm_file",
+}
+"""The keyword arguments that replace a primitive of the destination, by its name."""
+
+
+def _views(fs: Any, kwargs: dict[str, Any]) -> tuple[FlatView, FlatView]:
+    """The source and the destination, both ``fs``, with the primitives ``kwargs`` replace.
+
+    The destination is the source unless a primitive of its own is replaced.
+    The limit and the batch size are the source's, and the profile the
+    destination's.
+    """
+    source = {k: kwargs.pop(k) for k in _SOURCE & kwargs.keys()}
+    if "concurrency_limit" in kwargs:
+        source["operation_limit"] = kwargs.pop("concurrency_limit")
+    if "batch_size" in kwargs:
+        source["rm_batch_size"] = kwargs.pop("batch_size")
+    profile = {}
+    if "profile" in kwargs:
+        profile["storage_profile"] = kwargs.pop("profile")
+
+    replaced = {
+        _DESTINATION[k]: kwargs.pop(k) for k in _DESTINATION.keys() & kwargs.keys()
     }
-    return flat_cp(path1, path2, **{**operations, **kwargs})
+    if not replaced:
+        view = FlatView(fs, **source, **profile)
+        return view, view
+    return FlatView(fs, **source), FlatView(fs, **replaced, **profile)
+
+
+def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
+    """`_flat_cp` within ``fs``, whose primitives ``kwargs`` may replace."""
+    kwargs = {"profile": _FLAT, **kwargs}
+    source, destination = _views(fs, kwargs)
+    return _flat_cp(
+        source, destination, path1, path2, **{"same_storage": True, **kwargs}
+    )
 
 
 _FILES = [
@@ -56,11 +86,11 @@ def _tree(fs: SimulatedFileSystem, prefix: str = "") -> None:
     ("path1", "path2"),
     [
         ("data", "copied"),  # Onto a new path.
-        ("data", "archive"),  # Into an existing folder.
-        ("data", "new/"),  # Into a folder, by its trailing "/".
-        ("data/", "archive"),  # Its contents onto an existing folder.
+        ("data", "archive"),  # Into an existing directory.
+        ("data", "new/"),  # Into a directory, by its trailing "/".
+        ("data/", "archive"),  # Its contents onto an existing directory.
         ("data/README.md", "copied.md"),  # A file, onto a new path.
-        ("data/README.md", "archive"),  # A file, into a folder.
+        ("data/README.md", "archive"),  # A file, into a directory.
     ],
 )
 async def test_places_as_fsspec(
@@ -73,7 +103,7 @@ async def test_places_as_fsspec(
     root = path1.rstrip("/")
     files = sorted(p for p in flat_fs._file_data if p.startswith(root + "/"))
     paths = [root, *files] if files else [root]
-    dest_is_dir = path2.endswith("/") or path2.rstrip("/") in flat_fs._folders
+    dest_is_dir = path2.endswith("/") or path2.rstrip("/") in flat_fs._dirs
     exists = dest_is_dir and not path1.endswith("/")
     expected = dict(zip(paths, other_paths(paths, path2, exists=exists), strict=True))
     data = {p: flat_fs._file_data[p].data for p in paths if p in flat_fs._file_data}
@@ -89,11 +119,11 @@ async def test_places_as_fsspec(
 @pytest.mark.parametrize(
     ("pattern", "path2"),
     [
-        ("data/*/01", "copied"),  # Folders, relative to their common prefix.
+        ("data/*/01", "copied"),  # Directories, relative to their common prefix.
         ("data/20*", "copied"),
         ("data/**/*.parquet", "copied"),  # Files only.
         ("data/*.md", "archive"),  # A single file goes into the destination.
-        ("data/2024/*", "copied/"),  # A single folder goes onto it.
+        ("data/2024/*", "copied/"),  # A single directory goes onto it.
     ],
 )
 async def test_a_pattern_places_as_fsspec(
@@ -111,7 +141,7 @@ async def test_a_pattern_places_as_fsspec(
     assert sorted(copied) == sorted((p, expected[p]) for p in files)
 
 
-async def test_a_list_keeps_the_trees_of_its_folders(
+async def test_a_list_keeps_the_trees_of_its_dirs(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)
@@ -162,18 +192,20 @@ async def test_markers_are_not_copied() -> None:
     async def cp_file(source: str, destination: str) -> None:
         copied.append((source, destination))
 
-    op = flat_cp(
-        "data",
-        "copied",
-        iexpand=iexpand,
-        info=info,
-        cp_file=cp_file,
-        dst_info=info,
-        dst_makedirs=_nothing,
-        dst_rm_file=_nothing,
-        same_storage=True,
-        profile=_FLAT,
-        concurrency_limit=asyncio.Semaphore(4),
+    source, destination = _views(
+        None,
+        {
+            "iexpand": iexpand,
+            "info": info,
+            "dst_info": info,
+            "dst_makedirs": _nothing,
+            "dst_rm_file": _nothing,
+            "profile": _FLAT,
+            "concurrency_limit": asyncio.Semaphore(4),
+        },
+    )
+    op = _flat_cp(
+        source, destination, "data", "copied", cp_file=cp_file, same_storage=True
     )
     assert await _collect_with_errors(op) == ([("data/a.txt", "copied/a.txt")], [])
     assert copied == [("data/a.txt", "copied/a.txt")]
@@ -229,3 +261,22 @@ async def test_maxdepth_requests(flat_fs: SimulatedFileSystem) -> None:
 async def test_maxdepth_below_1_is_refused(flat_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="maxdepth"):
         _cp(flat_fs, "data", "copied", maxdepth=0)
+
+
+async def test_a_list_yields_a_name_taken_when_the_rest_is_in_place(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    flat_fs.add_file("a/x", b"a")
+    flat_fs.add_file("b/x", b"b")
+    copied, errors = await _collect_with_errors(_cp(flat_fs, ["a/x", "b/x"], "a"))
+    assert copied == []
+    assert [type(e) for e in errors] == [FileExistsError]
+    assert flat_fs._file_data["a/x"].data == b"a"
+
+
+def test_a_copy_between_two_storages_needs_cp_file(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    other = SimulatedFileSystem(asynchronous=True)
+    with pytest.raises(ValueError, match="cp_file"):
+        _flat_cp(FlatView(flat_fs), FlatView(other), "data", "copied")

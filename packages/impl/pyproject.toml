@@ -65,7 +65,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 source = "vcs"
-# The git repository is the workspace's, two folders up.
+# The git repository is the workspace's, two directories up.
 raw-options = { root = "../..", version_scheme = "post-release" }
 
 # The version is written into the package, not read from the installed

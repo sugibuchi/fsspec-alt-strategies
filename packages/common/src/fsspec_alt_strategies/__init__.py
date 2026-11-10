@@ -14,6 +14,8 @@ once, so that every copy in a project, of any version, shares one interface.
 
 Its monitors are one context variable for the whole project: a `monitoring`
 block watches the calls of every copy.
+
+This module depends on `monitor`, `profile`, `states` and `wrapper`.
 """
 
 from __future__ import annotations

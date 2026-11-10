@@ -141,7 +141,7 @@ def inner() -> SimulatedFileSystem:
     fs = SimulatedFileSystem(asynchronous=True)
     for path in _FILES:
         fs.add_file(path, b"x" * 10)
-    fs.add_file("database.csv")  # Shares the text "data", not the folder.
+    fs.add_file("database.csv")  # Shares the text "data", not the directory.
     return fs
 
 
@@ -198,7 +198,7 @@ async def test_walk_lists_once(inner: SimulatedFileSystem) -> None:
     fs = _Flat(inner, asynchronous=True)
     inner.reset_stats()
     assert len([t async for t in fs._walk("data")]) == 1 + 6
-    assert inner.stats.calls == {"list": 1}  # fsspec's lists each of the 7 folders.
+    assert inner.stats.calls == {"list": 1}  # fsspec's lists each of the 7 directories.
 
 
 async def test_recursive_rm_copy_and_mv(fs: _Flat, inner: SimulatedFileSystem) -> None:
@@ -272,7 +272,7 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
         await fs._rm("data", recursive=True, callback=callback)
     assert monitor.calls == ["walk", "rm"]
     assert callback.value == len(_FILES)
-    # The walk's folders, then the files deleted.
+    # The walk's directories, then the files deleted.
     assert monitor.items == 7 + len(_FILES)
 
 

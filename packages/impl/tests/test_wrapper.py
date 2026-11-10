@@ -46,14 +46,14 @@ def test_every_primitive_is_passed_on(wrapper: type) -> None:
     assert (declared - _FAMILYS_OWN) | _ROUTED <= passed_on
 
 
-async def test_an_async_filesystem_makes_a_folder() -> None:
+async def test_an_async_filesystem_makes_a_dir() -> None:
     inner = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     tree = AsyncTreeWrapper(inner, **_LIMITS)
     await tree._mkdir("a/b")
     assert await inner._isdir("a/b")
 
 
-async def test_a_sync_filesystem_makes_a_folder_and_dates_a_file(
+async def test_a_sync_filesystem_makes_a_dir_and_dates_a_file(
     tmp_path: Path,
 ) -> None:
     local = LocalFileSystem()

@@ -1,4 +1,4 @@
-"""Tests of `tree_glob`, checked against fsspec's own ``_glob``."""
+"""Tests of `_tree_glob`, checked against fsspec's own ``_glob``."""
 
 from __future__ import annotations
 
@@ -8,20 +8,30 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.states import GlobState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.common.patterns import _Prefix
-from fsspec_alt_strategies_impl.tree.glob import GlobState, tree_glob
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl.tree.glob import _tree_glob
+from fsspec_alt_strategies_impl_testing import (
+    SimulatedFileSystem,
+    TreeView,
+)
+
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_dir", "rm_tree", "cp_file", "mv_file"}
+"""The keyword arguments that replace a primitive of the filesystem."""
+
+_SETTINGS = {"profile": "storage_profile", "concurrency_limit": "operation_limit"}
+"""The keyword arguments that set the filesystem's profile and limit, by its attribute."""
 
 
 def _glob(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`tree_glob` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "ils": folder_ils(fs),
-        "info": fs._info,
-    }
-    return tree_glob(path, **{**operations, **kwargs})
+    """`_tree_glob` on a filesystem's own primitives, which ``kwargs`` may replace."""
+    view = TreeView(
+        fs,
+        **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()},
+        **{_SETTINGS[k]: kwargs.pop(k) for k in _SETTINGS.keys() & kwargs.keys()},
+    )
+    return _tree_glob(view, path, **kwargs)
 
 
 async def _sorted_glob(
@@ -76,7 +86,7 @@ async def test_answers_as_fsspec(
     assert entries == list(expected.values())
 
 
-async def test_prunes_folders_the_pattern_cannot_match_in(
+async def test_prunes_dirs_the_pattern_cannot_match_in(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
@@ -84,7 +94,7 @@ async def test_prunes_folders_the_pattern_cannot_match_in(
     entries, _ = await _collect_with_errors(op)
     assert len(entries) == 6
     assert op.state == GlobState(
-        current=op.state.current, folders_listed=1 + 3 + 3 + 6, matched=6
+        current=op.state.current, directories_listed=1 + 3 + 3 + 6, matched=6
     )
     # data, the 3 tables, their 2024s: the 2023s are pruned.
     assert hierarchical_fs.stats.calls == {"list": 1 + 3 + 3 + 6}
@@ -134,7 +144,7 @@ async def test_several_patterns_answer_as_fsspecs_globs_together(
     ]
 
 
-async def test_several_patterns_list_shared_folders_once(
+async def test_several_patterns_list_shared_dirs_once(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
@@ -150,7 +160,7 @@ async def test_several_patterns_list_shared_folders_once(
     assert hierarchical_fs.stats.calls == {"list": 2 * (1 + 3 + 3 + 6)}
 
 
-async def test_lists_folders_concurrently_within_batch_size() -> None:
+async def test_lists_dirs_concurrently_within_batch_size() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(5):
         for j in range(5):
@@ -190,7 +200,7 @@ async def test_cancel_asks_for_no_more_plain_paths() -> None:
 
 
 class _Forbidding(SimulatedFileSystem):
-    """Refuses to list one folder, as a storage without permission would."""
+    """Refuses to list one directory, as a storage without permission would."""
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         if self._strip_protocol(path) == "data/sales":

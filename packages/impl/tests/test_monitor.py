@@ -36,13 +36,12 @@ def test_a_monitored_filesystem_is_returned_as_it_is() -> None:
 
 def test_a_filesystem_is_wrapped_as_its_entry_says() -> None:
     fs = SimulatedFileSystem()
-    profile = StorageProfile(fs_type="flat", implicit_folders=True)
+    profile = StorageProfile(fs_type="flat", implicit_directories=True)
     flat = monitored(
         fs,
         {
             _SIMULATED: {
                 "storage_profile": profile,
-                "async": True,
                 "operation_concurrency": 3,
                 "io_concurrency": 2,
                 "rm_batch_size": 100,
@@ -62,7 +61,6 @@ def test_a_subclass_takes_the_entry_of_its_class() -> None:
     # Of no fs_type: a tree, the way right on any storage.
     entry: Any = {
         "storage_profile": StorageProfile(),
-        "async": True,
         "operation_concurrency": 2,
         "io_concurrency": 1,
     }

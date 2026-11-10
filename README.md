@@ -15,16 +15,16 @@ a way to watch and stop what they do.
 
 fsspec's recursive operations, such as `find`, `rm` and `copy`, list a whole tree before they act on it. That suits
 object stores, which list every key under a prefix in one paginated request. It is slow on storages with a hierarchical
-namespace, which list one folder per request, such as Azure Data Lake Storage Gen2, SFTP or HDFS. And once called, such
+namespace, which list one directory per request, such as Azure Data Lake Storage Gen2, SFTP or HDFS. And once called, such
 an operation cannot be watched or stopped until it ends.
 
 This library offers other ways of doing the same things. It is a third-party project, not part of fsspec.
 
 ## What it offers
 
-- **Faster file tree operations:** finding, deleting, copying or moving a whole folder tree, on storages with folders
+- **Faster file tree operations:** finding, deleting, copying or moving a whole directory tree, on storages with directories
   and on object stores alike.
-- **Work on huge folders:** files are acted on as soon as they are found, so a folder of hundreds of thousands of
+- **Work on huge directories:** files are acted on as soon as they are found, so a directory of hundreds of thousands of
   files never needs to fit in memory.
 - **Progress you can see, and stop:** follow a long operation file by file, see which files failed, and stop it at
   any time, through the familiar fsspec calls.

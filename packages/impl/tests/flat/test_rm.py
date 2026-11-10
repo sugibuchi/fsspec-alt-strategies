@@ -1,4 +1,4 @@
-"""Tests of `flat_rm`, the delete that deletes a prefix's keys in batches as it lists."""
+"""Tests of `_flat_rm`, the delete that deletes a prefix's keys in batches as it lists."""
 
 from __future__ import annotations
 
@@ -9,24 +9,28 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.states import RmState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.rm import RmState, flat_rm
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.flat.rm import _flat_rm
+from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
+def _view(fs: Any, kwargs: dict[str, Any]) -> FlatView:
+    """``fs`` as a `FlatView`, with the primitives, limit and batch size ``kwargs`` give."""
+    view = {k: kwargs.pop(k) for k in ("iexpand", "info", "rm_files") if k in kwargs}
+    if "concurrency_limit" in kwargs:
+        view["operation_limit"] = kwargs.pop("concurrency_limit")
+    if "batch_size" in kwargs:
+        view["rm_batch_size"] = kwargs.pop("batch_size")
+    return FlatView(fs, **view)
+
+
 def _rm(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`flat_rm` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "iexpand": fs._iexpand,
-        "info": fs._info,
-        "rm_files": fs._rm_files,
-        "batch_size": 1000,
-    }
-    return flat_rm(path, **{**operations, **kwargs})
+    """`_flat_rm` on ``fs``, whose primitives ``kwargs`` may replace."""
+    return _flat_rm(_view(fs, kwargs), path, **kwargs)
 
 
 _FILES = [
@@ -41,7 +45,7 @@ _FILES = [
 def _tree(fs: SimulatedFileSystem) -> None:
     for path in _FILES:
         fs.add_file(path)
-    fs.add_file("database.csv")  # Shares the text "data", not the folder.
+    fs.add_file("database.csv")  # Shares the text "data", not the directory.
     fs.add_file("other/kept")
 
 
@@ -158,14 +162,17 @@ async def test_markers_are_deleted_as_keys() -> None:
     async def info(path: str) -> dict[str, Any]:
         raise AssertionError("not asked")
 
-    op = flat_rm(
-        "data",
-        iexpand=iexpand,
-        info=info,
-        rm_files=rm_files,
-        batch_size=10,
-        concurrency_limit=asyncio.Semaphore(4),
+    view = _view(
+        None,
+        {
+            "iexpand": iexpand,
+            "info": info,
+            "rm_files": rm_files,
+            "batch_size": 10,
+            "concurrency_limit": asyncio.Semaphore(4),
+        },
     )
+    op = _flat_rm(view, "data")
     await _collect_with_errors(op)
     assert sorted(deleted_keys) == ["data/", "data/a.txt", "data/empty/"]
 
@@ -216,12 +223,12 @@ async def test_maxdepth_requests(flat_fs: SimulatedFileSystem) -> None:
     assert op.state == RmState(current=op.state.current, files_found=1, files_deleted=1)
 
 
-async def test_maxdepth_1_of_a_pattern_lists_no_folder_matched(
+async def test_maxdepth_1_of_a_pattern_lists_no_dir_matched(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)
     deleted, _ = await _collect_with_errors(_rm(flat_fs, "data/*", maxdepth=1))
-    # fsspec's _expand_path takes the matches only: the folders are not expanded.
+    # fsspec's _expand_path takes the matches only: the directories are not expanded.
     assert deleted == ["data/README.md"]
     assert await flat_fs._exists("data/2023/01/part-0.parquet")
 

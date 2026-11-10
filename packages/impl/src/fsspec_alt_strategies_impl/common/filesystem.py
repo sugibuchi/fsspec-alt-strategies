@@ -14,7 +14,6 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 import asyncio
-import functools
 import io
 import os
 from abc import ABCMeta
@@ -55,9 +54,14 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     the concurrency, so that several filesystems share it, or else a new one,
     of the number given.
 
-    ``storage_profile``, a class field, tells the strategies what the storage
-    does. A subclass must set it: one whose storage is unknown says so, with
-    ``StorageProfile()``.
+    ``storage_profile`` tells the strategies what the storage does. It is one
+    for the whole filesystem, and never changes. One whose storage is unknown
+    says so, with ``StorageProfile()``. Where it is found by a request, e.g.
+    whether an account has a hierarchical namespace, a subclass overrides
+    ``_load_storage_profile`` instead. Either way, the strategies and the
+    subclass's primitives get it with ``await self._get_storage_profile()``.
+    A storage whose profile differs by path, e.g. per bucket, is several
+    filesystems under a router.
 
     Each family's class declares the abstract methods its subclasses implement,
     so that a reader finds them all in one place.
@@ -92,16 +96,51 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         super().__init__(*args, **kwargs)
 
+        # A profile found by a request needs none set beside it.
+        load = type(self)._load_storage_profile
         profile = getattr(self, "storage_profile", None)
-        if not isinstance(profile, StorageProfile):
+        if load is _BaseFileSystem._load_storage_profile and not isinstance(
+            profile, StorageProfile
+        ):
             raise ValueError(
-                f"storage_profile must be set, to a StorageProfile: {profile!r}"
+                "storage_profile must be set, to a StorageProfile, unless"
+                f" _load_storage_profile is overridden: {profile!r}"
             )
+        # Named apart from a subclass's own members.
+        self._storage_profile_loaded: StorageProfile | None = None
+        self._storage_profile_lock = asyncio.Lock()
 
         self.operation_concurrency = operation_concurrency
         self.io_concurrency = io_concurrency
         self.operation_limit = operation_limit
         self.io_limit = io_limit
+
+    async def _load_storage_profile(self) -> StorageProfile:
+        """Find the profile: here, ``storage_profile``.
+
+        A subclass overrides it where the profile is found by a request, e.g.
+        whether an account has a hierarchical namespace. It is awaited once,
+        by `_get_storage_profile`, which keeps what it returns. One that cannot
+        tell yet raises, and is awaited again next time, or returns
+        ``StorageProfile()``, right on any storage, kept as any profile is.
+        """
+        return self.storage_profile  # type: ignore[attr-defined, no-any-return]
+
+    async def _get_storage_profile(self) -> StorageProfile:
+        """The profile, loaded once by `_load_storage_profile`, then kept.
+
+        The strategies await it once, when they start. The subclass's
+        primitives may await it too, e.g. a ``_rmdir`` depending on whether
+        directories are real, rather than keep a copy of what it knows.
+        A first call loads it while the others wait, then find it kept.
+        """
+        # Once kept, no call waits for the lock.
+        if (profile := self._storage_profile_loaded) is not None:
+            return profile
+        async with self._storage_profile_lock:
+            if self._storage_profile_loaded is None:
+                self._storage_profile_loaded = await self._load_storage_profile()
+            return self._storage_profile_loaded
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
@@ -172,7 +211,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         **kwargs: Any,
     ) -> None:
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
-            return  # A folder, which fsspec's get makes itself.
+            return  # A directory, which fsspec's get makes itself.
 
         f = await self.open_async(rpath, "rb", **kwargs)
         async with f:
@@ -195,7 +234,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         **kwargs: Any,
     ) -> None:
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
-            return  # A folder: a storage needs none for the files put in it.
+            return  # A directory: a storage needs none for the files put in it.
 
         f = await self.open_async(rpath, "xb" if mode == "create" else "wb", **kwargs)
         async with f:
@@ -210,7 +249,7 @@ def _strip_only_protocol(fs: AbstractFileSystem, path: str | Sequence[str]) -> A
     """A path, or paths, of ``fs`` without its protocol, keeping a trailing "/".
 
     The strategies take paths without a protocol. A trailing "/" means
-    something to some, e.g. a glob of folders only, or a copy into a folder.
+    something to some, e.g. a glob of directories only, or a copy into a directory.
     """
     if not isinstance(path, str):
         return [_strip_only_protocol(fs, p) for p in path]
@@ -238,15 +277,6 @@ async def _skip(f: Any, start: int, chunk_size: int) -> None:
         if not chunk:
             return  # Past the end: the read after answers nothing.
         skipped += len(chunk)
-
-
-def _with(func: Callable[..., Any], kwargs: dict[str, Any]) -> Callable[..., Any]:
-    """``func``, given ``kwargs`` too at each call, e.g. ``_ils`` with refresh=True.
-
-    fsspec's recursive methods pass their extra keyword arguments on to the
-    listing, which the strategies call with the path alone.
-    """
-    return functools.partial(func, **kwargs) if kwargs else func
 
 
 def _answer(entries: list[dict[str, Any]], detail: bool) -> Any:
@@ -281,15 +311,15 @@ def _raise(errors: list[Exception], doing: str) -> None:
         raise ExceptionGroup(f"{doing} failed for {len(errors)} paths", errors)
 
 
-def _failed_folder(
-    folder: str,
+def _failed_dir(
+    directory: str,
     error: Exception,
     on_error: str | Callable[[Exception], Any],
     detail: bool,
 ) -> tuple[str, Any, Any]:
-    """What fsspec's ``walk`` yields for a folder that failed to list, the root too."""
+    """What fsspec's ``walk`` yields for a directory that failed to list, the root too."""
     if on_error == "raise":
         raise error
     if callable(on_error):
         on_error(error)
-    return (folder, {}, {}) if detail else (folder, [], [])
+    return (directory, {}, {}) if detail else (directory, [], [])

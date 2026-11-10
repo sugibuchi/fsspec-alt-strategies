@@ -1,26 +1,22 @@
-"""Tests of `flat_du`, checked against fsspec's own ``_du``."""
+"""Tests of `_flat_du`, checked against fsspec's own ``_du``."""
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.states import DuState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.du import DuState, flat_du
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.flat.du import _flat_du
+from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 
 def _du(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
-    """`flat_du` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {
-        "concurrency_limit": asyncio.Semaphore(32),
-        "iexpand": fs._iexpand,
-        "info": fs._info,
-    }
-    return flat_du(path, **{**operations, **kwargs})
+    """`_flat_du` on ``fs``, whose ``iexpand`` or ``info`` ``kwargs`` may replace."""
+    primitives = {k: kwargs.pop(k) for k in ("iexpand", "info") if k in kwargs}
+    return _flat_du(FlatView(fs, **primitives), path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:

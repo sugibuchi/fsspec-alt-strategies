@@ -1,18 +1,23 @@
-"""Tests of `common.jobs`: the permits of `_Queue`, and the steps of `_Jobs`.
+"""Tests of `common.jobs`: the permits of `_Queue`, the steps of `_Jobs`, and `_CopyJobs`'s placing.
 
 The strategies test `_Jobs` through what they do to a storage. These test what
-none of them shows: each permit given back, however the operation ends.
+none of them shows: each permit given back, however the operation ends. The
+copies of both families test the placing of fsspec's cases: these test the
+edges of a pattern that none of them reaches.
 """
 
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from fsspec_alt_strategies.monitor import State
+from fsspec_alt_strategies.states import CpState
 from fsspec_alt_strategies_impl.common.jobs import (
+    _CopyJobs,
     _Job,
     _Jobs,
     _Queue,
@@ -39,7 +44,7 @@ class _Toy(_Jobs):
         failing: frozenset[str] = frozenset(),
         delay: float = 0.01,
     ) -> None:
-        super().__init__(limit, op)
+        super().__init__(fs=SimpleNamespace(operation_limit=limit), op=op)
         self.batches = batches
         self.failing = failing
         self.delay = delay
@@ -51,6 +56,9 @@ class _Toy(_Jobs):
 
     async def prepare(self) -> _Roots | None:
         return _Roots(["root"])
+
+    def glob(self, pattern: Any) -> Any:
+        raise NotImplementedError  # The toy takes no pattern.
 
     def state(self) -> State:
         return State(errors=self.errors, current=self.current)
@@ -205,7 +213,7 @@ async def test_closing_a_queue_gives_back_the_permit_its_waiter_got() -> None:
     assert limit._value == 1
 
 
-def test_roots_of_leave_out_what_a_matching_folder_has() -> None:
+def test_roots_of_leave_out_what_a_matching_dir_has() -> None:
     matches = [
         {"name": "a/b", "type": "file"},
         {"name": "a", "type": "directory"},
@@ -213,11 +221,97 @@ def test_roots_of_leave_out_what_a_matching_folder_has() -> None:
         {"name": "d", "type": "file"},
     ]
     roots = _roots_of(matches, [], "*")
-    assert (list(roots.folders), list(roots.files)) == (["a", "c"], ["d"])
+    assert (list(roots.directories), list(roots.files)) == (["a", "c"], ["d"])
 
 
 def test_roots_of_nothing_raise_unless_errors_were_found() -> None:
     with pytest.raises(FileNotFoundError):
         _roots_of([], [], "x*")
     error = OSError("x")
-    assert _roots_of([], [error], "x*") == _Roots([], [], [error])
+    assert _roots_of([], [error], "x*") == _Roots([], [])
+
+
+# The placing of a copy.
+
+
+async def _missing(path: str) -> dict[str, Any]:
+    raise FileNotFoundError(path)
+
+
+class _Copy(_CopyJobs):
+    """A copy whose glob yields the entries and errors given, and which copies nothing."""
+
+    def __init__(self, path1: Any, path2: str, found: list[Any]) -> None:
+        storage = SimpleNamespace(operation_limit=asyncio.Semaphore(1), _info=_missing)
+        super().__init__(
+            fs=storage,
+            dst_fs=storage,
+            path1=path1,
+            path2=path2,
+            same_storage=True,
+            op=Operation(lambda op: self.outcomes(), CpState()),
+        )
+        self.globbed = found
+
+    def glob(self, pattern: Any) -> Operation[Any, Any]:
+        async def entries() -> AsyncGenerator[Any]:
+            for item in self.globbed:
+                yield item
+
+        return Operation(lambda op: entries(), State())
+
+    # The jobs, never run here: only the placing is, and its errors yielded.
+
+    def source(self, roots: _Roots) -> Any:
+        return None  # Nothing to list.
+
+    def fed(self, item: Any) -> list[Any]:
+        raise NotImplementedError
+
+    def file_root(self, path: str) -> None:
+        raise NotImplementedError
+
+    def run(self, job: Any) -> Any:
+        raise NotImplementedError
+
+    def done(self, job: Any) -> list[Any]:
+        raise NotImplementedError
+
+    def failed(self, job: Any, error: Exception) -> list[Any]:
+        raise NotImplementedError
+
+
+def _file(name: str) -> dict[str, Any]:
+    return {"name": name, "type": "file"}
+
+
+def _dir(name: str) -> dict[str, Any]:
+    return {"name": name, "type": "directory"}
+
+
+async def test_a_pattern_matching_only_errors_yields_them() -> None:
+    error = OSError("x")
+    copy = _Copy("x*", "dest", [error])
+    assert await _collect_with_errors(copy.op) == ([], [error])
+    assert copy.op.state.errors == 1
+
+
+async def test_errors_are_yielded_when_nothing_else_is_to_do() -> None:
+    # The first root is in place already, and the second's name is taken.
+    copy = _Copy(["a/x", "b/*"], "a", [_file("a/x"), _file("b/x")])
+    outcomes, errors = await _collect_with_errors(copy.op)
+    assert outcomes == []
+    assert [type(e) for e in errors] == [FileExistsError]
+    assert copy.op.state.errors == 1
+
+
+async def test_a_single_match_already_in_place_is_left() -> None:
+    copy = _Copy("a/*.txt", "a", [_file("a/x.txt")])
+    assert await copy.prepare() is None
+
+
+async def test_matches_without_a_common_dir_go_under_the_destination() -> None:
+    copy = _Copy("*1", "dest", [_dir("x1"), _file("y1")])
+    assert await copy.prepare() is not None
+    assert copy.prefix == ""
+    assert (copy.target("x1/f"), copy.target("y1")) == ("dest/x1/f", "dest/y1")

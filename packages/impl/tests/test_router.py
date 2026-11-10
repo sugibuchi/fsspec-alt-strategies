@@ -138,7 +138,7 @@ class _Router(AsyncRoutingFileSystem):
             "flat": lambda: _Flat(
                 self.flat,
                 rm_batch_size=10,
-                storage_profile=StorageProfile(implicit_folders=True),
+                storage_profile=StorageProfile(implicit_directories=True),
                 **_OPTIONS,
             ),
             # A plain async fsspec filesystem, without strategies.
@@ -260,7 +260,7 @@ async def test_a_call_passed_on_keeps_the_slash() -> None:
 @pytest.mark.parametrize("source", ["tree", "flat", "plain"])
 @pytest.mark.parametrize("destination", ["tree", "flat", "plain"])
 @pytest.mark.parametrize("form", ["path", "glob", "list"])
-async def test_a_file_goes_into_a_missing_folder_ending_in_a_slash(
+async def test_a_file_goes_into_a_missing_dir_ending_in_a_slash(
     method: str, source: str, destination: str, form: str
 ) -> None:
     # Within a storage and across two, as fsspec's copy: never a file "new".
@@ -312,12 +312,6 @@ async def test_a_sync_filesystem_is_refused(router: _Router) -> None:
     router.makers["memory"] = MemoryFileSystem
     with pytest.raises(TypeError, match="SyncTreeWrapper"):
         await router._info("lake/memory/x")
-
-
-def test_a_storages_profile(router: _Router) -> None:
-    assert router.storage_profile_of("lake/flat/x").implicit_folders is True
-    assert router.storage_profile_of("lake/tree/x") == StorageProfile(fs_type="tree")
-    assert router.storage_profile_of("lake") == StorageProfile()
 
 
 # The primitives, each the storage's own.
@@ -390,7 +384,7 @@ def test_created_modified_and_sign_are_the_storages(router: _Router) -> None:
 async def test_find_runs_the_storages_strategy(router: _Router) -> None:
     expected = [f"lake/tree/{p}" for p in _FILES]
     assert await router._find("lake/tree/data") == expected
-    # tree_find: a listing per folder.
+    # tree_find: a listing per directory.
     assert router.tree.stats.calls == {"list": 3}
     assert await router._find("lake/flat/data") == [f"lake/flat/{p}" for p in _FILES]
     # flat_find: one listing of the prefix.
@@ -543,6 +537,21 @@ async def test_copy_across_storages_tries_the_server_first() -> None:
     assert router.tree.stats.calls["read"] == 1
     assert router.flat.stats.calls["write"] == 1
     assert len(router.flat._file_data) == 3
+
+
+async def test_maxdepth_across_storages_runs_the_strategy() -> None:
+    router = _ServerCopying()
+    for path in [*_FILES, "data/top.txt"]:
+        router.tree.add_file(path, path.encode())
+    await router._copy("lake/tree/data", "lake/flat/copied", recursive=True, maxdepth=1)
+    # Each file by _cross_fs_cp_file, which fsspec's own copy never calls.
+    assert router.server_copies == [("data/top.txt", "copied/top.txt")]
+    assert sorted(router.flat._file_data) == ["copied/top.txt"]
+
+    await router._mv("lake/tree/data", "lake/flat/moved", recursive=True, maxdepth=1)
+    assert "moved/top.txt" in router.flat._file_data
+    # What is deeper stays, as _tree_mv keeps it.
+    assert sorted(router.tree._file_data) == sorted(_FILES)
 
 
 async def test_copy_from_a_plain_storage_is_fsspecs(router: _Router) -> None:

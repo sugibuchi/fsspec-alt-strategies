@@ -1,4 +1,4 @@
-"""Tests of `tree_walk`, and of ``_listings``, the engine under the tree strategies."""
+"""Tests of `_tree_walk`, and of ``_listings``, the engine under the tree strategies."""
 
 from __future__ import annotations
 
@@ -13,18 +13,32 @@ from fsspec_alt_strategies_impl.tree.walk import (
     WalkState,
     _chunks,
     _listings,
-    tree_walk,
+    _tree_walk,
 )
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, folder_ils
+from fsspec_alt_strategies_impl_testing import (
+    SimulatedFileSystem,
+    TreeView,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
+_PRIMITIVES = {"ils", "info", "rm_file", "rm_dir", "rm_tree", "cp_file", "mv_file"}
+"""The keyword arguments that replace a primitive of the filesystem."""
+
+_SETTINGS = {"profile": "storage_profile", "concurrency_limit": "operation_limit"}
+"""The keyword arguments that set the filesystem's profile and limit, by its attribute."""
+
+
 def _walk(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`tree_walk` on a filesystem's own operations, which ``kwargs`` may replace."""
-    operations = {"concurrency_limit": asyncio.Semaphore(32), "ils": folder_ils(fs)}
-    return tree_walk(path, **{**operations, **kwargs})
+    """`_tree_walk` on a filesystem's own primitives, which ``kwargs`` may replace."""
+    view = TreeView(
+        fs,
+        **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()},
+        **{_SETTINGS[k]: kwargs.pop(k) for k in _SETTINGS.keys() & kwargs.keys()},
+    )
+    return _tree_walk(view, path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
@@ -43,15 +57,17 @@ async def test_yields_what_fsspecs_walk_yields(
     any_fs: SimulatedFileSystem, kwargs: dict[str, Any]
 ) -> None:
     _tree(any_fs)
-    folders = await _all(_walk(any_fs, "data", **kwargs))
+    directories = await _all(_walk(any_fs, "data", **kwargs))
     expected = await _all(AsyncFileSystem._walk(any_fs, "data", detail=True, **kwargs))
-    assert sorted(folders, key=lambda f: f[0]) == sorted(expected, key=lambda f: f[0])
+    assert sorted(directories, key=lambda f: f[0]) == sorted(
+        expected, key=lambda f: f[0]
+    )
 
 
-async def test_yields_each_folder_once(any_fs: SimulatedFileSystem) -> None:
+async def test_yields_each_dir_once(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    folders = await _all(_walk(any_fs, "data"))
-    assert sorted(path for path, _, _ in folders) == [
+    directories = await _all(_walk(any_fs, "data"))
+    assert sorted(path for path, _, _ in directories) == [
         "data",
         "data/2023",
         "data/2023/01",
@@ -60,7 +76,7 @@ async def test_yields_each_folder_once(any_fs: SimulatedFileSystem) -> None:
         "data/2024/01",
         "data/2024/02",
     ]
-    root = next(f for f in folders if f[0] == "data")
+    root = next(f for f in directories if f[0] == "data")
     assert (sorted(root[1]), sorted(root[2])) == (["2023", "2024"], ["README.md"])
     assert any_fs.stats.calls == {"list": 7}
 
@@ -87,8 +103,8 @@ async def test_topdown_orders(latency: float) -> None:
 
 async def test_maxdepth(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    folders = await _all(_walk(any_fs, "data", maxdepth=2))
-    assert sorted(p for p, _, _ in folders) == ["data", "data/2023", "data/2024"]
+    directories = await _all(_walk(any_fs, "data", maxdepth=2))
+    assert sorted(p for p, _, _ in directories) == ["data", "data/2023", "data/2024"]
     assert any_fs.stats.calls == {"list": 3}
     with pytest.raises(ValueError, match="at least 1"):
         await _all(_walk(any_fs, "data", maxdepth=0))
@@ -113,7 +129,7 @@ async def test_root_errors_are_raised(any_fs: SimulatedFileSystem) -> None:
 
 
 class _Forbidding(SimulatedFileSystem):
-    """Refuses to list one folder, as a storage without permission would."""
+    """Refuses to list one directory, as a storage without permission would."""
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         if self._strip_protocol(path) == "data/2023":
@@ -129,13 +145,13 @@ async def test_failed_listing_is_yielded_and_the_walk_goes_on(topdown: bool) -> 
     errors = [i for i in items if isinstance(i, Exception)]
     assert [type(e) for e in errors] == [PermissionError]
     paths = {i[0] for i in items if not isinstance(i, Exception)}
-    # Its error instead of its folder, and nothing below it.
+    # Its error instead of its directory, and nothing below it.
     assert not any(p.startswith("data/2023") for p in paths)
     assert {"data", "data/2024", "data/2024/02"} <= paths
 
 
 class _Recording(_Forbidding):
-    """Records each folder whose listing reached the storage."""
+    """Records each directory whose listing reached the storage."""
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         self.requested.append(self._strip_protocol(path))
@@ -162,7 +178,7 @@ async def test_on_error_raise_stops_at_once(topdown: bool) -> None:
     assert fs._in_flight == 0
 
 
-async def test_lists_folders_concurrently_within_batch_size() -> None:
+async def test_lists_dirs_concurrently_within_batch_size() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     for i in range(20):
         fs.add_file(f"root/{i:02}/file")
@@ -186,7 +202,7 @@ async def test_a_shared_limit_spans_operations() -> None:
         _all(_walk(fs, "a", concurrency_limit=limit)),
         _all(_walk(fs, "b", concurrency_limit=limit)),
     )
-    # Each alone would list 10 folders at once: together, still 3 at a time.
+    # Each alone would list 10 directories at once: together, still 3 at a time.
     assert fs.stats.max_concurrency == 3
     await _all_permits_back(limit, 3)
 
@@ -209,8 +225,8 @@ async def test_closing_gives_every_permit_back() -> None:
     for i in range(10):
         fs.add_file(f"root/{i}/file")
     limit = asyncio.Semaphore(4)
-    async with _walk(fs, "root", concurrency_limit=limit) as folders:
-        async for _ in folders:
+    async with _walk(fs, "root", concurrency_limit=limit) as directories:
+        async for _ in directories:
             break  # Listings in flight, and a waiter for the next permit.
     await _all_permits_back(limit, 4)
 
@@ -219,9 +235,11 @@ async def test_closing_cancels_listings_in_flight() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.05, asynchronous=True)
     for i in range(10):
         fs.add_file(f"root/{i}/file")
-    async with _walk(fs, "root", concurrency_limit=asyncio.Semaphore(10)) as folders:
-        async for _ in folders:
-            break  # The root: its ten subfolders are now in flight.
+    async with _walk(
+        fs, "root", concurrency_limit=asyncio.Semaphore(10)
+    ) as directories:
+        async for _ in directories:
+            break  # The root: its ten subdirectories are now in flight.
     # None is left running, and those cancelled before they started were never sent.
     assert fs._in_flight == 0
     assert fs.stats.calls["list"] < 11
@@ -237,21 +255,21 @@ async def test_cancel_yields_the_listings_in_flight() -> None:
     async for path, _, _ in op:
         paths.append(path)
         if path == "root":
-            op.cancel()  # Four subfolders are in flight.
+            op.cancel()  # Four subdirectories are in flight.
     assert len(paths) == 1 + 4
     assert fs.stats.calls["list"] == 1 + 4
     assert op.cancelled()
     assert op.state == WalkState(
-        current=op.state.current, folders_listed=5, found=10 + 4 * 2
+        current=op.state.current, directories_listed=5, found=10 + 4 * 2
     )
 
 
-async def test_failed_listing_names_its_folder() -> None:
+async def test_failed_listing_names_its_dir() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
     errors = [i for i in await _all(_walk(fs, "data")) if isinstance(i, Exception)]
     assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
-    assert errors[0].folder == "data/2023"
+    assert errors[0].directory == "data/2023"
 
 
 async def test_on_error_omits_or_calls() -> None:
@@ -263,7 +281,7 @@ async def test_on_error_omits_or_calls() -> None:
     items = await _all(_walk(fs, "data", on_error=called.append))
     assert not any(isinstance(i, Exception) for i in items)
     assert [type(e) for e in called] == [PermissionError]
-    # Either way, the folders that did list are all there.
+    # Either way, the directories that did list are all there.
     assert sorted(i[0] for i in items) == sorted(i[0] for i in omitted)
 
 
@@ -272,42 +290,34 @@ def test_on_error_is_checked_at_once(any_fs: SimulatedFileSystem) -> None:
         _walk(any_fs, "data", on_error="ignore")
 
 
-async def test_listings_carry_folder_and_depth(any_fs: SimulatedFileSystem) -> None:
+async def test_listings_carry_dir_and_depth(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     # A trailing "/" is trimmed, as fsspec's _strip_protocol does.
-    async with aclosing(
-        _listings(folder_ils(any_fs), "data/", concurrency_limit=asyncio.Semaphore(32))
-    ) as listings:
+    async with aclosing(_listings(TreeView(any_fs), "data/")) as listings:
         first = await anext(listings)
-    assert (first.folder, first.depth) == ("data", 1)
-    listings = {
-        lst.folder: lst
-        async for lst in _listings(
-            folder_ils(any_fs), "data", concurrency_limit=asyncio.Semaphore(32)
-        )
-    }
+    assert (first.directory, first.depth) == ("data", 1)
+    listings = {lst.directory: lst async for lst in _listings(TreeView(any_fs), "data")}
     assert [lst.depth for lst in listings.values()].count(3) == 4
 
 
-async def test_bottom_up_listings_come_after_their_subfolders() -> None:
+async def test_bottom_up_listings_come_after_their_subdirs() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.002, asynchronous=True)
     _tree(fs)
-    folders = [
-        lst.folder
+    directories = [
+        lst.directory
         async for lst in _listings(
-            folder_ils(fs),
+            TreeView(fs, operation_limit=asyncio.Semaphore(2)),
             "data",
             topdown=False,
-            concurrency_limit=asyncio.Semaphore(2),
         )
     ]
-    assert folders[-1] == "data"
-    for i, folder in enumerate(folders):
-        assert all(not f.startswith(folder + "/") for f in folders[i + 1 :])
+    assert directories[-1] == "data"
+    for i, directory in enumerate(directories):
+        assert all(not f.startswith(directory + "/") for f in directories[i + 1 :])
 
 
 def _streamed(fs: SimulatedFileSystem, listed: list[str]) -> Any:
-    """A folder ``ils`` yielding entries one by one, noting each as it goes."""
+    """A directory ``ils`` yielding entries one by one, noting each as it goes."""
 
     async def ils(path: str) -> AsyncIterator[dict[str, Any]]:
         for entry in await fs._ls(path, detail=True):
@@ -318,21 +328,20 @@ def _streamed(fs: SimulatedFileSystem, listed: list[str]) -> Any:
     return ils
 
 
-async def test_chunks_stream_a_folder_in_parts() -> None:
+async def test_chunks_stream_a_dir_in_parts() -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     for i in range(5):
         fs.add_file(f"data/file-{i}")
     fs.add_file("data/sub/inner")
     listed: list[str] = []
     chunks = _chunks(
-        _streamed(fs, listed),
+        TreeView(fs, ils=_streamed(fs, listed), operation_limit=asyncio.Semaphore(4)),
         "data",
-        concurrency_limit=asyncio.Semaphore(4),
         chunk_size=2,
     )
     async with aclosing(chunks):
         parts = [
-            (part.folder, len(part.entries), part.first, part.last, len(listed))
+            (part.directory, len(part.entries), part.first, part.last, len(listed))
             async for part in chunks
         ]
     data = [p for p in parts if p[0] == "data"]
@@ -344,15 +353,15 @@ async def test_chunks_stream_a_folder_in_parts() -> None:
         (2, False, False),
         (0, False, True),
     ]
-    # The first part came before its folder was all listed.
+    # The first part came before its directory was all listed.
     assert data[0][4] < 6
     assert ("data/sub", 1, True, True) in [p[:4] for p in parts]
 
 
-async def test_chunks_of_an_empty_folder_are_one_part() -> None:
+async def test_chunks_of_an_empty_dir_are_one_part() -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     fs.add_dir("data")
-    chunks = _chunks(folder_ils(fs), "data", concurrency_limit=asyncio.Semaphore(4))
+    chunks = _chunks(TreeView(fs, operation_limit=asyncio.Semaphore(4)), "data")
     async with aclosing(chunks):
         parts = [part async for part in chunks]
     assert [(p.entries, p.first, p.last) for p in parts] == [([], True, True)]
