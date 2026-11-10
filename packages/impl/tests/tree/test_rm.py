@@ -405,14 +405,14 @@ async def test_rm_tree_deletes_a_folder_whole(
     )
     deleted, errors = await _collect_with_errors(op)
     assert (deleted, errors) == (["data"], [])
-    # Its kind asked, then one deletion: no listing.
-    assert hierarchical_fs.stats.calls == {"info": 1, "delete": 1}
+    # One deletion: no listing.
+    assert hierarchical_fs.stats.calls == {"delete": 1}
     assert op.state.folders_deleted == 1
     assert not await hierarchical_fs._exists("data")
     assert await hierarchical_fs._exists("other/kept")
 
 
-async def test_rm_tree_is_given_folders_only(
+async def test_rm_tree_takes_any_root(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     _tree(hierarchical_fs)
@@ -422,9 +422,11 @@ async def test_rm_tree_is_given_folders_only(
     deleted, errors = await _collect_with_errors(
         _rm(hierarchical_fs, "data/README.md", rm_tree=rm_tree, profile=_DELETES)
     )
-    assert (deleted, errors, seen) == (["data/README.md"], [], [])
-    assert hierarchical_fs.stats.calls == {"info": 1, "delete": 1}
-    # A pattern's folders are known as such, by its glob: each goes whole.
+    # A file, of unknown kind until deleted: no request asks it first.
+    assert (deleted, errors, seen) == (["data/README.md"], [], ["data/README.md"])
+    assert hierarchical_fs.stats.calls == {"delete": 1}
+    # A pattern's files are deleted as files, its folders whole.
+    seen.clear()
     hierarchical_fs.add_file("data/notes.md")
     hierarchical_fs.reset_stats()
     deleted, errors = await _collect_with_errors(
@@ -452,7 +454,7 @@ async def test_a_failed_rm_tree_is_the_roots_error(
     assert deleted == []
     assert [type(e) for e in errors] == [PermissionError]
     assert "Deleting 'data' failed." in errors[0].__notes__
-    assert hierarchical_fs.stats.calls == {"info": 1}
+    assert hierarchical_fs.stats.calls == {}
     assert op.state.errors == 1
     assert await hierarchical_fs._exists("data/README.md")
 
@@ -489,6 +491,24 @@ async def test_rm_tree_sends_nothing_once_cancelled(
     op.cancel()
     assert await _collect_with_errors(op) == ([], [])
     assert hierarchical_fs.stats.calls == {}
+
+
+async def test_rm_tree_starts_no_root_once_cancelled_midway(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    seen: list[str] = []
+    op = _rm(
+        hierarchical_fs,
+        ["data/2023", "data/2024"],
+        rm_tree=_rm_tree(hierarchical_fs, seen),
+        profile=_DELETES,
+        concurrency_limit=asyncio.Semaphore(1),
+    )
+    async for _ in op:
+        op.cancel()  # After the first root: the other is never sent.
+    assert len(seen) == 1
+    assert op.state.folders_deleted == 1
 
 
 async def test_a_large_folder_is_deleted_while_it_is_listed() -> None:

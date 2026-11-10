@@ -95,8 +95,8 @@ async def test_an_async_filesystem_deletes_a_folder_by_its_rm_tree() -> None:
     tree = AsyncTreeWrapper(inner, **_DELETES)
     inner.reset_stats()
     await tree._rm("data", recursive=True)
-    # Its kind asked, then one deletion: no listing.
-    assert inner.stats.calls == {"info": 1, "delete": 1}
+    # One deletion: no listing.
+    assert inner.stats.calls == {"delete": 1}
     assert not inner._file_data
 
 

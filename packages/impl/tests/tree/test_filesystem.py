@@ -327,7 +327,7 @@ async def test_rm_uses_a_recursive_delete_of_the_storage(
     inner.reset_stats()
     with monitoring(monitor):
         await fs._rm("data", recursive=True, callback=callback)
-    assert inner.stats.calls == {"info": 1, "delete": 1}
+    assert inner.stats.calls == {"delete": 1}
     assert not await inner._exists("data")
     # Still an operation, watched as any: the root is its one path deleted.
     assert ("yielded", "rm", "data") in monitor.events

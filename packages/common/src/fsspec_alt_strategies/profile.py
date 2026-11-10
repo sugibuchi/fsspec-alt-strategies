@@ -70,7 +70,8 @@ class StorageProfile:
         only.
     deletes_folders : bool, optional
         Whether the filesystem's ``_rm_tree`` deletes a folder with all in
-        it, in one request, as a storage's recursive delete does. Unknown by
+        it, in one request, as a storage's recursive delete does. It deletes a
+        file too. Unknown by
         default, taken as False: a folder is walked, and what is in it deleted
         one by one. Declared True, a failed ``_rm_tree`` is the folder's
         failure, never walked.

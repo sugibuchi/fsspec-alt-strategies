@@ -138,8 +138,9 @@ class TreeFileSystem(_BaseFileSystem):
 
         A subclass whose storage has a recursive delete implements it, and its
         profile's ``deletes_folders=True`` says so. A recursive ``rm`` then
-        deletes each folder root by it, with no walk. It is called only then,
-        and on folders only.
+        deletes each root by it, with no walk. It is called only then. It takes
+        a file too, which it deletes as ``_rm_file`` does, as a root may be
+        either.
         """
         raise NotImplementedError(f"{type(self).__name__} deletes no folder whole")
 

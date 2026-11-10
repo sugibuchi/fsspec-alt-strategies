@@ -12,7 +12,6 @@ This module depends on `_jobs`, and `filesystem`, `jobs` and `paths` of
 
 from __future__ import annotations
 
-import asyncio
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
@@ -60,11 +59,12 @@ def _tree_rm(
     ``deletes_folders=True`` says the filesystem's ``_rm_tree``, called
     ``rm_tree`` below, sends it.
 
-    With ``deletes_folders``, each folder root is deleted whole by one
-    ``rm_tree``, with no walk. A root whose deletion fails yields the error,
-    with its cause, and is kept: nothing in it is walked. One found missing
-    is walked, which raises as without it. A root deleted whole is yielded
-    once: what was in it is neither listed, yielded nor counted.
+    With ``deletes_folders``, each root is deleted whole by one ``rm_tree``,
+    with no walk, as each file is deleted: concurrently, under the same limit
+    and cancelling. A root whose deletion fails yields the error, with its
+    cause, and is kept. ``path`` missing raises, as without it. A root deleted
+    whole is yielded once, and counted as a folder: what was in it is neither
+    listed, yielded nor counted.
 
     A glob pattern deletes each path it matches, and all in it, as fsspec's
     ``_rm`` with ``recursive=True`` does. So does a list of paths and
@@ -88,8 +88,7 @@ def _tree_rm(
     Requests: one ``_ils`` per folder, one ``rm_file`` per file, and one
     ``rm_folder`` per folder. Patterns, or a list, add the requests of their
     `_tree_glob`. With ``deletes_folders``, a root costs one ``rm_tree``
-    instead. A single ``path`` then costs an ``info`` first, as ``rm_tree``
-    is given folders only. Each request holds a permit of the filesystem's
+    instead. Each request holds a permit of the filesystem's
     ``operation_limit`` while it runs.
 
     The filesystem's profile's ``implicit_folders=True`` saves the
@@ -125,68 +124,29 @@ class _Deletion(_TreeJobs):
         profile = _profile_of(fs)
         self.deletes_folders = maxdepth is None and profile.deletes_folders is True
 
-        # The roots deleted whole, yielded with the first step.
-        self.whole: list[str] = []
         self.implicit_folders = bool(profile.implicit_folders)
         self.files_found = 0
         self.files_deleted = 0
         self.folders_deleted = 0
 
     async def prepare(self) -> _Roots:
-        """Find the roots, then delete whole the folders that can be: the rest are walked."""
+        """Find the roots: a glob's matches, or the path, of unknown kind."""
         if not isinstance(self.path, str) or has_magic(self.path):
-            roots = await self.glob_roots(self.path)
-            known = True  # The glob found the folders to be folders.
-        else:
-            roots = _Roots([self.path])
-            known = False  # Of unknown kind, until asked.
+            return await self.glob_roots(self.path)
+        return _Roots([self.path])
 
-        if not self.deletes_folders or self.op.cancelling():
-            return roots
-
-        sources = list(roots.folders)
-        kinds = await asyncio.gather(*(self.delete_whole(s, known) for s in sources))
-        self.whole = [s for s, k in zip(sources, kinds, strict=True) if k == "whole"]
-        self.folders_deleted = len(self.whole)
-        files = [s for s, k in zip(sources, kinds, strict=True) if k == "file"]
-        self.found.extend(k for k in kinds if isinstance(k, Exception))
-
-        return _Roots(
-            [s for s, k in zip(sources, kinds, strict=True) if k == "walk"],
-            [*roots.files, *files],
-        )
-
-    async def delete_whole(self, folder: str, known: bool) -> str | Exception:
-        """Delete a root by one ``rm_tree``, and tell how it went: whole, file, walk or its error.
-
-        A root of unknown kind is asked first, as ``rm_tree`` takes folders
-        only. A missing root is walked, which then raises as without
-        ``deletes_folders``. Any other failure is the root's: the profile
-        declares the storage deletes folders whole, so a walk would only hide
-        the cause.
-        """
-        try:
-            if not known:
-                async with self.concurrency_limit:
-                    if (await self.fs._info(folder))["type"] != "directory":
-                        return "file"
-
-            async with self.concurrency_limit:
-                await self.fs._rm_tree(folder)
-        except FileNotFoundError:
-            return "walk"
-        except Exception as e:
-            # Yielded among paths, the error must tell its path itself.
-            e.add_note(f"Deleting {folder!r} failed.")
-            return e
-
-        return "whole"
+    def source(self, roots: _Roots) -> AsyncGenerator[_Listing] | None:
+        # Deleted whole, no folder is walked.
+        return None if self.deletes_folders else super().source(roots)
 
     async def begin(
         self, roots: _Roots, source: AsyncGenerator[_Listing] | None
     ) -> list[Any]:
-        whole, self.whole = self.whole, []
-        return [*whole, *await super().begin(roots, source)]
+        if self.deletes_folders:
+            # A job each, as a file's deletion: rm_tree takes files too.
+            self.waiting.extend(_Job("tree", f) for f in roots.folders)
+            roots = _Roots([], roots.files)
+        return await super().begin(roots, source)
 
     def state(self) -> RmState:
         return RmState(
@@ -220,12 +180,14 @@ class _Deletion(_TreeJobs):
             self.remove(listing.folder)
 
     def run(self, job: _Job) -> Awaitable[Any]:
+        if job.kind == "tree":
+            return self.fs._rm_tree(job.source)
         if job.kind == "folder":
             return self.fs._rmdir(job.source)
         return self.fs._rm_file(job.source)
 
     def done(self, job: _Job) -> list[Any]:
-        if job.kind == "folder":
+        if job.kind in ("folder", "tree"):
             self.folders_deleted += 1
         else:
             self.files_deleted += 1
@@ -234,7 +196,11 @@ class _Deletion(_TreeJobs):
         return [job.source]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
-        if isinstance(error, FileNotFoundError):
+        missing = isinstance(error, FileNotFoundError)
+        if missing and job.kind == "tree" and job.source == self.path:
+            raise error  # The path missing, as the walk would find it.
+
+        if missing:
             # Already gone: an object store's folder, or deleted by another.
             self.after(job.source)
             return []
