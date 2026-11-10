@@ -82,31 +82,22 @@ def _transfer_of(
 
 
 class _Job(NamedTuple):
-    """A request to make: its kind, e.g. "copy", and the paths it is about.
+    """A request to make: its kind, e.g. "copy", its source, and where it goes.
 
-    ``paths`` are those of a request about several, e.g. a batch deletion.
-    ``entry`` is the source's, for a copy or a move: what its listing told.
+    ``source`` is the source's entry, as its listing gave it, so that a copy or
+    a move hands it on: at least its ``"name"``, all a path known otherwise
+    has. ``paths`` are those of a request about several, e.g. a batch deletion.
     """
 
     kind: str
-    source: str
+    source: dict[str, Any]
     destination: str = ""
     paths: tuple[str, ...] = ()
-    entry: dict[str, Any] | None = None
 
-
-def _entry_of(job: _Job) -> dict[str, Any]:
-    """The source entry of a copy's or a move's job, named by its source path.
-
-    A listing may name a path with a trailing "/", which the job's source has
-    not. A job queued with no entry has its name alone.
-    """
-    entry = job.entry
-    if entry is None:
-        return {"name": job.source}
-    if entry["name"] != job.source:
-        return {**entry, "name": job.source}
-    return entry
+    @property
+    def path(self) -> str:
+        """The source's path."""
+        return self.source["name"]  # type: ignore[no-any-return]
 
 
 class _Roots(NamedTuple):
@@ -468,7 +459,7 @@ class _Jobs(ABC):
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
         """Handle a job's task done, counting its errors, and return what to yield."""
         job = self.running.pop(task)
-        self.current = job.source or job.destination
+        self.current = job.path or job.destination
 
         try:
             task.result()

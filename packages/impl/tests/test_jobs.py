@@ -69,26 +69,26 @@ class _Toy(_Jobs):
             yield batch
 
     def fed(self, item: list[str]) -> list[Any]:
-        self.waiting.extend(_Job("do", name) for name in item)
+        self.waiting.extend(_Job("do", {"name": name}) for name in item)
         return []
 
     def file_root(self, path: str) -> None:
-        self.waiting.append(_Job("do", path))
+        self.waiting.append(_Job("do", {"name": path}))
 
     async def run(self, job: _Job) -> None:
-        self.started.append(job.source)
+        self.started.append(job.path)
         self.at_once += 1
         self.most = max(self.most, self.at_once)
         try:
             await asyncio.sleep(self.delay)
-            if job.source in self.failing:
-                raise OSError(job.source)
-            self.finished.append(job.source)
+            if job.path in self.failing:
+                raise OSError(job.path)
+            self.finished.append(job.path)
         finally:
             self.at_once -= 1
 
     def done(self, job: _Job) -> list[Any]:
-        return [job.source]
+        return [job.path]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         return [error]

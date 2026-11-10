@@ -145,7 +145,7 @@ class _Deletion(_TreeJobs):
 
         if not self.deletes_directories:
             return roots
-        self.waiting.extend(_Job("tree", f) for f in roots.directories)
+        self.waiting.extend(_Job("tree", {"name": f}) for f in roots.directories)
         return roots._replace(directories=[])
 
     def state(self) -> RmState:
@@ -159,13 +159,13 @@ class _Deletion(_TreeJobs):
 
     def file_root(self, entry: dict[str, Any]) -> None:
         self.files_found = 1
-        self.waiting.append(_Job("file", entry["name"]))
+        self.waiting.append(_Job("file", entry))
 
     def at_limit(self, directory: str) -> None:
         # Deleted only if empty: one that is not fails, as fsspec's deletion
         # of each path found does. An implicit directory is no path to delete.
         if not self.implicit_directories:
-            self.waiting.append(_Job("directory", directory))
+            self.waiting.append(_Job("directory", {"name": directory}))
 
     def add(self, listing: _Listing) -> None:
         self.track(listing)
@@ -173,7 +173,9 @@ class _Deletion(_TreeJobs):
         for entry in listing.entries:
             if entry["type"] != "directory":
                 self.files_found += 1
-                self.waiting.append(_Job("file", entry["name"].rstrip("/")))
+                self.waiting.append(
+                    _Job("file", {**entry, "name": entry["name"].rstrip("/")})
+                )
 
         # Empty, or all in it deleted before its last part came.
         if listing.last and self.finished(listing.directory):
@@ -181,10 +183,10 @@ class _Deletion(_TreeJobs):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "tree":
-            return self.fs._rm_tree(job.source)
+            return self.fs._rm_tree(job.path)
         if job.kind == "directory":
-            return self.fs._rmdir(job.source)
-        return self.fs._rm_file(job.source)
+            return self.fs._rmdir(job.path)
+        return self.fs._rm_file(job.path)
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind in ("directory", "tree"):
@@ -192,21 +194,21 @@ class _Deletion(_TreeJobs):
         else:
             self.files_deleted += 1
 
-        self.after(job.source)
-        return [job.source]
+        self.after(job.path)
+        return [job.path]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         missing = isinstance(error, FileNotFoundError)
-        if missing and job.kind == "tree" and job.source == self.path:
+        if missing and job.kind == "tree" and job.path == self.path:
             raise error  # The path missing, as the walk would find it.
 
         if missing:
             # Already gone: an object store's directory, or deleted by another.
-            self.after(job.source)
+            self.after(job.path)
             return []
 
         # Yielded among paths, the error must tell its path itself.
-        error.add_note(f"Deleting {job.source!r} failed.")
+        error.add_note(f"Deleting {job.path!r} failed.")
         return [error]
 
     def after(self, path: str) -> None:
@@ -219,4 +221,4 @@ class _Deletion(_TreeJobs):
         if self.implicit_directories:
             self.after(directory)  # Gone already, as a FileNotFoundError tells.
         else:
-            self.waiting.append(_Job("directory", directory))
+            self.waiting.append(_Job("directory", {"name": directory}))

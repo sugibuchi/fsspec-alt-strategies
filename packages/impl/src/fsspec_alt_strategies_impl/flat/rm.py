@@ -144,4 +144,4 @@ class _Deletion(_FlatJobs):
     def send(self) -> None:
         """Queue the deletion of the batch, and start another."""
         paths, self.batch = tuple(self.batch), []
-        self.waiting.append(_Job("delete", paths[-1], paths=paths))
+        self.waiting.append(_Job("delete", {"name": paths[-1]}, paths=paths))

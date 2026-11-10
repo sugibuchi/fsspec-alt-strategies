@@ -15,7 +15,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from ..common.jobs import _CopyJobs, _entry_of, _Job, _transfer_of
+from ..common.jobs import _CopyJobs, _Job, _transfer_of
 from ..common.paths import _check_maxdepth
 from ._jobs import _FlatJobs
 
@@ -172,7 +172,7 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
         self.files_found += 1
         target = self.target(name)
         # The entry goes with its copy, so that cp_entry need not ask it.
-        job = _Job("copy", name, target, entry=entry)
+        job = _Job("copy", entry, target)
         self.queue(target.rpartition("/")[0], [job])
 
     def queue(
@@ -188,13 +188,13 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
             return
 
         if directory not in self.after_mkdir:
-            self.waiting.append(_Job("mkdir", "", directory))
+            self.waiting.append(_Job("mkdir", {"name": ""}, directory))
         self.after_mkdir.setdefault(directory, []).extend(copies)
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
             return self.dst_fs._makedirs(job.destination, exist_ok=True)
-        return self.transfer_file(_entry_of(job), job.destination)
+        return self.transfer_file(job.source, job.destination)
 
     @abstractmethod
     async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
@@ -207,7 +207,7 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
             return []
 
         self.files_done += 1
-        return [(job.source, job.destination)]
+        return [(job.path, job.destination)]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         if job.kind == "mkdir":

@@ -182,7 +182,7 @@ class _Rename(_CopyOrMove):
         if name.endswith("/"):
             # With maxdepth, directories stay, as fsspec's copy leaves them out.
             if self.maxdepth is None:
-                job = _Job("marker", name, self.target(name), entry=entry)
+                job = _Job("marker", entry, self.target(name))
                 self.waiting.append(job)
             return
         super().add(entry)
@@ -263,7 +263,7 @@ class _Move(_Copy):
             return super().done(job)
         if job.kind == "copy":
             self.copying -= 1
-            self.delete_later(job.source)
+            self.delete_later(job.path)
             return []
 
         moved = []
@@ -278,7 +278,7 @@ class _Move(_Copy):
             return super().failed(job, error)
         if job.kind == "copy":
             self.copying -= 1
-            self.copied.pop(job.source)
+            self.copied.pop(job.path)
             self.send_if_ready()
             return super().failed(job, error)
 
@@ -304,4 +304,4 @@ class _Move(_Copy):
         done = (self.listed or self.op.cancelling()) and self.copying == 0
         if len(self.batch) >= self.batch_size or done:
             paths, self.batch = tuple(self.batch), []
-            self.waiting.append(_Job("delete", paths[-1], paths=paths))
+            self.waiting.append(_Job("delete", {"name": paths[-1]}, paths=paths))

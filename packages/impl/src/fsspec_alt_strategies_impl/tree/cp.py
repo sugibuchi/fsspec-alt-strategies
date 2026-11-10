@@ -15,7 +15,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from ..common.jobs import _CopyJobs, _entry_of, _Job, _transfer_of
+from ..common.jobs import _CopyJobs, _Job, _transfer_of
 from ..common.paths import _check_maxdepth
 from ._jobs import _TreeJobs
 
@@ -171,7 +171,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         self.files_found += 1
         path = entry["name"]
         target = self.target(path)
-        job = _Job("copy", path, target, entry=entry)
+        job = _Job("copy", entry, target)
         self.queue(target.rpartition("/")[0], "", [job])
 
     def add(self, listing: _Listing) -> list[Any] | None:
@@ -181,7 +181,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
                 name = entry["name"].rstrip("/")
                 self.files_found += 1
                 # The entry goes with its copy, so that cp_entry need not ask it.
-                copies.append(_Job("copy", name, self.target(name), entry=entry))
+                copies.append(_Job("copy", {**entry, "name": name}, self.target(name)))
 
         if listing.first and listing.last and not listing.entries:
             # An empty directory is made, whatever the storage. With maxdepth,
@@ -209,13 +209,13 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             return
 
         if directory not in self.after_mkdir:
-            self.waiting.append(_Job("mkdir", source, directory))
+            self.waiting.append(_Job("mkdir", {"name": source}, directory))
         self.after_mkdir.setdefault(directory, []).extend(copies)
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
             return self.dst_fs._makedirs(job.destination, exist_ok=True)
-        return self.transfer_file(_entry_of(job), job.destination)
+        return self.transfer_file(job.source, job.destination)
 
     @abstractmethod
     async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
@@ -227,7 +227,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             self.waiting.extend(self.after_mkdir.pop(job.destination))
             return []
         self.files_done += 1
-        return [(job.source, job.destination)]
+        return [(job.path, job.destination)]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         # A file's error is noted where it happened, in transfer_file.

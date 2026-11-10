@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
-from ..common.jobs import _entry_of, _Job, _transfer_of
+from ..common.jobs import _Job, _transfer_of
 from ..common.paths import _check_maxdepth
 from .cp import _CopyOrMove
 
@@ -242,7 +242,7 @@ class _Move(_CopyOrMove):
             # makes none, and mv_entry is not to make it.
             target = self.target(root)
             parent = target.rpartition("/")[0]
-            job = _Job("rename", root, target, entry=entry)
+            job = _Job("rename", entry, target)
             self.queue(parent, "", [job], always=not self.implicit_directories)
 
         self.roots_renamed = 0
@@ -289,9 +289,9 @@ class _Move(_CopyOrMove):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "rmdir":
-            return self.fs._rmdir(job.source)
+            return self.fs._rmdir(job.path)
         if job.kind == "rename":
-            return self.mv_entry(_entry_of(job), job.destination)
+            return self.mv_entry(job.source, job.destination)
         return super().run(job)
 
     async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
@@ -306,21 +306,21 @@ class _Move(_CopyOrMove):
         if job.kind == "mkdir":
             outcome = super().done(job)
             # An empty directory: made at the destination, it can go.
-            if job.source and self.finished(job.source):
-                outcome += self.remove(job.source)
+            if job.path and self.finished(job.path):
+                outcome += self.remove(job.path)
             return outcome
 
         if job.kind == "rename":
             self.roots_renamed = (self.roots_renamed or 0) + 1
-            return [(job.source, job.destination)]
+            return [(job.path, job.destination)]
 
         if job.kind == "rmdir":
             self.directories_moved += 1
         else:
             self.files_done += 1
 
-        outcome: list[Any] = [(job.source, job.destination)]
-        if (directory := self.child_done(job.source)) is not None:
+        outcome: list[Any] = [(job.path, job.destination)]
+        if (directory := self.child_done(job.path)) is not None:
             outcome += self.remove(directory)
 
         return outcome
@@ -331,7 +331,7 @@ class _Move(_CopyOrMove):
         An implicit directory went with its last file: it is moved, with no
         request, as one found already gone is.
         """
-        job = _Job("rmdir", directory, self.target(directory))
+        job = _Job("rmdir", {"name": directory}, self.target(directory))
         if self.implicit_directories:
             return self.done(job)
         self.waiting.append(job)
@@ -341,14 +341,12 @@ class _Move(_CopyOrMove):
         if job.kind == "rename":
             # Declared to rename directories, the storage failed this one: its
             # cause, not one failure per file.
-            error.add_note(
-                f"{self.doing} {job.source!r} to {job.destination!r} failed."
-            )
+            error.add_note(f"{self.doing} {job.path!r} to {job.destination!r} failed.")
             return [error]
         if job.kind != "rmdir":
             return super().failed(job, error)
 
         if isinstance(error, FileNotFoundError):
             return self.done(job)  # Already gone, as _tree_rm counts it.
-        error.add_note(f"Deleting the directory {job.source!r} failed.")
+        error.add_note(f"Deleting the directory {job.path!r} failed.")
         return [error]
