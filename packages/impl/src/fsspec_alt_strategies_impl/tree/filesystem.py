@@ -230,7 +230,8 @@ class TreeFileSystem(_BaseFileSystem):
 
         fsspec's own does nothing. An existing path raises FileExistsError.
         Without ``create_parents``, a missing parent raises FileNotFoundError,
-        and one that is a file NotADirectoryError.
+        and one that is a file NotADirectoryError. With it, ``_makedirs``
+        makes the parents, and answers for a file among them.
         """
         path = self._strip_protocol(path)
         if await self._exists(path):
