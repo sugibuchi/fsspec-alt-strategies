@@ -38,7 +38,7 @@ from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Collection
+    from collections.abc import AsyncGenerator, Callable, Collection, Iterable
 
 __all__: list[str] = []
 
@@ -175,6 +175,7 @@ async def _chunks(
     maxdepth: int | None = None,
     matched: Collection[str] = (),
     descend: Callable[[dict[str, Any]], bool] | None = None,
+    whole: Callable[[dict[str, Any]], bool] | None = None,
     raise_on_error: bool = False,
     ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
@@ -205,14 +206,17 @@ async def _chunks(
     Once ``stopping`` returns true, no new listing starts, and those in flight
     stop after their current part: a directory stopped so has no last part.
 
-    With the profile's ``lists_recursively=True``, and no ``descend`` to prune
-    the tree, each root is listed whole by one recursive ``_ils``, split into
-    the same parts, as `_produce_tree` says.
+    With the profile's ``lists_recursively=True``, a tree that nothing prunes
+    is listed whole by one recursive ``_ils``, split into the same parts, as
+    `_produce_tree` says. Without ``descend``, that is each root. With it,
+    ``whole`` tells of a directory's entry whether ``descend`` holds for every
+    directory below it, e.g. below a glob's ``**``: such a directory is listed
+    so, and the walk prunes only above it.
     """
     _check_maxdepth(maxdepth)
 
     roots = {_trim(p) for p in ([path] if isinstance(path, str) else path)}
-    recursive = descend is None and await _lists_recursively(fs)
+    trees = _Trees(await _lists_recursively(fs), descend, whole)
     # The directories to list, each with its depth.
     directories: _Queue[tuple[str, int]] = _Queue(fs.operation_limit)
     # The parts listed, a few at a time: a listing waits while they are full.
@@ -231,7 +235,7 @@ async def _chunks(
                 _produce_tree(
                     fs, ils_kwargs or {}, *item, maxdepth, parts, chunk_size, stopped
                 )
-                if recursive
+                if item[0] in trees.roots
                 else _produce(
                     fs,
                     ils_kwargs or {},
@@ -244,6 +248,7 @@ async def _chunks(
             )
         )
 
+    trees.add(roots)
     directories.waiting.extend(
         (root, 2 if root in matched else 1) for root in sorted(roots)
     )
@@ -260,8 +265,12 @@ async def _chunks(
                 if (part.directory in roots and part.first) or raise_on_error:
                     raise part.error
                 _note(part.error, part.directory)
-            elif not recursive and (maxdepth is None or part.depth < maxdepth):
-                directories.waiting.extend(_new_subdirs(part, descend, found))
+            elif not trees.listed(part.directory) and (
+                maxdepth is None or part.depth < maxdepth
+            ):
+                subdirs = _new_subdirs(part, descend, found)
+                trees.add(s for s, _ in subdirs)
+                directories.waiting.extend(subdirs)
 
             if part.last:
                 found.pop(part.directory, None)
@@ -470,6 +479,44 @@ def _new_subdirs(
     new = [s for s in dict.fromkeys(_subdirs(part.entries, descend)) if s not in seen]
     seen.update(new)
     return [(s, part.depth + 1) for s in new]
+
+
+class _Trees:
+    """The directories a walk lists whole, by one recursive ``_ils`` each.
+
+    A directory is so listed when the storage lists recursively, and the walk
+    prunes nothing below it: it has no ``descend``, or ``whole`` holds for it.
+    The directories below are then in its listing, never listed on their own.
+    """
+
+    def __init__(
+        self,
+        recursive: bool,
+        descend: Callable[[dict[str, Any]], bool] | None,
+        whole: Callable[[dict[str, Any]], bool] | None,
+    ) -> None:
+        self.recursive = recursive
+        self.descend = descend
+        self.whole = whole
+        self.roots: set[str] = set()
+
+    def add(self, directories: Iterable[str]) -> None:
+        """Note those of the directories to list that are listed whole."""
+        if self.recursive:
+            self.roots.update(d for d in directories if self._whole(d))
+
+    def _whole(self, directory: str) -> bool:
+        if self.descend is None:
+            return True
+        return self.whole is not None and self.whole(
+            {"name": directory, "type": "directory"}
+        )
+
+    def listed(self, directory: str) -> bool:
+        """Whether the directory's subdirectories are in a recursive listing."""
+        return any(
+            r in (directory, "") or directory.startswith(r + "/") for r in self.roots
+        )
 
 
 def _note(error: Exception, directory: str) -> None:

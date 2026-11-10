@@ -110,6 +110,7 @@ async def _find_listings(
     *,
     maxdepth: int | None = None,
     descend: Callable[[dict[str, Any]], bool] | None = None,
+    whole: Callable[[dict[str, Any]], bool] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
     file_root: bool = False,
@@ -136,6 +137,7 @@ async def _find_listings(
         root,
         maxdepth=maxdepth,
         descend=descend,
+        whole=whole,
         ils_kwargs=ils_kwargs,
         stopping=stopping,
     )

@@ -159,6 +159,70 @@ async def test_a_pattern_still_lists_a_directory_per_request(
     assert any_fs.stats.calls["list"] > 1
 
 
+@pytest.mark.parametrize(
+    "kwargs", [{}, {"withdirs": False}, {"maxdepth": 2}, {"maxdepth": 3}]
+)
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "data/**",
+        "data/**/*.parquet",
+        "data/*/**/part-0.parquet",
+        "data/2024/**",
+        "data/*/0?/**/*",
+        "**/x",
+        "data/**/02/*",
+        "data/*/01/*.parquet",
+    ],
+)
+async def test_glob_matches_as_fsspec(
+    any_fs: SimulatedFileSystem, pattern: str, kwargs: dict[str, Any]
+) -> None:
+    _tree(any_fs)
+    expected = await AsyncFileSystem._glob(any_fs, pattern, **kwargs)
+
+    found, errors = await _collect_with_errors(
+        _tree_glob(_view(any_fs), pattern, **kwargs)
+    )
+
+    assert errors == []
+    assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)
+
+
+@pytest.mark.parametrize(
+    ("pattern", "lists"),
+    [
+        # At the first ** from the root: the root is listed whole.
+        ("data/**/*.parquet", 1),
+        # data, then each of its 2 directories, whole.
+        ("data/*/**/part-0.parquet", 3),
+        # data, its 2 directories, then each of their 4, whole.
+        ("data/*/0?/**", 7),
+    ],
+)
+async def test_glob_lists_whole_below_the_first_globstar(
+    any_fs: SimulatedFileSystem, pattern: str, lists: int
+) -> None:
+    _tree(any_fs)
+    any_fs.reset_stats()
+
+    await _collect_with_errors(_tree_glob(_view(any_fs), pattern))
+
+    assert any_fs.stats.calls["list"] == lists
+
+
+async def test_glob_with_maxdepth_lists_a_directory_per_request(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    any_fs.reset_stats()
+
+    await _collect_with_errors(_tree_glob(_view(any_fs), "data/**", maxdepth=2))
+
+    # Its depth prunes below the **: data and its 2 directories.
+    assert any_fs.stats.calls["list"] == 3
+
+
 async def test_a_directory_comes_before_its_own_parts(
     flat_fs: SimulatedFileSystem,
 ) -> None:
