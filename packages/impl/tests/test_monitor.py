@@ -54,6 +54,17 @@ def test_a_filesystem_is_wrapped_as_its_entry_says() -> None:
     assert (flat.rm_batch_size, flat.storage_profile) == (100, profile)
 
 
+def test_an_entry_passes_its_native_methods_on() -> None:
+    entry: Any = {
+        "storage_profile": StorageProfile(fs_type="tree"),
+        "operation_concurrency": 2,
+        "io_concurrency": 1,
+        "native": ["mv", "rm"],
+    }
+    tree = monitored(SimulatedFileSystem(), {_SIMULATED: entry})
+    assert tree.native == {"mv", "rm"}  # type: ignore[attr-defined]
+
+
 def test_a_subclass_takes_the_entry_of_its_class() -> None:
     class Mine(SimulatedFileSystem):
         pass
