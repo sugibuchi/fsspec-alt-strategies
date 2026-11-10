@@ -96,8 +96,8 @@ Each family declares the primitives its subclasses implement, and overrides fssp
 
 Both also take `_info`, `_rm_file`, `_makedirs`, `open_async` and `_open`, and copy and move a file with:
 
-- `_cp_entry(entry, path2)`, a copy within the storage;
-- `_mv_entry(entry, path2)`, the storage's rename, or a copy then a delete where it has none.
+- `_cp_file_entry(entry, path2)`, a copy within the storage;
+- `_mv_file_entry(entry, path2)`, the storage's rename, or a copy then a delete where it has none.
 
 Each takes the source's entry, as the listing gave it, so that a copy needing the size, e.g. to go in parts, need not
 ask it again. The entry may be stale, so a copy must still be right if the file changed. fsspec's `_cp_file` and
@@ -216,8 +216,8 @@ stores list them.
 - Name order tells when a directory is done, so `_flat_walk` streams its directories. Each key is listed once.
 - Directories are derived from the keys, by `flat/_keys.py`. A key ending with "/" marks a directory.
 - `_flat_rm` deletes in batches of `rm_batch_size`, with `_rm_files`.
-- `_flat_mv` renames with `_mv_entry` when the profile says the storage renames. Otherwise it copies, then deletes in
-  batches.
+- `_flat_mv` renames with `_mv_file_entry` when the profile says the storage renames. Otherwise it copies, then
+  deletes in batches.
 - A listing error ends the operation: there is no other listing to go on with.
 
 ### Storage profiles
@@ -231,7 +231,7 @@ profile only saves requests:
 | `parents_required`     | False: the `_makedirs` of each destination directory written to    |
 | `implicit_directories` | True: those, and the deletion of each directory                    |
 | `renames_files`        | True: the data copied by `_flat_mv`                                |
-| `renames_directories`  | True: every request in a directory moved whole by one `_mv_entry`  |
+| `renames_directories`  | True: every request in a directory moved whole by one `_mv_file_entry`  |
 | `deletes_directories`  | True: every request in a directory deleted whole by one `_rm_tree` |
 
 - A filesystem has one profile, which never changes. It is `storage_profile`, or what `_load_storage_profile()`

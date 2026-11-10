@@ -110,10 +110,14 @@ class _Tree(TreeFileSystem):
     async def _rmdir(self, path: str) -> None:
         await self.inner._rmdir(path)
 
-    async def _cp_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+    async def _cp_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
         await self.inner._cp_file(entry["name"], path2)
 
-    async def _mv_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+    async def _mv_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
         await self.inner._mv_file(entry["name"], path2)
 
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
@@ -284,7 +288,7 @@ async def test_a_rename_moves_a_dir_whole(inner: SimulatedFileSystem) -> None:
     class Renaming(_Tree):
         storage_profile = StorageProfile(renames_directories=True)
 
-        async def _mv_entry(
+        async def _mv_file_entry(
             self, entry: dict[str, Any], path2: str, **kwargs: Any
         ) -> None:
             await self.inner._rename(entry["name"], path2)
@@ -292,7 +296,7 @@ async def test_a_rename_moves_a_dir_whole(inner: SimulatedFileSystem) -> None:
     renaming = Renaming(inner, asynchronous=True)
     inner.reset_stats()
     await renaming._mv("data", "moved", recursive=True)
-    # The target's info, and the root's own, for the entry _mv_entry takes.
+    # The target's info, and the root's own, for the entry _mv_file_entry takes.
     assert inner.stats.calls == {"info": 2, "rename": 1}
     assert not await inner._exists("data")
     assert await inner._exists("moved/2024/01/part-0.parquet")
@@ -303,7 +307,7 @@ async def test_a_file_moves_by_mv_file_when_not_recursive(
     inner: SimulatedFileSystem, path2: str
 ) -> None:
     class Renaming(_Tree):
-        async def _mv_entry(
+        async def _mv_file_entry(
             self, entry: dict[str, Any], path2: str, **kwargs: Any
         ) -> None:
             await self.inner._rename(entry["name"], path2)

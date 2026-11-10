@@ -52,7 +52,7 @@ class StorageProfile:
         Whether writing a file into a missing directory fails, rather than
         creating its parents. Unknown by default, taken as True: directories are
         created before files are written into them. It tells of writes only:
-        a rename's parent is always created first, as ``_mv_entry`` is called
+        a rename's parent is always created first, as ``_mv_file_entry`` is called
         only where the destination's parent exists.
     implicit_directories : bool, optional
         Whether directories exist only through the files under them, with no
@@ -65,9 +65,9 @@ class StorageProfile:
         rather than a copy and a delete. Unknown by default, taken as False: a
         move copies, and deletes in batches where it can.
     renames_directories : bool, optional
-        Whether ``_mv_entry`` moves a directory too, with all in it, in one request,
+        Whether ``_mv_file_entry`` moves a directory too, with all in it, in one request,
         as a storage's rename does. Unknown by default, taken as False: a
-        directory's files are moved one by one, as ``_mv_entry`` is called on files
+        directory's files are moved one by one, as ``_mv_file_entry`` is called on files
         only. True holds between any two paths of the filesystem: a storage
         whose rename stops at a boundary, e.g. containers, is several
         filesystems under a router.

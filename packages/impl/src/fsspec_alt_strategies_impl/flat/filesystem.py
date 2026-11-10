@@ -67,7 +67,7 @@ class FlatFileSystem(_BaseFileSystem):
       ``rm_batch_size``;
     - ``_ils``, a directory's listing, which ``_ls`` and so fsspec's own methods
       list with, and ``_info`` and ``_rm_file``;
-    - ``_cp_entry`` and ``_mv_entry``, a copy and a move of a key by its entry,
+    - ``_cp_file_entry`` and ``_mv_file_entry``, a copy and a move of a key by its entry,
       as its listing gave it, e.g. with its size. fsspec's ``_cp_file`` and
       ``_mv_file`` ask the entry, then call them;
     - ``open_async``, giving its files ``io_limit`` as their concurrency
@@ -84,7 +84,7 @@ class FlatFileSystem(_BaseFileSystem):
 
     ``storage_profile``, a `StorageProfile`, tells the strategies what the
     storage does. With ``renames_files=True``, a recursive ``mv``, or one of a
-    single file, moves each key by ``_mv_entry``, the storage's rename.
+    single file, moves each key by ``_mv_file_entry``, the storage's rename.
     Otherwise it copies each key, and deletes them in batches.
 
     Parameters
@@ -121,8 +121,8 @@ class FlatFileSystem(_BaseFileSystem):
     ...     async def _ils(self, path, **kwargs): ...
     ...     async def _info(self, path, **kwargs): ...
     ...     async def _rm_file(self, path, **kwargs): ...
-    ...     async def _cp_entry(self, entry, path2, **kwargs): ...
-    ...     async def _mv_entry(self, entry, path2, **kwargs): ...
+    ...     async def _cp_file_entry(self, entry, path2, **kwargs): ...
+    ...     async def _mv_file_entry(self, entry, path2, **kwargs): ...
     ...
     ...     async def open_async(self, path, mode="rb", **kwargs):
     ...         file = MyFile(self, path, mode, concurrency_limit=self.io_limit)
@@ -211,7 +211,9 @@ class FlatFileSystem(_BaseFileSystem):
         """
 
     @abstractmethod
-    async def _cp_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+    async def _cp_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
         """Copy a key within the storage, by its entry, to ``path2``.
 
         ``entry`` is the source's, as ``_iexpand`` or ``_info`` gave it, its
@@ -222,10 +224,12 @@ class FlatFileSystem(_BaseFileSystem):
         """
 
     @abstractmethod
-    async def _mv_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+    async def _mv_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
         """Move a key within the storage, by its entry, to ``path2``.
 
-        ``entry`` is as `_cp_entry` takes it. The flat strategies call it only
+        ``entry`` is as `_cp_file_entry` takes it. The flat strategies call it only
         where the profile's ``renames_files=True`` says the storage renames: a
         directory's marker too, its name ending with "/". One with no rename
         copies, then deletes the source, for fsspec's ``_mv_file``.
@@ -381,7 +385,7 @@ class FlatFileSystem(_BaseFileSystem):
         """Move files, as fsspec's ``mv`` does: with the flat move when recursive.
 
         A single file goes by the flat move too, recursive or not, so that it
-        moves by ``_mv_entry`` where the profile's ``renames_files`` says it
+        moves by ``_mv_file_entry`` where the profile's ``renames_files`` says it
         renames.
         """
         if path1 == path2:

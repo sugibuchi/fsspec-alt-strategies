@@ -120,7 +120,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         The requests received since the filesystem was made, or since
         `reset_stats`.
     entries : list of dict
-        The source entries `_cp_entry` and `_mv_entry` were given, in order,
+        The source entries `_cp_file_entry` and `_mv_file_entry` were given, in order,
         so that a test checks what a strategy handed on.
 
     Examples
@@ -368,12 +368,16 @@ class SimulatedFileSystem(AsyncFileSystem):
         self._check_writable(path2)
         self._write(path2, data)
 
-    async def _cp_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
-        """Copy a file by its entry, as the families' ``_cp_entry`` takes it, noting the entry."""
+    async def _cp_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
+        """Copy a file by its entry, as the families' ``_cp_file_entry`` takes it, noting the entry."""
         self.entries.append(entry)
         await self._cp_file(entry["name"], path2, **kwargs)
 
-    async def _mv_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+    async def _mv_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
         """Move a file by its entry, as fsspec's ``_mv_file`` does: a copy, then a deletion."""
         self.entries.append(entry)
         await self._mv_file(entry["name"], path2)
@@ -638,7 +642,7 @@ def dir_ils(fs: Any) -> Callable[[str], AsyncIterator[dict[str, Any]]]:
 def _by_name(
     transfer: Callable[[str, str], Awaitable[None]],
 ) -> Callable[[dict[str, Any], str], Awaitable[None]]:
-    """A ``_cp_entry`` or ``_mv_entry`` calling ``transfer`` with the entry's name.
+    """A ``_cp_file_entry`` or ``_mv_file_entry`` calling ``transfer`` with the entry's name.
 
     A test replaces a copy or a move with one taking paths, e.g. a
     `SimulatedFileSystem`'s ``_rename``.
@@ -654,7 +658,7 @@ class TreeView:
     """A filesystem as the tree strategies take it, its primitives replaceable.
 
     The tree strategies take a filesystem, and call its ``_ils``, ``_info``,
-    ``_rm_file``, ``_rmdir``, ``_cp_entry``, ``_mv_entry``, ``_makedirs`` and
+    ``_rm_file``, ``_rmdir``, ``_cp_file_entry``, ``_mv_file_entry``, ``_makedirs`` and
     ``_rm_tree``. A `SimulatedFileSystem` has no ``_ils``: this view lists
     with `dir_ils`. Each other primitive is the filesystem's own, unless
     given, so that a test may replace one, e.g. with one that fails. A
@@ -685,8 +689,12 @@ class TreeView:
         self._rm_file = fs._rm_file if rm_file is None else rm_file
         self._rmdir = fs._rmdir if rm_dir is None else rm_dir
         self._rm_tree = rm_tree
-        self._cp_entry = fs._cp_entry if cp_file is None else _by_name(cp_file)
-        self._mv_entry = fs._mv_entry if mv_file is None else _by_name(mv_file)
+        self._cp_file_entry = (
+            fs._cp_file_entry if cp_file is None else _by_name(cp_file)
+        )
+        self._mv_file_entry = (
+            fs._mv_file_entry if mv_file is None else _by_name(mv_file)
+        )
         self._makedirs = fs._makedirs if makedirs is None else makedirs
         self.storage_profile = storage_profile or StorageProfile()
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
@@ -699,7 +707,7 @@ class FlatView:
     """A filesystem as the flat strategies take it, its primitives replaceable.
 
     The flat strategies take a filesystem, and call its ``_iexpand``,
-    ``_info``, ``_rm_files``, ``_cp_entry``, ``_mv_entry``, ``_makedirs`` and
+    ``_info``, ``_rm_files``, ``_cp_file_entry``, ``_mv_file_entry``, ``_makedirs`` and
     ``_rm_file``. Each is the filesystem's own, unless given, so that a test
     may replace one, e.g. with one that fails. A ``cp_file`` or ``mv_file``
     given takes paths, the entry's name. ``fs`` may be None when all
@@ -732,11 +740,11 @@ class FlatView:
         self._iexpand = own("_iexpand", iexpand)
         self._info = own("_info", info)
         self._rm_files = own("_rm_files", rm_files)
-        self._cp_entry = (
-            own("_cp_entry", None) if cp_file is None else _by_name(cp_file)
+        self._cp_file_entry = (
+            own("_cp_file_entry", None) if cp_file is None else _by_name(cp_file)
         )
-        self._mv_entry = (
-            own("_mv_entry", None) if mv_file is None else _by_name(mv_file)
+        self._mv_file_entry = (
+            own("_mv_file_entry", None) if mv_file is None else _by_name(mv_file)
         )
         self._makedirs = own("_makedirs", makedirs)
         self._rm_file = own("_rm_file", rm_file)

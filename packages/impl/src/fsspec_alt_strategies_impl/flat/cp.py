@@ -117,7 +117,7 @@ def _flat_cp(
     ``src_fs`` is the filesystem copied from, and ``dst_fs`` the one copied
     to, ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
     glob pattern, or a list of them, as the source's ``_iexpand`` takes paths.
-    ``cp_entry(entry, destination)`` copies a file: the source's ``_cp_entry``
+    ``cp_entry(entry, destination)`` copies a file: the source's ``_cp_file_entry``
     by default, within one storage. ``same_storage`` is whether ``dst_fs`` is
     ``src_fs``, unless given. ``maxdepth`` of 1 copies only the keys right in
     ``path1``.

@@ -711,7 +711,7 @@ async def test_a_dir_moving_whole_gives_mv_entry_its_entry(
     view = TreeView(
         hierarchical_fs, storage_profile=StorageProfile(renames_directories=True)
     )
-    view._mv_entry = mv_entry  # type: ignore[method-assign]
+    view._mv_file_entry = mv_entry  # type: ignore[method-assign]
     op = _tree_mv(view, view, "data", "moved", same_storage=True)
     assert await _collect_with_errors(op) == ([("data", "moved")], [])
     # The root's own entry, asked of the source, as no listing gave it.

@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     _Transfer: TypeAlias = Callable[[dict[str, Any], str], Awaitable[None]]
     """How one file goes from its source entry to a destination path.
 
-    It is the source's ``_cp_entry`` or ``_mv_entry`` within one storage, or a
+    It is the source's ``_cp_file_entry`` or ``_mv_file_entry`` within one storage, or a
     router's copy or move of a file between two. The entry is the source's, as
     its listing or ``_info`` gave it, its ``"name"`` the source path.
     """
@@ -66,16 +66,17 @@ def _transfer_of(
     """How a copy or move sends each file, and whether it stays in one storage.
 
     ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given. Within
-    one storage, a file goes by the source's own ``_cp_entry`` or ``_mv_entry``,
-    as ``name`` says, unless ``transfer`` is given. Between two, ``transfer``
-    is required: the source's own would write to the source.
+    one storage, a file goes by the source's own ``_cp_file_entry`` or
+    ``_mv_file_entry``, as ``name``, "cp_entry" or "mv_entry", says, unless
+    ``transfer`` is given. Between two, ``transfer`` is required: the source's
+    own would write to the source.
     """
     if same_storage is None:
         same_storage = src_fs is dst_fs
     if transfer is None:
         if not same_storage:
             raise ValueError(f"{name} is required between two storages")
-        transfer = getattr(src_fs, f"_{name}")
+        transfer = getattr(src_fs, f"_{name.removesuffix('_entry')}_file_entry")
     return transfer, same_storage
 
 

@@ -105,10 +105,14 @@ class _Flat(FlatFileSystem):
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         await self.inner._rm_file(path)
 
-    async def _cp_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+    async def _cp_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
         await self.inner._cp_file(entry["name"], path2)
 
-    async def _mv_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+    async def _mv_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
         await self.inner._mv_file(entry["name"], path2)
 
     def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
@@ -227,7 +231,7 @@ async def test_a_file_moves_as_the_profile_says_when_not_recursive(
     class Renaming(_Flat):
         storage_profile = StorageProfile(renames_files=renames_files)
 
-        async def _mv_entry(
+        async def _mv_file_entry(
             self, entry: dict[str, Any], path2: str, **kwargs: Any
         ) -> None:
             renamed.append((entry["name"], path2))

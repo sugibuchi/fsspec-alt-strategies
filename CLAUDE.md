@@ -50,8 +50,8 @@ code: read it before adding a strategy.
 - The only function a strategy takes is a copy's or a move's `cp_entry` or `mv_entry`, a `common.jobs._Transfer`,
   taking the source's entry. The router passes its copy of a file between two storages so. Between two storages it is
   required.
-- A copy or move hands each file's entry, as its listing found it, to `_cp_entry` or `_mv_entry`. Never drop it for
-  the path alone: a storage may need its size.
+- A copy or move hands each file's entry, as its listing found it, to `_cp_file_entry` or `_mv_file_entry`. Never drop it
+  for the path alone: a storage may need its size.
 - A strategy calls only a storage's primitives, such as `_ils`, `_info` and `_rm_file`, never a high-level method such
   as `_find` or `_glob`: another strategy may have replaced it.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.

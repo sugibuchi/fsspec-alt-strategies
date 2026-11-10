@@ -5,7 +5,7 @@
 `_flat_mv` is an alternative to fsspec's recursive ``mv`` for flat storages.
 fsspec's copies every key, then deletes them all, each stage listing the
 prefix first. `_flat_mv` moves each key as soon as the listing gives it: by
-one ``_mv_entry``, or by a copy, deleting the copied keys in batches while the
+one ``_mv_file_entry``, or by a copy, deleting the copied keys in batches while the
 listing goes on.
 
 This module depends on `_jobs`, `cp`, and `jobs`, `operation` and `paths` of
@@ -50,7 +50,7 @@ def _flat_mv(
 
     It moves each key in one of two ways, by the destination's profile:
 
-    - by the source's ``_mv_entry``: each key is moved by one ``_mv_entry`` as
+    - by the source's ``_mv_file_entry``: each key is moved by one ``_mv_file_entry`` as
       soon as the listing gives it, and yielded once moved. It wins on
       storages renaming a key in one request, which copies no data.
     - by copies: each key is copied by one ``cp_entry`` as soon as the listing
@@ -60,7 +60,7 @@ def _flat_mv(
       batch is deleted. It wins on object stores, which rename nothing, but
       delete many keys in one request.
 
-    It moves by ``_mv_entry`` only within one storage whose profile's
+    It moves by ``_mv_file_entry`` only within one storage whose profile's
     ``renames_files`` is True. Unknown, it copies and deletes in batches,
     which is right on any storage: about one request per key either way, but
     a rename copies no data.
@@ -94,7 +94,7 @@ def _flat_mv(
     FileNotFoundError if ``path1`` does not exist, or matches nothing, and
     ValueError if ``path2`` is inside it.
 
-    Requests: as `_flat_cp`, with one ``_mv_entry`` per key instead of its
+    Requests: as `_flat_cp`, with one ``_mv_file_entry`` per key instead of its
     ``cp_entry``, or with one ``_rm_files`` more per batch.
 
     ``src_fs`` is the filesystem moved from, and ``dst_fs`` the one moved to,
@@ -102,7 +102,7 @@ def _flat_mv(
     pattern, or a list of them, as the source's ``_iexpand`` takes paths.
     ``path2`` places them as `_flat_cp` does. ``cp_entry(entry,
     destination)`` copies a file by its source entry when the move copies: the source's
-    ``_cp_entry`` by default, within one storage. ``same_storage`` is whether
+    ``_cp_file_entry`` by default, within one storage. ``same_storage`` is whether
     ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 moves only the
     keys right in ``path1``.
 
@@ -145,9 +145,9 @@ def _flat_mv(
 
 
 class _Rename(_CopyOrMove):
-    """The jobs of one `_flat_mv` by ``_mv_entry``: one move per key.
+    """The jobs of one `_flat_mv` by ``_mv_file_entry``: one move per key.
 
-    The source's ``_mv_entry`` moves each key where a copy would put it. A
+    The source's ``_mv_file_entry`` moves each key where a copy would put it. A
     directory's marker is moved too, but not yielded.
     """
 
@@ -158,12 +158,12 @@ class _Rename(_CopyOrMove):
         await super().setup()
 
         # A rename makes no parent, as a write may: parents_required tells of
-        # writes only, and _mv_entry is called only where the parent exists.
+        # writes only, and _mv_file_entry is called only where the parent exists.
         self.parents_required = not self.implicit_directories
 
     async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
         try:
-            await self.fs._mv_entry(entry, destination)
+            await self.fs._mv_file_entry(entry, destination)
         except Exception as e:
             # Yielded among paths, the error must tell its paths itself.
             e.add_note(f"{self.doing} {entry['name']!r} to {destination!r} failed.")

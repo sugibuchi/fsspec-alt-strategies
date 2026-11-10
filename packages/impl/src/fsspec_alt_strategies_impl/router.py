@@ -238,7 +238,7 @@ class AsyncRoutingFileSystem(
 
         ``src_entry`` is the source's, as its listing or ``_info`` gave it, its
         ``"name"`` the source path. Its size, e.g., may choose how the data
-        goes, but may be stale, as `TreeFileSystem._cp_entry` takes it.
+        goes, but may be stale, as `TreeFileSystem._cp_file_entry` takes it.
 
         Here, the data is streamed through the router, by both storages'
         ``open_async``. A block, the source's ``transfer_size``, is read, then

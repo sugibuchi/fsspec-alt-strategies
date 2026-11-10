@@ -136,7 +136,7 @@ concurrency limits. The wrapper is async if the filesystem is. Pass your own tab
 time, with nothing known of the storage.
 
 A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper,
-overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_entry`
+overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_file_entry`
 renaming a directory, or `_rm_tree` deleting one whole. The strategies then use them where the profile says so,
 streamed and monitored. Use such a wrapper directly: `monitored()` knows only the generic ones.
 

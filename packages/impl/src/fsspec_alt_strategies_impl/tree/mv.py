@@ -141,7 +141,7 @@ def _tree_mv(
     ``src_fs`` again within one storage. ``path1`` is a directory, a file, a glob
     pattern, or a list of them, as the source's ``_ils`` takes paths.
     ``mv_entry(entry, destination)`` moves a file by its source entry, as its
-    listing gave it: the source's ``_mv_entry`` by default, within one storage.
+    listing gave it: the source's ``_mv_file_entry`` by default, within one storage.
     A storage renaming a path in one request implements it so, and may move a
     directory with it too, as the profile's ``renames_directories`` declares.
     ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given.

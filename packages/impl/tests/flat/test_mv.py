@@ -448,7 +448,7 @@ async def test_mv_entry_is_given_the_listings_entries(
     op = _mv(flat_fs, "data", "moved", profile=profile)
     _, errors = await _collect_with_errors(op)
     assert errors == []
-    # By the source's own _mv_entry, each key's entry as the listing gave it.
+    # By the source's own _mv_file_entry, each key's entry as the listing gave it.
     assert sorted((e["name"], e["size"]) for e in flat_fs.entries) == [
         (p, len(p)) for p in _FILES
     ]
