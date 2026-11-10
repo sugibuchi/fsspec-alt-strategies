@@ -70,7 +70,9 @@ class _TreeJobs(_Jobs):
 
     def source(self, roots: _Roots) -> AsyncGenerator[_Listing] | None:
         """The listings of the root directories, if any, walked at once."""
-        directories = [f for f in roots.directories if not self.unlisted(f)]
+        directories = [
+            d["name"] for d in roots.directories if not self.unlisted(d["name"])
+        ]
         if not directories:
             return None
         return _chunks(
@@ -90,8 +92,8 @@ class _TreeJobs(_Jobs):
         its listing says so, and its jobs are queued instead.
         """
         for directory in roots.directories:
-            if self.unlisted(directory):
-                self.at_limit(directory)
+            if self.unlisted(directory["name"]):
+                self.at_limit(directory["name"])
 
         try:
             return await super().begin(roots, source)

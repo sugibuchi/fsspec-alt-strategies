@@ -101,19 +101,19 @@ class _Job(NamedTuple):
 class _Roots(NamedTuple):
     """Where an operation starts: what it walks, and what it handles alone.
 
-    ``directories`` are walked, or listed, at once. A single path of unknown kind is
-    among them, as its listing tells. ``files`` are the entries of known
-    files, e.g. glob matches, so that a copy hands each on without asking it
-    again.
+    Each root is its entry, so that a copy or move hands it on without asking
+    it again. ``directories`` are walked, or listed, at once. A single path of
+    unknown kind is among them, its entry its ``"name"`` alone, as its listing
+    tells what it is. ``files`` are known files, e.g. glob matches.
     """
 
-    directories: Sequence[str]
+    directories: Sequence[dict[str, Any]]
     files: Sequence[dict[str, Any]] = ()
 
     @property
     def paths(self) -> list[str]:
         """The paths of all the roots, the directories first."""
-        return [*self.directories, *(f["name"] for f in self.files)]
+        return [e["name"] for e in (*self.directories, *self.files)]
 
 
 def _roots_of(
@@ -129,7 +129,7 @@ def _roots_of(
     if not matches and not errors:
         raise FileNotFoundError(pattern)
 
-    directories: dict[str, None] = {}
+    directories: dict[str, dict[str, Any]] = {}
     files: list[dict[str, Any]] = []
 
     # Sorted, a directory comes before all in it.
@@ -139,11 +139,11 @@ def _roots_of(
         if any("/".join(parts[:i]) in directories for i in range(1, len(parts))):
             continue
         if entry["type"] == "directory":
-            directories[name] = None
+            directories[name] = {**entry, "name": name}
         else:
             files.append({**entry, "name": name})
 
-    return _Roots(list(directories), files)
+    return _Roots(list(directories.values()), files)
 
 
 class _Queue(Generic[_T]):
@@ -296,7 +296,9 @@ class _Jobs(ABC):
         if self.maxdepth is not None:
             named = [pattern] if isinstance(pattern, str) else pattern
             literal = {_trim(p) for p in named if not has_magic(p)}
-            self.matched = {f for f in roots.directories if f not in literal}
+            self.matched = {
+                d["name"] for d in roots.directories if d["name"] not in literal
+            }
         return roots
 
     @abstractmethod
@@ -560,7 +562,7 @@ class _CopyJobs(_Jobs):
             root = _trim(self.path1)
             if root == destination and self.same_storage:
                 return None
-            roots = _Roots([root])
+            roots = _Roots([{"name": root}])
             sources = [root]
             self.prefix = root
             self.base = await self._base(root, destination)
@@ -584,6 +586,7 @@ class _CopyJobs(_Jobs):
         error is the root's own: what is in it is not copied either.
         """
         roots = await self.glob_roots(self.path1)
+        directories = {d["name"]: d for d in roots.directories}
         files = {f["name"]: f for f in roots.files}
         placed: dict[str, str] = {}
 
@@ -603,7 +606,7 @@ class _CopyJobs(_Jobs):
             self.places[source] = target
 
         return _Roots(
-            [s for s in self.places if s not in files],
+            [directories[s] for s in self.places if s in directories],
             [files[s] for s in self.places if s in files],
         )
 

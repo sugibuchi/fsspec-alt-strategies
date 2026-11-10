@@ -118,7 +118,7 @@ def _tree_mv(
     ``cp_entry``, and one ``rm_dir`` per source directory. With
     ``renames_directories``, each directory root first costs a ``dst_info`` of its
     target, unless ``path2`` was found missing already. One moving whole then
-    costs an ``info`` of its own, for its entry, a
+    costs an ``info`` of its own, for its entry, unless a pattern matched it, a
     ``dst_makedirs`` of its parent, and its ``mv_entry``: nothing more.
     Each request holds a permit of the source's ``operation_limit`` while it
     runs.
@@ -240,7 +240,7 @@ class _Move(_CopyOrMove):
 
             # A job each, as a file's move, after its parent is made: a rename
             # makes none, and mv_entry is not to make it.
-            target = self.target(root)
+            target = self.target(entry["name"])
             parent = target.rpartition("/")[0]
             job = _Job("rename", entry, target)
             self.queue(parent, "", [job], always=not self.implicit_directories)
@@ -248,13 +248,14 @@ class _Move(_CopyOrMove):
         self.roots_renamed = 0
         return roots._replace(directories=walked)
 
-    async def whole(self, source: str) -> dict[str, Any] | Exception | None:
+    async def whole(self, root: dict[str, Any]) -> dict[str, Any] | Exception | None:
         """A root's entry if it can move whole, as its target is missing, or None.
 
-        The entry is asked, for ``mv_entry``. An error asking either is
-        returned, noted: the root's, as its walk would only meet it again on
-        each file.
+        The entry is its pattern's match, or else asked, for ``mv_entry``: a
+        path named is of unknown kind. An error asking either is returned,
+        noted: the root's, as its walk would only meet it again on each file.
         """
+        source = root["name"]
         target = self.target(source)
         try:
             if target not in self.missing:
@@ -266,6 +267,8 @@ class _Move(_CopyOrMove):
                 else:
                     return None
 
+            if "type" in root:
+                return root
             async with self.concurrency_limit:
                 return {**await self.fs._info(source), "name": source}
         except Exception as e:

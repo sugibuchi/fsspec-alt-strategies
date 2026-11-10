@@ -141,11 +141,11 @@ class _Deletion(_TreeJobs):
         if not isinstance(self.path, str) or has_magic(self.path):
             roots = await self.glob_roots(self.path)
         else:
-            roots = _Roots([self.path])
+            roots = _Roots([{"name": self.path}])
 
         if not self.deletes_directories:
             return roots
-        self.waiting.extend(_Job("tree", {"name": f}) for f in roots.directories)
+        self.waiting.extend(_Job("tree", d) for d in roots.directories)
         return roots._replace(directories=[])
 
     def state(self) -> RmState:

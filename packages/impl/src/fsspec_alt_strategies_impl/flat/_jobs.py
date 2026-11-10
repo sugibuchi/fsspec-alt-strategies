@@ -66,7 +66,7 @@ class _FlatJobs(_Jobs):
         """The keys under the root directories, if any, listed one after another."""
         if not roots.directories:
             return None
-        return self._keys(roots.directories)
+        return self._keys([d["name"] for d in roots.directories])
 
     def fed(self, item: dict[str, Any]) -> list[Any]:
         self.current = item["name"]
