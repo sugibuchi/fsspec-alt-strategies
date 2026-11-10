@@ -110,8 +110,11 @@ class _Tree(TreeFileSystem):
     async def _rmdir(self, path: str) -> None:
         await self.inner._rmdir(path)
 
-    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        await self.inner._cp_file(path1, path2)
+    async def _cp_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        await self.inner._cp_file(entry["name"], path2)
+
+    async def _mv_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        await self.inner._mv_file(entry["name"], path2)
 
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
         await self.inner._makedirs(path, exist_ok=exist_ok)
@@ -281,13 +284,16 @@ async def test_a_rename_moves_a_dir_whole(inner: SimulatedFileSystem) -> None:
     class Renaming(_Tree):
         storage_profile = StorageProfile(renames_directories=True)
 
-        async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-            await self.inner._rename(path1, path2)
+        async def _mv_entry(
+            self, entry: dict[str, Any], path2: str, **kwargs: Any
+        ) -> None:
+            await self.inner._rename(entry["name"], path2)
 
     renaming = Renaming(inner, asynchronous=True)
     inner.reset_stats()
     await renaming._mv("data", "moved", recursive=True)
-    assert inner.stats.calls == {"info": 1, "rename": 1}
+    # The target's info, and the root's own, for the entry _mv_entry takes.
+    assert inner.stats.calls == {"info": 2, "rename": 1}
     assert not await inner._exists("data")
     assert await inner._exists("moved/2024/01/part-0.parquet")
 
@@ -297,8 +303,10 @@ async def test_a_file_moves_by_mv_file_when_not_recursive(
     inner: SimulatedFileSystem, path2: str
 ) -> None:
     class Renaming(_Tree):
-        async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-            await self.inner._rename(path1, path2)
+        async def _mv_entry(
+            self, entry: dict[str, Any], path2: str, **kwargs: Any
+        ) -> None:
+            await self.inner._rename(entry["name"], path2)
 
     renaming = Renaming(inner, asynchronous=True)
     inner.reset_stats()
@@ -691,3 +699,13 @@ def test_the_sync_rmdir_deletes() -> None:
     fs = _Tree(inner)
     fs.rmdir("empty")
     assert not inner.exists("empty")
+
+
+async def test_cp_file_asks_info_then_copies_the_entry(
+    fs: _Tree, inner: SimulatedFileSystem
+) -> None:
+    inner.reset_stats()
+    await fs._cp_file("data/README.md", "copied.md")
+    # The default _cp_file asks the source's entry once, then hands it on.
+    assert inner.stats.calls == {"info": 1, "copy": 1}
+    assert inner._file_data["copied.md"].data == b"readme"

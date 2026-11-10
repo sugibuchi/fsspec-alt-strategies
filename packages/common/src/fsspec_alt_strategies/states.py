@@ -157,7 +157,7 @@ class MvState(State):
         The source directories deleted so far, once all in them was moved. None
         for a ``FlatFileSystem``, which deletes no directories.
     roots_renamed : int or None
-        The directories moved whole, each by one ``_mv_file``, what is in them
+        The directories moved whole, each by one ``_mv_entry``, what is in them
         neither found nor counted. None unless the storage moves directories so.
     """
 

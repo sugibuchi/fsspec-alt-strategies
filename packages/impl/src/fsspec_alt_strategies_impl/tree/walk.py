@@ -324,7 +324,7 @@ async def _produce(
                     # storages list a directory within itself too, e.g. as its
                     # marker object.
                     if entry["type"] != "directory" and root:
-                        raise NotADirectoryError(directory)
+                        raise _not_a_directory(directory, entry)
                     continue
 
                 chunk.append(entry)
@@ -413,7 +413,7 @@ class _Split:
         if name == self.root:
             # A file lists itself. A directory may list its own marker.
             if entry["type"] != "directory":
-                raise NotADirectoryError(self.root)
+                raise _not_a_directory(self.root, entry)
             return
         if not name.startswith(f"{self.root}/" if self.root else ""):
             return  # Not below the root: no storage should list it.
@@ -517,6 +517,16 @@ class _Trees:
         return any(
             r in (directory, "") or directory.startswith(r + "/") for r in self.roots
         )
+
+
+def _not_a_directory(root: str, entry: dict[str, Any]) -> NotADirectoryError:
+    """The error of a root that is a file, with its entry as the listing gave it.
+
+    A copy or move of the root then hands the entry on, with no ``_info``.
+    """
+    error = NotADirectoryError(root)
+    error.entry = {**entry, "name": root}  # type: ignore[attr-defined]
+    return error
 
 
 def _note(error: Exception, directory: str) -> None:

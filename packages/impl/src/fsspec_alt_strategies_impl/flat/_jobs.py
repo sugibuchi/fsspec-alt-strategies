@@ -59,8 +59,8 @@ class _FlatJobs(_Jobs):
     def add(self, entry: dict[str, Any]) -> None:
         """Queue the jobs for a key: a file, or a directory's marker ending with "/"."""
 
-    def file_root(self, path: str) -> None:
-        self.add({"name": path, "type": "file"})
+    def file_root(self, entry: dict[str, Any]) -> None:
+        self.add(entry)
 
     def source(self, roots: _Roots) -> AsyncGenerator[dict[str, Any]] | None:
         """The keys under the root directories, if any, listed one after another."""

@@ -15,7 +15,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from ..common.jobs import _CopyJobs, _Job, _transfer_of
+from ..common.jobs import _CopyJobs, _entry_of, _Job, _transfer_of
 from ..common.paths import _check_maxdepth
 from ._jobs import _TreeJobs
 
@@ -37,7 +37,7 @@ def _tree_cp(
     path1: str | Sequence[str],
     path2: str,
     *,
-    cp_file: _Transfer | None = None,
+    cp_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
 ) -> Operation[tuple[str, str], CpState]:
@@ -67,7 +67,7 @@ def _tree_cp(
     one only.
 
     The tree is walked as `_tree_walk` walks it. Each directory's files are copied
-    as soon as the directory is listed, each by a ``cp_file``. A directory is
+    as soon as the directory is listed, each by a ``cp_entry``. A directory is
     created at the destination before files are copied into it, and for each
     empty directory.
 
@@ -81,8 +81,8 @@ def _tree_cp(
     The destination is described by ``dst_fs`` and its ``storage_profile``,
     unknown if it has none. Within one storage, ``dst_fs`` is ``src_fs``, and
     ``same_storage`` is True: a path copied onto itself, or under itself, is
-    refused. Between two, ``cp_file`` copies from one to the other, e.g. the
-    router's ``_cross_fs_cp_file``, and every byte may go through the caller. A
+    refused. Between two, ``cp_entry`` copies from one to the other, e.g. the
+    router's ``_cross_fs_cp_entry``, and every byte may go through the caller. A
     path may then go to the same path, or under it. The copies run
     concurrently, so the destination's paths are created in another order than
     the source's. A storage listing in creation order shows it.
@@ -104,13 +104,13 @@ def _tree_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests of
-    their `_tree_glob`. One ``_ils`` per directory, one ``cp_file`` per file, and
+    their `_tree_glob`. One ``_ils`` per directory, one ``cp_entry`` per file, and
     one ``dst_makedirs`` per destination directory with files or empty. A
     destination refusing to overwrite costs a ``dst_info``, a ``dst_rm_file``
-    and a ``cp_file`` more per file it refused. The ``dst_info`` checks it is
+    and a ``cp_entry`` more per file it refused. The ``dst_info`` checks it is
     a file, as ``dst_rm_file`` is given only paths known to be files. Each
     request holds a permit of the source's ``operation_limit`` while it runs,
-    a ``cp_file`` between two storages too.
+    a ``cp_entry`` between two storages too.
 
     The destination's profile's ``parents_required=False``, or
     ``implicit_directories=True``, saves the ``dst_makedirs`` of each directory with
@@ -124,19 +124,19 @@ def _tree_cp(
     ``src_fs`` is the filesystem copied from, and ``dst_fs`` the one copied
     to, ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
     glob pattern, or a list of them, as the source's ``_ils`` takes paths.
-    ``cp_file(source, destination)`` copies a file: the source's ``_cp_file``
+    ``cp_entry(entry, destination)`` copies a file: the source's ``_cp_entry``
     by default, within one storage. ``same_storage`` is whether ``dst_fs`` is
     ``src_fs``, unless given. ``maxdepth`` of 1 copies only the files in
     ``path1``.
 
     The operation yields ``(source, destination)`` for each file copied, or an
     error, and its state is a `CpState`. The call raises ValueError if
-    ``maxdepth`` is less than 1, or ``cp_file`` is missing between two
+    ``maxdepth`` is less than 1, or ``cp_entry`` is missing between two
     storages. `_tree_mv` does the same, deleting the source as it goes.
     """
     _check_maxdepth(maxdepth)
-    cp_file, same_storage = _transfer_of(
-        src_fs, dst_fs, cp_file, same_storage, "cp_file"
+    cp_entry, same_storage = _transfer_of(
+        src_fs, dst_fs, cp_entry, same_storage, "cp_entry"
     )
     return _Copy.operation(
         fs=src_fs,
@@ -145,7 +145,7 @@ def _tree_cp(
         path2=path2,
         same_storage=same_storage,
         maxdepth=maxdepth,
-        cp_file=cp_file,
+        cp_entry=cp_entry,
     )
 
 
@@ -167,10 +167,12 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         # parts is made once, and its later copies need not wait.
         self.made: set[str] = set()
 
-    def file_root(self, path: str) -> None:
+    def file_root(self, entry: dict[str, Any]) -> None:
         self.files_found += 1
+        path = entry["name"]
         target = self.target(path)
-        self.queue(target.rpartition("/")[0], "", [_Job("copy", path, target)])
+        job = _Job("copy", path, target, entry=entry)
+        self.queue(target.rpartition("/")[0], "", [job])
 
     def add(self, listing: _Listing) -> list[Any] | None:
         copies = []
@@ -178,7 +180,8 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             if entry["type"] != "directory":
                 name = entry["name"].rstrip("/")
                 self.files_found += 1
-                copies.append(_Job("copy", name, self.target(name)))
+                # The entry goes with its copy, so that cp_entry need not ask it.
+                copies.append(_Job("copy", name, self.target(name), entry=entry))
 
         if listing.first and listing.last and not listing.entries:
             # An empty directory is made, whatever the storage. With maxdepth,
@@ -212,11 +215,11 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
             return self.dst_fs._makedirs(job.destination, exist_ok=True)
-        return self.transfer_file(job.source, job.destination)
+        return self.transfer_file(_entry_of(job), job.destination)
 
     @abstractmethod
-    async def transfer_file(self, source: str, destination: str) -> None:
-        """Copy or move a file. An error raised notes its paths, as it is yielded."""
+    async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
+        """Copy or move a file, by its entry. An error raised notes its paths, as it is yielded."""
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":
@@ -236,11 +239,11 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
 
 
 class _Copy(_CopyOrMove):
-    """The jobs of one `_tree_cp`: a ``cp_file`` per file."""
+    """The jobs of one `_tree_cp`: a ``cp_entry`` per file."""
 
-    def __init__(self, *, cp_file: _Transfer, **kwargs: Any) -> None:
+    def __init__(self, *, cp_entry: _Transfer, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.cp_file = cp_file
+        self.cp_entry = cp_entry
 
-    async def transfer_file(self, source: str, destination: str) -> None:
-        await self.copy_file(self.cp_file, source, destination)
+    async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
+        await self.copy_file(self.cp_entry, entry, destination)

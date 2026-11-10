@@ -63,10 +63,13 @@ class TreeFileSystem(_BaseFileSystem):
     fsspec's applies it to the root only, as its walk recurses without it.
 
     A subclass implements the storage's primitives, which fsspec leaves
-    abstract: ``_info``, ``_rm_file``, ``_rmdir``, ``_cp_file`` and
-    ``_makedirs``, and ``_ils``, a directory's listing as an async iterator,
-    which ``_ls`` lists with. It implements ``open_async`` too, giving its files
-    ``io_limit`` as their concurrency limit, and ``_open``. ``_cat_file``,
+    abstract: ``_info``, ``_rm_file``, ``_rmdir`` and ``_makedirs``, and
+    ``_ils``, a directory's listing as an async iterator, which ``_ls`` lists
+    with. It copies and moves a file by ``_cp_entry`` and ``_mv_entry``, which
+    take the source's entry, as its listing gave it, e.g. with its size.
+    fsspec's ``_cp_file`` and ``_mv_file`` ask the entry, then call them. It
+    implements ``open_async`` too, giving its files ``io_limit`` as their
+    concurrency limit, and ``_open``. ``_cat_file``,
     ``_pipe_file``, ``_get_file`` and ``_put_file`` read and write through
     ``open_async``'s files. It may implement ``_rm_tree`` too, a storage's
     recursive delete of a directory, which a recursive ``rm`` uses where the
@@ -84,13 +87,12 @@ class TreeFileSystem(_BaseFileSystem):
     is unknown, and the strategies then take the way right on any storage.
 
     A recursive ``mv``, or one of a single file, moves each file with
-    ``_mv_file``, which is fsspec's copy then delete. A subclass whose storage
-    renames a path in one request overrides it. If its rename moves a directory
-    too, with all in it, the profile's ``renames_directories=True`` says so: a
-    recursive ``mv`` then moves each directory whole where it can. The
-    strategies call ``_mv_file`` only where the destination's parent exists,
-    having made it: a rename need not make it. A caller outside the
-    strategies makes it too.
+    ``_mv_entry``: the storage's rename, or a copy then a delete where it has
+    none. If its rename moves a directory too, with all in it, the profile's
+    ``renames_directories=True`` says so: a recursive ``mv`` then moves each
+    directory whole where it can. The strategies call ``_mv_entry`` only where
+    the destination's parent exists, having made it: a rename need not make
+    it. A caller outside the strategies makes it too.
 
     Parameters
     ----------
@@ -123,7 +125,8 @@ class TreeFileSystem(_BaseFileSystem):
     ...     async def _info(self, path, **kwargs): ...
     ...     async def _rm_file(self, path, **kwargs): ...
     ...     async def _rmdir(self, path): ...
-    ...     async def _cp_file(self, path1, path2, **kwargs): ...
+    ...     async def _cp_entry(self, entry, path2, **kwargs): ...
+    ...     async def _mv_entry(self, entry, path2, **kwargs): ...
     ...     async def _makedirs(self, path, exist_ok=False): ...
     ...
     ...     async def open_async(self, path, mode="rb", **kwargs):
@@ -223,8 +226,25 @@ class TreeFileSystem(_BaseFileSystem):
         """
 
     @abstractmethod
-    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        """Copy a file within the storage."""
+    async def _cp_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        """Copy a file within the storage, by its entry, to ``path2``.
+
+        ``entry`` is the source's, as ``_ils`` or ``_info`` gave it, its
+        ``"name"`` the source path. Its other keys, e.g. the size, may save a
+        request, e.g. one telling whether a copy goes in parts. They may be
+        stale, listed before the copy: a copy must still succeed, or fail as
+        the storage says, if the file changed since.
+        """
+
+    @abstractmethod
+    async def _mv_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        """Move a file within the storage, by its entry, to ``path2``.
+
+        ``entry`` is as `_cp_entry` takes it. A storage renaming a path in one
+        request renames it. If its rename moves a directory too, the profile's
+        ``renames_directories=True`` says so, and ``entry`` may then be a
+        directory's. One with no rename copies, then deletes the source.
+        """
 
     @abstractmethod
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
@@ -432,8 +452,7 @@ class TreeFileSystem(_BaseFileSystem):
         """Move files, as fsspec's ``mv`` does: with the tree move when recursive.
 
         A single file goes by the tree move too, recursive or not, so that it
-        moves by ``_mv_file``, the storage's rename where a subclass overrides
-        it.
+        moves by ``_mv_entry``, the storage's rename where it has one.
         """
         if path1 == path2:
             return

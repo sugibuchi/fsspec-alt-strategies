@@ -57,10 +57,10 @@ class _Writer:
 def streaming_copy(
     open_source: Any, open_destination: Any, *, block_size: int = 1024
 ) -> Any:
-    """A ``cp_file`` between two storages, a block at a time, as the router's."""
+    """A ``cp_entry`` between two storages, a block at a time, as the router's."""
 
-    async def copy_file(source: str, destination: str) -> None:
-        reader = await open_source(source, "rb")
+    async def copy_file(entry: dict[str, Any], destination: str) -> None:
+        reader = await open_source(entry["name"], "rb")
         async with reader:
             writer = await open_destination(destination, "wb")
             async with writer:
@@ -90,7 +90,7 @@ def _across(
     the source's, and the profile the destination's.
     """
     operations = {
-        "cp_file": streaming_copy(
+        "cp_entry": streaming_copy(
             _opener(src, _Reader), _opener(dst, _Writer), block_size=4
         ),
         "same_storage": False,
@@ -221,9 +221,9 @@ async def test_a_marker_makes_its_dir() -> None:
     async def info(path: str) -> dict[str, Any]:
         raise FileNotFoundError(path)
 
-    async def copy_file(source: str, destination: str) -> None:
-        written.append((source, destination))
-        await dst._pipe_file(destination, keys[source])
+    async def copy_file(entry: dict[str, Any], destination: str) -> None:
+        written.append((entry["name"], destination))
+        await dst._pipe_file(destination, keys[entry["name"]])
 
     profile = StorageProfile(parents_required=False)
     copied, errors = await _collect_with_errors(
@@ -237,7 +237,7 @@ async def test_a_marker_makes_its_dir() -> None:
             FlatView(dst, storage_profile=profile),
             "data",
             "copied",
-            cp_file=copy_file,
+            cp_entry=copy_file,
             same_storage=False,
         )
     )
@@ -270,10 +270,10 @@ async def test_failures_are_yielded_and_the_rest_is_copied(
     _tree(flat_fs)
     stream = streaming_copy(_opener(flat_fs, _Reader), _opener(dst, _Writer))
 
-    async def copy_file(source: str, destination: str) -> None:
-        if source == "data/README.md":
-            raise PermissionError(source)
-        await stream(source, destination)
+    async def copy_file(entry: dict[str, Any], destination: str) -> None:
+        if entry["name"] == "data/README.md":
+            raise PermissionError(entry["name"])
+        await stream(entry, destination)
 
     async def makedirs(path: str, exist_ok: bool = False) -> None:
         if path == "copied/2023/02":
@@ -282,7 +282,7 @@ async def test_failures_are_yielded_and_the_rest_is_copied(
 
     copied, errors = await _collect_with_errors(
         _across(
-            flat_fs, dst, "data", "copied", cp_file=copy_file, dst_makedirs=makedirs
+            flat_fs, dst, "data", "copied", cp_entry=copy_file, dst_makedirs=makedirs
         )
     )
     assert sorted(e.__notes__[0] for e in errors) == [

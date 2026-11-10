@@ -38,7 +38,7 @@ from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 from fsspec_alt_strategies.profile import StorageProfile
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 
 __all__ = ["CallStats", "FlatView", "SimulatedFileSystem", "TreeView", "dir_ils"]
 
@@ -119,6 +119,9 @@ class SimulatedFileSystem(AsyncFileSystem):
     stats : CallStats
         The requests received since the filesystem was made, or since
         `reset_stats`.
+    entries : list of dict
+        The source entries `_cp_entry` and `_mv_entry` were given, in order,
+        so that a test checks what a strategy handed on.
 
     Examples
     --------
@@ -162,6 +165,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         self.overwrite = overwrite
 
         self.stats = CallStats()
+        self.entries: list[dict[str, Any]] = []
         self._in_flight = 0
         self._file_data: dict[str, _File] = {}
         # Each directory's direct children. In flat mode, a directory is here only
@@ -363,6 +367,16 @@ class SimulatedFileSystem(AsyncFileSystem):
         data = self._file(path1).data
         self._check_writable(path2)
         self._write(path2, data)
+
+    async def _cp_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        """Copy a file by its entry, as the families' ``_cp_entry`` takes it, noting the entry."""
+        self.entries.append(entry)
+        await self._cp_file(entry["name"], path2, **kwargs)
+
+    async def _mv_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        """Move a file by its entry, as fsspec's ``_mv_file`` does: a copy, then a deletion."""
+        self.entries.append(entry)
+        await self._mv_file(entry["name"], path2)
 
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         path = self._strip_protocol(path)
@@ -621,14 +635,30 @@ def dir_ils(fs: Any) -> Callable[[str], AsyncIterator[dict[str, Any]]]:
     return ils
 
 
+def _by_name(
+    transfer: Callable[[str, str], Awaitable[None]],
+) -> Callable[[dict[str, Any], str], Awaitable[None]]:
+    """A ``_cp_entry`` or ``_mv_entry`` calling ``transfer`` with the entry's name.
+
+    A test replaces a copy or a move with one taking paths, e.g. a
+    `SimulatedFileSystem`'s ``_rename``.
+    """
+
+    async def by_entry(entry: dict[str, Any], path2: str) -> None:
+        await transfer(entry["name"], path2)
+
+    return by_entry
+
+
 class TreeView:
     """A filesystem as the tree strategies take it, its primitives replaceable.
 
     The tree strategies take a filesystem, and call its ``_ils``, ``_info``,
-    ``_rm_file``, ``_rmdir``, ``_cp_file``, ``_mv_file``, ``_makedirs`` and
+    ``_rm_file``, ``_rmdir``, ``_cp_entry``, ``_mv_entry``, ``_makedirs`` and
     ``_rm_tree``. A `SimulatedFileSystem` has no ``_ils``: this view lists
     with `dir_ils`. Each other primitive is the filesystem's own, unless
-    given, so that a test may replace one, e.g. with one that fails.
+    given, so that a test may replace one, e.g. with one that fails. A
+    ``cp_file`` or ``mv_file`` given takes paths, the entry's name.
 
     ``operation_limit`` and ``storage_profile`` are a filesystem's: 32
     requests at a time, and a storage unknown.
@@ -655,8 +685,8 @@ class TreeView:
         self._rm_file = fs._rm_file if rm_file is None else rm_file
         self._rmdir = fs._rmdir if rm_dir is None else rm_dir
         self._rm_tree = rm_tree
-        self._cp_file = fs._cp_file if cp_file is None else cp_file
-        self._mv_file = fs._mv_file if mv_file is None else mv_file
+        self._cp_entry = fs._cp_entry if cp_file is None else _by_name(cp_file)
+        self._mv_entry = fs._mv_entry if mv_file is None else _by_name(mv_file)
         self._makedirs = fs._makedirs if makedirs is None else makedirs
         self.storage_profile = storage_profile or StorageProfile()
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
@@ -669,9 +699,10 @@ class FlatView:
     """A filesystem as the flat strategies take it, its primitives replaceable.
 
     The flat strategies take a filesystem, and call its ``_iexpand``,
-    ``_info``, ``_rm_files``, ``_cp_file``, ``_mv_file``, ``_makedirs`` and
+    ``_info``, ``_rm_files``, ``_cp_entry``, ``_mv_entry``, ``_makedirs`` and
     ``_rm_file``. Each is the filesystem's own, unless given, so that a test
-    may replace one, e.g. with one that fails. ``fs`` may be None when all
+    may replace one, e.g. with one that fails. A ``cp_file`` or ``mv_file``
+    given takes paths, the entry's name. ``fs`` may be None when all
     that a test calls is given.
 
     ``operation_limit``, ``storage_profile`` and ``rm_batch_size`` are a
@@ -701,8 +732,12 @@ class FlatView:
         self._iexpand = own("_iexpand", iexpand)
         self._info = own("_info", info)
         self._rm_files = own("_rm_files", rm_files)
-        self._cp_file = own("_cp_file", cp_file)
-        self._mv_file = own("_mv_file", mv_file)
+        self._cp_entry = (
+            own("_cp_entry", None) if cp_file is None else _by_name(cp_file)
+        )
+        self._mv_entry = (
+            own("_mv_entry", None) if mv_file is None else _by_name(mv_file)
+        )
         self._makedirs = own("_makedirs", makedirs)
         self._rm_file = own("_rm_file", rm_file)
         self.storage_profile = storage_profile or StorageProfile()

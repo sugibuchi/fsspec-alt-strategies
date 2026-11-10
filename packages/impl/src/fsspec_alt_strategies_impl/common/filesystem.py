@@ -5,6 +5,8 @@
 `_BaseFileSystem` holds the two concurrency limits, and moves data through
 file objects: its ``_cat_file``, ``_pipe_file``, ``_get_file`` and
 ``_put_file`` open the file with ``open_async``, which a subclass implements.
+Its ``_cp_file`` and ``_mv_file`` ask a path's ``_info``, then copy or move by
+the families' ``_cp_entry`` and ``_mv_entry``.
 The functions below it shape the answers and errors of fsspec's methods, as
 the families' classes give them.
 
@@ -179,6 +181,25 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
             return False
 
         return entry["type"] != "directory"
+
+    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
+        """Copy a file, as fsspec's ``_cp_file`` does: by ``_cp_entry``, with its ``_info``.
+
+        The strategies call ``_cp_entry`` with the entry their listing found.
+        fsspec's own methods, and other callers, know only the path: its entry
+        is asked first. A subclass whose copy needs nothing of the entry may
+        override this too, to save that request.
+        """
+        entry = await self._info(path1)
+        await self._cp_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
+
+    async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
+        """Move a file, as fsspec's ``_mv_file`` does: by ``_mv_entry``, with its ``_info``.
+
+        As `_cp_file`, for a move.
+        """
+        entry = await self._info(path1)
+        await self._mv_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
 
     async def _cat_file(
         self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any

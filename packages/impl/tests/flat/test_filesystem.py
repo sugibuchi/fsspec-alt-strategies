@@ -105,8 +105,11 @@ class _Flat(FlatFileSystem):
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         await self.inner._rm_file(path)
 
-    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        await self.inner._cp_file(path1, path2)
+    async def _cp_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        await self.inner._cp_file(entry["name"], path2)
+
+    async def _mv_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        await self.inner._mv_file(entry["name"], path2)
 
     def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         # The same file, for the sync API, on the filesystem's loop.
@@ -224,10 +227,12 @@ async def test_a_file_moves_as_the_profile_says_when_not_recursive(
     class Renaming(_Flat):
         storage_profile = StorageProfile(renames_files=renames_files)
 
-        async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-            renamed.append((path1, path2))
-            await self.inner._cp_file(path1, path2)
-            await self.inner._rm_file(path1)
+        async def _mv_entry(
+            self, entry: dict[str, Any], path2: str, **kwargs: Any
+        ) -> None:
+            renamed.append((entry["name"], path2))
+            await self.inner._cp_file(entry["name"], path2)
+            await self.inner._rm_file(entry["name"])
 
     fs = Renaming(inner, asynchronous=True)
     inner.reset_stats()
@@ -329,3 +334,13 @@ async def test_copy_and_mv_with_maxdepth(fs: _Flat, inner: SimulatedFileSystem) 
     ]
     # fsspec's own deletes the whole source: the keys deeper are kept here.
     assert "data/2023/top.txt" in inner._file_data
+
+
+async def test_cp_file_asks_info_then_copies_the_entry(
+    fs: _Flat, inner: SimulatedFileSystem
+) -> None:
+    inner.reset_stats()
+    await fs._cp_file("data/README.md", "copied.md")
+    # The default _cp_file asks the source's entry once, then hands it on.
+    assert inner.stats.calls == {"info": 1, "copy": 1}
+    assert inner._file_data["copied.md"].data == b"x" * 10

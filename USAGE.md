@@ -136,7 +136,7 @@ concurrency limits. The wrapper is async if the filesystem is. Pass your own tab
 time, with nothing known of the storage.
 
 A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper,
-overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_file`
+overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_entry`
 renaming a directory, or `_rm_tree` deleting one whole. The strategies then use them where the profile says so,
 streamed and monitored. Use such a wrapper directly: `monitored()` knows only the generic ones.
 
@@ -293,5 +293,6 @@ with fs.transaction:
 - `_outer(fs, path)` gives the router's path of an inner one;
 - `_roots(path)` lists a directory above the storages.
 
-`transfer_concurrency` bounds the copies and moves between storages at a time. Override `_cross_fs_cp_file` or
-`_cross_fs_mv_file` for a storage with a faster way, such as a server-side copy.
+`transfer_concurrency` bounds the copies and moves between storages at a time. Override `_cross_fs_cp_entry` or
+`_cross_fs_mv_entry` for a storage with a faster way, such as a server-side copy. Each takes the source file's entry,
+with its size, as the listing found it.

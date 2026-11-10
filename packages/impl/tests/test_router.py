@@ -508,19 +508,23 @@ class _ServerCopying(_Router):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.server_copies: list[tuple[str, str]] = []
+        # The size of each entry handed over, which a server copy may need.
+        self.sizes: dict[str, int] = {}
 
-    async def _cross_fs_cp_file(
+    async def _cross_fs_cp_entry(
         self,
         src_fs: AsyncFileSystem,
-        src_path: str,
+        src_entry: dict[str, Any],
         dest_fs: AsyncFileSystem,
         dest_path: str,
     ) -> None:
+        src_path = src_entry["name"]
         if src_path.endswith("3.txt"):
             # e.g. not possible for this one: streamed.
-            await super()._cross_fs_cp_file(src_fs, src_path, dest_fs, dest_path)
+            await super()._cross_fs_cp_entry(src_fs, src_entry, dest_fs, dest_path)
             return
         self.server_copies.append((src_path, dest_path))
+        self.sizes[src_path] = src_entry["size"]
         data = src_fs.fs._file_data[src_path].data  # type: ignore[attr-defined]
         dest_fs.fs.add_file(dest_path, data)  # type: ignore[attr-defined]
 
@@ -534,6 +538,8 @@ async def test_copy_across_storages_tries_the_server_first() -> None:
         ("data/a/1.txt", "copied/a/1.txt"),
         ("data/a/2.txt", "copied/a/2.txt"),
     ]
+    # Each entry as the source's listing gave it, with its size.
+    assert router.sizes == {"data/a/1.txt": 12, "data/a/2.txt": 12}
     assert router.tree.stats.calls["read"] == 1
     assert router.flat.stats.calls["write"] == 1
     assert len(router.flat._file_data) == 3
@@ -544,7 +550,7 @@ async def test_maxdepth_across_storages_runs_the_strategy() -> None:
     for path in [*_FILES, "data/top.txt"]:
         router.tree.add_file(path, path.encode())
     await router._copy("lake/tree/data", "lake/flat/copied", recursive=True, maxdepth=1)
-    # Each file by _cross_fs_cp_file, which fsspec's own copy never calls.
+    # Each file by _cross_fs_cp_entry, which fsspec's own copy never calls.
     assert router.server_copies == [("data/top.txt", "copied/top.txt")]
     assert sorted(router.flat._file_data) == ["copied/top.txt"]
 

@@ -26,6 +26,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from contextlib import aclosing
 from glob import has_magic
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar
 
 from fsspec.utils import common_prefix
@@ -37,14 +38,21 @@ from .operation import Operation, _collect_with_errors
 from .paths import _trim
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+    from collections.abc import (
+        AsyncGenerator,
+        Awaitable,
+        Callable,
+        Mapping,
+        Sequence,
+    )
     from typing import Self, TypeAlias
 
-    _Transfer: TypeAlias = Callable[[str, str], Awaitable[None]]
-    """How one file goes from a source path to a destination path.
+    _Transfer: TypeAlias = Callable[[dict[str, Any], str], Awaitable[None]]
+    """How one file goes from its source entry to a destination path.
 
-    It is the source's ``_cp_file`` or ``_mv_file`` within one storage, or a
-    router's copy or move of a file between two.
+    It is the source's ``_cp_entry`` or ``_mv_entry`` within one storage, or a
+    router's copy or move of a file between two. The entry is the source's, as
+    its listing or ``_info`` gave it, its ``"name"`` the source path.
     """
 
 _T = TypeVar("_T")
@@ -60,7 +68,7 @@ def _transfer_of(
     """How a copy or move sends each file, and whether it stays in one storage.
 
     ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given. Within
-    one storage, a file goes by the source's own ``_cp_file`` or ``_mv_file``,
+    one storage, a file goes by the source's own ``_cp_entry`` or ``_mv_entry``,
     as ``name`` says, unless ``transfer`` is given. Between two, ``transfer``
     is required: the source's own would write to the source.
     """
@@ -77,12 +85,28 @@ class _Job(NamedTuple):
     """A request to make: its kind, e.g. "copy", and the paths it is about.
 
     ``paths`` are those of a request about several, e.g. a batch deletion.
+    ``entry`` is the source's, for a copy or a move: what its listing told.
     """
 
     kind: str
     source: str
     destination: str = ""
     paths: tuple[str, ...] = ()
+    entry: dict[str, Any] | None = None
+
+
+def _entry_of(job: _Job) -> dict[str, Any]:
+    """The source entry of a copy's or a move's job, named by its source path.
+
+    A listing may name a path with a trailing "/", which the job's source has
+    not. A job queued with no entry has its name alone.
+    """
+    entry = job.entry
+    if entry is None:
+        return {"name": job.source}
+    if entry["name"] != job.source:
+        return {**entry, "name": job.source}
+    return entry
 
 
 class _Roots(NamedTuple):
@@ -90,11 +114,17 @@ class _Roots(NamedTuple):
 
     ``directories`` are walked, or listed, at once. A single path of unknown kind is
     among them, as its listing tells. ``files`` are known files, e.g. glob
-    matches.
+    matches. ``entries`` are the matches' entries, by path, so that a copy
+    hands a file's on without asking it again.
     """
 
     directories: Sequence[str]
     files: Sequence[str] = ()
+    entries: Mapping[str, dict[str, Any]] = MappingProxyType({})
+
+    def entry(self, path: str) -> dict[str, Any]:
+        """The entry of a file root, as its glob found it."""
+        return self.entries.get(path) or {"name": path, "type": "file"}
 
 
 def _roots_of(
@@ -112,6 +142,7 @@ def _roots_of(
 
     directories: dict[str, None] = {}
     files: list[str] = []
+    entries: dict[str, dict[str, Any]] = {}
 
     # Sorted, a directory comes before all in it.
     for entry in sorted(matches, key=lambda e: e["name"]):
@@ -119,12 +150,13 @@ def _roots_of(
         parts = name.split("/")
         if any("/".join(parts[:i]) in directories for i in range(1, len(parts))):
             continue
+        entries[name] = {**entry, "name": name}
         if entry["type"] == "directory":
             directories[name] = None
         else:
             files.append(name)
 
-    return _Roots(list(directories), files)
+    return _Roots(list(directories), files, entries)
 
 
 class _Queue(Generic[_T]):
@@ -289,8 +321,8 @@ class _Jobs(ABC):
         """Queue the jobs for an item of the source, and return what to yield."""
 
     @abstractmethod
-    def file_root(self, path: str) -> None:
-        """Queue the jobs for ``path``, a root of the operation, which is a file."""
+    def file_root(self, entry: dict[str, Any]) -> None:
+        """Queue the jobs for a root of the operation which is a file, by its entry."""
 
     @abstractmethod
     def run(self, job: _Job) -> Awaitable[Any]:
@@ -385,7 +417,7 @@ class _Jobs(ABC):
     ) -> list[Any]:
         """Queue the files' jobs, and take the source's first item: the first step."""
         for path in roots.files:
-            self.file_root(path)
+            self.file_root(roots.entry(path))
 
         if source is None:
             self.exhausted()
@@ -586,6 +618,7 @@ class _CopyJobs(_Jobs):
         return _Roots(
             [s for s in self.places if s in directories],
             [s for s in self.places if s not in directories],
+            roots.entries,
         )
 
     async def _base(self, root: str, destination: str) -> str:
@@ -620,25 +653,26 @@ class _CopyJobs(_Jobs):
         return f"{self.base}/{path}" if self.base else path
 
     async def copy_file(
-        self, cp_file: _Transfer, source: str, destination: str
+        self, cp_entry: _Transfer, entry: dict[str, Any], destination: str
     ) -> None:
-        """Copy a file by ``cp_file``, replacing a file there the destination keeps.
+        """Copy a file by ``cp_entry``, replacing a file there the destination keeps.
 
         A destination refusing to overwrite, as fsspec's copy does not, costs
         an ``_info``, an ``_rm_file`` and a copy more. A directory there is no file
         to replace: ``_rm_file`` takes files only. The job holds its permit
         already. An error raised notes its paths, as it is yielded among paths.
         """
+        source = entry["name"]
         try:
             try:
-                await cp_file(source, destination)
+                await cp_entry(entry, destination)
             except FileExistsError:
-                entry = await self.dst_fs._info(destination)
-                if entry["type"] == "directory":
+                found = await self.dst_fs._info(destination)
+                if found["type"] == "directory":
                     raise
 
                 await self.dst_fs._rm_file(destination)
-                await cp_file(source, destination)
+                await cp_entry(entry, destination)
         except Exception as e:
             e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")
             raise

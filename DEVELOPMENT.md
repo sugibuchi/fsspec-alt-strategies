@@ -94,8 +94,14 @@ Each family declares the primitives its subclasses implement, and overrides fssp
 | `TreeFileSystem` | `_ils`, `_rmdir`, and `_rm_tree` optional | `_walk`, `_find`, `_du`, `_glob`, `_rm`, `_copy`, `_mv`   |
 | `FlatFileSystem` | `_iexpand`, `_rm_files`, `rm_batch_size`  | The same                                                  |
 
-Both also take `_info`, `_rm_file`, `_cp_file`, `_makedirs`, `open_async` and `_open`. `_mv_file` is fsspec's copy and
-delete, unless a subclass overrides it with the storage's rename.
+Both also take `_info`, `_rm_file`, `_makedirs`, `open_async` and `_open`, and copy and move a file with:
+
+- `_cp_entry(entry, path2)`, a copy within the storage;
+- `_mv_entry(entry, path2)`, the storage's rename, or a copy then a delete where it has none.
+
+Each takes the source's entry, as the listing gave it, so that a copy needing the size, e.g. to go in parts, need not
+ask it again. The entry may be stale, so a copy must still be right if the file changed. fsspec's `_cp_file` and
+`_mv_file` ask `_info`, then call them.
 
 A method raises its strategy's failures: one as it is, several in an ExceptionGroup. `_walk` is the family's walk.
 The other methods stream each directory in parts, and only `_walk` holds a directory whole, as fsspec's `walk` answers a
@@ -119,8 +125,8 @@ Each recursive method starts a private strategy of its family, e.g. `tree/rm.py`
 - It takes the filesystem it works on: `_tree_rm(fs, path, maxdepth=...)`. A copy or move takes two, `src_fs` and
   `dst_fs`, which are the same within one storage.
 - It reads what it needs from the filesystem: the primitives, `operation_limit` and `storage_profile`.
-- It takes no function but one: a copy's or a move's `cp_file` or `mv_file`, a `_Transfer`. The router passes its
-  copy of a file between two storages so.
+- It takes no function but one: a copy's or a move's `cp_entry` or `mv_entry`, a `_Transfer`, taking the source's
+  entry. The router passes its copy of a file between two storages so.
 - Paths come without a protocol.
 - Argument errors are raised by the call. Errors ending the whole operation, such as a missing root, are raised by
   the iteration.
@@ -178,8 +184,9 @@ Within one storage, a call is that storage's own. Between two, a recursive copy 
 strategy on the two inner filesystems, chosen by the source profile's `fs_type`, with `maxdepth` too. Without one, it
 is fsspec's copy, a file at a time. A plain fsspec filesystem counts as one of unknown profile.
 
-Each file goes through `_cross_fs_cp_file` or `_cross_fs_mv_file`. By default these stream the data through both
-storages' `open_async`. A subclass can use a server-side copy instead.
+Each file goes through `_cross_fs_cp_entry` or `_cross_fs_mv_entry`, with the source's entry. By default these stream
+the data through both storages' `open_async`. A subclass can use a server-side copy instead, or the size to choose how
+the data goes.
 
 The router imports a family only when copying from it. Its inner filesystems must be async, and `close()` closes them.
 Its transaction commits file by file, so it is not atomic across storages.
@@ -209,7 +216,7 @@ stores list them.
 - Name order tells when a directory is done, so `_flat_walk` streams its directories. Each key is listed once.
 - Directories are derived from the keys, by `flat/_keys.py`. A key ending with "/" marks a directory.
 - `_flat_rm` deletes in batches of `rm_batch_size`, with `_rm_files`.
-- `_flat_mv` renames with `_mv_file` when the profile says the storage renames. Otherwise it copies, then deletes in
+- `_flat_mv` renames with `_mv_entry` when the profile says the storage renames. Otherwise it copies, then deletes in
   batches.
 - A listing error ends the operation: there is no other listing to go on with.
 
@@ -224,7 +231,7 @@ profile only saves requests:
 | `parents_required`     | False: the `_makedirs` of each destination directory written to    |
 | `implicit_directories` | True: those, and the deletion of each directory                    |
 | `renames_files`        | True: the data copied by `_flat_mv`                                |
-| `renames_directories`  | True: every request in a directory moved whole by one `_mv_file`   |
+| `renames_directories`  | True: every request in a directory moved whole by one `_mv_entry`  |
 | `deletes_directories`  | True: every request in a directory deleted whole by one `_rm_tree` |
 
 - A filesystem has one profile, which never changes. It is `storage_profile`, or what `_load_storage_profile()`

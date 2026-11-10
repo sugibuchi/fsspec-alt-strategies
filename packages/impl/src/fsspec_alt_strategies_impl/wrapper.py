@@ -137,6 +137,15 @@ class _AsyncFileSystemWrapper(_FileSystemWrapper):
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         await self.fs._rm_file(path, **kwargs)
 
+    # fsspec's copy and move take paths: the entry's name alone, and no _info
+    # first. A subclass overriding _cp_file or _mv_file, e.g. with a rename,
+    # is so used by the strategies too.
+    async def _cp_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        await self._cp_file(entry["name"], path2, **kwargs)
+
+    async def _mv_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        await self._mv_file(entry["name"], path2, **kwargs)
+
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         await self.fs._cp_file(path1, path2, **kwargs)
 
@@ -211,6 +220,15 @@ class _SyncFileSystemWrapper(SyncClientSupport, _FileSystemWrapper):
 
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         await self._run_in_thread(self.fs.rm_file, path, **kwargs)
+
+    # fsspec's copy and move take paths: the entry's name alone, and no info
+    # first. A subclass overriding _cp_file or _mv_file, e.g. with a rename,
+    # is so used by the strategies too.
+    async def _cp_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        await self._cp_file(entry["name"], path2, **kwargs)
+
+    async def _mv_entry(self, entry: dict[str, Any], path2: str, **kwargs: Any) -> None:
+        await self._mv_file(entry["name"], path2, **kwargs)
 
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         await self._run_in_thread(self.fs.cp_file, path1, path2, **kwargs)

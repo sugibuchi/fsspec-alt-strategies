@@ -146,7 +146,7 @@ class _Deletion(_TreeJobs):
         if not self.deletes_directories:
             return roots
         self.waiting.extend(_Job("tree", f) for f in roots.directories)
-        return _Roots([], roots.files)
+        return roots._replace(directories=[])
 
     def state(self) -> RmState:
         return RmState(
@@ -157,9 +157,9 @@ class _Deletion(_TreeJobs):
             directories_deleted=self.directories_deleted,
         )
 
-    def file_root(self, path: str) -> None:
+    def file_root(self, entry: dict[str, Any]) -> None:
         self.files_found = 1
-        self.waiting.append(_Job("file", path))
+        self.waiting.append(_Job("file", entry["name"]))
 
     def at_limit(self, directory: str) -> None:
         # Deleted only if empty: one that is not fails, as fsspec's deletion

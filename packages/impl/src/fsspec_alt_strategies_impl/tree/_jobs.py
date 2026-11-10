@@ -96,7 +96,8 @@ class _TreeJobs(_Jobs):
         try:
             return await super().begin(roots, source)
         except NotADirectoryError as e:
-            self.file_root(e.args[0])
+            # The root is a file: its listing's entry, which the walk noted.
+            self.file_root(getattr(e, "entry", None) or {"name": e.args[0]})
             return []
 
     def fed(self, item: _Listing) -> list[Any]:

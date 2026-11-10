@@ -47,8 +47,11 @@ code: read it before adding a strategy.
 - A strategy takes the filesystem it works on, never its methods as functions: `_tree_rm(fs, path, maxdepth=...)`. A
   copy or move takes `src_fs` and `dst_fs`, the same within one storage. It reads the primitives, `operation_limit`
   and `storage_profile` from them.
-- The only function a strategy takes is a copy's or a move's `cp_file` or `mv_file`, a `common.jobs._Transfer`. The
-  router passes its copy of a file between two storages so. Between two storages it is required.
+- The only function a strategy takes is a copy's or a move's `cp_entry` or `mv_entry`, a `common.jobs._Transfer`,
+  taking the source's entry. The router passes its copy of a file between two storages so. Between two storages it is
+  required.
+- A copy or move hands each file's entry, as its listing found it, to `_cp_entry` or `_mv_entry`. Never drop it for
+  the path alone: a storage may need its size.
 - A strategy calls only a storage's primitives, such as `_ils`, `_info` and `_rm_file`, never a high-level method such
   as `_find` or `_glob`: another strategy may have replaced it.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
