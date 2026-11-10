@@ -276,7 +276,7 @@ async def test_a_folder_moves_whole(hierarchical_fs: SimulatedFileSystem) -> Non
     assert await _collect_with_errors(op) == ([("data", "moved")], [])
     # Where path2 goes, found free, then the rename: nothing is listed.
     assert hierarchical_fs.stats.calls == {"info": 1, "rename": 1}
-    assert op.state == MvState(current=None, folders_moved=0, roots_renamed=1)
+    assert op.state == MvState(current="data", folders_moved=0, roots_renamed=1)
     assert _files(hierarchical_fs) == expected
     assert await hierarchical_fs._isdir("moved/empty")
 
@@ -335,18 +335,20 @@ async def test_a_merge_moves_file_by_file(
         assert hierarchical_fs._file_data[taken].data == b"kept"
 
 
-async def test_a_folder_failing_to_move_whole_moves_file_by_file(
+async def test_a_folder_failing_to_move_whole_is_the_roots_error(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)
     # Wrongly declared: fsspec's _mv_file copies a file, and fails on a folder.
     profile = StorageProfile(renames_folders=True)
     op = _mv(flat_fs, "data", "moved", profile=profile)
-    _, errors = await _collect_with_errors(op)
-    assert errors == []
-    assert op.state.roots_renamed == 0
-    assert op.state.files_moved == len(_FILES)
-    assert not await flat_fs._exists("data")
+    moved, errors = await _collect_with_errors(op)
+    # Its cause, not one failure per file: nothing is walked.
+    assert moved == []
+    assert len(errors) == 1
+    assert "Moving 'data' to 'moved' failed." in errors[0].__notes__
+    assert (op.state.roots_renamed, op.state.files_moved) == (0, 0)
+    assert await flat_fs._exists("data/README.md")
 
 
 async def test_unknown_no_folder_is_moved_whole(
