@@ -300,16 +300,14 @@ async def test_a_rename_moves_a_dir_whole(inner: SimulatedFileSystem) -> None:
     class Renaming(_Tree):
         storage_profile = StorageProfile(renames_directories=True)
 
-        async def _mv_file_entry(
-            self, entry: dict[str, Any], path2: str, **kwargs: Any
-        ) -> None:
-            await self.inner._rename(entry["name"], path2)
+        async def _mv_tree(self, path1: str, path2: str) -> None:
+            await self.inner._rename(path1, path2)
 
     renaming = Renaming(inner, asynchronous=True)
     inner.reset_stats()
     await renaming._mv("data", "moved", recursive=True)
-    # The target's info, and the root's own, for the entry _mv_file_entry takes.
-    assert inner.stats.calls == {"info": 2, "rename": 1}
+    # The target's info, found free, then the rename of the root.
+    assert inner.stats.calls == {"info": 1, "rename": 1}
     assert not await inner._exists("data")
     assert await inner._exists("moved/2024/01/part-0.parquet")
 

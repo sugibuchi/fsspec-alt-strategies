@@ -65,12 +65,12 @@ class StorageProfile:
         rather than a copy and a delete. Unknown by default, taken as False: a
         move copies, and deletes in batches where it can.
     renames_directories : bool, optional
-        Whether ``_mv_file_entry`` moves a directory too, with all in it, in one request,
-        as a storage's rename does. Unknown by default, taken as False: a
-        directory's files are moved one by one, as ``_mv_file_entry`` is called on files
-        only. True holds between any two paths of the filesystem: a storage
-        whose rename stops at a boundary, e.g. containers, is several
-        filesystems under a router.
+        Whether the filesystem's ``_mv_tree`` moves a directory with all in
+        it, in one request, as a storage's rename does. It moves a file too.
+        Unknown by default, taken as False: a directory is walked, and its
+        files moved one by one. True holds between any two paths of the
+        filesystem: a storage whose rename stops at a boundary, e.g.
+        containers, is several filesystems under a router.
     deletes_directories : bool, optional
         Whether the filesystem's ``_rm_tree`` deletes a directory with all in
         it, in one request, as a storage's recursive delete does. It deletes a

@@ -7,9 +7,9 @@ whole tree, then deletes it, each stage listing the tree first. `_tree_mv` moves
 each directory's files as soon as the directory is listed, each by one ``mv_entry``,
 and deletes each source directory once it is empty.
 
-Where ``mv_entry`` moves a directory too, in one request, as a storage's rename
-does, the profile says so. `_tree_mv` then moves each directory whole with it
-where it can, and walks only what it cannot move so.
+Where the filesystem's ``_mv_tree`` moves a directory in one request, as a
+storage's rename does, the profile says so. `_tree_mv` then moves each root
+whole with it where it can, and walks only what it cannot move so.
 
 This module depends on `cp`, and `jobs` and `paths` of `common`.
 """
@@ -87,9 +87,9 @@ def _tree_mv(
     listing, not after the whole tree is listed twice.
 
     Within one storage, with the profile's ``renames_directories=True``,
-    ``mv_entry`` moves a directory with all in it, in one request. Each
-    directory root is then moved whole by one ``mv_entry``, where it can be, as
-    a job among the files' moves. That wins by far on storages renaming a
+    the filesystem's ``_mv_tree``, called ``mv_tree`` below, moves a directory
+    with all in it, in one request. Each directory root is then moved whole by
+    one ``mv_tree``, where it can be, as a job among the files' moves. That wins by far on storages renaming a
     directory at once, such as Azure Data Lake Storage Gen2, HDFS or a local
     disk. A root goes whole only to a destination that does not exist, as a
     rename onto an existing path differs among storages. Into an existing
@@ -118,13 +118,12 @@ def _tree_mv(
     ``cp_entry``, and one ``rm_dir`` per source directory. With
     ``renames_directories``, each directory root first costs a ``dst_info`` of its
     target, unless ``path2`` was found missing already. One moving whole then
-    costs an ``info`` of its own, for its entry, unless a pattern matched it, a
-    ``dst_makedirs`` of its parent, and its ``mv_entry``: nothing more.
+    costs a ``dst_makedirs`` of its parent, and its ``mv_tree``: nothing more.
     Each request holds a permit of the source's ``operation_limit`` while it
     runs.
 
-    A destination's parent is made before any rename, as ``mv_entry`` is
-    called only where the parent exists. The destination's profile's
+    A destination's parent is made before any rename, as ``mv_entry`` and
+    ``mv_tree`` are called only where the parent exists. The destination's profile's
     ``parents_required=False`` saves the ``dst_makedirs`` of each directory with
     files only between two storages, or with ``renames_files=False``, where
     ``mv_entry`` writes, which creates the directory. Its
@@ -142,8 +141,7 @@ def _tree_mv(
     pattern, or a list of them, as the source's ``_ils`` takes paths.
     ``mv_entry(entry, destination)`` moves a file by its source entry, as its
     listing gave it: the source's ``_mv_file_entry`` by default, within one storage.
-    A storage renaming a path in one request implements it so, and may move a
-    directory with it too, as the profile's ``renames_directories`` declares.
+    A storage renaming a file in one request implements it so.
     ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given.
     ``maxdepth`` of 1 moves only the files in ``path1``.
 
@@ -230,50 +228,44 @@ class _Move(_CopyOrMove):
         sources = list(roots.directories)
         whole = await asyncio.gather(*(self.whole(s) for s in sources))
         walked = []
-        for root, entry in zip(sources, whole, strict=True):
-            if isinstance(entry, Exception):
-                self.found.append(entry)
+        for root, outcome in zip(sources, whole, strict=True):
+            if isinstance(outcome, Exception):
+                self.found.append(outcome)
                 continue
-            if entry is None:
+            if not outcome:
                 walked.append(root)
                 continue
 
             # A job each, as a file's move, after its parent is made: a rename
-            # makes none, and mv_entry is not to make it.
-            target = self.target(entry["name"])
+            # makes none, and mv_tree is not to make it.
+            target = self.target(root["name"])
             parent = target.rpartition("/")[0]
-            job = _Job("rename", entry, target)
+            job = _Job("rename", root, target)
             self.queue(parent, "", [job], always=not self.implicit_directories)
 
         self.roots_renamed = 0
         return roots._replace(directories=walked)
 
-    async def whole(self, root: dict[str, Any]) -> dict[str, Any] | Exception | None:
-        """A root's entry if it can move whole, as its target is missing, or None.
+    async def whole(self, root: dict[str, Any]) -> bool | Exception:
+        """Whether a root can move whole, as its target is missing.
 
-        The entry is its pattern's match, or else asked, for ``mv_entry``: a
-        path named is of unknown kind. An error asking either is returned,
-        noted: the root's, as its walk would only meet it again on each file.
+        An error asking is returned, noted: the root's, as its walk would only
+        meet it again on each file.
         """
         source = root["name"]
         target = self.target(source)
+        if target in self.missing:
+            return True
         try:
-            if target not in self.missing:
-                try:
-                    async with self.concurrency_limit:
-                        await self.dst_fs._info(target)
-                except FileNotFoundError:
-                    pass
-                else:
-                    return None
-
-            if "type" in root:
-                return root
             async with self.concurrency_limit:
-                return {**await self.fs._info(source), "name": source}
+                await self.dst_fs._info(target)
+        except FileNotFoundError:
+            return True
         except Exception as e:
             e.add_note(f"{self.doing} {source!r} to {target!r} failed.")
             return e
+        else:
+            return False
 
     def add(self, listing: _Listing) -> list[Any] | None:
         self.track(listing)
@@ -290,7 +282,7 @@ class _Move(_CopyOrMove):
         if job.kind == "rmdir":
             return self.fs._rmdir(job.path)
         if job.kind == "rename":
-            return self.mv_entry(job.source, job.destination)
+            return self.fs._mv_tree(job.path, job.destination)
         return super().run(job)
 
     async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:

@@ -89,10 +89,10 @@ AsyncRoutingFileSystem             router.py, holding filesystems of the above
 
 Each family declares the primitives its subclasses implement, and overrides fsspec's recursive methods:
 
-| Class            | Its own primitives                        | Overrides                                                 |
-|------------------|-------------------------------------------|-----------------------------------------------------------|
-| `TreeFileSystem` | `_ils`, `_rmdir`, and `_rm_tree` optional | `_walk`, `_find`, `_du`, `_glob`, `_rm`, `_copy`, `_mv`   |
-| `FlatFileSystem` | `_iexpand`, `_rm_files`, `rm_batch_size`  | The same                                                  |
+| Class            | Its own primitives                                    | Overrides                                               |
+|------------------|-------------------------------------------------------|---------------------------------------------------------|
+| `TreeFileSystem` | `_ils`, `_rmdir`, and optional `_rm_tree`, `_mv_tree` | `_walk`, `_find`, `_du`, `_glob`, `_rm`, `_copy`, `_mv` |
+| `FlatFileSystem` | `_iexpand`, `_rm_files`, `rm_batch_size`              | The same                                                |
 
 Both also take `_info`, `_rm_file`, `_makedirs`, `open_async` and `_open`, and copy and move a file with:
 
@@ -114,7 +114,8 @@ A developer chooses, per method:
 - a family, by subclassing its class or wrapping a filesystem with it;
 - fsspec's own algorithm instead, by putting it back, e.g. `_rm = AsyncFileSystem._rm`;
 - a storage's own operation, by overriding the method;
-- a storage's recursive delete, by implementing `_rm_tree`, which `deletes_directories=True` declares.
+- a storage's recursive delete, by implementing `_rm_tree`, which `deletes_directories=True` declares;
+- a storage's rename of a directory, by implementing `_mv_tree`, which `renames_directories=True` declares.
 
 `monitored(fs)` picks the wrapper of a filesystem from `known_implementations`, a table the developer may replace.
 
@@ -248,7 +249,7 @@ profile only saves requests:
 | `parents_required`     | False: the `_makedirs` of each destination directory written to    |
 | `implicit_directories` | True: those, and the deletion of each directory                    |
 | `renames_files`        | True: the data copied by `_flat_mv`                                |
-| `renames_directories`  | True: every request in a directory moved whole by one `_mv_file_entry`  |
+| `renames_directories`  | True: every request in a directory moved whole by one `_mv_tree`   |
 | `deletes_directories`  | True: every request in a directory deleted whole by one `_rm_tree` |
 
 - A filesystem has one profile, which never changes. It is `storage_profile`, or what `_load_storage_profile()`

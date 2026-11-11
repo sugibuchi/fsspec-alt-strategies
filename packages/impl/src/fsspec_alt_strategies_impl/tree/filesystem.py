@@ -75,9 +75,13 @@ class TreeFileSystem(_BaseFileSystem):
     implements ``open_async`` too, giving its files ``io_limit`` as their
     concurrency limit, and ``_open``. ``_cat_file``,
     ``_pipe_file``, ``_get_file`` and ``_put_file`` read and write through
-    ``open_async``'s files. It may implement ``_rm_tree`` too, a storage's
-    recursive delete of a directory, which a recursive ``rm`` uses where the
-    profile's ``deletes_directories=True`` says so.
+    ``open_async``'s files. It may implement two requests on a directory whole,
+    used where the profile declares them:
+
+    - ``_rm_tree``, a storage's recursive delete, which a recursive ``rm``
+      uses where ``deletes_directories=True``;
+    - ``_mv_tree``, a storage's rename of a directory, which a recursive
+      ``mv`` uses where ``renames_directories=True``.
 
     Two limits bound its requests, each an `asyncio.Semaphore` of its own:
 
@@ -91,12 +95,11 @@ class TreeFileSystem(_BaseFileSystem):
     is unknown, and the strategies then take the way right on any storage.
 
     A recursive ``mv``, or one of a single file, moves each file with
-    ``_mv_file_entry``: the storage's rename, or a copy then a delete where it has
-    none. If its rename moves a directory too, with all in it, the profile's
-    ``renames_directories=True`` says so: a recursive ``mv`` then moves each
-    directory whole where it can. The strategies call ``_mv_file_entry`` only where
-    the destination's parent exists, having made it: a rename need not make
-    it. A caller outside the strategies makes it too.
+    ``_mv_file_entry``: the storage's rename, or a copy then a delete where it
+    has none. With ``renames_directories=True``, a recursive ``mv`` moves each
+    root whole by ``_mv_tree`` where it can. The strategies call both only
+    where the destination's parent exists, having made it: a rename need not
+    make it. A caller outside the strategies makes it too.
 
     Parameters
     ----------
@@ -147,19 +150,6 @@ class TreeFileSystem(_BaseFileSystem):
 
     A subclass sets it, or overrides ``_load_storage_profile`` instead.
     """
-
-    async def _rm_tree(self, path: str) -> None:
-        """Delete a directory with everything in it, in one request.
-
-        A subclass whose storage has a recursive delete implements it, and its
-        profile's ``deletes_directories=True`` says so. A recursive ``rm`` then
-        deletes each root by it, with no walk. It is called only then. It takes
-        a file too, which it deletes as ``_rm_file`` does, as a root may be
-        either. A missing path raises FileNotFoundError, as a walk would find
-        it: a storage whose recursive delete succeeds on a missing path asks
-        first.
-        """
-        raise NotImplementedError(f"{type(self).__name__} deletes no directory whole")
 
     def __init__(
         self,
@@ -275,10 +265,9 @@ class TreeFileSystem(_BaseFileSystem):
     ) -> None:
         """Move a file within the storage, by its entry, to ``path2``.
 
-        ``entry`` is as `_cp_file_entry` takes it. A storage renaming a path in one
-        request renames it. If its rename moves a directory too, the profile's
-        ``renames_directories=True`` says so, and ``entry`` may then be a
-        directory's. One with no rename copies, then deletes the source.
+        ``entry`` is as `_cp_file_entry` takes it. A storage renaming a file in
+        one request renames it. One with no rename copies, then deletes the
+        source. A directory moved whole goes by `_mv_tree`.
         """
 
     @abstractmethod
@@ -319,6 +308,35 @@ class TreeFileSystem(_BaseFileSystem):
     @abstractmethod
     def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         """Open a file, as fsspec's ``_open`` does, for the sync ``open``."""
+
+    # What a subclass may implement: a storage's requests on a directory whole,
+    # used where its profile declares them.
+
+    async def _rm_tree(self, path: str) -> None:
+        """Delete a directory with everything in it, in one request.
+
+        A subclass whose storage has a recursive delete implements it, and its
+        profile's ``deletes_directories=True`` says so. A recursive ``rm`` then
+        deletes each root by it, with no walk. It is called only then. It takes
+        a file too, which it deletes as ``_rm_file`` does, as a root may be
+        either. A missing path raises FileNotFoundError, as a walk would find
+        it: a storage whose recursive delete succeeds on a missing path asks
+        first.
+        """
+        raise NotImplementedError(f"{type(self).__name__} deletes no directory whole")
+
+    async def _mv_tree(self, path1: str, path2: str) -> None:
+        """Move a directory with everything in it to ``path2``, in one request.
+
+        A subclass whose storage renames a directory implements it, and its
+        profile's ``renames_directories=True`` says so. A recursive ``mv`` then
+        moves each root by it where it can, with no walk. It is called only
+        then, with ``path2`` missing and its parent existing, having made it:
+        a rename need not make it. It takes a file too, which it moves as
+        ``_mv_file_entry`` does, as a root may be either. A missing ``path1``
+        raises FileNotFoundError.
+        """
+        raise NotImplementedError(f"{type(self).__name__} moves no directory whole")
 
     async def _walk(
         self,

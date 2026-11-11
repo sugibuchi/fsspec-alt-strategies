@@ -124,6 +124,28 @@ async def test_a_sync_filesystem_deletes_by_its_recursive_rm(tmp_path: Path) -> 
     assert not local.exists(f"{root}/data")
 
 
+class _Renaming(SimulatedFileSystem):
+    """A storage renaming a directory whole, in one request."""
+
+    async def _mv_tree(self, path1: str, path2: str) -> None:
+        await self._rename(path1, path2)
+
+
+async def test_an_async_filesystem_moves_a_dir_by_its_mv_tree() -> None:
+    inner = _Renaming(hierarchical=True, asynchronous=True)
+    for path in _FILES:
+        inner.add_file(path, path.encode())
+    tree = AsyncTreeWrapper(
+        inner,
+        **{**_LIMITS, "storage_profile": StorageProfile(renames_directories=True)},
+    )
+    inner.reset_stats()
+    await tree._mv("data", "moved", recursive=True)
+    # The target found free, then one rename: no listing.
+    assert inner.stats.calls == {"info": 1, "rename": 1}
+    assert sorted(inner._file_data) == sorted("moved" + p[4:] for p in _FILES)
+
+
 async def test_rm_tree_is_unused_unless_declared() -> None:
     inner = _RecursiveDelete(hierarchical=True, asynchronous=True)
     for path in _FILES:
