@@ -156,6 +156,62 @@ async def test_gcsfs_lists_a_prefix_by_its_find_in_name_order() -> None:
     assert fs.calls == [("_find", "bkt/data", "2024-")]
 
 
+class _GcsBatches(_Gcs):
+    """gcsfs's batch deletion: each object deleted answers its path, any other an OSError."""
+
+    on_google = True
+
+    def __init__(self, keys: dict[str, int], refused: set[str] = frozenset()) -> None:
+        super().__init__(keys)
+        self.refused = refused
+
+    async def _rm_files(self, paths: list[str]) -> list[Any]:
+        self.calls.append(("batch", len(paths)))
+        out: list[Any] = []
+        for path in paths:
+            if path in self.refused:
+                out.append(OSError('{"code": 403, "message": "retention"}'))
+            elif path in self.keys:
+                del self.keys[path]
+                out.append(path)
+            else:
+                out.append(OSError('{"code": 404, "message": "No such object"}'))
+        return out
+
+    async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        if path not in self.keys:
+            raise FileNotFoundError(path)
+        return {"name": path, "type": "file", "size": self.keys[path]}
+
+    async def _rm(self, path: Any, **kwargs: Any) -> None:
+        self.calls.append(("_rm", len(path)))
+
+
+async def test_gcsfs_deletes_up_to_100_per_batch_by_its_own_rm_files() -> None:
+    fs = _GcsBatches({f"bkt/k{i}": 1 for i in range(150)} | {"bkt/kept": 1})
+    flat = GcsfsWrapper(fs, rm_batch_size=1000, **_LIMITS)
+    paths = [f"bkt/k{i}" for i in range(150)] + ["bkt/missing"]
+    assert await flat._rm_files(paths) == {}
+    assert fs.calls == [("batch", 100), ("batch", 51)]
+    assert list(fs.keys) == ["bkt/kept"]
+
+
+async def test_gcsfs_returns_the_keys_it_refused() -> None:
+    fs = _GcsBatches({"bkt/a": 1, "bkt/b": 1}, refused={"bkt/b"})
+    flat = GcsfsWrapper(fs, rm_batch_size=100, **_LIMITS)
+    refused = await flat._rm_files(["bkt/a", "bkt/b", "bkt/missing"])
+    assert list(refused) == ["bkt/b"]
+    assert "retention" in str(refused["bkt/b"])
+
+
+async def test_gcsfs_off_google_deletes_as_fsspec() -> None:
+    fs = _GcsBatches({"bkt/a": 1})
+    fs.on_google = False  # E.g. an emulator, where gcsfs sends no batch.
+    flat = GcsfsWrapper(fs, rm_batch_size=100, **_LIMITS)
+    await flat._rm_files(["bkt/a"])
+    assert fs.calls == [("_rm", 1)]
+
+
 async def test_gcsfs_lists_nothing_of_a_missing_bucket() -> None:
     _, flat = _gcs(_KEYS)
     assert [e async for e in flat._ils("missing", True)] == []

@@ -92,10 +92,10 @@ known_implementations: dict[str, KnownImplementation] = {
         "wrapper": "S3fsWrapper",
     },
     "gcsfs.core.GCSFileSystem": {
-        # A bucket with a hierarchical namespace has directories of its own: one
-        # class serves both kinds of bucket, so that is unknown. Its _mv renames
-        # a directory in such a bucket, but the wrapper moves by _mv_file, which
-        # is fsspec's copy, then a delete.
+        # For buckets without a hierarchical namespace. One with it has folders of
+        # their own, which the flat strategies leave after a recursive rm or mv:
+        # wrap it as a tree, under a router where both kinds are served. The
+        # wrapper moves by _mv_file, which is fsspec's copy, then a delete.
         "storage_profile": StorageProfile(
             fs_type="flat",
             parents_required=False,
@@ -108,7 +108,7 @@ known_implementations: dict[str, KnownImplementation] = {
         "io_concurrency": 8,
         # As GCS's batch requests take at most 100 calls.
         "rm_batch_size": 100,
-        # Lists by prefix.
+        # Lists by prefix, and deletes 100 objects per batch request.
         "wrapper": "GcsfsWrapper",
     },
     "adlfs.spec.AzureBlobFileSystem": {

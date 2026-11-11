@@ -1,22 +1,30 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""gcsfs's ``GCSFileSystem``, wrapped as a `FlatFileSystem`, listing by prefix.
+"""gcsfs's ``GCSFileSystem``, wrapped as a `FlatFileSystem`, listing by prefix and deleting in full batches.
 
-The generic `AsyncFlatWrapper` lists a prefix by gcsfs's ``_find`` of its
-directory, then keeps the names starting with the prefix. `GcsfsWrapper` gives
-gcsfs's ``_find`` the prefix, which lists only the objects starting with it:
-for the glob "data/2024-*", the objects of "data/2024-", not all of "data/".
-gcsfs still gathers every page before answering, so the listing is held
-whole, not streamed.
+`GcsfsWrapper` uses what gcsfs has beside fsspec's API:
 
-The rest is the generic one's, as gcsfs does it best already:
+- its recursive ``_ils`` gives gcsfs's ``_find`` the prefix, which lists only
+  the objects starting with it: for the glob "data/2024-*", those of
+  "data/2024-", not all of "data/". gcsfs still gathers every page before
+  answering, so the listing is held whole, not streamed.
+- its ``_rm_files`` deletes a batch by gcsfs's own ``_rm_files``, one batch
+  request of up to 100 objects, GCS's most. gcsfs's ``_rm``, which the generic
+  wrapper calls, sends batches of 20 since gcsfs 2026's ``ExtendedGcsFileSystem``,
+  and on a bucket with a hierarchical namespace first asks each key's info.
 
-- its copies, as gcsfs's ``objects.rewrite`` asks nothing first;
-- its deletes, as gcsfs's ``_rm`` sends batches of 100, GCS's most.
+Its copies are the generic one's, as gcsfs's ``objects.rewrite`` asks nothing
+first.
+
+On a bucket with a hierarchical namespace, folders are objects of their own,
+which the flat strategies never delete: a recursive ``rm`` or ``mv`` leaves
+them. Such a bucket suits `AsyncTreeWrapper`, whose ``_rmdir`` is gcsfs's,
+deleting a folder. A filesystem serving both kinds of bucket is two under a
+router.
 
 It imports nothing of gcsfs: it calls the wrapped filesystem's own methods.
-Where its ``_find`` takes no ``prefix``, as of gcsfs 2026.x it does, it lists
-as the generic wrapper does.
+Those are private, as of gcsfs 2026.x: where ``_find`` takes no ``prefix``, or
+``_rm_files`` is missing, it lists or deletes as the generic wrapper does.
 
 This module depends on `flat`.
 """
@@ -33,18 +41,22 @@ if TYPE_CHECKING:
 
 __all__ = ["GcsfsWrapper"]
 
+_BATCH = 100
+"""The most calls one GCS batch request takes."""
+
 
 class GcsfsWrapper(AsyncFlatWrapper):
-    """A gcsfs filesystem as a `FlatFileSystem`, listing by prefix as gcsfs does.
+    """A gcsfs filesystem as a `FlatFileSystem`, listing by prefix and deleting in full batches.
 
     It takes what `AsyncFlatWrapper` takes. ``rm_batch_size`` is best a
-    multiple of 100, the most calls gcsfs sends in one batch request.
+    multiple of 100, the most objects one batch request deletes. It suits
+    buckets without a hierarchical namespace.
 
     Examples
     --------
     >>> flat = GcsfsWrapper(
     ...     gcsfs.GCSFileSystem(),
-    ...     rm_batch_size=1000,
+    ...     rm_batch_size=100,
     ...     operation_concurrency=32,
     ...     io_concurrency=8,
     ...     storage_profile=known_implementations["gcsfs.core.GCSFileSystem"]["storage_profile"],
@@ -68,6 +80,52 @@ class GcsfsWrapper(AsyncFlatWrapper):
             return  # A missing bucket lists nothing, as a missing prefix does.
         for entry in sorted(found.values(), key=lambda e: e["name"]):
             yield entry
+
+    async def _rm_files(self, paths: list[str]) -> dict[str, Exception] | None:
+        # gcsfs batches deletions only on Google's own endpoint: elsewhere, e.g. on
+        # an emulator, its _rm deletes one object per request.
+        rm_files = getattr(self.fs, "_rm_files", None)
+        if rm_files is None or not getattr(self.fs, "on_google", False):
+            return await super()._rm_files(paths)
+
+        refused: dict[str, Exception] = {}
+        for start in range(0, len(paths), _BATCH):
+            batch = list(paths[start : start + _BATCH])
+            refused.update(await self._refused(batch, await rm_files(batch)))
+        return refused
+
+    async def _refused(
+        self, batch: list[str], outcomes: list[Any]
+    ) -> dict[str, Exception]:
+        """The keys of a batch not deleted, each with an error, from gcsfs's outcomes.
+
+        gcsfs answers each object deleted by its path, and each other by an
+        OSError naming no key, a missing object's 404 among them. So a key not
+        deleted is asked for only when an error other than a 404 came back:
+        still there, it was refused.
+        """
+        deleted = {o for o in outcomes if isinstance(o, str)}
+        errors = [o for o in outcomes if isinstance(o, Exception) and not _absent(o)]
+        if not errors:
+            return {}  # Each key not deleted was missing: no error.
+
+        refused: dict[str, Exception] = {}
+        for key in batch:
+            if key in deleted:
+                continue
+            try:
+                await self.fs._info(key)
+            except FileNotFoundError:
+                continue
+            # gcsfs ties no error to its key: each key refused gets the batch's first.
+            refused[key] = OSError(f"{key} was not deleted: {errors[0]}")
+        return refused
+
+
+def _absent(error: Exception) -> bool:
+    """Whether gcsfs's error of a batch deletion is a missing object's, which is no error."""
+    text = str(error)
+    return "No such object" in text or '"code": 404' in text or ": 404" in text
 
 
 def _takes_prefix(find: Any) -> bool:
