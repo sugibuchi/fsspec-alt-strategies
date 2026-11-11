@@ -97,6 +97,7 @@ implement the storage's primitives, and declare its profile:
 
 ```python
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 from fsspec_alt_strategies import StorageProfile
 
 
@@ -104,15 +105,17 @@ class MyFileSystem(TreeFileSystem):
     protocol = "my"
     storage_profile = StorageProfile()  # Nothing known: right on any storage.
 
-    async def _ils(self, path, recursive=False, **kwargs):
+    def _ils(self, path, recursive=False, **kwargs):
         # A directory's entries, as they come. With recursive=True, all below
         # it, depth first or sorted by name: the storage's own recursive
-        # listing, or one per directory where it has none.
+        # listing, or _tree_ils where it has none. _tree_ils lists each
+        # directory by this _ils, without recursive.
         if recursive:
-            async for entry in self._ils_by_directory(path, **kwargs):
-                yield entry
-            return
-        ...
+            return _tree_ils(self, path, **kwargs)
+        return self._list_directory(path, **kwargs)
+
+    async def _list_directory(self, path, **kwargs):
+        ...  # Yield each entry, a page at a time.
 
     async def _info(self, path, **kwargs): ...
     # ... and the other primitives each class declares abstract.

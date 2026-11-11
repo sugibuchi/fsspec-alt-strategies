@@ -22,6 +22,7 @@ from fsspec_alt_strategies_impl.files.adaptive import (
 )
 from fsspec_alt_strategies_impl.files.fsspec_async import AsyncFileAdapter
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -96,18 +97,19 @@ class _Tree(TreeFileSystem):
         # The extra keyword arguments each listing was given, e.g. refresh=True.
         self.ls_kwargs: list[dict[str, Any]] = []
 
-    async def _ils(
+    def _ils(
         self, path: str, recursive: bool = False, **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
         if recursive:
             # A storage with no recursive listing of its own.
-            async for entry in self._ils_by_directory(path, **kwargs):
-                yield entry
-            return
+            return _tree_ils(self, path, **kwargs)
+        return self._list_directory(path, **kwargs)
 
+    async def _list_directory(
+        self, path: str, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
         self.ls_kwargs.append(kwargs)
-        listing = await self.inner._ls(path, detail=True)
-        for entry in sorted(listing, key=lambda e: e["name"]):
+        for entry in await self.inner._ls(path, detail=True):
             yield entry
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:

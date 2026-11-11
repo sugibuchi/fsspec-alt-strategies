@@ -200,7 +200,7 @@ below a directory, at any depth, in one of two orders, which tell the walk when 
 - Sorted by the whole name, as object stores list keys. A directory's entry may come apart from what is below it, as
   "a/b-x" comes between "a/b" and "a/b/c".
 - A directory may be left out, as object stores list only files. The walk tells it from the paths below it.
-- A storage with no recursive listing answers with `TreeFileSystem._ils_by_directory`, by `tree/listing.py`. It lists
+- A storage with no recursive listing answers with `_tree_ils` of `tree/listing.py`. It lists
   depth first, a directory per request, several ahead at a time. The wrappers list so.
 
 The strategies walk with a private engine, `tree.walk._chunks`. It streams each directory in parts of at most 1000

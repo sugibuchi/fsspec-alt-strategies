@@ -6,8 +6,8 @@
 directory. A subclass implements the storage's primitives, and gets fsspec's
 recursive methods from the tree strategies.
 
-This module depends on `cp`, `du`, `find`, `glob`, `listing`, `mv`, `rm`,
-`walk`, and `filesystem` and `operation` of `common`.
+This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm`, `walk`, and
+`filesystem` and `operation` of `common`.
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ from .cp import _tree_cp
 from .du import _tree_du
 from .find import _tree_find
 from .glob import _tree_glob
-from .listing import _tree_ils
 from .mv import _tree_mv
 from .rm import _tree_rm
 from .walk import _tree_walk
@@ -69,7 +68,8 @@ class TreeFileSystem(_BaseFileSystem):
     ``_ils``, a directory's listing as an async iterator, which ``_ls`` lists
     with. ``_ils`` lists a whole tree too, with ``recursive=True``, depth first
     or in name order: by the storage's recursive listing, or by
-    `_ils_by_directory` where it has none. It copies and moves a file by ``_cp_file_entry`` and ``_mv_file_entry``, which
+    ``tree.listing._tree_ils`` where it has none. It copies and moves a file by
+    ``_cp_file_entry`` and ``_mv_file_entry``, which
     take the source's entry, as its listing gave it, e.g. with its size.
     fsspec's ``_cp_file`` and ``_mv_file`` ask the entry, then call them. It
     implements ``open_async`` too, giving its files ``io_limit`` as their
@@ -210,26 +210,23 @@ class TreeFileSystem(_BaseFileSystem):
           A directory's entry may then come apart from what is below it, as
           "a/b-x" comes between "a/b" and "a/b/c".
 
-        A storage with no recursive listing of its own answers with
-        `_ils_by_directory`.
+        A storage with no recursive listing of its own, or one breaking these
+        orders, answers with ``_tree_ils`` of ``tree/listing.py``. It lists
+        depth first, by this ``_ils`` without ``recursive``, one directory per
+        request, several at a time::
+
+            from .listing import _tree_ils
+
+            def _ils(self, path, recursive=False, **kwargs):
+                if recursive:
+                    # kwargs hold no recursive: each directory is listed alone.
+                    return _tree_ils(self, path, **kwargs)
+                return self._list_directory(path, **kwargs)
+
+        Its listings hold permits of ``operation_limit``, beside the one held
+        by the caller of ``_ils``. A directory that fails to list ends the
+        whole listing, with its error.
         """
-
-    def _ils_by_directory(
-        self, path: str, **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        """List all below a directory, as a recursive ``_ils``, by one ``_ils`` per directory.
-
-        A subclass whose storage has no recursive listing answers ``_ils``
-        with it when ``recursive=True``. It lists depth first, several
-        directories at a time, each directory's entries in the order `_ils`
-        without ``recursive`` gives them. A directory that fails to list ends
-        the whole listing, with its error.
-
-        Its listings hold permits of ``operation_limit``, beside the one
-        held by the caller of ``_ils``, as the strategies hold one for each
-        request. ``kwargs`` go to each ``_ils``.
-        """
-        return _tree_ils(self, path, **kwargs)
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         """List a directory, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names."""
