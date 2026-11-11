@@ -504,7 +504,11 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     - A write waits while the concurrency limit allows no upload. So the
       memory a file holds is its parts in flight, at most one per permit, and
       one part being filled. A limit shared by files bounds their parts in
-      flight together.
+      flight together: a filesystem's ``io_limit``, shared by all its files,
+      bounds the bytes all its writes have in flight to its permits times
+      ``max_block_size``, e.g. 16 times 16 MiB. That is the memory to plan for,
+      however many files are written at once, with one part being filled per
+      file. A smaller limit, or ``max_block_size``, lowers it.
     - Every part but the last has at least ``min_block_size`` bytes, as storages
       such as S3 require. So ``flush`` uploads nothing.
     - ``flush(force=True)`` finishes the file as closing does, as fsspec's

@@ -108,7 +108,9 @@ class TreeFileSystem(_BaseFileSystem):
         A semaphore is used as it is, shared with what else holds it.
     io_concurrency : int or asyncio.Semaphore
         The reads and writes of data at a time.
-        A semaphore is used as it is, shared with what else holds it.
+        A semaphore is used as it is, shared with what else holds it. Each
+        holds a block or a part, so it bounds their memory too: at most this
+        many times the file class's ``max_block_size`` in flight.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
