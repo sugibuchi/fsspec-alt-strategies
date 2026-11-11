@@ -298,3 +298,65 @@ async def test_cat_ranges_fetches_a_large_merged_range_in_parts() -> None:
     ours = await fs._cat_ranges(["r/3", "r/3"], [0, size // 2], [size // 2, size])
     assert b"".join(ours) == inner._file_data["r/3"].data
     assert inner.stats.calls == {"read": 3}
+
+
+# The profile, loaded with the paths of the operation first.
+
+
+class _Noting:
+    """Notes each path the profile is ensured with, before a strategy loads it with none."""
+
+    ensured: list[Any]
+
+    async def _ensure_storage_profile(self, path: Any) -> StorageProfile:
+        self.ensured.append(path)
+        return await super()._ensure_storage_profile(path)  # type: ignore[misc]
+
+
+class _NotingTree(_Noting, AsyncTreeWrapper):
+    pass
+
+
+class _NotingFlat(_Noting, AsyncFlatWrapper):
+    pass
+
+
+async def _walked(fs: Any, path: str) -> list[Any]:
+    return [item async for item in fs._walk(path)]
+
+
+@pytest.mark.parametrize("family", ["tree", "flat"])
+@pytest.mark.parametrize(
+    ("call", "paths"),
+    [
+        (lambda fs: _walked(fs, "data"), ["data"]),
+        (lambda fs: fs._find("data"), ["data"]),
+        (lambda fs: fs._du("data"), ["data"]),
+        (lambda fs: fs._glob("data/*"), ["data/*"]),
+        (lambda fs: fs._rm("data", recursive=True), ["data"]),
+        (lambda fs: fs._copy("data", "copied", recursive=True), ["data", "copied"]),
+        (lambda fs: fs._mv("data", "moved", recursive=True), ["data", "moved"]),
+        # fsspec's own, starting no strategy.
+        (lambda fs: fs._rm("data/a.txt"), []),
+    ],
+)
+async def test_methods_starting_a_strategy_ensure_the_profile_first(
+    family: str, call: Any, paths: list[str]
+) -> None:
+    inner = SimulatedFileSystem(hierarchical=family == "tree", asynchronous=True)
+    inner.add_file("data/a.txt", b"a")
+    inner.add_file("data/b/c.txt", b"c")
+    if family == "tree":
+        fs: Any = _NotingTree(inner, **_LIMITS)
+    else:
+        fs = _NotingFlat(inner, rm_batch_size=10, **_LIMITS)
+    fs.ensured = []
+    await call(fs)
+    assert fs.ensured == paths
+
+
+async def test_ensure_storage_profile_is_the_profile_by_default() -> None:
+    fs = AsyncTreeWrapper(SimulatedFileSystem(asynchronous=True), **_LIMITS)
+    assert await fs._ensure_storage_profile("any/path") == StorageProfile(
+        fs_type="tree"
+    )

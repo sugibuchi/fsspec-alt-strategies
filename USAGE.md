@@ -131,7 +131,9 @@ fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
 
 A filesystem has one profile, which never changes. Where only a request can find it, e.g. whether an account has a
 hierarchical namespace, override `async def _load_storage_profile(self)` instead: it is awaited once, and the profile
-kept. A storage whose behaviour differs by path, e.g. per bucket, is several filesystems under a router.
+kept. Where that request needs a path, e.g. a container a credential may read, override
+`async def _ensure_storage_profile(self, path)` too. The methods starting a strategy await it with their paths first.
+A storage whose behaviour differs by path, e.g. per bucket, is several filesystems under a router.
 
 A method of fsspec's own can come back, e.g. `_rm = AsyncFileSystem._rm`. A storage's own operation can override a
 method too.

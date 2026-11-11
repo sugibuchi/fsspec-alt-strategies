@@ -1032,10 +1032,13 @@ class AsyncRoutingFileSystem(
         fsspec's own copy then runs. Each file goes by ``_cross_fs_cp_entry``.
         The operation is returned not yet started.
         """
-        get = getattr(fs1, "_get_storage_profile", None)
-        if get is None:
+        ensure = getattr(fs1, "_ensure_storage_profile", None)
+        if ensure is None:
             return None  # A plain fsspec filesystem: fsspec's own copy.
-        fs_type = (await get()).fs_type
+        fs_type = (await ensure(path1)).fs_type
+        # The destination's, which its jobs read, loaded with its path too.
+        if (ensure2 := getattr(fs2, "_ensure_storage_profile", None)) is not None:
+            await ensure2(path2)
         if fs_type is None:
             return None
 
@@ -1081,10 +1084,13 @@ class AsyncRoutingFileSystem(
         copies each key by ``_cross_fs_cp_entry`` instead, and deletes the keys
         copied in batches, by its ``_rm_files``.
         """
-        get = getattr(fs1, "_get_storage_profile", None)
-        if get is None:
+        ensure = getattr(fs1, "_ensure_storage_profile", None)
+        if ensure is None:
             return None  # A plain fsspec filesystem: fsspec's own copy, then rm.
-        fs_type = (await get()).fs_type
+        fs_type = (await ensure(path1)).fs_type
+        # The destination's, which its jobs read, loaded with its path too.
+        if (ensure2 := getattr(fs2, "_ensure_storage_profile", None)) is not None:
+            await ensure2(path2)
         if fs_type is None:
             return None
 

@@ -777,3 +777,23 @@ async def test_cat_ranges_gives_each_storage_its_ranges(router: _Router) -> None
     assert router.plain.stats.calls == {"read": 10}
     with pytest.raises(FileNotFoundError):
         await router._cat_ranges(paths, all_starts, all_ends, on_error="raise")
+
+
+@pytest.mark.parametrize("move", [False, True])
+async def test_transfers_across_storages_ensure_each_sides_profile(
+    router: _Router, move: bool
+) -> None:
+    # Each side's profile is loaded with its own path, as its methods would.
+    ensured: list[tuple[str, Any]] = []
+    for name in ("tree", "flat"):
+        fs = router.backend(name)
+        original = fs._ensure_storage_profile
+
+        async def note(path: Any, name: str = name, original: Any = original) -> Any:
+            ensured.append((name, path))
+            return await original(path)
+
+        fs._ensure_storage_profile = note
+    method = router._mv if move else router._copy
+    await method("lake/tree/data", "lake/flat/moved", recursive=True)
+    assert ensured == [("tree", "data"), ("flat", "moved")]

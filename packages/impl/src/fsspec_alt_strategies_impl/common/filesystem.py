@@ -149,6 +149,21 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
                 self._storage_profile_loaded = await self._load_storage_profile()
             return self._storage_profile_loaded
 
+    async def _ensure_storage_profile(
+        self, path: str | Sequence[str]
+    ) -> StorageProfile:
+        """The profile, loaded before an operation on ``path``: here, `_get_storage_profile`'s.
+
+        The methods starting a strategy await it with their paths first, as do
+        the router's transfers, before the strategy loads the profile with
+        none. A subclass whose `_load_storage_profile` asks the storage
+        overrides it to note where it may ask, e.g. the container a credential
+        is limited to, then awaits `_get_storage_profile`. The profile is still
+        one for the whole filesystem: the path tells where loading may ask, never
+        what the profile is.
+        """
+        return await self._get_storage_profile()
+
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
         return self

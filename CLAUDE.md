@@ -71,6 +71,8 @@ code: read it before adding a strategy.
   it.
 - A filesystem has one profile, which never changes. A storage whose behaviour differs by path, e.g. per bucket or
   container, is several filesystems under a router. Never add a strategy hook taking a path to tell them apart.
+- A method starting a strategy, and the router's transfers, first await `_ensure_storage_profile(path)` with their
+  paths. Its path tells a profile loaded by a request where it may ask, e.g. a container, never what the profile is.
 - The library never chooses a strategy for the developer. Each docstring says what the strategy assumes of the
   storage, and when it wins or loses.
 - Async first: write the async version, and a sync one only when asked.
