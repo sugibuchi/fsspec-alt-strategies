@@ -9,7 +9,7 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.wrapper import AsyncFlatWrapper, SyncFlatWrapper
+from fsspec_alt_strategies_impl.wrapper.flat import AsyncFlatWrapper, SyncFlatWrapper
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -41,8 +41,9 @@ async def test_an_async_filesystem_answers_as_fsspec(
     assert await flat._glob("data/*/*.txt") == await AsyncFileSystem._glob(
         inner, "data/*/*.txt"
     )
-    assert [e["name"] async for e in flat._iexpand("data/202")] == [
-        p for p in _FILES if p.startswith("data/202")
+    listed = flat._ils("data", recursive=True, prefix="202")
+    assert [e["name"] async for e in listed] == [
+        p for p in sorted(_FILES) if p.startswith("data/202")
     ]
     await flat._mv("data/2023", "moved", recursive=True)
     await flat._rm("data", recursive=True)

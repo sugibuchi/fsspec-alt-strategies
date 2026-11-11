@@ -7,9 +7,11 @@ data methods the wrappers pass on, and the helpers shaping fsspec's answers.
 from __future__ import annotations
 
 import io
+import random
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
@@ -21,11 +23,8 @@ from fsspec_alt_strategies_impl.common.filesystem import (
     _strip_only_protocol,
 )
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
-from fsspec_alt_strategies_impl.wrapper import (
-    AsyncFlatWrapper,
-    AsyncTreeWrapper,
-    SyncTreeWrapper,
-)
+from fsspec_alt_strategies_impl.wrapper.flat import AsyncFlatWrapper
+from fsspec_alt_strategies_impl.wrapper.tree import AsyncTreeWrapper, SyncTreeWrapper
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -176,10 +175,15 @@ def test_a_dir_failing_to_list_is_raised_reported_or_empty() -> None:
 
 
 class _Flat(AsyncFlatWrapper):
-    """A simulated storage as a `FlatFileSystem`, listed by its own ``_iexpand``."""
+    """A simulated storage as a `FlatFileSystem`, listed by its own prefix listing."""
 
-    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        return self.fs._iexpand(prefix)
+    def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            return self.fs._list_prefix(f"{path}/{prefix}" if path else prefix)
+        else:
+            return super()._ils(path, prefix=prefix, **kwargs)
 
 
 @pytest.mark.parametrize("family", ["tree", "flat"])
@@ -199,3 +203,98 @@ async def test_a_file_copied_or_moved_into_a_missing_dir(
     await getattr(fs, method)(path, "new/", recursive=recursive)
     assert sim._file_data["new/1.txt"].data == b"1"
     assert "new" not in sim._file_data
+
+
+class _NoPermit(AsyncTreeWrapper):
+    """A subclass whose data methods send their request holding no permit of io_limit."""
+
+    async def _cat_file(
+        self, path: str, start: Any = None, end: Any = None, **kwargs: Any
+    ) -> bytes:
+        return await self.fs._cat_file(path, start=start, end=end)
+
+    async def _pipe_file(self, path: str, value: bytes, **kwargs: Any) -> None:
+        await self.fs._pipe_file(path, value)
+
+
+@pytest.mark.parametrize("batch_size", [None, 5])
+async def test_many_paths_go_io_concurrency_at_a_time(batch_size: int | None) -> None:
+    inner = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
+    fs = _NoPermit(inner, asynchronous=True, **{**_LIMITS, "io_concurrency": 3})
+    paths = [f"many/{i}" for i in range(20)]
+
+    await fs._pipe(dict.fromkeys(paths, b"x"), batch_size=batch_size)
+    piped = inner.stats.max_concurrency
+    inner.reset_stats()
+    assert await fs._cat(paths, batch_size=batch_size) == dict.fromkeys(paths, b"x")
+
+    # io_concurrency by default, though the subclass takes no permit; the call's own if given.
+    assert piped == inner.stats.max_concurrency == (batch_size or 3)
+
+
+def _ranges_fs(**kwargs: Any) -> tuple[SimulatedFileSystem, AsyncTreeWrapper]:
+    inner = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    for i, size in enumerate([0, 1000, 300_000, 3 * 1024 * 1024]):
+        inner.add_file(
+            f"r/{i}", bytes(range(256)) * (size // 256) + b"x" * (size % 256)
+        )
+    return inner, AsyncTreeWrapper(inner, asynchronous=True, **{**_LIMITS, **kwargs})
+
+
+async def test_cat_ranges_answers_as_fsspec() -> None:
+    inner, fs = _ranges_fs()
+    rng = random.Random(4)
+    paths, starts, ends = [], [], []
+    for _ in range(300):
+        paths.append(rng.choice(["r/0", "r/1", "r/2", "r/3", "r/missing"]))
+        start = rng.choice([None, 0, -50, rng.randrange(400_000)])
+        starts.append(start)
+        ends.append(
+            rng.choice(
+                [
+                    None,
+                    -10,
+                    rng.randrange(3_200_000),
+                    (start or 0) + rng.randrange(5000),
+                ]
+            )
+        )
+    ours = await fs._cat_ranges(paths, starts, ends)
+    reference = await AsyncFileSystem._cat_ranges(inner, paths, starts, ends)
+    for got, expected in zip(ours, reference, strict=True):
+        if isinstance(expected, Exception):
+            assert type(got) is type(expected)
+        else:
+            assert got == expected
+    with pytest.raises(FileNotFoundError):
+        await fs._cat_ranges(paths, starts, ends, on_error="raise")
+
+
+async def test_cat_ranges_merges_nearby_ranges() -> None:
+    inner, fs = _ranges_fs()
+    # 100 ranges of 1000 bytes, 2000 apart, in one file: one request, not 100.
+    starts = [i * 3000 for i in range(100)]
+    ends = [s + 1000 for s in starts]
+    inner.reset_stats()
+    ours = await fs._cat_ranges(["r/2"] * 100, starts, ends)
+    assert ours == [
+        inner._file_data["r/2"].data[s:e] for s, e in zip(starts, ends, strict=True)
+    ]
+    assert inner.stats.calls == {"read": 1}
+    # Apart beyond max_gap: one request each.
+    inner.reset_stats()
+    await fs._cat_ranges(
+        ["r/2"] * 3, [0, 100_000, 200_000], [10, 100_010, 200_010], max_gap=1000
+    )
+    assert inner.stats.calls == {"read": 3}
+
+
+async def test_cat_ranges_fetches_a_large_merged_range_in_parts() -> None:
+    inner, fs = _ranges_fs()
+    fs.ranges_split_size = 1024 * 1024
+    inner.reset_stats()
+    # 3 MiB merged from two ranges: in 3 parts of 1 MiB, at once.
+    size = 3 * 1024 * 1024
+    ours = await fs._cat_ranges(["r/3", "r/3"], [0, size // 2], [size // 2, size])
+    assert b"".join(ours) == inner._file_data["r/3"].data
+    assert inner.stats.calls == {"read": 3}

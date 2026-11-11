@@ -9,18 +9,20 @@ bandwidth if one is set.
 
 Its two modes model the two kinds of storage that strategies are chosen for:
 
-- *flat*, an object store such as S3. Directories are only prefixes of keys, so a
-  directory without files does not exist, and deleting a directory deletes each file.
+- *flat*, an object store such as S3. Directories are only prefixes of keys,
+  so a directory without files does not exist, and deleting a directory
+  deletes each file.
 - *hierarchical*, a storage with a hierarchical namespace such as Azure Data
-  Lake Storage Gen2. Directories are real, and a directory is deleted in one request.
+  Lake Storage Gen2. Directories are real, and a directory is deleted in one
+  request.
 
-Whether a whole subtree can be listed in one paginated request is set apart, by
-``recursive_listing``. Some hierarchical storages have it, others list one directory
-per request.
+Whether a whole subtree can be listed in one paginated request is set apart,
+by ``recursive_listing``. Some hierarchical storages have it, others list one
+directory per request.
 
 It is a package of its own, apart from the strategies: copying them into
-another package leaves it out. It depends on fsspec, and on the interface for
-`StorageProfile`.
+another package leaves it out. It depends on fsspec, on the interface for
+`StorageProfile`, and on the strategies for the recursive listing of `TreeView`.
 """
 
 from __future__ import annotations
@@ -36,9 +38,10 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 
 __all__ = ["CallStats", "FlatView", "SimulatedFileSystem", "TreeView", "dir_ils"]
 
@@ -91,8 +94,8 @@ class SimulatedFileSystem(AsyncFileSystem):
     ----------
     hierarchical : bool
         True for a storage with real directories, False for an object store.
-        Only a hierarchical one keeps empty directories, and deletes a directory with
-        everything in it in one request.
+        Only a hierarchical one keeps empty directories, and deletes a
+        directory with everything in it in one request.
     recursive_listing : bool
         Whether `_find` lists a subtree in one paginated request, as object
         stores do. Otherwise, it walks the subtree a directory at a time.
@@ -119,6 +122,9 @@ class SimulatedFileSystem(AsyncFileSystem):
     stats : CallStats
         The requests received since the filesystem was made, or since
         `reset_stats`.
+    entries : list of dict
+        The source entries `_cp_file_entry` and `_mv_file_entry` were given,
+        in order, so that a test checks what a strategy handed on.
 
     Examples
     --------
@@ -162,6 +168,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         self.overwrite = overwrite
 
         self.stats = CallStats()
+        self.entries: list[dict[str, Any]] = []
         self._in_flight = 0
         self._file_data: dict[str, _File] = {}
         # Each directory's direct children. In flat mode, a directory is here only
@@ -292,13 +299,32 @@ class SimulatedFileSystem(AsyncFileSystem):
             return {n: self._entry(n) for n in names}
         return names
 
-    async def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def _ils_recursive(self, path: str) -> AsyncIterator[dict[str, Any]]:
+        """List all below a directory, a page per request, as a recursive listing does.
+
+        It is no fsspec method: a `TreeView` with ``recursive_listing`` lists
+        with it for ``recursive=True``. Its entries come sorted by name.
+        An object store lists only files, a hierarchical storage its directories
+        too. A file lists itself, and a missing path raises FileNotFoundError.
+        """
+        path = self._strip_protocol(path)
+        if path not in self._file_data and path not in self._dirs:
+            await self._request("list")
+            raise FileNotFoundError(path)
+
+        names = sorted(self._listing(path))
+        for start in range(0, max(len(names), 1), self.page_size):
+            await self._request("list")
+            for name in names[start : start + self.page_size]:
+                yield self._entry(name)
+
+    async def _list_prefix(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
         """List the files whose paths start with ``prefix``, as object stores do.
 
-        It is no fsspec method: the flat strategies list with it.
-        ``prefix`` is a raw string, e.g. "data/2024-" lists "data/2024-01.csv".
-        The files come in path order, a page per request: a page is asked for
-        only once the one before it is all taken.
+        It is no fsspec method: a `FlatView` lists with it, for a recursive
+        ``_ils``. ``prefix`` is a raw string, e.g. "data/2024-" lists
+        "data/2024-01.csv". The files come in path order, a page per request:
+        a page is asked for only once the one before it is all taken.
         """
         after: str | None = None
 
@@ -346,6 +372,20 @@ class SimulatedFileSystem(AsyncFileSystem):
         self._check_writable(path2)
         self._write(path2, data)
 
+    async def _cp_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
+        """Copy a file by its entry, as the families' ``_cp_file_entry`` takes it, noting the entry."""
+        self.entries.append(entry)
+        await self._cp_file(entry["name"], path2, **kwargs)
+
+    async def _mv_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
+        """Move a file by its entry, noting the entry: a copy, then a deletion, as fsspec's ``_mv_file``."""
+        self.entries.append(entry)
+        await self._mv_file(entry["name"], path2)
+
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         path = self._strip_protocol(path)
         await self._request("delete")
@@ -357,7 +397,7 @@ class SimulatedFileSystem(AsyncFileSystem):
 
         It is no fsspec method: the flat strategies delete with it. A path
         that is no file is left out, as object stores leave out a key that
-        does not exist.
+        does not exist. It returns None: every key was deleted.
         """
         await self._request("delete")
         for path in map(self._strip_protocol, paths):
@@ -421,10 +461,11 @@ class SimulatedFileSystem(AsyncFileSystem):
     async def _rename(self, path1: str, path2: str) -> None:
         """Move a file, or a directory with all in it, in one request.
 
-        It is no fsspec method: it is a hierarchical storage's own, as Azure Data
-        Lake Storage Gen2 renames a path. A test gives it to the tree move as its
-        ``mv_file``, with a profile's ``renames_directories=True``. It refuses a
-        ``path2`` that exists, and an object store has none.
+        It is no fsspec method: it is a hierarchical storage's own, as Azure
+        Data Lake Storage Gen2 renames a path. A test gives it to the tree move
+        as its ``mv_file``, and as its ``mv_tree`` with a profile's
+        ``renames_directories=True``. It refuses a ``path2`` that exists. An
+        object store has no rename: it raises NotImplementedError.
         """
         path1, path2 = self._strip_protocol(path1), self._strip_protocol(path2)
         if not self.hierarchical:
@@ -582,29 +623,54 @@ class SimulatedFileSystem(AsyncFileSystem):
 
 
 def dir_ils(fs: Any) -> Callable[[str], AsyncIterator[dict[str, Any]]]:
-    """A tree strategy's ``ils``, listing a directory by ``fs._ls``, or by ``fs`` itself.
+    """A tree strategy's ``ils`` of one directory, by ``fs._ls``, or by ``fs`` itself.
 
-    A `SimulatedFileSystem`'s own ``_iexpand`` lists by prefix, as the flat
+    A `SimulatedFileSystem`'s own ``_list_prefix`` lists by prefix, as the flat
     strategies take it. This one lists one directory, as the tree strategies take
-    it. ``fs._ls`` is looked up at each call, so that a test may replace it.
+    it, in name order. ``fs._ls`` is looked up at each call, so that a test may
+    replace it.
     """
 
     async def ils(path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         ls = getattr(fs, "_ls", fs)
-        for entry in await ls(path, detail=True, **kwargs):
+        listing = await ls(path, detail=True, **kwargs)
+        for entry in sorted(listing, key=lambda e: e["name"]):
             yield entry
 
     return ils
+
+
+def _by_name(
+    transfer: Callable[[str, str], Awaitable[None]],
+) -> Callable[[dict[str, Any], str], Awaitable[None]]:
+    """A ``_cp_file_entry`` or ``_mv_file_entry`` calling ``transfer`` with the entry's name.
+
+    A test replaces a copy or a move with one taking paths, e.g. a
+    `SimulatedFileSystem`'s ``_rename``.
+    """
+
+    async def by_entry(entry: dict[str, Any], path2: str) -> None:
+        await transfer(entry["name"], path2)
+
+    return by_entry
 
 
 class TreeView:
     """A filesystem as the tree strategies take it, its primitives replaceable.
 
     The tree strategies take a filesystem, and call its ``_ils``, ``_info``,
-    ``_rm_file``, ``_rmdir``, ``_cp_file``, ``_mv_file``, ``_makedirs`` and
-    ``_rm_tree``. A `SimulatedFileSystem` has no ``_ils``: this view lists
-    with `dir_ils`. Each other primitive is the filesystem's own, unless
-    given, so that a test may replace one, e.g. with one that fails.
+    ``_rm_file``, ``_rmdir``, ``_cp_file_entry``, ``_mv_file_entry``,
+    ``_makedirs``, ``_rm_tree`` and ``_mv_tree``. A `SimulatedFileSystem` has no ``_ils``: this
+    view lists a directory with `dir_ils`, or with ``ils`` if given. Each other
+    primitive is the filesystem's own, unless given, so that a test may replace
+    one, e.g. with one that fails. A ``cp_file`` or ``mv_file`` given takes
+    paths, the entry's name. ``rm_tree`` and ``mv_tree`` are None unless given,
+    as a `SimulatedFileSystem` has neither.
+
+    Its ``_ils`` with ``recursive=True`` lists a directory per request, as a
+    `TreeFileSystem` without a recursive listing of its own does. With
+    ``recursive_listing``, it lists by the filesystem's own recursive listing
+    instead, a page per request.
 
     ``operation_limit`` and ``storage_profile`` are a filesystem's: 32
     requests at a time, and a storage unknown.
@@ -614,11 +680,13 @@ class TreeView:
         self,
         fs: Any,
         *,
+        recursive_listing: bool = False,
         ils: Any = None,
         info: Any = None,
         rm_file: Any = None,
         rm_dir: Any = None,
         rm_tree: Any = None,
+        mv_tree: Any = None,
         cp_file: Any = None,
         mv_file: Any = None,
         makedirs: Any = None,
@@ -626,16 +694,31 @@ class TreeView:
         operation_limit: asyncio.Semaphore | None = None,
     ) -> None:
         self.fs = fs
-        self._ils = dir_ils(fs) if ils is None else ils
+        self.recursive_listing = recursive_listing
+        self._dir_ils = dir_ils(fs) if ils is None else ils
         self._info = fs._info if info is None else info
         self._rm_file = fs._rm_file if rm_file is None else rm_file
         self._rmdir = fs._rmdir if rm_dir is None else rm_dir
         self._rm_tree = rm_tree
-        self._cp_file = fs._cp_file if cp_file is None else cp_file
-        self._mv_file = fs._mv_file if mv_file is None else mv_file
+        self._mv_tree = mv_tree
+        self._cp_file_entry = (
+            fs._cp_file_entry if cp_file is None else _by_name(cp_file)
+        )
+        self._mv_file_entry = (
+            fs._mv_file_entry if mv_file is None else _by_name(mv_file)
+        )
         self._makedirs = fs._makedirs if makedirs is None else makedirs
         self.storage_profile = storage_profile or StorageProfile()
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
+
+    def _ils(
+        self, path: str, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if not recursive:
+            return self._dir_ils(path, **kwargs)
+        if self.recursive_listing:
+            return self.fs._ils_recursive(path)
+        return _tree_ils(self, path, recursive=False, **kwargs)
 
     async def _get_storage_profile(self) -> StorageProfile:
         return self.storage_profile
@@ -644,11 +727,14 @@ class TreeView:
 class FlatView:
     """A filesystem as the flat strategies take it, its primitives replaceable.
 
-    The flat strategies take a filesystem, and call its ``_iexpand``,
-    ``_info``, ``_rm_files``, ``_cp_file``, ``_mv_file``, ``_makedirs`` and
-    ``_rm_file``. Each is the filesystem's own, unless given, so that a test
-    may replace one, e.g. with one that fails. ``fs`` may be None when all
-    that a test calls is given.
+    The flat strategies take a filesystem, and call its recursive ``_ils``,
+    ``_info``, ``_rm_files``, ``_cp_file_entry``, ``_mv_file_entry``,
+    ``_makedirs`` and ``_rm_file``. Each is the filesystem's own, unless given, so that a test
+    may replace one, e.g. with one that fails. ``list_prefix``, a listing of
+    every key starting with a raw prefix, e.g. "data/2024-", answers a
+    recursive ``_ils``: the filesystem's own unless given. A ``cp_file`` or
+    ``mv_file`` given takes paths, the entry's name. ``fs`` may be None when
+    all that a test calls is given.
 
     ``operation_limit``, ``storage_profile`` and ``rm_batch_size`` are a
     filesystem's: 32 requests at a time, a storage unknown, and 1000 keys
@@ -659,7 +745,7 @@ class FlatView:
         self,
         fs: Any,
         *,
-        iexpand: Any = None,
+        list_prefix: Any = None,
         info: Any = None,
         rm_files: Any = None,
         cp_file: Any = None,
@@ -674,16 +760,28 @@ class FlatView:
             return getattr(fs, name, None) if given is None else given
 
         self.fs = fs
-        self._iexpand = own("_iexpand", iexpand)
+        self._list_prefix = own("_list_prefix", list_prefix)
         self._info = own("_info", info)
         self._rm_files = own("_rm_files", rm_files)
-        self._cp_file = own("_cp_file", cp_file)
-        self._mv_file = own("_mv_file", mv_file)
+        self._cp_file_entry = (
+            own("_cp_file_entry", None) if cp_file is None else _by_name(cp_file)
+        )
+        self._mv_file_entry = (
+            own("_mv_file_entry", None) if mv_file is None else _by_name(mv_file)
+        )
         self._makedirs = own("_makedirs", makedirs)
         self._rm_file = own("_rm_file", rm_file)
         self.storage_profile = storage_profile or StorageProfile()
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
         self.rm_batch_size = rm_batch_size
+
+    def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            return self._list_prefix(f"{path}/{prefix}" if path else prefix)
+        else:
+            return dir_ils(self.fs)(path, **kwargs)
 
     async def _get_storage_profile(self) -> StorageProfile:
         return self.storage_profile

@@ -18,7 +18,16 @@ from fsspec_alt_strategies_impl_testing import (
     TreeView,
 )
 
-_PRIMITIVES = {"ils", "info", "rm_file", "rm_dir", "rm_tree", "cp_file", "mv_file"}
+_PRIMITIVES = {
+    "ils",
+    "info",
+    "rm_file",
+    "rm_dir",
+    "rm_tree",
+    "mv_tree",
+    "cp_file",
+    "mv_file",
+}
 """The keyword arguments that replace a primitive of the filesystem."""
 
 
@@ -59,12 +68,12 @@ def _views(
 def _mv(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
     """`_tree_mv` within ``fs``, whose primitives ``kwargs`` may replace.
 
-    With ``same_storage=False``, ``mv_file`` is the hook moving each file to
+    With ``same_storage=False``, ``mv_entry`` is the hook moving each file to
     the other storage, not the source's primitive.
     """
     hook = {}
-    if kwargs.get("same_storage") is False and "mv_file" in kwargs:
-        hook["mv_file"] = kwargs.pop("mv_file")
+    if kwargs.get("same_storage") is False and "mv_entry" in kwargs:
+        hook["mv_entry"] = kwargs.pop("mv_entry")
     source, destination = _views(fs, kwargs)
     return _tree_mv(
         source, destination, path1, path2, **{"same_storage": True, **hook, **kwargs}
@@ -260,8 +269,12 @@ def _files(fs: SimulatedFileSystem) -> dict[str, bytes]:
 
 
 def _renaming(fs: SimulatedFileSystem) -> dict[str, Any]:
-    """A storage's rename as mv_file, declared to move directories too."""
-    return {"mv_file": fs._rename, "profile": StorageProfile(renames_directories=True)}
+    """A storage's rename as mv_file, and as mv_tree, declared to move directories."""
+    return {
+        "mv_file": fs._rename,
+        "mv_tree": fs._rename,
+        "profile": StorageProfile(renames_directories=True),
+    }
 
 
 async def test_a_dir_moves_whole(hierarchical_fs: SimulatedFileSystem) -> None:
@@ -274,7 +287,8 @@ async def test_a_dir_moves_whole(hierarchical_fs: SimulatedFileSystem) -> None:
     hierarchical_fs.reset_stats()
     op = _mv(hierarchical_fs, "data", "moved", **_renaming(hierarchical_fs))
     assert await _collect_with_errors(op) == ([("data", "moved")], [])
-    # Where path2 goes, found free, then the rename: nothing is listed.
+    # Where path2 goes, found free, then the rename: nothing is listed, and the
+    # root's own entry is not asked.
     assert hierarchical_fs.stats.calls == {"info": 1, "rename": 1}
     assert op.state == MvState(current="data", directories_moved=0, roots_renamed=1)
     assert _files(hierarchical_fs) == expected
@@ -339,9 +353,9 @@ async def test_a_dir_failing_to_move_whole_is_the_roots_error(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)
-    # Wrongly declared: fsspec's _mv_file copies a file, and fails on a directory.
+    # Wrongly declared: an object store renames nothing at once.
     profile = StorageProfile(renames_directories=True)
-    op = _mv(flat_fs, "data", "moved", profile=profile)
+    op = _mv(flat_fs, "data", "moved", mv_tree=flat_fs._rename, profile=profile)
     moved, errors = await _collect_with_errors(op)
     # Its cause, not one failure per file: nothing is walked.
     assert moved == []
@@ -398,7 +412,14 @@ async def test_a_rename_gets_its_parent_where_a_write_needs_none(
         renames_files=True,
         renames_directories=renames_directories,
     )
-    op = _mv(fs, "data", "new/deep/moved", mv_file=fs._rename, profile=profile)
+    op = _mv(
+        fs,
+        "data",
+        "new/deep/moved",
+        mv_file=fs._rename,
+        mv_tree=fs._rename,
+        profile=profile,
+    )
     _, errors = await _collect_with_errors(op)
     assert errors == []
     assert await fs._exists("new/deep/moved/2023/01/part-0.parquet")
@@ -546,6 +567,7 @@ async def test_a_target_failing_its_info_is_the_roots_error(
         "moved",
         dst_info=info,
         mv_file=hierarchical_fs._rename,
+        mv_tree=hierarchical_fs._rename,
         profile=profile,
     )
     moved, errors = await _collect_with_errors(op)
@@ -577,7 +599,8 @@ async def test_moves_to_another_storage(hierarchical_fs: SimulatedFileSystem) ->
     _tree(hierarchical_fs)
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
 
-    async def mv_file(source: str, destination: str) -> None:
+    async def mv_entry(entry: dict[str, Any], destination: str) -> None:
+        source = entry["name"]
         await dst._pipe_file(destination, hierarchical_fs._file_data[source].data)
         await hierarchical_fs._rm_file(source)
 
@@ -585,7 +608,7 @@ async def test_moves_to_another_storage(hierarchical_fs: SimulatedFileSystem) ->
         hierarchical_fs,
         "data",
         "moved",
-        mv_file=mv_file,
+        mv_entry=mv_entry,
         dst_info=dst._info,
         dst_makedirs=dst._makedirs,
         same_storage=False,
@@ -639,10 +662,7 @@ async def test_maxdepth_moves_what_fsspecs_copy_copies(
 
     kwargs: dict[str, Any] = {}
     if renames_directories:
-        kwargs = {
-            "mv_file": fs._rename,
-            "profile": StorageProfile(renames_directories=True),
-        }
+        kwargs = _renaming(fs)
     _, errors = await _collect_with_errors(
         _mv(fs, path1, path2, maxdepth=maxdepth, **kwargs)
     )
@@ -681,3 +701,42 @@ async def test_maxdepth_keeps_the_dirs_not_emptied(
 async def test_maxdepth_below_1_is_refused(any_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="maxdepth"):
         _mv(any_fs, "data", "moved", maxdepth=0)
+
+
+async def test_mv_entry_is_given_the_listings_entries(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    sizes = {p: len(f.data) for p, f in hierarchical_fs._file_data.items()}
+    _, errors = await _collect_with_errors(_mv(hierarchical_fs, "data", "moved"))
+    assert errors == []
+    # Each file's entry as its directory's listing gave it, with its size.
+    assert sorted((e["name"], e["size"]) for e in hierarchical_fs.entries) == sorted(
+        (p, s) for p, s in sizes.items() if p.startswith("data/")
+    )
+
+
+async def test_a_dir_moving_whole_goes_by_mv_tree_not_mv_entry(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    trees: list[tuple[str, str]] = []
+    entries: list[dict[str, Any]] = []
+
+    async def mv_tree(path1: str, path2: str) -> None:
+        trees.append((path1, path2))
+        await hierarchical_fs._rename(path1, path2)
+
+    async def mv_entry(entry: dict[str, Any], path2: str) -> None:
+        entries.append(entry)
+
+    view = TreeView(
+        hierarchical_fs,
+        mv_tree=mv_tree,
+        storage_profile=StorageProfile(renames_directories=True),
+    )
+    view._mv_file_entry = mv_entry  # type: ignore[method-assign]
+    op = _tree_mv(view, view, "data", "moved", same_storage=True)
+    assert await _collect_with_errors(op) == ([("data", "moved")], [])
+    assert trees == [("data", "moved")]
+    assert entries == []

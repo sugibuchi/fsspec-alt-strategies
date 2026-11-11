@@ -14,8 +14,8 @@ from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 
 def _du(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
-    """`_flat_du` on ``fs``, whose ``iexpand`` or ``info`` ``kwargs`` may replace."""
-    primitives = {k: kwargs.pop(k) for k in ("iexpand", "info") if k in kwargs}
+    """`_flat_du` on ``fs``, whose ``list_prefix`` or ``info`` ``kwargs`` may replace."""
+    primitives = {k: kwargs.pop(k) for k in ("list_prefix", "info") if k in kwargs}
     return _flat_du(FlatView(fs, **primitives), path, **kwargs)
 
 

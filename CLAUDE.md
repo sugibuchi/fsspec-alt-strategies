@@ -47,8 +47,11 @@ code: read it before adding a strategy.
 - A strategy takes the filesystem it works on, never its methods as functions: `_tree_rm(fs, path, maxdepth=...)`. A
   copy or move takes `src_fs` and `dst_fs`, the same within one storage. It reads the primitives, `operation_limit`
   and `storage_profile` from them.
-- The only function a strategy takes is a copy's or a move's `cp_file` or `mv_file`, a `common.jobs._Transfer`. The
-  router passes its copy of a file between two storages so. Between two storages it is required.
+- The only function a strategy takes is a copy's or a move's `cp_entry` or `mv_entry`, a `common.jobs._Transfer`,
+  taking the source's entry. The router passes its copy of a file between two storages so. Between two storages it is
+  required.
+- A copy or move hands each file's entry, as its listing found it, to `_cp_file_entry` or `_mv_file_entry`. Never drop
+  it for the path alone: a storage may need its size.
 - A strategy calls only a storage's primitives, such as `_ils`, `_info` and `_rm_file`, never a high-level method such
   as `_find` or `_glob`: another strategy may have replaced it.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
@@ -76,16 +79,18 @@ code: read it before adding a strategy.
 ### Families
 
 - A family, such as `tree/` or `flat/`, never imports another. What two share goes in `common/`, a module per
-  concern. What builds on both sits at the package's root: `wrapper.py` and `router.py`. The router imports a
+  concern. What builds on both sits at the package's root: `wrapper/` and `router.py`. The router imports a
   family only when copying or moving from a storage of it, as its profile's `fs_type` says.
+- A wrapper of one library, such as `wrapper/s3fs.py`, never imports it: it calls the wrapped filesystem's methods.
+  Write one only where the library saves requests or data beyond fsspec's API.
 - A family's modules export nothing public but its filesystem class, in `filesystem.py`.
 - The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
 - Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
-- The flat strategies list with `_iexpand(prefix)`, an async iterator of entries in name order, never pages: see
-  DEVELOPMENT.md's "The flat strategies". Those that only read derive directories with `flat._keys`. Those changing the
-  storage build on `flat._jobs._FlatJobs`.
+- The flat strategies list with `flat._keys._listing(fs, prefix)`, a recursive `_ils` of the prefix's directory, an
+  async iterator of entries in name order, never pages: see DEVELOPMENT.md's "The flat strategies". Those that only
+  read derive directories with `flat._keys`. Those changing the storage build on `flat._jobs._FlatJobs`.
 - The strategies changing a storage, in any family, run on `common.jobs._Jobs`, and start with `_Jobs.operation`. A
   copy or move also builds on `common.jobs._CopyJobs`, which places its paths: `_CopyOrMove(_CopyJobs, _TreeJobs)`.
   Their constructors take keywords only, and pass the rest on.

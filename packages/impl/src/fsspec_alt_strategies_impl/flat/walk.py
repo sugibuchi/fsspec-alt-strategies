@@ -20,7 +20,7 @@ from fsspec_alt_strategies.states import WalkState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
-from ._keys import _close, _dir, _dirs
+from ._keys import _close, _dir, _dirs, _listing
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -39,12 +39,12 @@ def _flat_walk(
     """Walk the keys under a prefix, from one listing streamed as it comes.
 
     It yields each directory as ``(path, dirs, files)``, as `_tree_walk` does:
-    ``path`` itself, then each directory below it. ``dirs`` and ``files`` map the
-    names in the directory to their entries. The files are the keys, as
-    ``_iexpand`` gives them. The directories are derived from the keys, as fsspec's
-    filesystems derive them for object stores, and a key ending with "/" is a
-    directory's marker. A derived directory's entry has only its ``name``, ``size`` 0
-    and ``type``.
+    ``path`` itself, then each directory below it. ``dirs`` and ``files`` map
+    the names in the directory to their entries. The files are the keys, as the
+    recursive ``_ils`` gives them. The directories are derived from the keys,
+    as fsspec's filesystems derive them for object stores, and a key ending
+    with "/" is a directory's marker. A derived directory's entry has only its
+    ``name``, ``size`` 0 and ``type``.
 
     A directory is done once the listing has passed its keys. Without
     ``topdown``, each directory comes as soon as it is done, after all those
@@ -68,13 +68,13 @@ def _flat_walk(
     - NotADirectoryError, if ``path`` is a file;
     - the error of the listing, as there is no other to go on with.
 
-    Requests: the pages of one ``_iexpand`` of ``path``, one after another.
-    One ``_info`` for ``path``, if nothing is under it, holding a permit of
-    the filesystem's ``operation_limit``. The listing holds none.
+    Requests: the pages of one recursive ``_ils`` of ``path``, one after
+    another. One ``_info`` for ``path``, if nothing is under it, holding a
+    permit of the filesystem's ``operation_limit``. The listing holds none.
 
-    ``path`` is the directory the walk starts from on ``fs``. Its ``_iexpand``
-    lists every key starting with a prefix, in name order, each key once, as
-    an object store lists them. ``maxdepth`` of 1 yields only ``path``.
+    ``path`` is the directory the walk starts from on ``fs``. Its recursive
+    ``_ils`` lists every key below a directory, in name order, each key once,
+    as an object store lists them. ``maxdepth`` of 1 yields only ``path``.
     ``topdown`` puts a directory before those below it. ``descend``, called with
     the entry of each subdirectory found, lets the walk enter it only if it
     returns True.
@@ -128,8 +128,8 @@ async def _dirs_done(
 ) -> AsyncGenerator[tuple[str, list[dict[str, Any]]]]:
     """Each directory walked with its entries, as soon as it is done: bottom up.
 
-    The directories open, those the listing is in, are ``path`` and its subdirectories
-    down to the key listed last. A key not under the deepest one closes it: the
+    The directories open, those the listing is in, are ``path`` and its
+    subdirectories down to the key listed last. A key not under the deepest one closes it: the
     keys come in order, so none under it comes later. A walk stopped leaves
     out the directories still open.
     """
@@ -140,7 +140,7 @@ async def _dirs_done(
     # The directories open, the root first, each with its entries so far.
     open_: list[tuple[str, list[dict[str, Any]]]] = [(root, [])]
 
-    keys = fs._iexpand(prefix)
+    keys = _listing(fs, prefix)
     try:
         async for key in keys:
             under = True

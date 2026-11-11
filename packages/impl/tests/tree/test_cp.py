@@ -407,9 +407,26 @@ async def test_a_list_yields_a_name_taken_when_the_rest_is_in_place(
     assert any_fs._file_data["a/x"].data == b"a"
 
 
-def test_a_copy_between_two_storages_needs_cp_file(
+def test_a_copy_between_two_storages_needs_cp_entry(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
     other = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    with pytest.raises(ValueError, match="cp_file"):
+    with pytest.raises(ValueError, match="cp_entry"):
         _tree_cp(TreeView(hierarchical_fs), TreeView(other), "data", "copied")
+
+
+async def test_cp_entry_is_given_the_listings_entries(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    sizes = {p: len(f.data) for p, f in hierarchical_fs._file_data.items()}
+    hierarchical_fs.reset_stats()
+    _, errors = await _collect_with_errors(_cp(hierarchical_fs, "data", "copied"))
+    assert errors == []
+    # Each file's entry as its directory's listing gave it, with its size, so
+    # that a copy needs not ask the source for it again.
+    assert sorted((e["name"], e["size"]) for e in hierarchical_fs.entries) == sorted(
+        (p, s) for p, s in sizes.items() if p.startswith("data/")
+    )
+    # One info only, where path2 goes: none per file.
+    assert hierarchical_fs.stats.calls["info"] == 1

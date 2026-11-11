@@ -41,7 +41,7 @@ from .walk import _flat_walk
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 
     from fsspec_alt_strategies.profile import StorageProfile
 
@@ -56,17 +56,23 @@ class FlatFileSystem(_BaseFileSystem):
     prefix in one paginated request. It overrides fsspec's ``_walk``,
     ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``_mv`` when
     recursive, with the flat strategies. These list every key under a prefix
-    with ``_iexpand``, and act on each key as it arrives. Their answers are
-    fsspec's, and their failures are raised, a single one as it is, several in
-    an ExceptionGroup.
+    with a recursive ``_ils``, and act on each key as it arrives. Their answers
+    are fsspec's, and their failures are raised, a single one as it is, several
+    in an ExceptionGroup.
 
     A subclass implements the storage's primitives:
 
-    - ``_iexpand``, the listing by prefix, which fsspec has not;
+    - ``_ils``, a directory's listing, which ``_ls`` and so fsspec's own
+      methods list with, and with ``recursive=True`` every key below it, which
+      the strategies list with;
     - ``_rm_files``, a deletion of several files in one request, with
       ``rm_batch_size``;
-    - ``_ils``, a directory's listing, which ``_ls`` and so fsspec's own methods
-      list with, and ``_info``, ``_rm_file`` and ``_cp_file``;
+    - ``_info`` and ``_rm_file``;
+    - ``_rmdir`` and ``_makedirs``, for fsspec's own methods only, e.g. making
+      or deleting a bucket: fsspec's defaults do nothing;
+    - ``_cp_file_entry`` and ``_mv_file_entry``, a copy and a move of a key by
+      its entry, as its listing gave it, e.g. with its size. fsspec's
+      ``_cp_file`` and ``_mv_file`` ask the entry, then call them;
     - ``open_async``, giving its files ``io_limit`` as their concurrency
       limit, and ``_open``.
 
@@ -81,9 +87,8 @@ class FlatFileSystem(_BaseFileSystem):
 
     ``storage_profile``, a `StorageProfile`, tells the strategies what the
     storage does. With ``renames_files=True``, a recursive ``mv``, or one of a
-    single file, moves each key by ``_mv_file``, which a subclass then
-    overrides with its rename. Otherwise it copies each key, and deletes them
-    in batches.
+    single file, moves each key by ``_mv_file_entry``, the storage's rename.
+    Otherwise it copies each key, and deletes them in batches.
 
     Parameters
     ----------
@@ -92,14 +97,16 @@ class FlatFileSystem(_BaseFileSystem):
         A semaphore is used as it is, shared with what else holds it.
     io_concurrency : int or asyncio.Semaphore
         The reads and writes of data at a time.
-        A semaphore is used as it is, shared with what else holds it.
+        A semaphore is used as it is, shared with what else holds it. Each
+        holds a block or a part, so it bounds their memory too: at most this
+        many times the file class's ``max_block_size`` in flight.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
     Raises
     ------
     ValueError
-        If a concurrency is less than 1, or ``rm_batch_size`` is not set. Also
+        If a concurrency or ``rm_batch_size`` is less than 1, or not set. Also
         if ``storage_profile`` is not set while ``_load_storage_profile`` is
         not overridden.
 
@@ -114,12 +121,14 @@ class FlatFileSystem(_BaseFileSystem):
     ...     storage_profile = StorageProfile()  # Unknown.
     ...     rm_batch_size = 1000  # As S3's DeleteObjects takes.
     ...
-    ...     async def _iexpand(self, prefix): ...
+    ...     async def _ils(self, path, recursive=False, prefix="", **kwargs): ...
     ...     async def _rm_files(self, paths): ...
-    ...     async def _ils(self, path, **kwargs): ...
     ...     async def _info(self, path, **kwargs): ...
     ...     async def _rm_file(self, path, **kwargs): ...
-    ...     async def _cp_file(self, path1, path2, **kwargs): ...
+    ...     async def _rmdir(self, path): ...
+    ...     async def _makedirs(self, path, exist_ok=False): ...
+    ...     async def _cp_file_entry(self, entry, path2, **kwargs): ...
+    ...     async def _mv_file_entry(self, entry, path2, **kwargs): ...
     ...
     ...     async def open_async(self, path, mode="rb", **kwargs):
     ...         file = MyFile(self, path, mode, concurrency_limit=self.io_limit)
@@ -157,38 +166,76 @@ class FlatFileSystem(_BaseFileSystem):
         if not isinstance(size, int) or size < 1:
             raise ValueError(f"rm_batch_size must be set, to at least 1: {size}")
 
-    # What a subclass implements: the storage's primitives, the flat ones first.
+    # What a subclass implements: the storage's primitives.
 
     @abstractmethod
-    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        """List every key starting with ``prefix``, as an async iterator of entries.
+    def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        """List a directory, or every key below it, as an async iterator of entries.
 
-        ``prefix`` is raw text, e.g. "data/2024-". The entries are as ``_ls``
-        gives them, a key ending with "/" being a directory's marker. They come in
-        order of their names, as object stores list them: ``_walk`` counts on
-        it to know when a directory is done. Each key comes once: a key listed
-        twice is copied, moved, deleted or counted twice.
+        The entries are as fsspec's ``_ls`` gives them with ``detail``, a key
+        ending with "/" being a directory's marker. A storage listing in pages
+        yields each page's as it comes. ``prefix`` keeps the names starting
+        with ``path/prefix``, or ``prefix`` at the root: object stores list so
+        in one request, with a delimiter or without.
+
+        Without ``recursive``, it lists ``path``'s files and subdirectories,
+        e.g. by an object store's listing with the delimiter "/". A file yields
+        itself, as fsspec's ``_ls`` lists it, and a missing ``path`` raises
+        FileNotFoundError. fsspec's own methods list so, through ``_ls``.
+
+        With ``recursive=True``, it lists every key below ``path``, at any
+        depth, with no directory but markers: the strategies list so, e.g.
+        "data" with the prefix "2024-" for the glob "data/2024-*". Nothing
+        below ``path``, or ``path`` missing, lists nothing: the strategies
+        then ask ``_info``. The keys come in order of their whole names, as
+        object stores list them, across buckets too at the root: the
+        strategies count on it to know when a directory is done. Each key
+        comes once: a key listed twice is copied, moved, deleted or counted
+        twice.
         """
 
     @abstractmethod
-    async def _rm_files(self, paths: list[str]) -> None:
+    async def _rm_files(self, paths: list[str]) -> Mapping[str, Exception] | None:
         """Delete several files in one request, e.g. with S3's DeleteObjects.
 
-        A key missing is no error. It raises if any is not deleted. The
-        strategies give it only keys they listed, or found by an ``info``: it
-        need not check them again.
+        A key missing is no error. It returns the keys it could not delete,
+        each with an error of its own, e.g. from DeleteObjects' ``Errors``:
+        the strategies count the others deleted. None, or nothing, says all
+        were. It raises only if the request failed whole, which fails every
+        key.
+
+        The strategies give it only keys they listed, or found by an
+        ``info``: it need not check them again. A batch may hold keys of
+        several buckets, as a root at the storage's root or several roots list
+        across them. A storage whose request takes one bucket sends one per
+        bucket of the batch.
         """
 
     @abstractmethod
-    def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
-        """List one directory, as an async iterator of its entries, for fsspec's own methods.
+    async def _rmdir(self, path: str) -> None:
+        """Delete an empty directory: on an object store, a bucket.
 
-        The entries are as fsspec's ``_ls`` gives them with ``detail``: the
-        files in the directory, and its subdirectories, e.g. by an object store's
-        listing with a delimiter, a page at a time. A file yields itself, as
-        fsspec's ``_ls`` lists it. The strategies never call it: they list
-        with ``_iexpand``.
+        The strategies never call it: keys are their only directories. fsspec's
+        own methods do, e.g. the sync ``rmdir``. fsspec's default does nothing,
+        so a storage with buckets implements it, and one without may too.
         """
+
+    @abstractmethod
+    async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
+        """Create a directory and its parents: on an object store, a bucket, if missing.
+
+        The strategies never call it. fsspec's own methods do, e.g. ``mkdir``
+        and ``makedirs``. fsspec's default does nothing, so a storage with
+        buckets implements it. One with keys only may do nothing on purpose.
+        """
+
+    async def _mkdir(
+        self, path: str, create_parents: bool = True, **kwargs: Any
+    ) -> None:
+        """Create a directory, as fsspec's ``_mkdir`` does: by ``_makedirs``."""
+        await self._makedirs(path, exist_ok=False)
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         """List a directory, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names."""
@@ -208,8 +255,29 @@ class FlatFileSystem(_BaseFileSystem):
         """
 
     @abstractmethod
-    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        """Copy a file within the storage."""
+    async def _cp_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
+        """Copy a key within the storage, by its entry, to ``path2``.
+
+        ``entry`` is the source's, as ``_ils`` or ``_info`` gave it, its
+        ``"name"`` the source key. Its other keys, e.g. the size, may save a
+        request, e.g. one telling whether a copy goes in parts. They may be
+        stale, listed before the copy: a copy must still succeed, or fail as
+        the storage says, if the key changed since.
+        """
+
+    @abstractmethod
+    async def _mv_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
+        """Move a key within the storage, by its entry, to ``path2``.
+
+        ``entry`` is as `_cp_file_entry` takes it. The flat strategies call it
+        only where the profile's ``renames_files=True`` says the storage
+        renames: a directory's marker too, its name ending with "/". One with no
+        rename copies, then deletes the source, for fsspec's ``_mv_file``.
+        """
 
     @abstractmethod
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
@@ -361,7 +429,7 @@ class FlatFileSystem(_BaseFileSystem):
         """Move files, as fsspec's ``mv`` does: with the flat move when recursive.
 
         A single file goes by the flat move too, recursive or not, so that it
-        moves by ``_mv_file`` where the profile's ``renames_files`` says it
+        moves by ``_mv_file_entry`` where the profile's ``renames_files`` says it
         renames.
         """
         if path1 == path2:
@@ -386,8 +454,11 @@ class FlatFileSystem(_BaseFileSystem):
         )
         _raise(errors, "Moving")
 
-    # fsspec makes sync methods only from the async ones it knows: _mv is not. It awaits
-    # the instance's own, so that a subclass's override is the one run.
+    # fsspec makes sync methods only from the async ones it knows: _mv and _rmdir are
+    # not. Each awaits the instance's own, so that a subclass's override is the one run.
 
     def mv(self, path1: str | list[str], path2: str, **kwargs: Any) -> None:
         return sync(self.loop, self._mv, path1, path2, **kwargs)
+
+    def rmdir(self, path: str) -> None:
+        return sync(self.loop, self._rmdir, path)

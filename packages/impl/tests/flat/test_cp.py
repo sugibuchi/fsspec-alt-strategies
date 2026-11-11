@@ -23,7 +23,7 @@ async def _nothing(*args: Any, **kwargs: Any) -> None:
     pass
 
 
-_SOURCE = {"iexpand", "info", "rm_files", "mv_file"}
+_SOURCE = {"list_prefix", "info", "rm_files", "mv_file"}
 """The keyword arguments that replace a primitive of the source."""
 
 _DESTINATION = {
@@ -181,7 +181,7 @@ async def test_markers_are_not_copied() -> None:
     keys = ["data/", "data/empty/", "data/a.txt"]
     copied: list[tuple[str, str]] = []
 
-    async def iexpand(prefix: str) -> Any:
+    async def list_prefix(prefix: str) -> Any:
         for name in keys:
             if name.startswith(prefix):
                 yield {"name": name, "size": 0, "type": "file"}
@@ -189,13 +189,14 @@ async def test_markers_are_not_copied() -> None:
     async def info(path: str) -> dict[str, Any]:
         raise FileNotFoundError(path)
 
-    async def cp_file(source: str, destination: str) -> None:
+    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+        source = entry["name"]
         copied.append((source, destination))
 
     source, destination = _views(
         None,
         {
-            "iexpand": iexpand,
+            "list_prefix": list_prefix,
             "info": info,
             "dst_info": info,
             "dst_makedirs": _nothing,
@@ -205,7 +206,7 @@ async def test_markers_are_not_copied() -> None:
         },
     )
     op = _flat_cp(
-        source, destination, "data", "copied", cp_file=cp_file, same_storage=True
+        source, destination, "data", "copied", cp_entry=cp_entry, same_storage=True
     )
     assert await _collect_with_errors(op) == ([("data/a.txt", "copied/a.txt")], [])
     assert copied == [("data/a.txt", "copied/a.txt")]
@@ -274,9 +275,26 @@ async def test_a_list_yields_a_name_taken_when_the_rest_is_in_place(
     assert flat_fs._file_data["a/x"].data == b"a"
 
 
-def test_a_copy_between_two_storages_needs_cp_file(
+def test_a_copy_between_two_storages_needs_cp_entry(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     other = SimulatedFileSystem(asynchronous=True)
-    with pytest.raises(ValueError, match="cp_file"):
+    with pytest.raises(ValueError, match="cp_entry"):
         _flat_cp(FlatView(flat_fs), FlatView(other), "data", "copied")
+
+
+async def test_cp_entry_is_given_the_listings_entries(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    sizes = {p: len(f.data) for p, f in flat_fs._file_data.items()}
+    flat_fs.reset_stats()
+    _, errors = await _collect_with_errors(_cp(flat_fs, "data", "copied"))
+    assert errors == []
+    # Each file's entry as its directory's listing gave it, with its size, so
+    # that a copy needs not ask the source for it again.
+    assert sorted((e["name"], e["size"]) for e in flat_fs.entries) == sorted(
+        (p, s) for p, s in sizes.items() if p.startswith("data/")
+    )
+    # One info only, where path2 goes: none per file.
+    assert flat_fs.stats.calls["info"] == 1

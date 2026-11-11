@@ -14,8 +14,8 @@ from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem, Tr
 
 
 def _walk(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
-    """`_flat_walk` on ``fs``, whose ``iexpand`` or ``info`` ``kwargs`` may replace."""
-    primitives = {k: kwargs.pop(k) for k in ("iexpand", "info") if k in kwargs}
+    """`_flat_walk` on ``fs``, whose ``list_prefix`` or ``info`` ``kwargs`` may replace."""
+    primitives = {k: kwargs.pop(k) for k in ("list_prefix", "info") if k in kwargs}
     return _flat_walk(FlatView(fs, **primitives), path, **kwargs)
 
 
@@ -127,13 +127,13 @@ async def test_the_roots_own_marker_is_not_yielded(
     _tree(flat_fs)
     without, _ = await _collect_with_errors(_walk(flat_fs, "data"))
 
-    async def iexpand(prefix: str) -> Any:
+    async def list_prefix(prefix: str) -> Any:
         yield {"name": "data/", "size": 0, "type": "file"}
-        async for entry in flat_fs._iexpand(prefix):
+        async for entry in flat_fs._list_prefix(prefix):
             yield entry
 
     directories, errors = await _collect_with_errors(
-        _walk(flat_fs, "data", iexpand=iexpand)
+        _walk(flat_fs, "data", list_prefix=list_prefix)
     )
     assert errors == []
     assert directories == without

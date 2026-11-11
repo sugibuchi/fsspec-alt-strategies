@@ -18,7 +18,7 @@ from fsspec_alt_strategies.states import FindState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
-from ._keys import _close, _dir, _dirs, _new
+from ._keys import _close, _dir, _dirs, _listing, _new
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -38,8 +38,8 @@ def _flat_find(
     It finds the paths fsspec's ``_find`` finds. A missing ``path`` finds
     nothing, and a file finds itself. With ``withdirs``, the directories are
     derived from the keys, as fsspec's filesystems derive them for object
-    stores, and a key ending with "/" is a directory's marker. A derived directory's
-    entry has only its ``name``, ``size`` 0 and ``type``.
+    stores, and a key ending with "/" is a directory's marker. A derived
+    directory's entry has only its ``name``, ``size`` 0 and ``type``.
 
     It yields each path as its page of the listing arrives, so the first come
     after one request, not after the last. They come in the listing's order,
@@ -49,19 +49,19 @@ def _flat_find(
     It wins over fsspec's ``_find`` on large prefixes of flat storages: the
     caller starts on the first page, and holds one page at a time, not the
     whole listing. It sends the same listing requests. It loses on storages
-    with a hierarchical namespace, whose directories a listing by prefix does not
-    see when empty: `_tree_find` suits those.
+    with a hierarchical namespace, whose empty directories a listing by prefix
+    does not see: `_tree_find` suits those.
 
     Once cancelled, it takes nothing more from the listing. An error from the
     listing ends the operation, raised by its iteration.
 
-    Requests: the pages of one ``_iexpand`` of ``path``, one after another.
-    One ``_info`` for ``path`` itself, if nothing is under it, or with
-    ``withdirs``, holding a permit of the filesystem's ``operation_limit``.
-    The listing holds none.
+    Requests: the pages of one recursive ``_ils`` of ``path``, one after
+    another. One ``_info`` for ``path`` itself, if nothing is under it, or
+    with ``withdirs``, holding a permit of the filesystem's
+    ``operation_limit``. The listing holds none.
 
-    ``path`` is the directory searched on ``fs``. Its ``_iexpand`` lists every
-    key starting with a prefix, in name order, each key once. ``maxdepth`` of
+    ``path`` is the directory searched on ``fs``. Its recursive ``_ils`` lists
+    every key below a directory, in name order, each key once. ``maxdepth`` of
     1 finds only the files in ``path``, though the listing still lists every
     key under it. ``withdirs`` finds directories too, ``path`` included.
 
@@ -105,8 +105,8 @@ async def _find_entries(
 
     - missing, it yields nothing;
     - a file, it yields the file's ``_info`` entry;
-    - a directory, it yields the directory's own ``_info`` entry with ``withdirs``,
-      unless stopping.
+    - a directory, it yields the directory's own ``_info`` entry with
+      ``withdirs``, unless stopping.
 
     Once ``stopping`` returns true, it takes no more from the listing. An error
     of the listing ends it, as it ends the only listing there is.
@@ -118,7 +118,7 @@ async def _find_entries(
     # The directories of the key listed last.
     before: list[str] = []
 
-    entries = fs._iexpand(prefix)
+    entries = _listing(fs, prefix)
     try:
         async for entry in entries:
             under = True

@@ -225,7 +225,8 @@ class _Forbidding(SimulatedFileSystem):
 async def test_a_failed_listing_keeps_its_dirs_and_the_rest_goes() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
-    op = _rm(fs, "data")
+    # With a maxdepth, each directory is listed on its own: the rest goes on.
+    op = _rm(fs, "data", maxdepth=3)
     deleted, errors = await _collect_with_errors(op)
     assert [type(e) for e in errors] == [PermissionError]
     assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
@@ -237,6 +238,19 @@ async def test_a_failed_listing_keeps_its_dirs_and_the_rest_goes() -> None:
     assert not any(p.startswith("data/2023") for p in deleted)
     assert await fs._exists("data/2023/01/part-0.parquet")
     assert not await fs._exists("data/2024")
+
+
+async def test_a_failed_listing_ends_the_recursive_listing() -> None:
+    fs = _Forbidding(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    op = _rm(fs, "data")
+    deleted, errors = await _collect_with_errors(op)
+    assert [type(e) for e in errors] == [PermissionError]
+    assert "Listing 'data/2023' failed." in errors[0].__notes__
+    # data/2023 comes first, depth first: nothing was found to delete before it.
+    assert deleted == []
+    assert fs.stats.calls["delete"] == 0
+    assert await fs._exists("data/2024/01/part-0.parquet")
 
 
 class _Doubling(SimulatedFileSystem):
@@ -312,7 +326,8 @@ async def test_cancel_after_the_listing() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
     fs.add_file("root/sub/file")
     fs.add_file("root/file")
-    op = _rm(fs, "root", concurrency_limit=asyncio.Semaphore(10))
+    # With a maxdepth, each directory is listed on its own.
+    op = _rm(fs, "root", maxdepth=2, concurrency_limit=asyncio.Semaphore(10))
     async for path in op:
         op.cancel()
         assert path == "root/file"

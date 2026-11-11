@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
-_SOURCE = {"iexpand", "info", "rm_files", "mv_file"}
+_SOURCE = {"list_prefix", "info", "rm_files", "mv_file"}
 """The keyword arguments that replace a primitive of the source."""
 
 _DESTINATION = {
@@ -66,11 +66,11 @@ def _views(fs: Any, kwargs: dict[str, Any]) -> tuple[FlatView, FlatView]:
 def _mv(fs: Any, path1: Any, path2: Any, **kwargs: Any) -> Any:
     """`_flat_mv` within ``fs``, whose primitives ``kwargs`` may replace.
 
-    ``cp_file``, ``rm_files`` and ``batch_size`` given None move by
+    ``cp_entry``, ``rm_files`` and ``batch_size`` given None move by
     ``mv_file``: the profile then says the storage renames.
     """
     kwargs = {"profile": _FLAT, **kwargs}
-    batched = ("cp_file", "rm_files", "batch_size")
+    batched = ("cp_entry", "rm_files", "batch_size")
     if all(k in kwargs and kwargs[k] is None for k in batched):
         for k in batched:
             del kwargs[k]
@@ -150,16 +150,38 @@ async def test_a_failed_batch_leaves_its_keys_in_both_places(
     assert "moved/README.md" in flat_fs._file_data
 
 
+async def test_a_key_its_batch_refused_is_yielded_and_the_others_moved(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    refused = "data/2023/02/part-0.parquet"
+
+    async def rm_files(paths: list[str]) -> dict[str, Exception]:
+        await flat_fs._rm_files([p for p in paths if p != refused])
+        return {refused: PermissionError("retention")} if refused in paths else {}
+
+    op = _mv(flat_fs, "data", "moved", rm_files=rm_files)
+    moved, errors = await _collect_with_errors(op)
+    assert sorted(m[0] for m in moved) == sorted(p for p in _FILES if p != refused)
+    assert [type(e) for e in errors] == [PermissionError]
+    assert errors[0].__notes__ == [
+        f"Deleting {refused!r} failed, once copied: it is in both places."
+    ]
+    assert refused in flat_fs._file_data
+    assert (op.state.files_moved, op.state.errors) == (len(_FILES) - 1, 1)
+
+
 async def test_a_failed_copy_keeps_its_source(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
 
-    async def cp_file(source: str, destination: str) -> None:
+    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+        source = entry["name"]
         if source == "data/README.md":
             raise PermissionError(source)
         await flat_fs._cp_file(source, destination)
 
     moved, errors = await _collect_with_errors(
-        _mv(flat_fs, "data", "moved", cp_file=cp_file)
+        _mv(flat_fs, "data", "moved", cp_entry=cp_entry)
     )
     assert len(moved) == 3
     assert errors[0].__notes__ == [
@@ -175,12 +197,13 @@ async def test_cancel_still_deletes_the_keys_copied() -> None:
     _tree(fs)
     copied = []
 
-    async def cp_file(source: str, destination: str) -> None:
+    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+        source = entry["name"]
         await fs._cp_file(source, destination)
         copied.append(source)
         op.cancel()
 
-    op = _mv(fs, "data", "moved", cp_file=cp_file)
+    op = _mv(fs, "data", "moved", cp_entry=cp_entry)
     moved, _ = await _collect_with_errors(op)
     assert op.cancelled()
     # Each key copied was deleted too: none is in both places.
@@ -195,7 +218,7 @@ def test_batch_size_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
         _mv(flat_fs, "data", "moved", batch_size=0)
 
 
-_BY_MV_FILE = {"cp_file": None, "rm_files": None, "batch_size": None}
+_BY_MV_FILE = {"cp_entry": None, "rm_files": None, "batch_size": None}
 
 
 async def test_mv_file_moves_each_key(flat_fs: SimulatedFileSystem) -> None:
@@ -219,7 +242,7 @@ async def test_mv_file_moves_each_key(flat_fs: SimulatedFileSystem) -> None:
 async def test_mv_file_moves_markers_without_yielding_them() -> None:
     keys = {"data/": b"", "data/empty/": b"", "data/a.txt": b"a"}
 
-    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in sorted(keys):
             if name.startswith(prefix):
                 yield {"name": name, "size": len(keys[name]), "type": "file"}
@@ -234,7 +257,7 @@ async def test_mv_file_moves_markers_without_yielding_them() -> None:
         None,
         "data",
         "moved",
-        iexpand=iexpand,
+        list_prefix=list_prefix,
         info=info,
         mv_file=mv_file,
         dst_info=info,
@@ -275,7 +298,7 @@ async def test_batches_delete_markers_without_copying_them() -> None:
     copied: list[str] = []
     deleted: list[list[str]] = []
 
-    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in sorted(keys):
             if name.startswith(prefix):
                 yield {"name": name, "size": len(keys[name]), "type": "file"}
@@ -283,7 +306,8 @@ async def test_batches_delete_markers_without_copying_them() -> None:
     async def info(path: str) -> dict[str, Any]:
         raise FileNotFoundError(path)
 
-    async def cp_file(source: str, destination: str) -> None:
+    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+        source = entry["name"]
         copied.append(source)
         keys[destination] = keys[source]
 
@@ -296,9 +320,9 @@ async def test_batches_delete_markers_without_copying_them() -> None:
         None,
         "data",
         "moved",
-        iexpand=iexpand,
+        list_prefix=list_prefix,
         info=info,
-        cp_file=cp_file,
+        cp_entry=cp_entry,
         rm_files=rm_files,
         batch_size=10,
         dst_info=info,
@@ -319,7 +343,7 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
     copied: list[str] = []
     deleted: list[list[str]] = []
 
-    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
         # A listing may give a key twice, e.g. across pages of a changing prefix.
         for name in ["data/a.txt", "data/a.txt", "data/b.txt"]:
             yield {"name": name, "size": 1, "type": "file"}
@@ -327,7 +351,8 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
     async def info(path: str) -> dict[str, Any]:
         raise FileNotFoundError(path)
 
-    async def cp_file(source: str, destination: str) -> None:
+    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+        source = entry["name"]
         copied.append(source)
         keys[destination] = keys[source]
 
@@ -340,9 +365,9 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
         None,
         "data",
         "moved",
-        iexpand=iexpand,
+        list_prefix=list_prefix,
         info=info,
-        cp_file=cp_file,
+        cp_entry=cp_entry,
         rm_files=rm_files,
         batch_size=10,
         dst_info=info,
@@ -365,14 +390,15 @@ async def test_moves_to_another_storage(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
 
-    async def cp_file(source: str, destination: str) -> None:
+    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+        source = entry["name"]
         await dst._pipe_file(destination, flat_fs._file_data[source].data)
 
     op = _mv(
         flat_fs,
         "data",
         "moved",
-        cp_file=cp_file,
+        cp_entry=cp_entry,
         dst_info=dst._info,
         dst_makedirs=dst._makedirs,
         dst_rm_file=dst._rm_file,
@@ -418,7 +444,7 @@ async def test_maxdepth_moves_what_fsspecs_copy_copies(
 
     kwargs: dict[str, Any] = {}
     if by == "renames":
-        kwargs = {"mv_file": flat_fs._mv_file, "cp_file": None, "rm_files": None}
+        kwargs = {"mv_file": flat_fs._mv_file, "cp_entry": None, "rm_files": None}
         kwargs["batch_size"] = None
     _, errors = await _collect_with_errors(
         _mv(flat_fs, path1, path2, maxdepth=maxdepth, **kwargs)
@@ -433,3 +459,17 @@ async def test_maxdepth_moves_what_fsspecs_copy_copies(
 async def test_maxdepth_below_1_is_refused(flat_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="maxdepth"):
         _mv(flat_fs, "data", "moved", maxdepth=0)
+
+
+async def test_mv_entry_is_given_the_listings_entries(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    profile = StorageProfile(implicit_directories=True, renames_files=True)
+    op = _mv(flat_fs, "data", "moved", profile=profile)
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    # By the source's own _mv_file_entry, each key's entry as the listing gave it.
+    assert sorted((e["name"], e["size"]) for e in flat_fs.entries) == [
+        (p, len(p)) for p in _FILES
+    ]

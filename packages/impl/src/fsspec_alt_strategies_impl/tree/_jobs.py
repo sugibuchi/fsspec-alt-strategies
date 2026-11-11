@@ -3,9 +3,9 @@
 """The engine under the tree strategies that change a tree, such as _tree_rm.
 
 They walk the tree as _tree_walk does, and start their jobs, e.g. deleting a
-file, as each part of a directory's listing arrives: `_TreeJobs` feeds
-`common`'s `_Jobs` with the parts of `_chunks`, so that a directory of many files
-is never held whole. A subclass says what a listing queues, how a job
+file, as each part of a directory's listing arrives. `_TreeJobs` feeds
+`common`'s `_Jobs` with the parts of `_chunks`, so that a directory of many
+files is never held whole. A subclass says what a listing queues, how a job
 runs, and what its outcome is.
 
 A glob pattern is expanded first, as fsspec's ``_expand_path`` expands it:
@@ -35,10 +35,10 @@ class _TreeJobs(_Jobs):
     """The jobs of one operation, run while the tree of ``fs`` is walked.
 
     ``fs`` is the filesystem walked, by its ``_ils`` and ``_info``, each
-    request holding a permit of its ``operation_limit``. With
-    ``maxdepth``, the walk lists no directory deeper than it, as fsspec's
-    ``_expand_path`` finds paths. Each subdirectory the walk leaves unlisted goes
-    to `at_limit`, as fsspec finds it, but not what is in it.
+    request holding a permit of its ``operation_limit``. With ``maxdepth``, the
+    walk lists no directory deeper than it, as fsspec's ``_expand_path`` finds
+    paths. Each subdirectory the walk leaves unlisted goes to `at_limit`, as
+    fsspec finds it, but not what is in it.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -70,7 +70,9 @@ class _TreeJobs(_Jobs):
 
     def source(self, roots: _Roots) -> AsyncGenerator[_Listing] | None:
         """The listings of the root directories, if any, walked at once."""
-        directories = [f for f in roots.directories if not self.unlisted(f)]
+        directories = [
+            d["name"] for d in roots.directories if not self.unlisted(d["name"])
+        ]
         if not directories:
             return None
         return _chunks(
@@ -90,13 +92,14 @@ class _TreeJobs(_Jobs):
         its listing says so, and its jobs are queued instead.
         """
         for directory in roots.directories:
-            if self.unlisted(directory):
-                self.at_limit(directory)
+            if self.unlisted(directory["name"]):
+                self.at_limit(directory["name"])
 
         try:
             return await super().begin(roots, source)
         except NotADirectoryError as e:
-            self.file_root(e.args[0])
+            # The root is a file: its listing's entry, which the walk noted.
+            self.file_root(getattr(e, "entry", None) or {"name": e.args[0]})
             return []
 
     def fed(self, item: _Listing) -> list[Any]:

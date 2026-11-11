@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 def _glob(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`_flat_glob` on ``fs``, whose primitives or limit ``kwargs`` may replace."""
-    primitives = {k: kwargs.pop(k) for k in ("iexpand", "info") if k in kwargs}
+    primitives = {k: kwargs.pop(k) for k in ("list_prefix", "info") if k in kwargs}
     if "concurrency_limit" in kwargs:
         primitives["operation_limit"] = kwargs.pop("concurrency_limit")
     return _flat_glob(FlatView(fs, **primitives), path, **kwargs)
@@ -95,20 +95,20 @@ async def test_several_patterns_answer_as_fsspecs_globs_together(
 
 
 def _recorded(fs: SimulatedFileSystem, prefixes: list[str]) -> Any:
-    """The filesystem's ``iexpand``, noting each prefix it lists."""
+    """The filesystem's ``list_prefix``, noting each prefix it lists."""
 
-    def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
         prefixes.append(prefix)
-        return fs._iexpand(prefix)
+        return fs._list_prefix(prefix)
 
-    return iexpand
+    return list_prefix
 
 
 async def test_lists_only_the_keys_starting_as_the_pattern() -> None:
     fs = SimulatedFileSystem(page_size=1, asynchronous=True)
     _tree(fs)
     prefixes: list[str] = []
-    op = _glob(fs, "data/2024-*.csv", iexpand=_recorded(fs, prefixes))
+    op = _glob(fs, "data/2024-*.csv", list_prefix=_recorded(fs, prefixes))
     entries, _ = await _collect_with_errors(op)
     assert len(entries) == 2
     assert prefixes == ["data/2024-"]
@@ -139,7 +139,7 @@ async def test_patterns_share_a_listing() -> None:
     _tree(fs)
     prefixes: list[str] = []
     patterns = ["data/sales/2024/*", "data/sales/*", "data/s*/README.md", "other/*"]
-    await _collect_with_errors(_glob(fs, patterns, iexpand=_recorded(fs, prefixes)))
+    await _collect_with_errors(_glob(fs, patterns, list_prefix=_recorded(fs, prefixes)))
     # data/sales/ is in data/s: one listing serves the three.
     assert prefixes == ["data/s", "other/"]
 
@@ -157,7 +157,9 @@ async def test_cancel_lists_nothing_more() -> None:
     fs = SimulatedFileSystem(page_size=1, asynchronous=True)
     _tree(fs)
     prefixes: list[str] = []
-    op = _glob(fs, ["data/s*/README.md", "other/*"], iexpand=_recorded(fs, prefixes))
+    op = _glob(
+        fs, ["data/s*/README.md", "other/*"], list_prefix=_recorded(fs, prefixes)
+    )
     names = []
     async for entry in op:
         names.append(entry["name"])

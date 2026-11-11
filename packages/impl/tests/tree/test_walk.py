@@ -1,4 +1,4 @@
-"""Tests of `_tree_walk`, and of ``_listings``, the engine under the tree strategies."""
+"""Tests of `_tree_walk`, and of ``_chunks``, the engine under the tree strategies."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec_alt_strategies_impl.tree.walk import (
     WalkState,
     _chunks,
-    _listings,
     _tree_walk,
 )
 from fsspec_alt_strategies_impl_testing import (
@@ -137,17 +136,27 @@ class _Forbidding(SimulatedFileSystem):
         return await super()._ls(path, detail=detail, **kwargs)
 
 
-@pytest.mark.parametrize("topdown", [True, False])
-async def test_failed_listing_is_yielded_and_the_walk_goes_on(topdown: bool) -> None:
+async def test_failed_listing_is_yielded_and_the_walk_goes_on() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
-    items = await _all(_walk(fs, "data", topdown=topdown))
+    items = await _all(_walk(fs, "data"))
     errors = [i for i in items if isinstance(i, Exception)]
     assert [type(e) for e in errors] == [PermissionError]
     paths = {i[0] for i in items if not isinstance(i, Exception)}
     # Its error instead of its directory, and nothing below it.
     assert not any(p.startswith("data/2023") for p in paths)
     assert {"data", "data/2024", "data/2024/02"} <= paths
+
+
+async def test_bottom_up_a_failed_listing_ends_the_walk() -> None:
+    fs = _Forbidding(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    items = await _all(_walk(fs, "data", topdown=False))
+    # One recursive listing, which fails at data/2023, first depth first: the
+    # error is the root's, and no directory was done before it.
+    assert [type(i) for i in items] == [PermissionError]
+    assert items[0].directory == "data"
+    assert "Listing 'data/2023' failed." in items[0].__notes__
 
 
 class _Recording(_Forbidding):
@@ -290,27 +299,21 @@ def test_on_error_is_checked_at_once(any_fs: SimulatedFileSystem) -> None:
         _walk(any_fs, "data", on_error="ignore")
 
 
-async def test_listings_carry_dir_and_depth(any_fs: SimulatedFileSystem) -> None:
+async def test_parts_carry_dir_and_depth(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     # A trailing "/" is trimmed, as fsspec's _strip_protocol does.
-    async with aclosing(_listings(TreeView(any_fs), "data/")) as listings:
-        first = await anext(listings)
-    assert (first.directory, first.depth) == ("data", 1)
-    listings = {lst.directory: lst async for lst in _listings(TreeView(any_fs), "data")}
-    assert [lst.depth for lst in listings.values()].count(3) == 4
+    depths = {
+        part.directory: part.depth async for part in _chunks(TreeView(any_fs), "data/")
+    }
+    assert depths["data"] == 1
+    assert list(depths.values()).count(3) == 4
 
 
-async def test_bottom_up_listings_come_after_their_subdirs() -> None:
+async def test_bottom_up_directories_come_after_their_subdirs() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.002, asynchronous=True)
     _tree(fs)
-    directories = [
-        lst.directory
-        async for lst in _listings(
-            TreeView(fs, operation_limit=asyncio.Semaphore(2)),
-            "data",
-            topdown=False,
-        )
-    ]
+    walk = _walk(fs, "data", topdown=False, concurrency_limit=asyncio.Semaphore(2))
+    directories = [directory async for directory, _, _ in walk]
     assert directories[-1] == "data"
     for i, directory in enumerate(directories):
         assert all(not f.startswith(directory + "/") for f in directories[i + 1 :])
@@ -337,6 +340,8 @@ async def test_chunks_stream_a_dir_in_parts() -> None:
     chunks = _chunks(
         TreeView(fs, ils=_streamed(fs, listed), operation_limit=asyncio.Semaphore(4)),
         "data",
+        # Each directory listed on its own: a descend prunes.
+        descend=lambda _: True,
         chunk_size=2,
     )
     async with aclosing(chunks):

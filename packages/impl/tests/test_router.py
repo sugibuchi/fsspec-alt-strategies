@@ -15,7 +15,8 @@ from fsspec.spec import AbstractFileSystem
 from fsspec_alt_strategies.monitor import Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.router import AsyncRoutingFileSystem
-from fsspec_alt_strategies_impl.wrapper import AsyncFlatWrapper, AsyncTreeWrapper
+from fsspec_alt_strategies_impl.wrapper.flat import AsyncFlatWrapper
+from fsspec_alt_strategies_impl.wrapper.tree import AsyncTreeWrapper
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -111,8 +112,13 @@ class _Tree(_Files, AsyncTreeWrapper):
 
 
 class _Flat(_Files, AsyncFlatWrapper):
-    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        return self.fs._iexpand(prefix)
+    def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            return self.fs._list_prefix(f"{path}/{prefix}" if path else prefix)
+        else:
+            return super()._ils(path, prefix=prefix, **kwargs)
 
 
 _OPTIONS = {"operation_concurrency": 4, "io_concurrency": 2, "asynchronous": True}
@@ -508,19 +514,23 @@ class _ServerCopying(_Router):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.server_copies: list[tuple[str, str]] = []
+        # The size of each entry handed over, which a server copy may need.
+        self.sizes: dict[str, int] = {}
 
-    async def _cross_fs_cp_file(
+    async def _cross_fs_cp_entry(
         self,
         src_fs: AsyncFileSystem,
-        src_path: str,
+        src_entry: dict[str, Any],
         dest_fs: AsyncFileSystem,
         dest_path: str,
     ) -> None:
+        src_path = src_entry["name"]
         if src_path.endswith("3.txt"):
             # e.g. not possible for this one: streamed.
-            await super()._cross_fs_cp_file(src_fs, src_path, dest_fs, dest_path)
+            await super()._cross_fs_cp_entry(src_fs, src_entry, dest_fs, dest_path)
             return
         self.server_copies.append((src_path, dest_path))
+        self.sizes[src_path] = src_entry["size"]
         data = src_fs.fs._file_data[src_path].data  # type: ignore[attr-defined]
         dest_fs.fs.add_file(dest_path, data)  # type: ignore[attr-defined]
 
@@ -534,6 +544,8 @@ async def test_copy_across_storages_tries_the_server_first() -> None:
         ("data/a/1.txt", "copied/a/1.txt"),
         ("data/a/2.txt", "copied/a/2.txt"),
     ]
+    # Each entry as the source's listing gave it, with its size.
+    assert router.sizes == {"data/a/1.txt": 12, "data/a/2.txt": 12}
     assert router.tree.stats.calls["read"] == 1
     assert router.flat.stats.calls["write"] == 1
     assert len(router.flat._file_data) == 3
@@ -544,7 +556,7 @@ async def test_maxdepth_across_storages_runs_the_strategy() -> None:
     for path in [*_FILES, "data/top.txt"]:
         router.tree.add_file(path, path.encode())
     await router._copy("lake/tree/data", "lake/flat/copied", recursive=True, maxdepth=1)
-    # Each file by _cross_fs_cp_file, which fsspec's own copy never calls.
+    # Each file by _cross_fs_cp_entry, which fsspec's own copy never calls.
     assert router.server_copies == [("data/top.txt", "copied/top.txt")]
     assert sorted(router.flat._file_data) == ["copied/top.txt"]
 
@@ -712,7 +724,7 @@ _MIRRORED = {
 }  # fmt: skip
 # fsspec's own, built on the primitives passed on, as on any filesystem.
 _BUILT_ON_PRIMITIVES = {
-    "_cat", "_cat_ranges", "_get", "_pipe", "_put", "_size", "_sizes", "cat",
+    "_cat", "_get", "_pipe", "_put", "_size", "_sizes", "cat",
     "cat_ranges", "checksum", "get", "head", "open", "pipe", "put", "read_block",
     "read_bytes", "read_text", "sizes", "tail", "touch", "tree", "ukey",
     "write_bytes", "write_text",
@@ -737,3 +749,31 @@ def test_every_fsspec_method_is_passed_on_or_inherited_on_purpose() -> None:
     passed_on = set(vars(AsyncRoutingFileSystem))
     assert methods - passed_on - _INHERITED == set()
     assert not passed_on & _INHERITED
+
+
+async def test_cat_ranges_gives_each_storage_its_ranges(router: _Router) -> None:
+    data = bytes(range(256)) * 400
+    for sim in (router.tree, router.flat, router.plain):
+        sim.add_file("big", data)
+    starts = [i * 1000 for i in range(10)]
+    paths, all_starts, all_ends = [], [], []
+    for backend in ("tree", "flat", "plain"):
+        paths += [f"lake/{backend}/big"] * 10
+        all_starts += starts
+        all_ends += [s + 100 for s in starts]
+    paths.append("lake/missing/big")
+    all_starts.append(0)
+    all_ends.append(10)
+    _reset(router)
+
+    out = await router._cat_ranges(paths, all_starts, all_ends)
+
+    assert out[:-1] == [
+        data[s:e] for s, e in zip(all_starts[:-1], all_ends[:-1], strict=True)
+    ]
+    assert isinstance(out[-1], FileNotFoundError)
+    # The families' filesystems merge their ten ranges; the plain one reads each.
+    assert router.tree.stats.calls == router.flat.stats.calls == {"read": 1}
+    assert router.plain.stats.calls == {"read": 10}
+    with pytest.raises(FileNotFoundError):
+        await router._cat_ranges(paths, all_starts, all_ends, on_error="raise")

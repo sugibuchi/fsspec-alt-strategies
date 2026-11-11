@@ -57,10 +57,10 @@ class _Writer:
 def streaming_copy(
     open_source: Any, open_destination: Any, *, block_size: int = 1024
 ) -> Any:
-    """A ``cp_file`` between two storages, a block at a time, as the router's."""
+    """A ``cp_entry`` between two storages, a block at a time, as the router's."""
 
-    async def copy_file(source: str, destination: str) -> None:
-        reader = await open_source(source, "rb")
+    async def copy_file(entry: dict[str, Any], destination: str) -> None:
+        reader = await open_source(entry["name"], "rb")
         async with reader:
             writer = await open_destination(destination, "wb")
             async with writer:
@@ -86,7 +86,7 @@ def _across(
 ) -> Any:
     """`_tree_cp` between two filesystems, streaming each file."""
     operations = {
-        "cp_file": streaming_copy(
+        "cp_entry": streaming_copy(
             _opener(src, _Reader), _opener(dst, _Writer), block_size=4
         ),
         "same_storage": False,
@@ -225,13 +225,13 @@ async def test_a_failure_is_yielded_and_the_rest_is_copied(
     _tree(hierarchical_fs)
     stream = streaming_copy(_opener(hierarchical_fs, _Reader), _opener(dst, _Writer))
 
-    async def copy_file(source: str, destination: str) -> None:
-        if source == "data/README.md":
-            raise PermissionError(source)
-        await stream(source, destination)
+    async def copy_file(entry: dict[str, Any], destination: str) -> None:
+        if entry["name"] == "data/README.md":
+            raise PermissionError(entry["name"])
+        await stream(entry, destination)
 
     copied, errors = await _collect_with_errors(
-        _across(hierarchical_fs, dst, "data", "copied", cp_file=copy_file)
+        _across(hierarchical_fs, dst, "data", "copied", cp_entry=copy_file)
     )
     assert [type(e) for e in errors] == [PermissionError]
     assert errors[0].__notes__ == [

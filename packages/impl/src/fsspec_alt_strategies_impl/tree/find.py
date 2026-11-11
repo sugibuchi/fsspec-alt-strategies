@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """A recursive find that lists several directories at a time.
 
-`_tree_find` is an alternative to fsspec's ``_find``, with the same paths. fsspec's
-walks a tree one directory at a time, unless the filesystem lists whole trees.
-`_tree_find` lists several directories at a time, as `_tree_walk` does.
+`_tree_find` is an alternative to fsspec's ``_find``, with the same paths.
+fsspec's walks a tree one directory at a time, unless the filesystem lists
+whole trees. `_tree_find` lists the tree as `_tree_walk` does: by one recursive
+``_ils``, or a directory per request, several at a time.
 
 This module depends on `walk`, and `operation` and `paths` of `common`.
 """
@@ -38,22 +39,26 @@ def _tree_find(
 
     It finds the paths fsspec's ``_find`` finds. A missing ``path`` finds
     nothing, and a file finds itself. A directory that fails to list yields its
-    error, and the rest of the tree is still searched.
+    error. With ``maxdepth``, the rest of the tree is still searched. Without,
+    the tree's one recursive listing ends there.
 
     It yields each path as its directory's listing arrives, so the paths are not
     in order. fsspec's ``_find`` sorts them, by name. A storage listing a
     directory twice, e.g. as a prefix and as its marker object, yields it twice.
 
-    It wins over fsspec's ``_find`` on storages that list one directory per request,
-    with many directories: their listings overlap. It loses on object stores, which
-    list a whole tree in one paginated request.
+    It wins over fsspec's ``_find`` on storages that list one directory per
+    request, with many directories: their listings overlap. It gains nothing on
+    object stores, which list a whole tree in one paginated request: it sends
+    that same listing.
 
     Once cancelled, it lists no new directory, and yields the paths of the
     listings in flight.
 
-    Requests: one ``_ils`` per directory, as the filesystem's ``operation_limit``
-    allows. One ``info`` more for ``path`` itself, if a file, or a directory with
-    ``withdirs``.
+    Requests: one recursive ``_ils`` of ``path``, which a storage without a
+    recursive listing answers with one per directory. With ``maxdepth``, one
+    ``_ils`` per directory instead, as the filesystem's ``operation_limit``
+    allows. One ``info`` more for ``path`` itself, if a file, or a directory
+    with ``withdirs``.
 
     ``path`` is the directory searched on ``fs``, by its ``_ils`` and ``_info``.
     ``maxdepth`` of 1 finds only the files in ``path``. ``withdirs`` finds
@@ -110,6 +115,7 @@ async def _find_listings(
     *,
     maxdepth: int | None = None,
     descend: Callable[[dict[str, Any]], bool] | None = None,
+    whole: Callable[[dict[str, Any]], bool] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
     file_root: bool = False,
@@ -117,14 +123,14 @@ async def _find_listings(
 ) -> AsyncGenerator[_Listing]:
     """Walk as the strategies that only read do, such as find, du and glob.
 
-    It yields each directory's listing in parts, as ``_chunks`` does, but treats ``path``
-    itself as fsspec's ``_find`` and ``_glob`` do:
+    It yields each directory's listing in parts, as ``_chunks`` does, but
+    treats ``path`` itself as fsspec's ``_find`` and ``_glob`` do:
 
     - missing, it yields nothing;
     - a file, it yields the file's ``info`` entry if ``file_root``, else
       nothing;
-    - a directory, it yields the directory's own ``info`` entry after its listing's
-      last part, if ``dir_root`` and the walk is not stopping.
+    - a directory, it yields the directory's own ``info`` entry after its
+      listing's last part, if ``dir_root`` and the walk is not stopping.
 
     The root's own entry comes as a `_Listing` of depth 0, which is no listing.
     So the strategies filter and count it as any entry, but count no directory
@@ -136,6 +142,7 @@ async def _find_listings(
         root,
         maxdepth=maxdepth,
         descend=descend,
+        whole=whole,
         ils_kwargs=ils_kwargs,
         stopping=stopping,
     )

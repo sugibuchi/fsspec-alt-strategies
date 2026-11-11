@@ -47,12 +47,14 @@ def _tree_du(
 
     It wins over fsspec's ``_du`` on any storage, as it sends no ``info`` per
     file. On object stores, which list a whole tree in one paginated request,
-    summing the sizes from fsspec's ``_find`` with ``detail=True`` makes fewer
-    requests still.
+    it sends that one listing, as summing the sizes from fsspec's ``_find``
+    with ``detail=True`` would.
 
     Once cancelled, it lists no new directory, and counts the listings in flight.
 
-    Requests: one ``_ils`` per directory, as the filesystem's ``operation_limit``
+    Requests: one recursive ``_ils`` of ``path``, which a storage without a
+    recursive listing answers with one per directory. With ``maxdepth``, one
+    ``_ils`` per directory instead, as the filesystem's ``operation_limit``
     allows. One ``info`` for ``path``, if a file.
 
     ``path`` is the directory measured on ``fs``, by its ``_ils`` and ``_info``.

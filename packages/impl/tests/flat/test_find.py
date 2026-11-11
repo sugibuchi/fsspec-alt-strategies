@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 
 
 def _find(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
-    """`_flat_find` on ``fs``, whose ``iexpand`` or ``info`` ``kwargs`` may replace."""
-    primitives = {k: kwargs.pop(k) for k in ("iexpand", "info") if k in kwargs}
+    """`_flat_find` on ``fs``, whose ``list_prefix`` or ``info`` ``kwargs`` may replace."""
+    primitives = {k: kwargs.pop(k) for k in ("list_prefix", "info") if k in kwargs}
     return _flat_find(FlatView(fs, **primitives), path, **kwargs)
 
 
@@ -82,15 +82,15 @@ async def test_yields_as_the_pages_come() -> None:
 
 
 def _listing(*names: str) -> Any:
-    """An ``iexpand`` of these keys, as a storage with directory markers lists them."""
+    """An ``list_prefix`` of these keys, as a storage with directory markers lists them."""
 
-    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in names:
             if name.startswith(prefix):
                 size = 0 if name.endswith("/") else 1
                 yield {"name": name, "size": size, "type": "file"}
 
-    return iexpand
+    return list_prefix
 
 
 async def _info(path: str) -> dict[str, Any]:
@@ -98,9 +98,11 @@ async def _info(path: str) -> dict[str, Any]:
 
 
 async def test_markers_are_dirs() -> None:
-    iexpand = _listing("data/", "data/empty/", "data/a/b.txt")
+    list_prefix = _listing("data/", "data/empty/", "data/a/b.txt")
     entries, _ = await _collect_with_errors(
-        _flat_find(FlatView(None, iexpand=iexpand, info=_info), "data", withdirs=True)
+        _flat_find(
+            FlatView(None, list_prefix=list_prefix, info=_info), "data", withdirs=True
+        )
     )
     assert _sorted(entries) == [
         {"name": "data", "size": 0, "type": "directory"},
@@ -109,17 +111,17 @@ async def test_markers_are_dirs() -> None:
         {"name": "data/empty", "size": 0, "type": "directory"},
     ]
     files, _ = await _collect_with_errors(
-        _flat_find(FlatView(None, iexpand=iexpand, info=_info), "data")
+        _flat_find(FlatView(None, list_prefix=list_prefix, info=_info), "data")
     )
     assert [e["name"] for e in files] == ["data/a/b.txt"]
 
 
 async def test_an_error_of_the_listing_ends_it() -> None:
-    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
         yield {"name": "data/a", "size": 1, "type": "file"}
         raise PermissionError(prefix)
 
-    op = _flat_find(FlatView(None, iexpand=iexpand, info=_info), "data")
+    op = _flat_find(FlatView(None, list_prefix=list_prefix, info=_info), "data")
     with pytest.raises(PermissionError):
         await _collect_with_errors(op)
 

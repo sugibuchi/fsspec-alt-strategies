@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""The engine under the strategies that change a storage, such as _tree_rm.
+"""The engine under the strategies that change a storage, such as ``_tree_rm``.
 
 They find what to change, e.g. by walking a tree or listing a prefix, and start
 their jobs, e.g. deleting a file, as each item found arrives. `_Jobs` runs both
@@ -37,14 +37,21 @@ from .operation import Operation, _collect_with_errors
 from .paths import _trim
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+    from collections.abc import (
+        AsyncGenerator,
+        Awaitable,
+        Callable,
+        Sequence,
+    )
     from typing import Self, TypeAlias
 
-    _Transfer: TypeAlias = Callable[[str, str], Awaitable[None]]
-    """How one file goes from a source path to a destination path.
+    _Transfer: TypeAlias = Callable[[dict[str, Any], str], Awaitable[None]]
+    """How one file goes from its source entry to a destination path.
 
-    It is the source's ``_cp_file`` or ``_mv_file`` within one storage, or a
-    router's copy or move of a file between two.
+    It is the source's ``_cp_file_entry`` or ``_mv_file_entry`` within one
+    storage, or a router's copy or move of a file between two. The entry is the
+    source's, as its listing or ``_info`` gave it, its ``"name"`` the source
+    path.
     """
 
 _T = TypeVar("_T")
@@ -60,41 +67,55 @@ def _transfer_of(
     """How a copy or move sends each file, and whether it stays in one storage.
 
     ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given. Within
-    one storage, a file goes by the source's own ``_cp_file`` or ``_mv_file``,
-    as ``name`` says, unless ``transfer`` is given. Between two, ``transfer``
-    is required: the source's own would write to the source.
+    one storage, a file goes by the source's own ``_cp_file_entry`` or
+    ``_mv_file_entry``, as ``name``, "cp_entry" or "mv_entry", says, unless
+    ``transfer`` is given. Between two, ``transfer`` is required: the source's
+    own would write to the source.
     """
     if same_storage is None:
         same_storage = src_fs is dst_fs
     if transfer is None:
         if not same_storage:
             raise ValueError(f"{name} is required between two storages")
-        transfer = getattr(src_fs, f"_{name}")
+        transfer = getattr(src_fs, f"_{name.removesuffix('_entry')}_file_entry")
     return transfer, same_storage
 
 
 class _Job(NamedTuple):
-    """A request to make: its kind, e.g. "copy", and the paths it is about.
+    """A request to make: its kind, e.g. "copy", its source, and where it goes.
 
-    ``paths`` are those of a request about several, e.g. a batch deletion.
+    ``source`` is the source's entry, as its listing gave it, so that a copy or
+    a move hands it on: at least its ``"name"``, all a path known otherwise
+    has. ``paths`` are those of a request about several, e.g. a batch deletion.
     """
 
     kind: str
-    source: str
+    source: dict[str, Any]
     destination: str = ""
     paths: tuple[str, ...] = ()
+
+    @property
+    def path(self) -> str:
+        """The source's path."""
+        return self.source["name"]  # type: ignore[no-any-return]
 
 
 class _Roots(NamedTuple):
     """Where an operation starts: what it walks, and what it handles alone.
 
-    ``directories`` are walked, or listed, at once. A single path of unknown kind is
-    among them, as its listing tells. ``files`` are known files, e.g. glob
-    matches.
+    Each root is its entry, so that a copy or move hands it on without asking
+    it again. ``directories`` are walked, or listed, at once. A single path of
+    unknown kind is among them, its entry its ``"name"`` alone, as its listing
+    tells what it is. ``files`` are known files, e.g. glob matches.
     """
 
-    directories: Sequence[str]
-    files: Sequence[str] = ()
+    directories: Sequence[dict[str, Any]]
+    files: Sequence[dict[str, Any]] = ()
+
+    @property
+    def paths(self) -> list[str]:
+        """The paths of all the roots, the directories first."""
+        return [e["name"] for e in (*self.directories, *self.files)]
 
 
 def _roots_of(
@@ -104,14 +125,14 @@ def _roots_of(
 ) -> _Roots:
     """The roots of a glob's matches, as fsspec's ``_expand_path`` finds them.
 
-    A match inside a directory that matches is left out: walking the directory finds
-    it. Matching nothing raises FileNotFoundError, as fsspec does.
+    A match inside a directory that matches is left out: walking the directory
+    finds it. Matching nothing raises FileNotFoundError, as fsspec does.
     """
     if not matches and not errors:
         raise FileNotFoundError(pattern)
 
-    directories: dict[str, None] = {}
-    files: list[str] = []
+    directories: dict[str, dict[str, Any]] = {}
+    files: list[dict[str, Any]] = []
 
     # Sorted, a directory comes before all in it.
     for entry in sorted(matches, key=lambda e: e["name"]):
@@ -120,11 +141,11 @@ def _roots_of(
         if any("/".join(parts[:i]) in directories for i in range(1, len(parts))):
             continue
         if entry["type"] == "directory":
-            directories[name] = None
+            directories[name] = {**entry, "name": name}
         else:
-            files.append(name)
+            files.append({**entry, "name": name})
 
-    return _Roots(list(directories), files)
+    return _Roots(list(directories.values()), files)
 
 
 class _Queue(Generic[_T]):
@@ -277,7 +298,9 @@ class _Jobs(ABC):
         if self.maxdepth is not None:
             named = [pattern] if isinstance(pattern, str) else pattern
             literal = {_trim(p) for p in named if not has_magic(p)}
-            self.matched = {f for f in roots.directories if f not in literal}
+            self.matched = {
+                d["name"] for d in roots.directories if d["name"] not in literal
+            }
         return roots
 
     @abstractmethod
@@ -289,8 +312,8 @@ class _Jobs(ABC):
         """Queue the jobs for an item of the source, and return what to yield."""
 
     @abstractmethod
-    def file_root(self, path: str) -> None:
-        """Queue the jobs for ``path``, a root of the operation, which is a file."""
+    def file_root(self, entry: dict[str, Any]) -> None:
+        """Queue the jobs for a root of the operation which is a file, by its entry."""
 
     @abstractmethod
     def run(self, job: _Job) -> Awaitable[Any]:
@@ -384,8 +407,8 @@ class _Jobs(ABC):
         self, roots: _Roots, source: AsyncGenerator[Any] | None
     ) -> list[Any]:
         """Queue the files' jobs, and take the source's first item: the first step."""
-        for path in roots.files:
-            self.file_root(path)
+        for entry in roots.files:
+            self.file_root(entry)
 
         if source is None:
             self.exhausted()
@@ -436,7 +459,7 @@ class _Jobs(ABC):
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
         """Handle a job's task done, counting its errors, and return what to yield."""
         job = self.running.pop(task)
-        self.current = job.source or job.destination
+        self.current = job.path or job.destination
 
         try:
             task.result()
@@ -455,10 +478,9 @@ class _CopyJobs(_Jobs):
     a path under a root of ``places`` goes there instead. `prepare` sets them,
     before `target` is used.
 
-    The destination is described by ``dst_fs``, the filesystem copied
-    to, and its profile, unknown if it has none. Within one storage, it is the
-    source, and ``same_storage`` is True: a path copied onto itself, or under
-    itself, is refused. Between two, a path may go to the same path, or under
+    ``dst_fs`` is the filesystem copied to, described by its profile, unknown
+    if it has none. Within one storage, it is the source, and ``same_storage``
+    is True: a path copied onto itself, or under itself, is refused. Between two, a path may go to the same path, or under
     it, as that is another storage's.
     """
 
@@ -526,14 +548,14 @@ class _CopyJobs(_Jobs):
 
         if not isinstance(self.path1, str):
             roots = await self._place(destination)
-            sources = [*roots.directories, *roots.files]
+            sources = roots.paths
         elif has_magic(self.path1):
             roots = await self.glob_roots(self.path1)
-            sources = [*roots.directories, *roots.files]
+            sources = roots.paths
             if not sources:
                 return roots  # Only errors, in found, to yield.
             self.prefix = common_prefix(sources)
-            if sources == list(roots.files) and len(sources) == 1:
+            if not roots.directories and len(sources) == 1:
                 # A single file goes into the destination.
                 self.prefix = self.prefix.rpartition("/")[0]
             self.base = destination
@@ -541,7 +563,7 @@ class _CopyJobs(_Jobs):
             root = _trim(self.path1)
             if root == destination and self.same_storage:
                 return None
-            roots = _Roots([root])
+            roots = _Roots([{"name": root}])
             sources = [root]
             self.prefix = root
             self.base = await self._base(root, destination)
@@ -565,10 +587,11 @@ class _CopyJobs(_Jobs):
         error is the root's own: what is in it is not copied either.
         """
         roots = await self.glob_roots(self.path1)
-        directories = set(roots.directories)
+        directories = {d["name"]: d for d in roots.directories}
+        files = {f["name"]: f for f in roots.files}
         placed: dict[str, str] = {}
 
-        for source in sorted([*roots.directories, *roots.files]):
+        for source in sorted(roots.paths):
             name = source.rpartition("/")[2]
             target = f"{destination}/{name}" if destination else name
             if (other := placed.get(target)) is not None:
@@ -584,8 +607,8 @@ class _CopyJobs(_Jobs):
             self.places[source] = target
 
         return _Roots(
-            [s for s in self.places if s in directories],
-            [s for s in self.places if s not in directories],
+            [directories[s] for s in self.places if s in directories],
+            [files[s] for s in self.places if s in files],
         )
 
     async def _base(self, root: str, destination: str) -> str:
@@ -620,25 +643,26 @@ class _CopyJobs(_Jobs):
         return f"{self.base}/{path}" if self.base else path
 
     async def copy_file(
-        self, cp_file: _Transfer, source: str, destination: str
+        self, cp_entry: _Transfer, entry: dict[str, Any], destination: str
     ) -> None:
-        """Copy a file by ``cp_file``, replacing a file there the destination keeps.
+        """Copy a file by ``cp_entry``, replacing a file there the destination keeps.
 
         A destination refusing to overwrite, as fsspec's copy does not, costs
         an ``_info``, an ``_rm_file`` and a copy more. A directory there is no file
         to replace: ``_rm_file`` takes files only. The job holds its permit
         already. An error raised notes its paths, as it is yielded among paths.
         """
+        source = entry["name"]
         try:
             try:
-                await cp_file(source, destination)
+                await cp_entry(entry, destination)
             except FileExistsError:
-                entry = await self.dst_fs._info(destination)
-                if entry["type"] == "directory":
+                found = await self.dst_fs._info(destination)
+                if found["type"] == "directory":
                     raise
 
                 await self.dst_fs._rm_file(destination)
-                await cp_file(source, destination)
+                await cp_entry(entry, destination)
         except Exception as e:
             e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")
             raise

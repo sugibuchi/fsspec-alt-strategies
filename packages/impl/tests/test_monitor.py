@@ -8,14 +8,15 @@ import pytest
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 
-from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
+from fsspec_alt_strategies.monitor import Call, Monitor, Monitored, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.wrapper import known_implementations
 from fsspec_alt_strategies_impl.monitor import monitored
-from fsspec_alt_strategies_impl.wrapper import (
-    AsyncFlatWrapper,
-    AsyncTreeWrapper,
-    SyncTreeWrapper,
-)
+from fsspec_alt_strategies_impl.wrapper.adlfs import AdlfsWrapper
+from fsspec_alt_strategies_impl.wrapper.flat import AsyncFlatWrapper
+from fsspec_alt_strategies_impl.wrapper.gcsfs import GcsfsWrapper
+from fsspec_alt_strategies_impl.wrapper.s3fs import S3fsWrapper
+from fsspec_alt_strategies_impl.wrapper.tree import AsyncTreeWrapper, SyncTreeWrapper
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -104,6 +105,84 @@ def test_the_known_memory_filesystem() -> None:
         assert tree.find("/test_monitored") == ["/test_monitored/data/a.txt"]
     finally:
         memory.rm("/test_monitored", recursive=True)
+
+
+@pytest.mark.parametrize(
+    ("name", "own"),
+    [
+        ("s3fs.core.S3FileSystem", S3fsWrapper),
+        ("gcsfs.core.GCSFileSystem", GcsfsWrapper),
+        ("adlfs.spec.AzureBlobFileSystem", AdlfsWrapper),
+    ],
+)
+def test_s3fs_gcsfs_and_adlfs_get_their_own_wrappers(name: str, own: type) -> None:
+    module, _, qualname = name.rpartition(".")
+    known = type(qualname, (SimulatedFileSystem,), {"__module__": module})
+    known.__qualname__ = qualname
+
+    # A subclass of theirs, as gcsfs's own ExtendedGcsFileSystem is.
+    class Extended(known):  # type: ignore[valid-type, misc]
+        pass
+
+    assert type(monitored(Extended())) is own
+
+
+def _entry(fs_type: str, **wrapper: str) -> Any:
+    return {
+        "storage_profile": StorageProfile(fs_type=fs_type),  # type: ignore[arg-type]
+        "operation_concurrency": 1,
+        "io_concurrency": 1,
+        "rm_batch_size": 1,
+        **wrapper,
+    }
+
+
+@pytest.mark.parametrize(
+    ("fs_type", "wrapper", "cls"),
+    [
+        ("flat", "S3fsWrapper", S3fsWrapper),
+        ("flat", "fsspec_alt_strategies_impl.wrapper.gcsfs.GcsfsWrapper", GcsfsWrapper),
+        ("tree", "AsyncTreeWrapper", AsyncTreeWrapper),
+    ],
+)
+def test_an_entry_names_its_wrapper_built_in_or_by_its_full_name(
+    fs_type: str, wrapper: str, cls: type
+) -> None:
+    fs = monitored(
+        SimulatedFileSystem(), {_SIMULATED: _entry(fs_type, wrapper=wrapper)}
+    )
+    assert type(fs) is cls
+
+
+@pytest.mark.parametrize(
+    ("fs_type", "wrapper", "error"),
+    [
+        ("flat", "NoSuchWrapper", ValueError),
+        ("flat", "fsspec_alt_strategies_impl.wrapper.s3fs.NoSuchWrapper", ValueError),
+        ("flat", "no_such_module.Wrapper", ImportError),
+        # A wrapper of another family than the profile's.
+        ("tree", "S3fsWrapper", ValueError),
+        ("flat", "AdlfsWrapper", ValueError),
+    ],
+)
+def test_an_entry_naming_no_wrapper_of_its_family_raises(
+    fs_type: str, wrapper: str, error: type[Exception]
+) -> None:
+    with pytest.raises(error):
+        monitored(SimulatedFileSystem(), {_SIMULATED: _entry(fs_type, wrapper=wrapper)})
+
+
+def test_every_wrapper_the_known_implementations_name_is_built_in() -> None:
+    named = {e["wrapper"] for e in known_implementations.values() if "wrapper" in e}
+    assert named == {"S3fsWrapper", "GcsfsWrapper", "AdlfsWrapper"}
+    # Each of the family its entry declares.
+    for entry in known_implementations.values():
+        if "wrapper" in entry:
+            fs_type = entry["storage_profile"].fs_type
+            own = _entry(fs_type or "tree", wrapper=entry["wrapper"])
+            assert isinstance(
+                monitored(SimulatedFileSystem(), {_SIMULATED: own}), Monitored
+            )
 
 
 @pytest.mark.parametrize("asynchronous", [True, False])

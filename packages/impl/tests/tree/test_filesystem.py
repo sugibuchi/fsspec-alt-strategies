@@ -22,6 +22,7 @@ from fsspec_alt_strategies_impl.files.adaptive import (
 )
 from fsspec_alt_strategies_impl.files.fsspec_async import AsyncFileAdapter
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -96,7 +97,18 @@ class _Tree(TreeFileSystem):
         # The extra keyword arguments each listing was given, e.g. refresh=True.
         self.ls_kwargs: list[dict[str, Any]] = []
 
-    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+    def _ils(
+        self, path: str, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            # A storage with no recursive listing of its own.
+            return _tree_ils(self, path, recursive=False, **kwargs)
+        else:
+            return self._list_directory(path, **kwargs)
+
+    async def _list_directory(
+        self, path: str, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
         self.ls_kwargs.append(kwargs)
         for entry in await self.inner._ls(path, detail=True):
             yield entry
@@ -110,8 +122,15 @@ class _Tree(TreeFileSystem):
     async def _rmdir(self, path: str) -> None:
         await self.inner._rmdir(path)
 
-    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        await self.inner._cp_file(path1, path2)
+    async def _cp_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
+        await self.inner._cp_file(entry["name"], path2)
+
+    async def _mv_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
+        await self.inner._mv_file(entry["name"], path2)
 
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
         await self.inner._makedirs(path, exist_ok=exist_ok)
@@ -281,12 +300,13 @@ async def test_a_rename_moves_a_dir_whole(inner: SimulatedFileSystem) -> None:
     class Renaming(_Tree):
         storage_profile = StorageProfile(renames_directories=True)
 
-        async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
+        async def _mv_tree(self, path1: str, path2: str) -> None:
             await self.inner._rename(path1, path2)
 
     renaming = Renaming(inner, asynchronous=True)
     inner.reset_stats()
     await renaming._mv("data", "moved", recursive=True)
+    # The target's info, found free, then the rename of the root.
     assert inner.stats.calls == {"info": 1, "rename": 1}
     assert not await inner._exists("data")
     assert await inner._exists("moved/2024/01/part-0.parquet")
@@ -297,8 +317,10 @@ async def test_a_file_moves_by_mv_file_when_not_recursive(
     inner: SimulatedFileSystem, path2: str
 ) -> None:
     class Renaming(_Tree):
-        async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-            await self.inner._rename(path1, path2)
+        async def _mv_file_entry(
+            self, entry: dict[str, Any], path2: str, **kwargs: Any
+        ) -> None:
+            await self.inner._rename(entry["name"], path2)
 
     renaming = Renaming(inner, asynchronous=True)
     inner.reset_stats()
@@ -691,3 +713,13 @@ def test_the_sync_rmdir_deletes() -> None:
     fs = _Tree(inner)
     fs.rmdir("empty")
     assert not inner.exists("empty")
+
+
+async def test_cp_file_asks_info_then_copies_the_entry(
+    fs: _Tree, inner: SimulatedFileSystem
+) -> None:
+    inner.reset_stats()
+    await fs._cp_file("data/README.md", "copied.md")
+    # The default _cp_file asks the source's entry once, then hands it on.
+    assert inner.stats.calls == {"info": 1, "copy": 1}
+    assert inner._file_data["copied.md"].data == b"readme"

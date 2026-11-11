@@ -42,9 +42,9 @@ class StorageProfile:
     ----------
     fs_type : {"tree", "flat"}, optional
         The family of strategies the storage's filesystem answers with.
-        "tree" is a hierarchical namespace listed a directory per request, with
+        "tree" is a hierarchical namespace listed by directory, with
         ``_ils``, as on a `TreeFileSystem`. "flat" is keys listed by prefix,
-        with ``_iexpand``, ``_rm_files`` and ``rm_batch_size``, as on a
+        with a recursive ``_ils``, ``_rm_files`` and ``rm_batch_size``, as on a
         `FlatFileSystem`. A router copying or moving between two storages
         picks the source's strategies with it. Unknown by default: the router
         then copies with fsspec's own copy.
@@ -52,7 +52,7 @@ class StorageProfile:
         Whether writing a file into a missing directory fails, rather than
         creating its parents. Unknown by default, taken as True: directories are
         created before files are written into them. It tells of writes only:
-        a rename's parent is always created first, as ``_mv_file`` is called
+        a rename's parent is always created first, as ``_mv_file_entry`` is called
         only where the destination's parent exists.
     implicit_directories : bool, optional
         Whether directories exist only through the files under them, with no
@@ -65,12 +65,12 @@ class StorageProfile:
         rather than a copy and a delete. Unknown by default, taken as False: a
         move copies, and deletes in batches where it can.
     renames_directories : bool, optional
-        Whether ``mv_file`` moves a directory too, with all in it, in one request,
-        as a storage's rename does. Unknown by default, taken as False: a
-        directory's files are moved one by one, as ``mv_file`` is called on files
-        only. True holds between any two paths of the filesystem: a storage
-        whose rename stops at a boundary, e.g. containers, is several
-        filesystems under a router.
+        Whether the filesystem's ``_mv_tree`` moves a directory with all in
+        it, in one request, as a storage's rename does. It moves a file too.
+        Unknown by default, taken as False: a directory is walked, and its
+        files moved one by one. True holds between any two paths of the
+        filesystem: a storage whose rename stops at a boundary, e.g.
+        containers, is several filesystems under a router.
     deletes_directories : bool, optional
         Whether the filesystem's ``_rm_tree`` deletes a directory with all in
         it, in one request, as a storage's recursive delete does. It deletes a

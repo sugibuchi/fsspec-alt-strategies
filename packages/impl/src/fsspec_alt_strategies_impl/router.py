@@ -6,12 +6,12 @@
 under one namespace, e.g. a cloud's volumes or containers, each with its own
 filesystem. Each inner filesystem runs its own strategies. A copy or move
 across two storages runs the source's family's strategy, as its profile's
-``fs_type`` says, each file by ``_cross_fs_cp_file`` or ``_cross_fs_mv_file``,
+``fs_type`` says, each file by ``_cross_fs_cp_entry`` or ``_cross_fs_mv_entry``,
 which stream the data through the two storages' files unless overridden.
 
-This module depends on `filesystem`, `operation` and `paths` of `common`.
-It imports `cp` and `mv` of a family only to copy or move from a
-storage of it, so a copy may leave out the other family.
+This module depends on `filesystem`, `operation` and `paths` of `common`. It
+imports `cp` and `mv` of a family only to copy or move from a storage of it,
+so a copy may leave out the other family.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from .common.filesystem import (
     _AbstractFileSystemMeta,
     _copy_errors,
     _raise,
+    _range_bounds,
     _strip_only_protocol,
 )
 from .common.operation import _collect_with_monitors
@@ -98,9 +99,9 @@ class AsyncRoutingFileSystem(
     own: both paths route to the same inner filesystem. Between two storages,
     it is the copy or move of the source's family, as its profile's ``fs_type``
     says: that of `TreeFileSystem` or `FlatFileSystem`, walking or listing the
-    source as they do. Each file goes by ``_cross_fs_cp_file`` or
-    ``_cross_fs_mv_file``, which stream the data unless a subclass overrides
-    them, e.g. with a server-side copy, with ``maxdepth`` too. A source of
+    source as they do, with ``maxdepth`` too. Each file goes by
+    ``_cross_fs_cp_entry`` or ``_cross_fs_mv_entry``, which stream the data
+    unless a subclass overrides them, e.g. with a server-side copy. A source of
     unknown ``fs_type`` is copied by fsspec's own copy, a file at a time. A
     move between two storages deletes each source file once its copy succeeds,
     and the source directories left empty.
@@ -187,9 +188,9 @@ class AsyncRoutingFileSystem(
 
         ``path`` is the router's, without the protocol. A trailing "/" is kept,
         as it means a directory to a copy or a glob: the router puts it back on
-        the inner path if ``_route`` drops it. So may glob patterns: where
-        the literal part routes, the pattern's must route to the same
-        filesystem.
+        the inner path if ``_route`` drops it. ``path`` may be a glob pattern
+        too: where its literal part routes, the whole pattern must route to the
+        same filesystem.
 
         It raises FileNotFoundError for a path no storage has, e.g. a missing
         volume. It may make the inner filesystem, with `_backend`.
@@ -227,14 +228,18 @@ class AsyncRoutingFileSystem(
 
         raise FileNotFoundError(path)
 
-    async def _cross_fs_cp_file(
+    async def _cross_fs_cp_entry(
         self,
         src_fs: AsyncFileSystem,
-        src_path: str,
+        src_entry: dict[str, Any],
         dest_fs: AsyncFileSystem,
         dest_path: str,
     ) -> None:
         """Copy a file from one storage to another, the paths the inner filesystems'.
+
+        ``src_entry`` is the source's, as its listing or ``_info`` gave it, its
+        ``"name"`` the source path. Its size, e.g., may choose how the data
+        goes. It may be stale, as for `TreeFileSystem._cp_file_entry`.
 
         Here, the data is streamed through the router, by both storages'
         ``open_async``. A block, the source's ``transfer_size``, is read, then
@@ -249,28 +254,28 @@ class AsyncRoutingFileSystem(
         """
         block_size = getattr(src_fs, "transfer_size", None) or 8 * _MiB
 
-        reader = await src_fs.open_async(src_path, "rb")
+        reader = await src_fs.open_async(src_entry["name"], "rb")
         async with reader:
             writer = await dest_fs.open_async(dest_path, "wb")
             async with writer:
                 while block := await reader.read(block_size):
                     await writer.write(block)
 
-    async def _cross_fs_mv_file(
+    async def _cross_fs_mv_entry(
         self,
         src_fs: AsyncFileSystem,
-        src_path: str,
+        src_entry: dict[str, Any],
         dest_fs: AsyncFileSystem,
         dest_path: str,
     ) -> None:
         """Move a file from one storage to another, the paths the inner filesystems'.
 
-        Here, it is ``_cross_fs_cp_file``, then the source's ``_rm_file``: a
+        Here, it is ``_cross_fs_cp_entry``, then the source's ``_rm_file``: a
         source whose copy failed is kept. It runs holding a permit of
         ``transfer_limit``.
         """
-        await self._cross_fs_cp_file(src_fs, src_path, dest_fs, dest_path)
-        await src_fs._rm_file(src_path)
+        await self._cross_fs_cp_entry(src_fs, src_entry, dest_fs, dest_path)
+        await src_fs._rm_file(src_entry["name"])
 
     def _backend(
         self, key: Hashable, make: Callable[[], AsyncFileSystem]
@@ -278,7 +283,7 @@ class AsyncRoutingFileSystem(
         """The inner filesystem of ``key``, made by ``make`` the first time.
 
         A subclass's ``_route`` makes its inner filesystems with it, e.g. one
-        per volume, or per account and container. They are made with
+        per volume, or per account and container. ``make`` gives them
         ``asynchronous=True`` and the router's ``loop``, so that their
         coroutines run where the router's do. ``close()`` closes them.
         """
@@ -494,6 +499,63 @@ class AsyncRoutingFileSystem(
     ) -> bytes:
         return await self._forward(path, "_cat_file", start=start, end=end, **kwargs)
 
+    async def _cat_ranges(
+        self,
+        paths: list[str],
+        starts: Any,
+        ends: Any,
+        max_gap: int | None = None,
+        batch_size: int | None = None,
+        on_error: str = "return",
+        **kwargs: Any,
+    ) -> list[Any]:
+        """Read byte ranges of files, as fsspec's ``cat_ranges`` does, each storage's by its own.
+
+        fsspec's calls ``_cat_file`` once per range. This gives each inner
+        filesystem its ranges in one ``_cat_ranges``, all at once, so that a
+        filesystem merging nearby ranges, as the families' do, merges them. A
+        path no storage has, or above them, fails in place of its range. The
+        answers come in the order asked, as fsspec's do.
+        """
+        starts, ends = _range_bounds(paths, starts, ends)
+        out: list[Any] = [None] * len(paths)
+        # Each inner filesystem with the ranges it reads: their indices, and inner paths.
+        groups: dict[int, tuple[AsyncFileSystem, list[int], list[str]]] = {}
+        for i, path in enumerate(paths):
+            try:
+                fs, inner = self._required(path)
+            except Exception as e:
+                out[i] = e
+                continue
+            groups.setdefault(id(fs), (fs, [], []))[1].append(i)
+            groups[id(fs)][2].append(inner)
+
+        async def read(
+            fs: AsyncFileSystem, indices: list[int], inners: list[str]
+        ) -> None:
+            options = {} if max_gap is None else {"max_gap": max_gap}
+            with routing(self):
+                results = await fs._cat_ranges(
+                    inners,
+                    [starts[i] for i in indices],
+                    [ends[i] for i in indices],
+                    batch_size=batch_size,
+                    on_error="return",
+                    **options,
+                    **kwargs,
+                )
+            for i, inner, result in zip(indices, inners, results, strict=True):
+                if isinstance(result, BaseException):
+                    self._note(result, fs, inner, paths[i])
+                out[i] = result
+
+        await asyncio.gather(*(read(*group) for group in groups.values()))
+        if on_error != "return":
+            for result in out:
+                if isinstance(result, BaseException):
+                    raise result
+        return out
+
     async def _pipe_file(self, path: str, value: bytes, **kwargs: Any) -> None:
         if self._intrans:
             pipe_file = AbstractFileSystem.pipe_file
@@ -587,12 +649,17 @@ class AsyncRoutingFileSystem(
 
         if fs1 is fs2:
             await self._on(fs1, inner1, path1, fs1._cp_file(inner1, inner2, **kwargs))
-        elif await self._on(fs1, inner1, path1, fs1._isdir(inner1)):
+            return
+
+        # The source's entry, for the copy across, tells a directory too.
+        entry = await self._on(fs1, inner1, path1, fs1._info(inner1))
+        if entry["type"] == "directory":
             # fsspec's copy gives directories too, which each filesystem makes.
             await self._on(fs2, inner2, path2, fs2._makedirs(inner2, exist_ok=True))
         else:
             copy_file = self._across(fs1, fs2)
-            await self._on(fs1, inner1, path1, copy_file(inner1, inner2))
+            entry = {**entry, "name": inner1}
+            await self._on(fs1, inner1, path1, copy_file(entry, inner2))
 
     async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         fs1, inner1 = self._required(path1)
@@ -601,8 +668,10 @@ class AsyncRoutingFileSystem(
         if fs1 is fs2:
             await self._on(fs1, inner1, path1, fs1._mv_file(inner1, inner2, **kwargs))
         else:
+            entry = await self._on(fs1, inner1, path1, fs1._info(inner1))
             mv_file = self._across(fs1, fs2, move=True)
-            await self._on(fs1, inner1, path1, mv_file(inner1, inner2))
+            entry = {**entry, "name": inner1}
+            await self._on(fs1, inner1, path1, mv_file(entry, inner2))
 
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         return await self._forward(path, "open_async", mode, **kwargs)
@@ -882,8 +951,8 @@ class AsyncRoutingFileSystem(
         """Move, as fsspec's ``mv`` does: within a storage, or between two.
 
         Between two storages, each source file is deleted once copied, and the
-        source directories left empty once all are. A source whose copy failed is
-        kept.
+        source directories left empty once all are. A source whose copy failed
+        is kept.
         """
         if path1 == path2:
             return
@@ -960,7 +1029,7 @@ class AsyncRoutingFileSystem(
         """The recursive copy from ``fs1`` to ``fs2``, by the source's family, or None.
 
         The family is the source's profile's ``fs_type``: None when unknown, and
-        fsspec's own copy then runs. Each file goes by ``_cross_fs_cp_file``.
+        fsspec's own copy then runs. Each file goes by ``_cross_fs_cp_entry``.
         The operation is returned not yet started.
         """
         get = getattr(fs1, "_get_storage_profile", None)
@@ -980,7 +1049,7 @@ class AsyncRoutingFileSystem(
                 fs2,
                 path1,
                 path2,
-                cp_file=self._across(fs1, fs2),
+                cp_entry=self._across(fs1, fs2),
                 same_storage=False,
                 maxdepth=maxdepth,
             )
@@ -992,7 +1061,7 @@ class AsyncRoutingFileSystem(
                 fs2,
                 path1,
                 path2,
-                cp_file=self._across(fs1, fs2),
+                cp_entry=self._across(fs1, fs2),
                 same_storage=False,
                 maxdepth=maxdepth,
             )
@@ -1008,13 +1077,13 @@ class AsyncRoutingFileSystem(
     ) -> Operation[tuple[str, str], Any] | None:
         """The recursive move from ``fs1`` to ``fs2``, by the source's family, or None.
 
-        As `_cross_fs_cp`, each file by ``_cross_fs_mv_file``. A flat source
-        copies each key by ``_cross_fs_cp_file`` instead, and deletes the keys
+        As `_cross_fs_cp`, each file by ``_cross_fs_mv_entry``. A flat source
+        copies each key by ``_cross_fs_cp_entry`` instead, and deletes the keys
         copied in batches, by its ``_rm_files``.
         """
         get = getattr(fs1, "_get_storage_profile", None)
         if get is None:
-            return None  # A plain fsspec filesystem: fsspec's own copy.
+            return None  # A plain fsspec filesystem: fsspec's own copy, then rm.
         fs_type = (await get()).fs_type
         if fs_type is None:
             return None
@@ -1029,7 +1098,7 @@ class AsyncRoutingFileSystem(
                 fs2,
                 path1,
                 path2,
-                mv_file=self._across(fs1, fs2, move=True),
+                mv_entry=self._across(fs1, fs2, move=True),
                 same_storage=False,
                 maxdepth=maxdepth,
             )
@@ -1043,7 +1112,7 @@ class AsyncRoutingFileSystem(
                 fs2,
                 path1,
                 path2,
-                cp_file=self._across(fs1, fs2),
+                cp_entry=self._across(fs1, fs2),
                 same_storage=False,
                 maxdepth=maxdepth,
             )
@@ -1053,12 +1122,12 @@ class AsyncRoutingFileSystem(
         self, fs1: AsyncFileSystem, fs2: AsyncFileSystem, *, move: bool = False
     ) -> _Transfer:
         """A file's copy, or move, from ``fs1`` to ``fs2``, under ``transfer_limit``."""
-        hook = self._cross_fs_mv_file if move else self._cross_fs_cp_file
+        hook = self._cross_fs_mv_entry if move else self._cross_fs_cp_entry
 
-        async def request(path1: str, path2: str) -> None:
+        async def request(entry: dict[str, Any], path2: str) -> None:
             with routing(self):
                 async with self.transfer_limit:
-                    await hook(fs1, path1, fs2, path2)
+                    await hook(fs1, entry, fs2, path2)
 
         return request
 
@@ -1074,7 +1143,7 @@ class AsyncRoutingFileSystem(
         callback: Any,
         delete: bool = False,
     ) -> list[Exception]:
-        """Run a copy or move between two storages: the errors.
+        """Run a copy or move between two storages, returning its paths' errors.
 
         The call is the router's own, watched by the monitors as such.
         """

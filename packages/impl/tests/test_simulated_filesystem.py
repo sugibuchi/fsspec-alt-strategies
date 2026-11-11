@@ -172,7 +172,7 @@ async def test_ils_lists_a_raw_prefix_a_page_at_a_time() -> None:
     for name in ("data/2024-01.csv", "data/2024-02.csv", "data/2024-03.csv"):
         fs.add_file(name)
     fs.add_file("data/2025-01.csv")
-    listing = fs._iexpand("data/2024-")
+    listing = fs._list_prefix("data/2024-")
     assert (await anext(listing))["name"] == "data/2024-01.csv"
     assert fs.stats.calls == {"list": 1}  # The next page only once needed.
     names = [e["name"] async for e in listing]
@@ -180,8 +180,8 @@ async def test_ils_lists_a_raw_prefix_a_page_at_a_time() -> None:
     assert fs.stats.calls == {"list": 2}
     # Exactly a page full asks for no other page.
     fs.reset_stats()
-    assert len([e async for e in fs._iexpand("data/2024-0") if e]) == 3
-    assert [e async for e in fs._iexpand("missing")] == []
+    assert len([e async for e in fs._list_prefix("data/2024-0") if e]) == 3
+    assert [e async for e in fs._list_prefix("missing")] == []
     assert fs.stats.calls == {"list": 3}
 
 

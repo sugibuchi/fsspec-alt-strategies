@@ -8,29 +8,54 @@
 [![CodeQL](https://github.com/sugibuchi/fsspec-alt-strategies/actions/workflows/codeql.yaml/badge.svg?branch=main)](https://github.com/sugibuchi/fsspec-alt-strategies/actions/workflows/codeql.yaml)
 [![codecov](https://codecov.io/gh/sugibuchi/fsspec-alt-strategies/graph/badge.svg)](https://codecov.io/gh/sugibuchi/fsspec-alt-strategies)
 
-Alternative, filesystem-independent strategies for [fsspec](https://github.com/fsspec/filesystem_spec) filesystems, and
-a way to watch and stop what they do.
+An alternative implementation of the file operations behind [fsspec](https://github.com/fsspec/filesystem_spec)'s
+filesystem interface.
 
 > **Status:** alpha. The API may change.
 
-fsspec's recursive operations, such as `find`, `rm` and `copy`, list a whole tree before they act on it. That suits
-object stores, which list every key under a prefix in one paginated request. It is slow on storages with a hierarchical
-namespace, which list one directory per request, such as Azure Data Lake Storage Gen2, SFTP or HDFS. And once called, such
-an operation cannot be watched or stopped until it ends.
+The library aims to handle large cloud storages efficiently, such as data lakes holding millions of files across many
+directories. It is a third-party project, not part of fsspec.
 
-This library offers other ways of doing the same things. It is a third-party project, not part of fsspec.
+## Principles
 
-## What it offers
+### Streaming first
 
-- **Faster file tree operations:** finding, deleting, copying or moving a whole directory tree, on storages with directories
-  and on object stores alike.
-- **Work on huge directories:** files are acted on as soon as they are found, so a directory of hundreds of thousands of
-  files never needs to fit in memory.
-- **Progress you can see, and stop:** follow a long operation file by file, see which files failed, and stop it at
-  any time, through the familiar fsspec calls.
-- **Faster reads and writes:** files in cloud storages adapt to how each is used, and writes can wait for fsspec's
-  transaction to commit.
+- Its file operations list with one primitive, `_ils`. fsspec's own operations list every path first, with
+  `expand_path`. `_ils` is an async generator instead: it scans the storage step by step, and yields each path as it
+  is found.
+- The operations built on `_ils` act on its paths as they arrive, as far as they can. So a large file tree is processed
+  without ever being held in memory whole.
+
+### Hierarchical namespaces, used
+
+- Where a storage lists by directory, some operations scan the directories recursively, several at once. That can beat a
+  scan of a flat list of files, e.g. for a pattern pruning most of the tree.
+- A storage's own operations on a whole tree, such as the atomic move of a directory, plug in where the storage has
+  them.
+
+### One implementation for different storages
+
+- fsspec's abstract filesystem classes give default file operations, but many fsspec implementations override them,
+  each for its own storage's behaviour.
+- This library declares a storage's behaviour in a profile instead. From the profile declared for a filesystem, its
+  operations choose the fitting algorithm.
+
+### Adaptive file objects
+
+- The adaptive file classes aim at good read and write performance across access patterns, from random reads of short
+  ranges to bulk sequential reads. No parameter or buffering strategy needs tuning for each workload.
+- They resize their buffers as the data is read or written.
+- They fetch and send a file's blocks on an event loop, in the background and in parallel, as far as they can.
+
+### Observability and control
+
+- Follow a long operation file by file, see which files failed, and stop it at any time, through the familiar fsspec
+  calls.
+
+## It also offers
+
 - **Copies between storages:** one filesystem can span several storages, and copy or move files between them.
+- **Transactions:** writes can wait for fsspec's transaction to commit.
 - **Works with what you have:** existing fsspec filesystems, such as s3fs, get these features with a single call, and
   a new one by implementing a few basic operations.
 

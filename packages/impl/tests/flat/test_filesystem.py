@@ -89,15 +89,20 @@ class _Flat(FlatFileSystem):
         super().__init__(**{**options, **kwargs})
         self.inner = inner
 
-    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        return self.inner._iexpand(prefix)
+    def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            return self.inner._list_prefix(f"{path}/{prefix}" if path else prefix)
+        else:
+            return self._ls_directory(path)
+
+    async def _ls_directory(self, path: str) -> AsyncIterator[dict[str, Any]]:
+        for entry in await self.inner._ls(path, detail=True):
+            yield entry
 
     async def _rm_files(self, paths: list[str]) -> None:
         await self.inner._rm_files(paths)
-
-    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
-        for entry in await self.inner._ls(path, detail=True):
-            yield entry
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         return await self.inner._info(path)
@@ -105,8 +110,21 @@ class _Flat(FlatFileSystem):
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         await self.inner._rm_file(path)
 
-    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        await self.inner._cp_file(path1, path2)
+    async def _rmdir(self, path: str) -> None:
+        await self.inner._rmdir(path)
+
+    async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
+        await self.inner._makedirs(path, exist_ok=exist_ok)
+
+    async def _cp_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
+        await self.inner._cp_file(entry["name"], path2)
+
+    async def _mv_file_entry(
+        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    ) -> None:
+        await self.inner._mv_file(entry["name"], path2)
 
     def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         # The same file, for the sync API, on the filesystem's loop.
@@ -224,10 +242,12 @@ async def test_a_file_moves_as_the_profile_says_when_not_recursive(
     class Renaming(_Flat):
         storage_profile = StorageProfile(renames_files=renames_files)
 
-        async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-            renamed.append((path1, path2))
-            await self.inner._cp_file(path1, path2)
-            await self.inner._rm_file(path1)
+        async def _mv_file_entry(
+            self, entry: dict[str, Any], path2: str, **kwargs: Any
+        ) -> None:
+            renamed.append((entry["name"], path2))
+            await self.inner._cp_file(entry["name"], path2)
+            await self.inner._rm_file(entry["name"])
 
     fs = Renaming(inner, asynchronous=True)
     inner.reset_stats()
@@ -276,12 +296,26 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
     assert monitor.items == 7 + len(_FILES)
 
 
-def test_a_subclass_missing_a_primitive_is_refused() -> None:
-    class Incomplete(_Flat):
-        _iexpand = FlatFileSystem._iexpand  # Still abstract, as if not written.
+@pytest.mark.parametrize("primitive", ["_rm_files", "_rmdir", "_makedirs"])
+def test_a_subclass_missing_a_primitive_is_refused(primitive: str) -> None:
+    # Still abstract, as if not written: fsspec's _rmdir and _makedirs would do nothing.
+    incomplete = type(
+        "Incomplete", (_Flat,), {primitive: getattr(FlatFileSystem, primitive)}
+    )
 
-    with pytest.raises(TypeError, match="_iexpand"):
-        Incomplete(SimulatedFileSystem(), asynchronous=True)
+    with pytest.raises(TypeError, match=primitive):
+        incomplete(SimulatedFileSystem(), asynchronous=True)
+
+
+def test_buckets_are_made_and_deleted_by_the_subclass() -> None:
+    inner = SimulatedFileSystem(hierarchical=True)
+    fs = _Flat(inner)
+    fs.mkdir("bucket")
+    assert inner.isdir("bucket")
+    with pytest.raises(FileExistsError):
+        fs.mkdir("bucket")
+    fs.rmdir("bucket")
+    assert not inner.exists("bucket")
 
 
 async def test_what_the_strategies_leave_to_fsspec(
@@ -329,3 +363,13 @@ async def test_copy_and_mv_with_maxdepth(fs: _Flat, inner: SimulatedFileSystem) 
     ]
     # fsspec's own deletes the whole source: the keys deeper are kept here.
     assert "data/2023/top.txt" in inner._file_data
+
+
+async def test_cp_file_asks_info_then_copies_the_entry(
+    fs: _Flat, inner: SimulatedFileSystem
+) -> None:
+    inner.reset_stats()
+    await fs._cp_file("data/README.md", "copied.md")
+    # The default _cp_file asks the source's entry once, then hands it on.
+    assert inner.stats.calls == {"info": 1, "copy": 1}
+    assert inner._file_data["copied.md"].data == b"x" * 10
