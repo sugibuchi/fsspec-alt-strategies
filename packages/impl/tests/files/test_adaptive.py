@@ -106,6 +106,45 @@ async def test_read_to_the_end_splits_under_the_concurrency_limit(
     assert flat_fs.stats.max_concurrency == 4
 
 
+async def test_a_large_read_is_split_into_parts_fetched_together(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    data = os.urandom(64 * _KiB)
+    async with await _reader(flat_fs, data, split_size=8 * _KiB, kept_size=0) as f:
+        assert await f._read(32 * _KiB) == data[: 32 * _KiB]
+        f.seek(48 * _KiB)
+        assert await f._read(12 * _KiB) == data[48 * _KiB : 60 * _KiB]
+    # 32 KiB in 4 parts of 8 KiB; 12 KiB, below twice the split size, in one.
+    assert f.fetched == [
+        (0, 8 * _KiB),
+        (8 * _KiB, 16 * _KiB),
+        (16 * _KiB, 24 * _KiB),
+        (24 * _KiB, 32 * _KiB),
+        (48 * _KiB, 60 * _KiB),
+    ]
+
+
+@pytest.mark.parametrize("max_gap", [None, 0])
+async def test_skipping_a_few_bytes_keeps_the_run(
+    flat_fs: SimulatedFileSystem, max_gap: int | None
+) -> None:
+    # Reading in sequence, but skipping 512 bytes after each 8 KiB, e.g. a header.
+    data = os.urandom(512 * _KiB)
+    reads = 0
+    async with await _reader(flat_fs, data, max_gap=max_gap) as f:
+        for pos in range(0, len(data) - 8 * _KiB, 8 * _KiB + 512):
+            f.seek(pos)
+            assert await f._read(8 * _KiB) == data[pos : pos + 8 * _KiB]
+            reads += 1
+    if max_gap is None:
+        # The run goes on: blocks fetched ahead, growing, serve the reads.
+        assert len(f.fetched) < reads * 0.8
+        assert max(end - start for start, end in f.fetched[-5:]) > 8 * _KiB
+    else:
+        # Every skip ends the run: one request per read.
+        assert len(f.fetched) == reads
+
+
 async def test_scattered_reads_fetch_one_small_block_each(
     flat_fs: SimulatedFileSystem,
 ) -> None:

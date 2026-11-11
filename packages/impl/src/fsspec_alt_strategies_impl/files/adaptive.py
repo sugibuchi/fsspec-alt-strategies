@@ -89,20 +89,28 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
     ``_fetch_range`` request, which a subclass implements. Requests cost too,
     so it sends as few as the reads allow:
 
-    - A read fetches what it asks for, in one request up to ``max_block_size``,
-      and in even parts fetched together beyond.
+    - A read fetches what it asks for. From twice ``split_size``, it is split
+      into even parts of at least that, up to ``spread`` of them, fetched
+      together: one request returns its bytes at a bounded rate, e.g. about 70
+      MiB/s on Azure, where several in parallel go faster. No part exceeds
+      ``max_block_size``.
     - A read smaller than ``min_block_size`` fetches the block of that size
       holding it, aligned to a multiple of it. So reads near each other share
-      it, e.g. a Parquet file's footer and its metadata.
+      it, e.g. a Parquet file's footer and its metadata. Keeping it small
+      keeps scattered small reads cheap.
     - A read that starts where the last one ended continues a run. A run that
       has read n bytes is assumed to read n more: they are fetched ahead,
       topped up once half of them are read. They are split into ``spread``
       blocks, fetched at once as the concurrency limit allows. Their blocks
       double in size up to ``max_block_size``, so at most ``spread`` times
       ``max_block_size`` bytes are fetched ahead.
-    - A seek within the blocks fetched keeps them and the run. A seek elsewhere
-      cancels the blocks in flight and ends the run, so that scattered reads,
-      such as a Parquet file's column chunks, fetch nothing ahead.
+    - A seek within the blocks fetched keeps them and the run. So does a seek
+      forward past them by at most ``max_gap``, and by less than the run has
+      read: the bytes skipped are not fetched, and the run goes on fetching
+      ahead. A seek
+      elsewhere cancels the blocks in flight and ends the run, so that
+      scattered reads, such as a Parquet file's column chunks, fetch nothing
+      ahead.
     - Fetched blocks are kept, up to ``kept_size`` bytes, for later reads that
       come back to them.
 
@@ -158,6 +166,12 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         once. The class attribute if None.
     min_block_size, max_block_size : int, optional
         The smallest and largest request. The class attributes if None.
+    split_size : int, optional
+        The smallest part a read is split into. The class attribute if None.
+    max_gap : int, optional
+        The longest forward seek past the blocks fetched that keeps the run,
+        if shorter than what the run has read.
+        The class attribute if None, ``min_block_size`` if that is None too.
     kept_size : int, optional
         The most bytes of fetched blocks kept. The class attribute if None.
     version : str, optional
@@ -194,11 +208,26 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
     ...         return data
     """
 
-    min_block_size: int = _MiB // 2
-    """The smallest request, which smaller reads fetch whole."""
+    min_block_size: int = 64 * 1024
+    """The smallest request, which smaller reads fetch whole.
+
+    64 KiB holds a Parquet file's footer and its metadata in most files, as
+    Parquet readers ask for, and keeps a small random read from fetching much
+    more than it asks.
+    """
 
     max_block_size: int = 8 * _MiB
     """The largest request. Larger reads are split, to fetch the parts together."""
+
+    split_size: int = 4 * _MiB
+    """The smallest part a read is split into: a read below twice it is one request.
+
+    Splitting fetches faster, but sends more requests, which storages count and
+    bill: e.g. an 8 MiB column chunk is two requests.
+    """
+
+    max_gap: int | None = None
+    """The longest forward seek past the blocks fetched that keeps the run: ``min_block_size`` if None."""
 
     kept_size: int = 8 * _MiB
     """The most bytes of fetched blocks kept for reads that come back to them."""
@@ -216,6 +245,8 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         spread: int | None = None,
         min_block_size: int | None = None,
         max_block_size: int | None = None,
+        split_size: int | None = None,
+        max_gap: int | None = None,
         kept_size: int | None = None,
         version: str | None = None,
     ) -> None:
@@ -227,6 +258,11 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         self.max_block_size = max(
             max_block_size or self.max_block_size, self.min_block_size
         )
+        self.split_size = split_size or self.split_size
+        if max_gap is not None:
+            self.max_gap = max_gap
+        elif self.max_gap is None:
+            self.max_gap = self.min_block_size
         self.kept_size = self.kept_size if kept_size is None else kept_size
 
         self._pos = 0
@@ -378,8 +414,9 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
         if pos == self._settled:
             return
 
-        self._settled = pos
+        last, self._settled = self._settled, pos
         queue = self._requests.queue
+        fetched = queue[-1].end if queue else last
         if queue and queue[0].start <= pos <= queue[-1].end:
             # Many readers seek before each read, even in sequence: within the
             # blocks fetched, or right after them, the run goes on.
@@ -387,6 +424,14 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
             while queue and queue[0].end <= pos:
                 behind.append(queue.popleft())
             await self._drop(behind)
+        elif last < pos and pos - fetched <= min(self.max_gap, self._run - 1):
+            # A few bytes skipped, fewer than the run has read: still reading in
+            # sequence, the run goes on fetching ahead, but the bytes skipped
+            # are not fetched. Scattered small reads skip more than they read,
+            # and fetch nothing ahead.
+            run = self._run
+            await self._drop_all()
+            self._run = run
         else:
             await self._drop_all()
 
@@ -404,7 +449,9 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
             start = pos - pos % self.min_block_size
             await self._send(start, max(end, start + self.min_block_size))
         elif (start := queue[-1].end if queue else pos) < end:
-            await self._send(start, end)
+            # Even parts of at least split_size, up to spread of them.
+            parts = max(1, min(self.spread, (end - start) // self.split_size))
+            await self._send(start, end, math.ceil((end - start) / parts))
 
         if not continuing:
             return
@@ -419,12 +466,13 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
             await self._send(start, end + ahead, self._block_size(ahead))
 
     async def _send(self, start: int, stop: int, largest: int | None = None) -> None:
-        """Fetch [start, stop), within the file, in even parts of at most ``largest``."""
+        """Fetch [start, stop), within the file, in even parts of at most ``largest``, or ``max_block_size``."""
         stop = min(stop, self.size)
         if stop <= start:
             return
 
-        parts = math.ceil((stop - start) / (largest or self.max_block_size))
+        largest = min(largest or self.max_block_size, self.max_block_size)
+        parts = math.ceil((stop - start) / largest)
         part = math.ceil((stop - start) / parts)
         for s in range(start, stop, part):
             e = min(s + part, stop)
@@ -839,8 +887,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
             and len(buffer) <= cap
         ):
             # Even an empty file is created.
-            await self._upload_all(bytes(buffer))
+            data = bytes(buffer)
             buffer.clear()
+            await self._upload_all(data)
             return
 
         block = min(self._block_size(len(buffer) if closing else self._pos), cap)
@@ -874,11 +923,15 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
                     self._raise_failed_upload()
 
                 start = offset + taken
+                # One copy, through a view: a slice of the bytearray would copy
+                # it once more. The view goes before the buffer is resized.
+                with memoryview(buffer) as view:
+                    part = bytes(view[taken : taken + size])
                 await self._requests.send(
                     start,
                     start + size,
                     self._upload_part,
-                    bytes(buffer[taken : taken + size]),
+                    part,
                     start,
                     start + size,
                     len(self._requests.queue),
