@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import asyncio
 import io
+import math
 import os
 from abc import ABCMeta
+from collections.abc import Iterable
 from glob import has_magic
 from typing import TYPE_CHECKING, Any, Self
 
-from fsspec.asyn import AsyncFileSystem
+from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 from fsspec.callbacks import DEFAULT_CALLBACK
 
 from fsspec_alt_strategies.monitor import Monitored
@@ -325,16 +327,102 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         batch_size: int | None = None,
         on_error: str = "return",
         **kwargs: Any,
-    ) -> Any:
-        return await super()._cat_ranges(
-            paths,
-            starts,
-            ends,
-            max_gap=max_gap,
+    ) -> list[Any]:
+        """Read byte ranges of files, as fsspec's ``cat_ranges`` does, in fewer requests.
+
+        fsspec's sends one ``_cat_file`` per range. This merges the ranges of a
+        file whose gaps are at most ``max_gap``, or ``ranges_max_gap``, into one
+        range of at most ``ranges_max_block``, overlaps and repeats included.
+        A merged range from twice ``ranges_split_size`` is fetched in parts of
+        at least that, up to ``ranges_spread`` of them, at once. Each range is
+        then cut from what was fetched, in the order asked. A range counted
+        from the end, or to it, is fetched alone: merging it would ask the
+        file's size first.
+
+        It answers as fsspec's: the same bytes, a range beyond the end short or
+        empty, and a failure in place of each range it covers with
+        ``on_error="return"``, or raised otherwise. It fetches the gaps too, at
+        most ``max_gap`` bytes each, for fewer requests.
+        """
+        if not isinstance(paths, list):
+            raise TypeError(f"paths must be a list: {type(paths).__name__}")
+        count = len(paths)
+        starts = list(starts) if isinstance(starts, Iterable) else [starts] * count
+        ends = list(ends) if isinstance(ends, Iterable) else [ends] * count
+        if len(starts) != count or len(ends) != count:
+            raise ValueError("paths, starts and ends must be as many")
+
+        gap = self.ranges_max_gap if max_gap is None else max_gap
+        fetches, plan = _merge_ranges(paths, starts, ends, gap, self.ranges_max_block)
+        fetched = await self._fetch_ranges(fetches, batch_size, kwargs)
+        out = [_cut(fetched[index], offset, length) for index, offset, length in plan]
+
+        if on_error != "return":
+            for result in out:
+                if isinstance(result, BaseException):
+                    raise result
+        return out
+
+    async def _fetch_ranges(
+        self,
+        fetches: list[tuple[str, int | None, int | None]],
+        batch_size: int | None,
+        kwargs: dict[str, Any],
+    ) -> list[bytearray | BaseException]:
+        """Each range's bytes, or its first part's failure: its parts all sent at once, io_concurrency at a time."""
+        parts = [
+            (index, part)
+            for index, (_, start, end) in enumerate(fetches)
+            for part in self._ranges_parts(start, end)
+        ]
+        results = await _run_coros_in_chunks(
+            [
+                self._cat_file(fetches[index][0], start=start, end=end, **kwargs)
+                for index, (start, end) in parts
+            ],
             batch_size=self._io_batch_size(batch_size),
-            on_error=on_error,
-            **kwargs,
+            nofiles=True,
+            return_exceptions=True,
         )
+        fetched: list[bytearray | BaseException] = [bytearray() for _ in fetches]
+        for (index, _), result in zip(parts, results, strict=True):
+            data = fetched[index]
+            if isinstance(result, BaseException) and not isinstance(
+                data, BaseException
+            ):
+                fetched[index] = result
+            elif isinstance(data, bytearray):
+                data += result
+        return fetched
+
+    ranges_max_gap: int = _MiB
+    """The longest gap ``cat_ranges`` fetches to merge two ranges of a file.
+
+    Measured on Azure, a request took about 19 ms, and a MiB more in it about
+    16 ms: fetching a gap of up to about 1 MiB costs less than a request.
+    """
+
+    ranges_max_block: int = 64 * _MiB
+    """The longest range ``cat_ranges`` merges ranges into."""
+
+    ranges_split_size: int = 4 * _MiB
+    """The smallest part ``cat_ranges`` fetches a merged range in, as the files' ``split_size``."""
+
+    ranges_spread: int = 8
+    """The most parts ``cat_ranges`` fetches a merged range in at once."""
+
+    def _ranges_parts(
+        self, start: int | None, end: int | None
+    ) -> list[tuple[int | None, int | None]]:
+        """The parts a range is fetched in: even, of at least ``ranges_split_size``."""
+        if start is None or end is None or start < 0 or end < 0:
+            return [(start, end)]
+        size = end - start
+        parts = max(1, min(self.ranges_spread, size // self.ranges_split_size))
+        step = math.ceil(size / parts) if size > 0 else 1
+        return [(s, min(s + step, end)) for s in range(start, end, step)] or [
+            (start, end)
+        ]
 
     async def _pipe(
         self, path: Any, value: Any = None, batch_size: int | None = None, **kwargs: Any
@@ -350,6 +438,72 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     async def _put(self, lpath: Any, rpath: Any, **kwargs: Any) -> Any:
         kwargs["batch_size"] = self._io_batch_size(kwargs.get("batch_size"))
         return await super()._put(lpath, rpath, **kwargs)
+
+
+def _cut(
+    data: bytearray | BaseException, offset: int, length: int | None
+) -> bytes | BaseException:
+    """A range asked for, cut from what its fetch returned, or the fetch's failure."""
+    if isinstance(data, BaseException):
+        return data
+    if length is None:
+        return bytes(data)
+    return bytes(data[offset : offset + max(0, length)])
+
+
+def _merge_ranges(
+    paths: list[str],
+    starts: list[int | None],
+    ends: list[int | None],
+    max_gap: int,
+    max_block: int,
+) -> tuple[list[tuple[str, int | None, int | None]], list[tuple[int, int, int | None]]]:
+    """The ranges to fetch, and for each range asked, where to cut it from: ``(fetch, offset, length)``.
+
+    The ranges of a file with known ends, sorted, are merged while the gap is at
+    most ``max_gap`` and the merged range at most ``max_block``. A range
+    counted from the end, or to it, is fetched alone, its length None: whole.
+    """
+    fetches: list[tuple[str, int | None, int | None]] = []
+    plan: list[tuple[int, int, int | None] | None] = [None] * len(paths)
+    known: dict[str, list[int]] = {}
+    for i, (path, start, end) in enumerate(zip(paths, starts, ends, strict=True)):
+        if (start is None or start >= 0) and end is not None and end >= 0:
+            known.setdefault(path, []).append(i)
+        else:
+            plan[i] = (len(fetches), 0, None)
+            fetches.append((path, start, end))
+
+    for path, indices in known.items():
+        indices.sort(key=lambda i: (starts[i] or 0, ends[i]))
+        members: list[int] = []
+        low = high = 0
+        for i in [*indices, None]:
+            if i is not None:
+                start, end = starts[i] or 0, ends[i]
+                assert end is not None
+                end = max(end, start)
+                if (
+                    members
+                    and start - high <= max_gap
+                    and max(end, high) - low <= max_block
+                ):
+                    high = max(high, end)
+                    members.append(i)
+                    continue
+            if members:
+                for m in members:
+                    first = starts[m] or 0
+                    plan[m] = (
+                        len(fetches),
+                        first - low,
+                        max(ends[m] or 0, first) - first,
+                    )
+                fetches.append((path, low, high))
+            if i is not None:
+                members, low, high = [i], start, end
+
+    return fetches, plan  # type: ignore[return-value]
 
 
 def _strip_only_protocol(fs: AbstractFileSystem, path: str | Sequence[str]) -> Any:

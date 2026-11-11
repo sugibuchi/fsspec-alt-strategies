@@ -168,6 +168,9 @@ None of these is right for every storage, and the library never picks one for yo
   16 × 16 MiB = 256 MiB of writes, however many files are open. Each file written also fills one part. fsspec's
   methods on many paths, such as `cat`, `pipe`, `get` and `put`, handle `io_concurrency` paths at a time, unless given
   a `batch_size`.
+- **`cat_ranges` merges nearby ranges.** The ranges of a file at most `max_gap` apart, 1 MiB by default, are fetched
+  in one request with the gap, up to 64 MiB, and a large one in parallel parts. Zarr and kerchunk read through it: a
+  shard's chunks then cost a few requests, not one each.
 
 #### Costs to know
 

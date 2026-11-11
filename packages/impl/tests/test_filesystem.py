@@ -7,9 +7,11 @@ data methods the wrappers pass on, and the helpers shaping fsspec's answers.
 from __future__ import annotations
 
 import io
+import random
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
@@ -231,3 +233,71 @@ async def test_many_paths_go_io_concurrency_at_a_time(batch_size: int | None) ->
 
     # io_concurrency by default, though the subclass takes no permit; the call's own if given.
     assert piped == inner.stats.max_concurrency == (batch_size or 3)
+
+
+def _ranges_fs(**kwargs: Any) -> tuple[SimulatedFileSystem, AsyncTreeWrapper]:
+    inner = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    for i, size in enumerate([0, 1000, 300_000, 3 * 1024 * 1024]):
+        inner.add_file(
+            f"r/{i}", bytes(range(256)) * (size // 256) + b"x" * (size % 256)
+        )
+    return inner, AsyncTreeWrapper(inner, asynchronous=True, **{**_LIMITS, **kwargs})
+
+
+async def test_cat_ranges_answers_as_fsspec() -> None:
+    inner, fs = _ranges_fs()
+    rng = random.Random(4)
+    paths, starts, ends = [], [], []
+    for _ in range(300):
+        paths.append(rng.choice(["r/0", "r/1", "r/2", "r/3", "r/missing"]))
+        start = rng.choice([None, 0, -50, rng.randrange(400_000)])
+        starts.append(start)
+        ends.append(
+            rng.choice(
+                [
+                    None,
+                    -10,
+                    rng.randrange(3_200_000),
+                    (start or 0) + rng.randrange(5000),
+                ]
+            )
+        )
+    ours = await fs._cat_ranges(paths, starts, ends)
+    reference = await AsyncFileSystem._cat_ranges(inner, paths, starts, ends)
+    for got, expected in zip(ours, reference, strict=True):
+        if isinstance(expected, Exception):
+            assert type(got) is type(expected)
+        else:
+            assert got == expected
+    with pytest.raises(FileNotFoundError):
+        await fs._cat_ranges(paths, starts, ends, on_error="raise")
+
+
+async def test_cat_ranges_merges_nearby_ranges() -> None:
+    inner, fs = _ranges_fs()
+    # 100 ranges of 1000 bytes, 2000 apart, in one file: one request, not 100.
+    starts = [i * 3000 for i in range(100)]
+    ends = [s + 1000 for s in starts]
+    inner.reset_stats()
+    ours = await fs._cat_ranges(["r/2"] * 100, starts, ends)
+    assert ours == [
+        inner._file_data["r/2"].data[s:e] for s, e in zip(starts, ends, strict=True)
+    ]
+    assert inner.stats.calls == {"read": 1}
+    # Apart beyond max_gap: one request each.
+    inner.reset_stats()
+    await fs._cat_ranges(
+        ["r/2"] * 3, [0, 100_000, 200_000], [10, 100_010, 200_010], max_gap=1000
+    )
+    assert inner.stats.calls == {"read": 3}
+
+
+async def test_cat_ranges_fetches_a_large_merged_range_in_parts() -> None:
+    inner, fs = _ranges_fs()
+    fs.ranges_split_size = 1024 * 1024
+    inner.reset_stats()
+    # 3 MiB merged from two ranges: in 3 parts of 1 MiB, at once.
+    size = 3 * 1024 * 1024
+    ours = await fs._cat_ranges(["r/3", "r/3"], [0, size // 2], [size // 2, size])
+    assert b"".join(ours) == inner._file_data["r/3"].data
+    assert inner.stats.calls == {"read": 3}
