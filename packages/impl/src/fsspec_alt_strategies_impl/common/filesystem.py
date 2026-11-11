@@ -62,13 +62,15 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     of the number given.
 
     ``storage_profile`` tells the strategies what the storage does. It is one
-    for the whole filesystem, and never changes. One whose storage is unknown
-    says so, with ``StorageProfile()``. Where it is found by a request, e.g.
-    whether an account has a hierarchical namespace, a subclass overrides
-    ``_load_storage_profile(path)`` instead, which may ask the storage at one of
-    the paths the first operation needing it is given. Either way, the
-    strategies and the subclass's primitives get it with
-    ``await self._get_storage_profile(paths)``.
+    for the whole filesystem. One whose storage is unknown says so, with
+    ``StorageProfile()``. Where it is found by a request, e.g. whether an
+    account has a hierarchical namespace, a subclass overrides
+    ``_load_storage_profile(path)`` too, which may ask the storage at one of
+    the paths the first operation needing it is given. ``storage_profile`` is
+    then ``StorageProfile()`` until loaded, and the profile found after, never
+    changing again. Either way, the strategies and the subclass's primitives
+    get it with ``await self._get_storage_profile(paths)``, which loads it once
+    and returns ``storage_profile``.
     A storage whose profile differs by path, e.g. per bucket, is several
     filesystems under a router.
 
@@ -105,18 +107,20 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         super().__init__(*args, **kwargs)
 
-        # A profile found by a request needs none set beside it.
+        # A profile found by a request needs none set beside it: it is unknown,
+        # right on any storage, until loaded.
         load = type(self)._load_storage_profile
         profile = getattr(self, "storage_profile", None)
-        if load is _BaseFileSystem._load_storage_profile and not isinstance(
-            profile, StorageProfile
-        ):
-            raise ValueError(
-                "storage_profile must be set, to a StorageProfile, unless"
-                f" _load_storage_profile is overridden: {profile!r}"
-            )
+        if not isinstance(profile, StorageProfile):
+            if load is _BaseFileSystem._load_storage_profile:
+                raise ValueError(
+                    "storage_profile must be set, to a StorageProfile, unless"
+                    f" _load_storage_profile is overridden: {profile!r}"
+                )
+            else:
+                self.storage_profile = StorageProfile()
         # Named apart from a subclass's own members.
-        self._storage_profile_loaded: StorageProfile | None = None
+        self._storage_profile_loaded = False
         self._storage_profile_lock = asyncio.Lock()
 
         self.operation_concurrency = operation_concurrency
@@ -134,45 +138,49 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         It tells where to ask, never what the profile is: the profile is one
         for the whole filesystem.
 
-        `_get_storage_profile` keeps what it returns. One that cannot tell at
-        ``path`` raises: the next path is tried, or the next operation's.
-        Returning ``StorageProfile()`` instead keeps it, right on any storage.
+        `_get_storage_profile` sets what it returns as ``storage_profile``,
+        then never calls it again. One that cannot tell at ``path`` raises: the
+        next path is tried, or the next operation's. Returning
+        ``StorageProfile()`` instead keeps it, right on any storage.
         """
-        return self.storage_profile  # type: ignore[attr-defined, no-any-return]
+        return self.storage_profile
 
     async def _get_storage_profile(self, path: str | Sequence[str]) -> StorageProfile:
-        """The profile, kept once `_load_storage_profile` has found it with one of ``path``.
+        """``storage_profile``, loaded first by `_load_storage_profile` with one of ``path``.
 
         ``path`` is the path, or the paths, an operation is given, e.g. a
-        copy's destination. A profile kept is returned as it is. Otherwise each
-        path is tried in turn, until `_load_storage_profile` finds it. If it
-        fails at all of them, it raises: a single error as it is, several in an
-        ExceptionGroup. A first call loads it while the others wait, then find
-        it kept.
+        copy's destination. Once loaded, ``storage_profile`` is returned as it
+        is. Until then, each path is tried in turn, until
+        `_load_storage_profile` finds the profile, then set as
+        ``storage_profile``. If it fails at all of them, it raises: a single
+        error as it is, several in an ExceptionGroup. A first call loads it
+        while the others wait, then find it loaded.
 
         The strategies await it when they start. The subclass's primitives may
         await it too, with the paths they are given, e.g. a ``_rmdir``
         depending on whether directories are real.
         """
-        # Once kept, no call waits for the lock.
-        if (profile := self._storage_profile_loaded) is not None:
-            return profile
+        # Once loaded, no call waits for the lock.
+        if self._storage_profile_loaded:
+            return self.storage_profile
 
         paths = [path] if isinstance(path, str) else list(path)
         if not paths:
             raise ValueError("No path to load the storage profile with")
         async with self._storage_profile_lock:
-            if self._storage_profile_loaded is not None:
-                return self._storage_profile_loaded
+            if self._storage_profile_loaded:
+                return self.storage_profile
 
             errors: list[Exception] = []
             for p in paths:
                 try:
-                    self._storage_profile_loaded = await self._load_storage_profile(p)
+                    profile = await self._load_storage_profile(p)
                 except Exception as e:
                     errors.append(e)
                 else:
-                    return self._storage_profile_loaded
+                    self.storage_profile = profile
+                    self._storage_profile_loaded = True
+                    return profile
 
         if len(errors) == 1:
             raise errors[0]

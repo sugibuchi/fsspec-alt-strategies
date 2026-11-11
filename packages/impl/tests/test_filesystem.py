@@ -349,9 +349,12 @@ async def test_strategies_load_the_profile_with_their_paths(
         fs = _NotingFlat(
             inner, rm_batch_size=10, storage_profile=StorageProfile(), **limits
         )
+    # Found by a request: None until the strategy loads it.
+    fs.storage_profile = None
     fs.loaded = []
     await call(fs)
     assert fs.loaded[: len(paths)] == paths
+    assert fs.storage_profile == (StorageProfile() if paths else None)
     assert len(fs.loaded) == len(paths)  # Kept once loaded.
 
 

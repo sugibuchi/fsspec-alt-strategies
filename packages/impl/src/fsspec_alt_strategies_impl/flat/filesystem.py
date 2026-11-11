@@ -145,7 +145,8 @@ class FlatFileSystem(_BaseFileSystem):
     storage_profile: StorageProfile
     """What the storage does, for the strategies.
 
-    A subclass sets it, or overrides ``_load_storage_profile`` instead.
+    A subclass sets it, or overrides ``_load_storage_profile`` too: it is
+    then ``StorageProfile()`` until `_get_storage_profile` loads it.
     """
 
     def __init__(

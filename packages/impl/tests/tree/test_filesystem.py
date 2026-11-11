@@ -408,6 +408,28 @@ async def test_each_path_is_tried_until_one_loads(inner: SimulatedFileSystem) ->
         await Found(inner, asynchronous=True)._get_storage_profile([])
 
 
+async def test_storage_profile_is_the_profile_loaded(
+    inner: SimulatedFileSystem,
+) -> None:
+    found = StorageProfile(renames_files=True)
+
+    class Found(_Tree):
+        storage_profile = None  # type: ignore[assignment]
+
+        async def _load_storage_profile(self, path: str) -> StorageProfile:
+            return found
+
+    fs = Found(inner, asynchronous=True)
+    # Unknown, right on any storage, until loaded: then the profile found.
+    assert fs.storage_profile == StorageProfile()
+    assert await fs._get_storage_profile("data") is found
+    assert fs.storage_profile is found
+
+    # A profile set loads as itself.
+    declared = _Tree(inner, asynchronous=True)
+    assert await declared._get_storage_profile("data") is declared.storage_profile
+
+
 async def test_mkdir_makes_a_directory(fs: _Tree, inner: SimulatedFileSystem) -> None:
     # fsspec's own _mkdir does nothing.
     await fs._mkdir("new/deep")

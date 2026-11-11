@@ -278,9 +278,10 @@ profile only saves requests:
 
 - A filesystem has one profile, which never changes. It is `storage_profile`, or what `_load_storage_profile(path)`
   finds with a request, asking the storage at that path, e.g. the container a credential is limited to.
-- A strategy awaits it with `_get_storage_profile(paths)`, in its jobs' `setup()`, with the paths it is given. A
-  profile kept is returned. Otherwise each path is tried in turn, under a lock, and the first loaded is kept. If all
-  fail, it raises.
+- A strategy awaits it with `_get_storage_profile(paths)`, in its jobs' `setup()`, with the paths it is given. Once
+  loaded, `storage_profile` is returned. Until then, each path is tried in turn, under a lock, and the first profile
+  loaded is set as `storage_profile`. If all fail, it raises. A profile found by a request is `StorageProfile()`
+  until loaded, right on any storage.
 - Paths of one filesystem whose storages differ go to a router, each storage with a filesystem of its own.
 - A deletion reads the profile of the filesystem it deletes from.
 - A copy or move reads the destination's. `renames_files` and `renames_directories` count only within one storage.
