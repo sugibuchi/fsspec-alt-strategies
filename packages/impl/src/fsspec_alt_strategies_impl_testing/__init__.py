@@ -19,8 +19,8 @@ Whether a whole subtree can be listed in one paginated request is set apart, by
 per request.
 
 It is a package of its own, apart from the strategies: copying them into
-another package leaves it out. It depends on fsspec, and on the interface for
-`StorageProfile`.
+another package leaves it out. It depends on fsspec, on the interface for
+`StorageProfile`, and on the strategies for the recursive listing of `TreeView`.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
@@ -299,7 +300,8 @@ class SimulatedFileSystem(AsyncFileSystem):
     async def _ils_recursive(self, path: str) -> AsyncIterator[dict[str, Any]]:
         """List all below a directory, a page per request, as a recursive listing does.
 
-        It is no fsspec method: `dir_ils` lists with it for ``recursive=True``.
+        It is no fsspec method: a `TreeView` with ``recursive_listing`` lists
+        with it for ``recursive=True``. Its entries come sorted by name.
         An object store lists only files, a hierarchical storage its directories
         too. A file lists itself, and a missing path raises FileNotFoundError.
         """
@@ -618,22 +620,18 @@ class SimulatedFileSystem(AsyncFileSystem):
 
 
 def dir_ils(fs: Any) -> Callable[[str], AsyncIterator[dict[str, Any]]]:
-    """A tree strategy's ``ils``, listing a directory by ``fs._ls``, or by ``fs`` itself.
+    """A tree strategy's ``ils`` of one directory, by ``fs._ls``, or by ``fs`` itself.
 
     A `SimulatedFileSystem`'s own ``_iexpand`` lists by prefix, as the flat
     strategies take it. This one lists one directory, as the tree strategies take
-    it. ``fs._ls`` is looked up at each call, so that a test may replace it.
+    it, in name order. ``fs._ls`` is looked up at each call, so that a test may
+    replace it.
     """
 
-    async def ils(
-        path: str, recursive: bool = False, **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            async for entry in fs._ils_recursive(path):
-                yield entry
-            return
+    async def ils(path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         ls = getattr(fs, "_ls", fs)
-        for entry in await ls(path, detail=True, **kwargs):
+        listing = await ls(path, detail=True, **kwargs)
+        for entry in sorted(listing, key=lambda e: e["name"]):
             yield entry
 
     return ils
@@ -660,9 +658,15 @@ class TreeView:
     The tree strategies take a filesystem, and call its ``_ils``, ``_info``,
     ``_rm_file``, ``_rmdir``, ``_cp_file_entry``, ``_mv_file_entry``, ``_makedirs`` and
     ``_rm_tree``. A `SimulatedFileSystem` has no ``_ils``: this view lists
-    with `dir_ils`. Each other primitive is the filesystem's own, unless
-    given, so that a test may replace one, e.g. with one that fails. A
-    ``cp_file`` or ``mv_file`` given takes paths, the entry's name.
+    a directory with `dir_ils`, or with ``ils`` if given. Each other primitive
+    is the filesystem's own, unless given, so that a test may replace one,
+    e.g. with one that fails. A ``cp_file`` or ``mv_file`` given takes paths,
+    the entry's name.
+
+    Its ``_ils`` with ``recursive=True`` lists a directory per request, as a
+    `TreeFileSystem` without a recursive listing of its own does. With
+    ``recursive_listing``, it lists by the filesystem's own recursive listing
+    instead, a page per request.
 
     ``operation_limit`` and ``storage_profile`` are a filesystem's: 32
     requests at a time, and a storage unknown.
@@ -672,6 +676,7 @@ class TreeView:
         self,
         fs: Any,
         *,
+        recursive_listing: bool = False,
         ils: Any = None,
         info: Any = None,
         rm_file: Any = None,
@@ -684,7 +689,8 @@ class TreeView:
         operation_limit: asyncio.Semaphore | None = None,
     ) -> None:
         self.fs = fs
-        self._ils = dir_ils(fs) if ils is None else ils
+        self.recursive_listing = recursive_listing
+        self._dir_ils = dir_ils(fs) if ils is None else ils
         self._info = fs._info if info is None else info
         self._rm_file = fs._rm_file if rm_file is None else rm_file
         self._rmdir = fs._rmdir if rm_dir is None else rm_dir
@@ -698,6 +704,15 @@ class TreeView:
         self._makedirs = fs._makedirs if makedirs is None else makedirs
         self.storage_profile = storage_profile or StorageProfile()
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
+
+    def _ils(
+        self, path: str, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if not recursive:
+            return self._dir_ils(path, **kwargs)
+        if self.recursive_listing:
+            return self.fs._ils_recursive(path)
+        return _tree_ils(self, path, **kwargs)
 
     async def _get_storage_profile(self) -> StorageProfile:
         return self.storage_profile

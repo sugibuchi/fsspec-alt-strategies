@@ -104,7 +104,16 @@ class MyFileSystem(TreeFileSystem):
     protocol = "my"
     storage_profile = StorageProfile()  # Nothing known: right on any storage.
 
-    async def _ils(self, path, **kwargs): ...  # A directory's entries, as they come.
+    async def _ils(self, path, recursive=False, **kwargs):
+        # A directory's entries in name order, as they come. With recursive=True,
+        # all below it, in name order too: the storage's own recursive listing,
+        # or one per directory where it has none.
+        if recursive:
+            async for entry in self._ils_by_directory(path, **kwargs):
+                yield entry
+            return
+        ...
+
     async def _info(self, path, **kwargs): ...
     # ... and the other primitives each class declares abstract.
 

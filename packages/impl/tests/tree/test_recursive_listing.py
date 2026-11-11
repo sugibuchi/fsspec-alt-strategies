@@ -1,7 +1,8 @@
-"""Tests of the tree strategies on a storage declaring ``lists_recursively``.
+"""Tests of the tree strategies on a storage with a recursive listing of its own.
 
-Each root is then listed by one recursive ``_ils``, split into the parts a walk
-gives, so the strategies find what they find a directory per request.
+Each root is then listed by one recursive ``_ils``, a page per request, split
+into the parts a walk gives, so the strategies find what they find a directory
+per request.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl.tree.du import _tree_du
@@ -21,11 +21,9 @@ from fsspec_alt_strategies_impl.tree.rm import _tree_rm
 from fsspec_alt_strategies_impl.tree.walk import _chunks, _tree_walk
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
-_RECURSIVE = StorageProfile(lists_recursively=True)
-
 
 def _view(fs: SimulatedFileSystem, **kwargs: Any) -> TreeView:
-    return TreeView(fs, storage_profile=_RECURSIVE, **kwargs)
+    return TreeView(fs, recursive_listing=True, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
@@ -247,6 +245,52 @@ async def test_a_directory_comes_before_its_own_parts(
             *(f"data/{y}/{m}" for y in ("2023", "2024") for m in ("01", "02")),
         ]
     )
+
+
+async def test_entries_apart_from_their_directory_in_name_order(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    # In name order, "data/a-x" and "data/a.txt" come between "data/a" and
+    # "data/a/f": "-" and "." sort before "/".
+    for path in ("data/a/f", "data/a-x/g", "data/a.txt", "data/b/h"):
+        hierarchical_fs.add_file(path)
+    hierarchical_fs.add_dir("data/a/empty")
+    hierarchical_fs.add_dir("data/a-empty")
+
+    parts = [p async for p in _chunks(_view(hierarchical_fs), "data")]
+
+    entries: dict[str, list[str]] = {}
+    for part in parts:
+        assert part.first == (part.directory not in entries)
+        entries.setdefault(part.directory, []).extend(e["name"] for e in part.entries)
+    assert entries == {
+        "data": ["data/a", "data/a-empty", "data/a-x", "data/a.txt", "data/b"],
+        "data/a": ["data/a/empty", "data/a/f"],
+        "data/a/empty": [],
+        "data/a-empty": [],
+        "data/a-x": ["data/a-x/g"],
+        "data/b": ["data/b/h"],
+    }
+    # Each directory ends once, all below it ending first.
+    ended = [p.directory for p in parts if p.last]
+    assert sorted(ended) == sorted(entries)
+    for directory in ended:
+        below = [d for d in ended if d.startswith(directory + "/")]
+        assert all(ended.index(d) < ended.index(directory) for d in below)
+
+
+async def test_a_directory_ends_before_the_listing_does(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    parts = [p async for p in _chunks(_view(flat_fs), "data")]
+
+    # Its last part comes as the listing passes it, before data/2024's entries.
+    ended = next(
+        i for i, p in enumerate(parts) if p.last and p.directory == "data/2023/01"
+    )
+    later = next(i for i, p in enumerate(parts) if p.directory.startswith("data/2024"))
+    assert ended < later
 
 
 async def test_a_missing_root_raises(any_fs: SimulatedFileSystem) -> None:

@@ -124,7 +124,8 @@ class _Forbidding(SimulatedFileSystem):
 async def test_a_failed_dir_is_yielded() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
-    async with _find(fs, "data") as op:
+    # With a maxdepth, each directory is listed on its own: the rest goes on.
+    async with _find(fs, "data", maxdepth=3) as op:
         entries, errors = await _collect_with_errors(op)
     assert [type(e) for e in errors] == [PermissionError]
     assert _names(entries) == [
@@ -135,9 +136,21 @@ async def test_a_failed_dir_is_yielded() -> None:
     assert op.state.errors == 1
 
 
+async def test_a_failed_dir_ends_the_recursive_listing() -> None:
+    fs = _Forbidding(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    async with _find(fs, "data") as op:
+        entries, errors = await _collect_with_errors(op)
+    # Its error, noted with the directory that failed, and nothing after it.
+    assert [type(e) for e in errors] == [PermissionError]
+    assert "Listing 'data/2023' failed." in errors[0].__notes__
+    assert _names(entries) == []
+    assert op.state.errors == 1
+
+
 async def test_cancel_after_the_first_listing(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    op = _find(any_fs, "data", concurrency_limit=asyncio.Semaphore(1))
+    op = _find(any_fs, "data", maxdepth=3, concurrency_limit=asyncio.Semaphore(1))
     found = []
     async for entry in op:
         found.append(entry["name"])
@@ -145,6 +158,19 @@ async def test_cancel_after_the_first_listing(any_fs: SimulatedFileSystem) -> No
     # data's listing, then the one in flight with it, data/2023, which has no file.
     assert found == ["data/README.md"]
     assert any_fs.stats.calls["list"] <= 2
+    assert op.cancelled()
+
+
+async def test_cancel_stops_the_recursive_listing() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    for i in range(100):
+        fs.add_file(f"data/{i:03}/file")
+    op = _find(fs, "data", concurrency_limit=asyncio.Semaphore(1))
+    found = [entry async for entry in op if op.cancel() or True]
+    # Its listings ahead stop too: far from all 101 directories are listed.
+    assert len(found) < 100
+    assert fs.stats.calls["list"] < 101
+    assert fs._in_flight == 0
     assert op.cancelled()
 
 

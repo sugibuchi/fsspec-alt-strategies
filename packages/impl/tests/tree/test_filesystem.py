@@ -96,9 +96,18 @@ class _Tree(TreeFileSystem):
         # The extra keyword arguments each listing was given, e.g. refresh=True.
         self.ls_kwargs: list[dict[str, Any]] = []
 
-    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+    async def _ils(
+        self, path: str, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            # A storage with no recursive listing of its own.
+            async for entry in self._ils_by_directory(path, **kwargs):
+                yield entry
+            return
+
         self.ls_kwargs.append(kwargs)
-        for entry in await self.inner._ls(path, detail=True):
+        listing = await self.inner._ls(path, detail=True)
+        for entry in sorted(listing, key=lambda e: e["name"]):
             yield entry
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:

@@ -30,8 +30,8 @@ costs twice:
 A subclass overriding ``_iexpand`` with the storage's own listing by prefix,
 e.g. from its SDK, streams it page by page, and lists only the prefix.
 
-This module depends on `sync_client` of `common`, `filesystem` of `tree` and
-of `flat`, and `files.fsspec_async`.
+This module depends on `sync_client` of `common`, `filesystem` and `listing`
+of `tree`, `filesystem` of `flat`, and `files.fsspec_async`.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ from .common.sync_client import SyncClientSupport
 from .files.fsspec_async import SyncFileAdapter
 from .flat.filesystem import FlatFileSystem
 from .tree.filesystem import TreeFileSystem
+from .tree.listing import _tree_ils
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -126,9 +127,17 @@ class _AsyncFileSystemWrapper(_FileSystemWrapper):
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         return await self.fs._ls(path, detail=detail, **kwargs)
 
-    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+    async def _ils(
+        self, path: str, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            # fsspec has no recursive listing in name order: one per directory.
+            async for entry in _tree_ils(self, path, **kwargs):
+                yield entry
+            return
+
         # fsspec has no listing in pages: the wrapped one's _ls, all at once.
-        for entry in await self.fs._ls(path, detail=True, **kwargs):
+        for entry in _by_name(await self.fs._ls(path, detail=True, **kwargs)):
             yield entry
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
@@ -213,10 +222,18 @@ class _SyncFileSystemWrapper(SyncClientSupport, _FileSystemWrapper):
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
         return await self._run_in_thread(self.fs.ls, path, detail=detail, **kwargs)
 
-    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+    async def _ils(
+        self, path: str, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            # fsspec has no recursive listing in name order: one per directory.
+            async for entry in _tree_ils(self, path, **kwargs):
+                yield entry
+            return
+
         # fsspec has no listing in pages: the wrapped one's ls, all at once.
         listing = await self._run_in_thread(self.fs.ls, path, detail=True, **kwargs)
-        for entry in listing:
+        for entry in _by_name(listing):
             yield entry
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
@@ -609,6 +626,11 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
     async def _rm_if_there(self, path: str) -> None:
         with contextlib.suppress(FileNotFoundError):
             await self._run_in_thread(self.fs.rm_file, path)
+
+
+def _by_name(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A listing's entries in name order, as ``_ils`` yields them: fsspec's may not be."""
+    return sorted(entries, key=lambda e: e["name"])
 
 
 def _under(found: dict[str, dict[str, Any]], prefix: str) -> list[dict[str, Any]]:

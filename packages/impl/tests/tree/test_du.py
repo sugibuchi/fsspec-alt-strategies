@@ -68,11 +68,21 @@ async def test_sends_no_info_per_file(any_fs: SimulatedFileSystem) -> None:
 
 async def test_cancel_counts_what_was_listed(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    op = _du(any_fs, "data", concurrency_limit=asyncio.Semaphore(1))
+    op = _du(any_fs, "data", maxdepth=3, concurrency_limit=asyncio.Semaphore(1))
     async for _ in op:
         op.cancel()
     # data, and data/2023 listed with it: only the README is counted.
     assert (op.state.size, op.state.files) == (1, 1)
+    assert op.cancelled()
+
+
+async def test_cancel_stops_a_recursive_listing(any_fs: SimulatedFileSystem) -> None:
+    _tree(any_fs)
+    op = _du(any_fs, "data", concurrency_limit=asyncio.Semaphore(1))
+    async for _ in op:
+        op.cancel()
+    # The tree's one listing stops: not all of its 5 files are counted.
+    assert op.state.files < 5
     assert op.cancelled()
 
 
@@ -96,7 +106,14 @@ async def test_a_failed_listing_is_yielded_and_the_rest_counted() -> None:
             raise PermissionError(path)
         return await fs._ls(path, detail=detail, **kwargs)
 
-    op = _du(fs, "data", ils=dir_ils(ls))
+    # With a maxdepth, each directory is listed on its own: the rest goes on.
+    op = _du(fs, "data", maxdepth=3, ils=dir_ils(ls))
     _, errors = await _collect_with_errors(op)
     assert [type(e) for e in errors] == [PermissionError]
     assert (op.state.errors, op.state.size) == (1, 201)
+
+    # Without, the tree's one listing ends: what came before the failure is counted.
+    op = _du(fs, "data", ils=dir_ils(ls))
+    _, errors = await _collect_with_errors(op)
+    assert [type(e) for e in errors] == [PermissionError]
+    assert (op.state.errors, op.state.size) == (1, 0)

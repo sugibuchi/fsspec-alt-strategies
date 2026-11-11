@@ -38,7 +38,8 @@ def _tree_find(
 
     It finds the paths fsspec's ``_find`` finds. A missing ``path`` finds
     nothing, and a file finds itself. A directory that fails to list yields its
-    error, and the rest of the tree is still searched.
+    error. With ``maxdepth``, the rest of the tree is still searched. Without,
+    the tree's one recursive listing ends there.
 
     It yields each path as its directory's listing arrives, so the paths are not
     in order. fsspec's ``_find`` sorts them, by name. A storage listing a
@@ -51,9 +52,11 @@ def _tree_find(
     Once cancelled, it lists no new directory, and yields the paths of the
     listings in flight.
 
-    Requests: one ``_ils`` per directory, as the filesystem's ``operation_limit``
-    allows. One ``info`` more for ``path`` itself, if a file, or a directory with
-    ``withdirs``.
+    Requests: one recursive ``_ils`` of ``path``, which a storage without a
+    recursive listing answers with one per directory. With ``maxdepth``, one
+    ``_ils`` per directory instead, as the filesystem's ``operation_limit``
+    allows. One ``info`` more for ``path`` itself, if a file, or a directory
+    with ``withdirs``.
 
     ``path`` is the directory searched on ``fs``, by its ``_ils`` and ``_info``.
     ``maxdepth`` of 1 finds only the files in ``path``. ``withdirs`` finds

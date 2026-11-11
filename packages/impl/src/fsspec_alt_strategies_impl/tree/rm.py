@@ -83,7 +83,8 @@ def _tree_rm(
     unknown. Iterating it raises FileNotFoundError if ``path`` does not exist,
     or matches nothing.
 
-    Requests: one ``_ils`` per directory, one ``rm_file`` per file, and one
+    Requests: one recursive ``_ils`` per root, or one ``_ils`` per directory with
+    ``maxdepth``, one ``rm_file`` per file, and one
     ``rm_dir`` per directory. Patterns, or a list, add the requests of their
     `_tree_glob`. With ``deletes_directories``, a root costs one ``rm_tree``
     instead. Each request holds a permit of the filesystem's

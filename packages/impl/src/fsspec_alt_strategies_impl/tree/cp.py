@@ -104,7 +104,8 @@ def _tree_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests of
-    their `_tree_glob`. One ``_ils`` per directory, one ``cp_entry`` per file, and
+    their `_tree_glob`. One recursive ``_ils`` per root, or one ``_ils`` per
+    directory with ``maxdepth``, one ``cp_entry`` per file, and
     one ``dst_makedirs`` per destination directory with files or empty. A
     destination refusing to overwrite costs a ``dst_info``, a ``dst_rm_file``
     and a ``cp_entry`` more per file it refused. The ``dst_info`` checks it is

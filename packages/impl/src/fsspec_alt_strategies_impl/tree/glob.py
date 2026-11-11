@@ -13,9 +13,9 @@ A ``**`` matches any number of segments, so only those before the first ``**``
 can rule a directory out. Without a ``**``, nor can a directory as deep as the
 pattern, as nothing below it can match.
 
-Below a ``**``, nothing is pruned. On a storage whose profile declares
-``lists_recursively``, a directory below which a pattern prunes nothing, e.g.
-``data`` for ``data/**/*.csv``, is listed by one recursive ``_ils``.
+Below a ``**``, nothing is pruned. So a directory below which a pattern prunes
+nothing, e.g. ``data`` for ``data/**/*.csv``, is listed by one recursive
+``_ils``.
 
 Several patterns are matched in one walk per tree: a directory is listed once if
 any of them can match in it, and each path is matched with all of them.
@@ -77,18 +77,17 @@ def _tree_glob(
     ``data/*/2024/*.csv`` and ``data/*/2024/*.json``. It loses on object
     stores, which list a whole tree in one paginated request, and gains nothing
     over `_tree_find` with patterns such as ``data/**/*.parquet``, which can
-    match anywhere, unless the storage lists recursively.
+    match anywhere.
 
     Once cancelled, it lists no new directory, and yields the matches of the
     listings in flight.
 
     Requests: one ``_ils`` per directory a pattern can match in, as the
-    filesystem's ``operation_limit`` allows. With the profile's
-    ``lists_recursively=True``, and no ``maxdepth``, a directory at the
-    pattern's first ``**`` is listed by one recursive ``_ils``, with all below
-    it: ``data/*/**/*.csv`` lists ``data``, then each directory in it. One ``info`` per pattern without
-    wildcards, and per literal root directory walked that a pattern matches, e.g.
-    that of ``data/**``.
+    filesystem's ``operation_limit`` allows. Without ``maxdepth``, a directory
+    at the pattern's first ``**`` is listed by one recursive ``_ils``, with all
+    below it: ``data/*/**/*.csv`` lists ``data``, then each directory in it.
+    One ``info`` per pattern without wildcards, and per literal root directory
+    walked that a pattern matches, e.g. that of ``data/**``.
 
     ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``_ils``
     takes them: a trailing "/" matches only directories. ``maxdepth`` is how deep
