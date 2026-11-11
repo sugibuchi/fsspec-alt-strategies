@@ -176,9 +176,7 @@ class TreeFileSystem(_BaseFileSystem):
         """List a directory, as an async iterator of its entries, as the strategies list.
 
         The entries are as fsspec's ``_ls`` gives them with ``detail``: a
-        storage listing a directory in pages yields each page's as it comes,
-        best through ``common.pages._pages_ahead``, which asks for the next page
-        while one is used. A
+        storage listing a directory in pages yields each page's as it comes. A
         file yields itself, as fsspec's ``_ls`` lists it. They come in any
         order: a directory's listing is done when it ends.
 
