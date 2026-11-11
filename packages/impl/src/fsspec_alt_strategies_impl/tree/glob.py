@@ -79,6 +79,18 @@ def _tree_glob(
     over `_tree_find` with patterns such as ``data/**/*.parquet``, which can
     match anywhere.
 
+    It prunes a level at a time, so it lists every directory a wildcard
+    matches, each by a request, at once. A pattern selective deep in a small
+    tree costs more requests than one recursive listing of that tree would,
+    though no more rounds: ``t007/year=2024/*/part-0.parquet`` lists
+    ``year=2024``, then each of its 12 months, where adlfs lists all below
+    ``year=2024`` once, then filters. Measured on Azure, that was 13 requests
+    against 2, and 0.09 s against 0.06 s. The tree's size is not known, so
+    it never lists a subtree whole by itself: listing all below the
+    directories of ``*/year=2024/month=03`` that way took 3.4 s against
+    0.16 s. A caller who knows the subtree is small writes ``**`` there, e.g.
+    ``t007/year=2024/**/part-0.parquet``, which lists it whole.
+
     Once cancelled, it lists no new directory, and yields the matches of the
     listings in flight.
 
