@@ -255,7 +255,7 @@ class _Move(_Copy):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "delete":
-            return self.fs._rm_files(list(job.paths))
+            return self.delete(job.paths)
         return super().run(job)
 
     def done(self, job: _Job) -> list[Any]:
@@ -266,12 +266,16 @@ class _Move(_Copy):
             self.delete_later(job.path)
             return []
 
-        moved = []
+        refused = self.refused(
+            job.paths, "Deleting {key} failed, once copied: it is in both places."
+        )
+        moved: list[Any] = []
         for path in job.paths:
-            if (destination := self.copied.pop(path)) is not None:
+            destination = self.copied.pop(path)
+            if destination is not None and path not in refused:
                 self.files_done += 1
                 moved.append((path, destination))
-        return moved
+        return [*moved, *refused.values()]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         if job.kind == "mkdir":

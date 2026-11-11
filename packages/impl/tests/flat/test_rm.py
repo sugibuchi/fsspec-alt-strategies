@@ -149,6 +149,26 @@ async def test_a_failed_batch_is_yielded_and_the_others_go(
     assert "data/2023/01/part-0.parquet" in flat_fs._file_data
 
 
+async def test_a_key_its_batch_refused_is_yielded_and_the_others_counted(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    refused = "data/2023/01/part-0.parquet"
+
+    async def rm_files(paths: list[str]) -> dict[str, Exception]:
+        # As S3's DeleteObjects answers: the batch done, but for its Errors.
+        await flat_fs._rm_files([p for p in paths if p != refused])
+        return {refused: PermissionError("retention")} if refused in paths else {}
+
+    op = _rm(flat_fs, "data", rm_files=rm_files, batch_size=2)
+    deleted, errors = await _collect_with_errors(op)
+    assert [type(e) for e in errors] == [PermissionError]
+    assert errors[0].__notes__ == [f"Deleting {refused!r} failed."]
+    assert len(deleted) == 4 and refused not in deleted
+    assert refused in flat_fs._file_data
+    assert (op.state.files_deleted, op.state.errors) == (4, 1)
+
+
 async def test_markers_are_deleted_as_keys() -> None:
     keys = {"data/": 0, "data/empty/": 0, "data/a.txt": 1}
     deleted_keys: list[str] = []

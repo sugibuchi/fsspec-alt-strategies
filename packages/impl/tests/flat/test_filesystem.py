@@ -110,6 +110,12 @@ class _Flat(FlatFileSystem):
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         await self.inner._rm_file(path)
 
+    async def _rmdir(self, path: str) -> None:
+        await self.inner._rmdir(path)
+
+    async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
+        await self.inner._makedirs(path, exist_ok=exist_ok)
+
     async def _cp_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
@@ -290,12 +296,26 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
     assert monitor.items == 7 + len(_FILES)
 
 
-def test_a_subclass_missing_a_primitive_is_refused() -> None:
-    class Incomplete(_Flat):
-        _rm_files = FlatFileSystem._rm_files  # Still abstract, as if not written.
+@pytest.mark.parametrize("primitive", ["_rm_files", "_rmdir", "_makedirs"])
+def test_a_subclass_missing_a_primitive_is_refused(primitive: str) -> None:
+    # Still abstract, as if not written: fsspec's _rmdir and _makedirs would do nothing.
+    incomplete = type(
+        "Incomplete", (_Flat,), {primitive: getattr(FlatFileSystem, primitive)}
+    )
 
-    with pytest.raises(TypeError, match="_rm_files"):
-        Incomplete(SimulatedFileSystem(), asynchronous=True)
+    with pytest.raises(TypeError, match=primitive):
+        incomplete(SimulatedFileSystem(), asynchronous=True)
+
+
+def test_buckets_are_made_and_deleted_by_the_subclass() -> None:
+    inner = SimulatedFileSystem(hierarchical=True)
+    fs = _Flat(inner)
+    fs.mkdir("bucket")
+    assert inner.isdir("bucket")
+    with pytest.raises(FileExistsError):
+        fs.mkdir("bucket")
+    fs.rmdir("bucket")
+    assert not inner.exists("bucket")
 
 
 async def test_what_the_strategies_leave_to_fsspec(

@@ -15,9 +15,13 @@ depth first with one, as the tree strategies take a recursive listing. A
 directory with no marker blob is left out: the strategies tell it from the
 paths below it.
 
+Its ``_rmdir`` deletes a directory below a container, which adlfs's leaves,
+so that a recursive ``rm`` leaves none with a hierarchical namespace.
+
 Its copies are the generic one's: adlfs's copy asks nothing first. It imports
 nothing of adlfs or of the Azure SDK: it calls the wrapped filesystem's own
-objects.
+objects. ``service_client`` and ``_details`` are private, as of adlfs 2026.x:
+where one is missing, it lists as the generic wrapper does.
 
 This module depends on `tree`.
 """
@@ -49,11 +53,24 @@ class AdlfsWrapper(AsyncTreeWrapper):
     ... )
     """
 
+    async def _rmdir(self, path: str) -> None:
+        # adlfs's _rmdir deletes containers alone: a directory below one would
+        # stay, as a hierarchical namespace keeps it. Its blob is deleted as a
+        # file's, which deletes an empty directory, or its marker without one.
+        # One gone, or never marked, raises FileNotFoundError: deleted, to the
+        # strategies.
+        container, key, _ = self.fs.split_path(path)
+        if key.strip("/"):
+            await self.fs._rm_file(path)
+        else:
+            await self.fs._rmdir(container)
+
     def _ils(
         self, path: str, recursive: bool = False, **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
         container = self.fs.split_path(path)[0] if path.strip("/") else ""
-        if recursive and container:
+        own = hasattr(self.fs, "service_client") and hasattr(self.fs, "_details")
+        if recursive and container and own:
             return self._blobs(path)
         else:
             # The containers, or one directory: as the generic wrapper lists them.

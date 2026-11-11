@@ -150,6 +150,27 @@ async def test_a_failed_batch_leaves_its_keys_in_both_places(
     assert "moved/README.md" in flat_fs._file_data
 
 
+async def test_a_key_its_batch_refused_is_yielded_and_the_others_moved(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    refused = "data/2023/02/part-0.parquet"
+
+    async def rm_files(paths: list[str]) -> dict[str, Exception]:
+        await flat_fs._rm_files([p for p in paths if p != refused])
+        return {refused: PermissionError("retention")} if refused in paths else {}
+
+    op = _mv(flat_fs, "data", "moved", rm_files=rm_files)
+    moved, errors = await _collect_with_errors(op)
+    assert sorted(m[0] for m in moved) == sorted(p for p in _FILES if p != refused)
+    assert [type(e) for e in errors] == [PermissionError]
+    assert errors[0].__notes__ == [
+        f"Deleting {refused!r} failed, once copied: it is in both places."
+    ]
+    assert refused in flat_fs._file_data
+    assert (op.state.files_moved, op.state.errors) == (len(_FILES) - 1, 1)
+
+
 async def test_a_failed_copy_keeps_its_source(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
 

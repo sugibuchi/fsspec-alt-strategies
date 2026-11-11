@@ -97,7 +97,9 @@ Each family declares the primitives its subclasses implement, and overrides fssp
 | `TreeFileSystem` | `_ils`, `_rmdir`, and optional `_rm_tree`, `_mv_tree` | `_walk`, `_find`, `_du`, `_glob`, `_rm`, `_copy`, `_mv` |
 | `FlatFileSystem` | `_ils`, `_rm_files`, `rm_batch_size`                  | The same                                                |
 
-Both also take `_info`, `_rm_file`, `_makedirs`, `open_async` and `_open`, and copy and move a file with:
+Both also take `_info`, `_rm_file`, `_makedirs`, `open_async` and `_open`, and copy and move a file with the two
+methods below. A `FlatFileSystem` takes `_rmdir` too, for buckets: fsspec's default `_rmdir` and `_makedirs` do
+nothing, and a subclass forgetting them would fail silently.
 
 - `_cp_file_entry(entry, path2)`, a copy within the storage;
 - `_mv_file_entry(entry, path2)`, the storage's rename, or a copy then a delete where it has none.
@@ -240,7 +242,8 @@ for fsspec's own methods. The two are one request with or without a delimiter, a
   starting as its pattern does, e.g. `data` with the prefix `2024-` for `data/2024-*`.
 - Name order tells when a directory is done, so `_flat_walk` streams its directories. Each key is listed once.
 - Directories are derived from the keys, by `flat/_keys.py`. A key ending with "/" marks a directory.
-- `_flat_rm` deletes in batches of `rm_batch_size`, with `_rm_files`.
+- `_flat_rm` deletes in batches of `rm_batch_size`, with `_rm_files`. It returns the keys it could not delete, each
+  with its error, so that the others count as deleted. A batch may span buckets.
 - `_flat_mv` renames with `_mv_file_entry` when the profile says the storage renames. Otherwise it copies, then
   deletes in batches.
 - A listing error ends the operation: there is no other listing to go on with.

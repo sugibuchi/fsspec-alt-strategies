@@ -272,3 +272,90 @@ async def test_adlfs_raises_on_a_missing_path(path: str) -> None:
     _, tree = _adl(_TREE)
     with pytest.raises(FileNotFoundError):
         [e async for e in tree._ils(path, True)]
+
+
+async def test_adlfs_deletes_a_directory_by_its_blob_and_a_container_by_adlfs() -> None:
+    calls: list[tuple[str, str]] = []
+
+    class Adl(_Adl):
+        async def _rm_file(self, path: str, **kwargs: Any) -> None:
+            calls.append(("_rm_file", path))
+
+        async def _rmdir(self, path: str) -> None:
+            calls.append(("_rmdir", path))
+
+    tree = AdlfsWrapper(Adl(_TREE), **_LIMITS)
+    await tree._rmdir("c/data/sub")
+    await tree._rmdir("c")
+    assert calls == [("_rm_file", "c/data/sub"), ("_rmdir", "c")]
+
+
+# Without the private methods each wrapper calls: as the generic wrapper.
+
+
+async def test_s3fs_without_its_private_methods_lists_and_copies_as_fsspec() -> None:
+    class Bare(_Store):
+        async def _find(self, path: str, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(("_find", path))
+            return {
+                k: {"name": k, "type": "file", "size": 1}
+                for k in self._starting(*path.split("/", 1))
+            }
+
+        async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
+            self.calls.append(("_cp_file", path1, path2))
+
+    fs = Bare(_KEYS)
+    flat = S3fsWrapper(fs, rm_batch_size=1000, **_LIMITS)
+    names = [e["name"] async for e in flat._ils("bkt/data", True, prefix="2024-")]
+    assert names == ["bkt/data/2024-01.csv", "bkt/data/2024-02/a.csv"]
+    await flat._cp_file_entry({"name": "bkt/a", "type": "file", "size": 1}, "bkt/b")
+    assert fs.calls == [("_find", "bkt/data"), ("_cp_file", "bkt/a", "bkt/b")]
+
+
+async def test_gcsfs_whose_find_takes_no_prefix_lists_as_fsspec() -> None:
+    class Bare(_Store):
+        async def _find(self, path: str, detail: bool = False, **kwargs: Any) -> Any:
+            assert "prefix" not in kwargs
+            self.calls.append(("_find", path))
+            return {
+                k: {"name": k, "type": "file", "size": 1}
+                for k in self._starting(*path.split("/", 1))
+            }
+
+    fs = Bare(_KEYS)
+    flat = GcsfsWrapper(fs, rm_batch_size=100, **_LIMITS)
+    names = [e["name"] async for e in flat._ils("bkt/data", True, prefix="2024-")]
+    assert names == ["bkt/data/2024-01.csv", "bkt/data/2024-02/a.csv"]
+    assert fs.calls == [("_find", "bkt/data")]
+
+
+async def test_adlfs_without_its_client_lists_a_directory_at_a_time() -> None:
+    class Bare(_Adl):
+        def __init__(self, keys: dict[str, int | None]) -> None:
+            super().__init__(keys)
+            del self.service_client
+
+        async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+            self.calls.append(("_ls", path))
+            depth = path.count("/") + 1
+            names = {
+                "/".join(k.split("/")[: depth + 1])
+                for k in self.keys
+                if k.startswith(f"{path}/")
+            }
+            return [await self._info(n) for n in sorted(names)]
+
+    fs = Bare(_TREE)
+    tree = AdlfsWrapper(fs, **_LIMITS)
+    names = sorted([e["name"] async for e in tree._ils("c/data", True)])
+    assert names == [
+        "c/data/a.csv",
+        "c/data/sub",
+        "c/data/sub/b.csv",
+        "c/data/sub/c.csv",
+    ]
+    assert [c for c in fs.calls if c[0] == "_ls"] == [
+        ("_ls", "c/data"),
+        ("_ls", "c/data/sub"),
+    ]

@@ -15,12 +15,15 @@ The rest is the generic one's, as gcsfs does it best already:
 - its deletes, as gcsfs's ``_rm`` sends batches of 100, GCS's most.
 
 It imports nothing of gcsfs: it calls the wrapped filesystem's own methods.
+Where its ``_find`` takes no ``prefix``, as of gcsfs 2026.x it does, it lists
+as the generic wrapper does.
 
 This module depends on `flat`.
 """
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING, Any
 
 from .flat import AsyncFlatWrapper
@@ -51,7 +54,7 @@ class GcsfsWrapper(AsyncFlatWrapper):
     def _ils(
         self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
-        if recursive and path:
+        if recursive and path and _takes_prefix(self.fs._find):
             return self._objects(path, prefix)
         else:
             # The buckets, or one directory: as the generic wrapper lists them.
@@ -65,3 +68,11 @@ class GcsfsWrapper(AsyncFlatWrapper):
             return  # A missing bucket lists nothing, as a missing prefix does.
         for entry in sorted(found.values(), key=lambda e: e["name"]):
             yield entry
+
+
+def _takes_prefix(find: Any) -> bool:
+    """Whether a ``_find`` lists by a prefix, as gcsfs's does: fsspec's passes it on to ``_ls``."""
+    try:
+        return "prefix" in inspect.signature(find).parameters
+    except (TypeError, ValueError):
+        return False

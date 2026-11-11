@@ -53,7 +53,8 @@ def _flat_rm(
     The keys are grouped in batches of the filesystem's ``rm_batch_size``, each
     deleted by one ``_rm_files``, while the listing goes on. The last batch,
     smaller, goes once the listing ends. It yields each key once its batch is
-    deleted, and the error of each batch that failed, noting its keys.
+    deleted, the error of each key its batch could not delete, noting the key,
+    and the error of each batch that failed whole, noting its keys.
 
     It wins over fsspec's ``_rm`` on large prefixes of flat storages: the
     deletions start after the first page of the listing, not after the last,
@@ -79,9 +80,9 @@ def _flat_rm(
     right in ``path``.
 
     The filesystem's ``_rm_files`` deletes several keys in one request, e.g.
-    by S3's DeleteObjects. A key missing is no error, and it raises if any key
-    is not deleted, as the whole batch then fails. ``rm_batch_size`` is the
-    most keys of one ``_rm_files``.
+    by S3's DeleteObjects. A key missing is no error. It returns the keys it
+    could not delete, and raises only if the request failed whole.
+    ``rm_batch_size`` is the most keys of one ``_rm_files``.
 
     The operation yields each key deleted, or an error, and its state is an
     `RmState`. The call raises ValueError if ``rm_batch_size`` or ``maxdepth``
@@ -130,11 +131,13 @@ class _Deletion(_FlatJobs):
             self.send()
 
     def run(self, job: _Job) -> Awaitable[Any]:
-        return self.fs._rm_files(list(job.paths))
+        return self.delete(job.paths)
 
     def done(self, job: _Job) -> list[Any]:
-        self.files_deleted += len(job.paths)
-        return list(job.paths)
+        refused = self.refused(job.paths, "Deleting {key} failed.")
+        deleted = [p for p in job.paths if p not in refused]
+        self.files_deleted += len(deleted)
+        return [*deleted, *refused.values()]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         # Yielded among paths, the error must tell its paths itself.

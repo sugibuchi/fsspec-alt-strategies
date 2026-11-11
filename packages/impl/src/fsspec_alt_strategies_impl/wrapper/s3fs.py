@@ -14,6 +14,8 @@ beside them:
   asks the size first, by a HeadObject per file.
 
 It imports nothing of s3fs: it calls the wrapped filesystem's own methods.
+Those are private, as of s3fs 2026.x: where one is missing, it lists or copies
+as the generic wrapper does.
 
 This module depends on `flat`.
 """
@@ -53,7 +55,7 @@ class S3fsWrapper(AsyncFlatWrapper):
     def _ils(
         self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
-        if recursive and path:
+        if recursive and path and hasattr(self.fs, "_iterdir"):
             return self._keys(path, prefix)
         else:
             # The buckets, or one directory: as the generic wrapper lists them.
@@ -73,7 +75,8 @@ class S3fsWrapper(AsyncFlatWrapper):
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
         size = entry.get("size")
-        if size is None:
+        own = hasattr(self.fs, "_copy_basic") and hasattr(self.fs, "_copy_managed")
+        if size is None or not own:
             await super()._cp_file_entry(entry, path2, **kwargs)
         elif size <= _COPY_LIMIT:
             await self.fs._copy_basic(entry["name"], path2, **kwargs)
