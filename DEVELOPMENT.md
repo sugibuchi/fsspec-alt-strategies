@@ -193,11 +193,12 @@ Its transaction commits file by file, so it is not atomic across storages.
 
 ### The tree strategies
 
-The tree strategies list with `_ils(path)`, a directory's entries in name order. With `recursive=True`, it lists all
-below a directory, at any depth, still in name order:
+The tree strategies list with `_ils(path)`, a directory's entries in any order. With `recursive=True`, it lists all
+below a directory, at any depth, in one of two orders, which tell the walk when a directory is done:
 
-- Sorted by the whole name, as object stores list keys, or depth first. Either way, all below a directory come together,
-  after its entry.
+- Depth first: a directory's entry, then all below it, before any other entry. Siblings may come in any order.
+- Sorted by the whole name, as object stores list keys. A directory's entry may come apart from what is below it, as
+  "a/b-x" comes between "a/b" and "a/b/c".
 - A directory may be left out, as object stores list only files. The walk tells it from the paths below it.
 - A storage with no recursive listing answers with `TreeFileSystem._ils_by_directory`, by `tree/listing.py`. It lists
   depth first, a directory per request, several ahead at a time. The wrappers list so.
@@ -205,7 +206,7 @@ below a directory, at any depth, still in name order:
 The strategies walk with a private engine, `tree.walk._chunks`. It streams each directory in parts of at most 1000
 entries. A huge directory is never held whole, except by `_tree_walk`, which answers as fsspec's `walk` does.
 
-- A tree that nothing prunes is listed by one recursive `_ils` per root. Name order tells when each directory is done.
+- A tree that nothing prunes is listed by one recursive `_ils` per root. Its order tells when each directory is done.
 - A tree pruned, by `maxdepth` or a glob's pattern, is listed a directory per request, many at once. Below a glob's
   `**`, nothing is pruned, so it is listed recursively again.
 - A failure ends a recursive listing, as there is no way past it. The root's error is yielded, noting the directory that

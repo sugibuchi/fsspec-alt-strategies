@@ -131,13 +131,13 @@ class _AsyncFileSystemWrapper(_FileSystemWrapper):
         self, path: str, recursive: bool = False, **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
         if recursive:
-            # fsspec has no recursive listing in name order: one per directory.
+            # fsspec's find gives all at once, in no stated order: one listing per directory.
             async for entry in _tree_ils(self, path, **kwargs):
                 yield entry
             return
 
         # fsspec has no listing in pages: the wrapped one's _ls, all at once.
-        for entry in _by_name(await self.fs._ls(path, detail=True, **kwargs)):
+        for entry in await self.fs._ls(path, detail=True, **kwargs):
             yield entry
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
@@ -226,14 +226,13 @@ class _SyncFileSystemWrapper(SyncClientSupport, _FileSystemWrapper):
         self, path: str, recursive: bool = False, **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
         if recursive:
-            # fsspec has no recursive listing in name order: one per directory.
+            # fsspec's find gives all at once, in no stated order: one listing per directory.
             async for entry in _tree_ils(self, path, **kwargs):
                 yield entry
             return
 
         # fsspec has no listing in pages: the wrapped one's ls, all at once.
-        listing = await self._run_in_thread(self.fs.ls, path, detail=True, **kwargs)
-        for entry in _by_name(listing):
+        for entry in await self._run_in_thread(self.fs.ls, path, detail=True, **kwargs):
             yield entry
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
@@ -626,11 +625,6 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
     async def _rm_if_there(self, path: str) -> None:
         with contextlib.suppress(FileNotFoundError):
             await self._run_in_thread(self.fs.rm_file, path)
-
-
-def _by_name(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """A listing's entries in name order, as ``_ils`` yields them: fsspec's may not be."""
-    return sorted(entries, key=lambda e: e["name"])
 
 
 def _under(found: dict[str, dict[str, Any]], prefix: str) -> list[dict[str, Any]]:

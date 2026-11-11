@@ -66,10 +66,10 @@ class TreeFileSystem(_BaseFileSystem):
 
     A subclass implements the storage's primitives, which fsspec leaves
     abstract: ``_info``, ``_rm_file``, ``_rmdir`` and ``_makedirs``, and
-    ``_ils``, a directory's listing as an async iterator in name order, which
-    ``_ls`` lists with. ``_ils`` lists a whole tree too, with ``recursive=True``:
-    by the storage's recursive listing, or by `_ils_by_directory` where it has
-    none. It copies and moves a file by ``_cp_file_entry`` and ``_mv_file_entry``, which
+    ``_ils``, a directory's listing as an async iterator, which ``_ls`` lists
+    with. ``_ils`` lists a whole tree too, with ``recursive=True``, depth first
+    or in name order: by the storage's recursive listing, or by
+    `_ils_by_directory` where it has none. It copies and moves a file by ``_cp_file_entry`` and ``_mv_file_entry``, which
     take the source's entry, as its listing gave it, e.g. with its size.
     fsspec's ``_cp_file`` and ``_mv_file`` ask the entry, then call them. It
     implements ``open_async`` too, giving its files ``io_limit`` as their
@@ -185,8 +185,8 @@ class TreeFileSystem(_BaseFileSystem):
 
         The entries are as fsspec's ``_ls`` gives them with ``detail``: a
         storage listing a directory in pages yields each page's as it comes. A
-        file yields itself, as fsspec's ``_ls`` lists it. They come in name
-        order.
+        file yields itself, as fsspec's ``_ls`` lists it. They come in any
+        order: a directory's listing is done when it ends.
 
         Each entry is a dict with at least:
 
@@ -200,12 +200,18 @@ class TreeFileSystem(_BaseFileSystem):
 
         With ``recursive=True``, it lists all below ``path``, at any depth. A
         directory may be left out, as object stores list only files: the
-        strategies tell it from the paths below it. The entries come in name
-        order too: sorted by the whole name, as object stores list keys, or
-        depth first, a directory's entry followed by all below it. Either way,
-        all below a directory come together, after its entry, and the
-        strategies count on it to know when a directory is done. A storage with
-        no recursive listing of its own answers with `_ils_by_directory`.
+        strategies tell it from the paths below it. The entries come in one of
+        two orders, as the strategies count on it to know when a directory is
+        done:
+
+        - depth first: a directory's entry, then all below it, before any other
+          entry. Its entries among themselves may come in any order.
+        - name order: sorted by the whole name, as object stores list keys.
+          A directory's entry may then come apart from what is below it, as
+          "a/b-x" comes between "a/b" and "a/b/c".
+
+        A storage with no recursive listing of its own answers with
+        `_ils_by_directory`.
         """
 
     def _ils_by_directory(
@@ -215,9 +221,9 @@ class TreeFileSystem(_BaseFileSystem):
 
         A subclass whose storage has no recursive listing answers ``_ils``
         with it when ``recursive=True``. It lists depth first, several
-        directories at a time, as `_ils` without ``recursive`` gives them, in
-        name order. A directory that fails to list ends the whole listing, with
-        its error.
+        directories at a time, each directory's entries in the order `_ils`
+        without ``recursive`` gives them. A directory that fails to list ends
+        the whole listing, with its error.
 
         Its listings hold permits of ``operation_limit``, beside the one
         held by the caller of ``_ils``, as the strategies hold one for each

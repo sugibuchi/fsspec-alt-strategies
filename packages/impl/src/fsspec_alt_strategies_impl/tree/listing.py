@@ -3,14 +3,14 @@
 """A recursive listing made of one listing per directory, several at a time.
 
 A `TreeFileSystem`'s ``_ils`` lists all below a directory with
-``recursive=True``, in name order. A storage with a recursive listing of its own
-answers with it. One without answers with `_tree_ils`, which lists a
-directory per request, as ``_ils`` does without ``recursive``.
+``recursive=True``, depth first or in name order. A storage with a recursive
+listing of its own answers with it. One without answers with `_tree_ils`, which
+lists a directory per request, as ``_ils`` does without ``recursive``.
 
 It yields the entries depth first, as a walk visits them: each directory's
-entries in name order, and all below a subdirectory right after its entry. So
-it lists the directories in that order too, but starts the next ones ahead, as
-their entries arrive, so that their listings overlap.
+entries in the order its listing gives them, and all below a subdirectory right
+after its entry. So it lists the directories in that order too, but starts the
+next ones ahead, as their entries arrive, so that their listings overlap.
 
 This module depends on `paths` of `common`.
 """
@@ -40,11 +40,11 @@ _BATCH = 1000
 async def _tree_ils(
     fs: Any, path: str, **ils_kwargs: Any
 ) -> AsyncGenerator[dict[str, Any]]:
-    """List all below a directory in name order, by one ``_ils`` per directory.
+    """List all below a directory depth first, by one ``_ils`` per directory.
 
     It yields what a recursive ``_ils`` yields: each entry below ``path``, at any
     depth, depth first. A directory's entries come in the order its ``_ils``
-    gives them, name order, each subdirectory's followed by all below it. A
+    gives them, each subdirectory's followed by all below it. A
     file lists itself, as ``_ils`` lists it. A directory listed twice, e.g. as a
     prefix and as its marker object, is yielded twice, but listed once.
 

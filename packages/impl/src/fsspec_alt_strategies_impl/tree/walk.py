@@ -13,8 +13,8 @@ listed. ``_tree_walk`` gathers the parts, as fsspec's ``walk`` gives a directory
 whole.
 
 A tree that nothing prunes is listed by one recursive ``_ils``, which gives it
-in name order: its entries are split into the same parts, each directory's as
-soon as the listing has passed it. A storage with no recursive listing of its
+depth first or in name order: its entries are split into the same parts, each
+directory's as soon as the listing has passed it. A storage with no recursive listing of its
 own answers it with a directory per request, several at a time. Where the walk
 prunes, it lists each directory it enters on its own, several at a time,
 breadth first.
@@ -368,8 +368,8 @@ async def _produce_tree(
 ) -> None:
     """List a tree by one recursive ``_ils``, putting each directory's parts as a walk would.
 
-    The entries come in name order, all below a directory together, so a
-    directory is done once the listing has passed it: `_Split` puts its last
+    The entries come depth first or in name order, all below a directory
+    together, so a directory is done once the listing has passed it: `_Split` puts its last
     part then. A failed listing puts what it held, then its error as the root's
     last part: the directories below it that were not done get none, as when
     stopped. So the error is the root's first part only if the root itself
@@ -399,14 +399,17 @@ async def _produce_tree(
 
 
 class _Split:
-    """A recursive listing's entries, in name order, split into each directory's parts.
+    """A recursive listing's entries, depth first or in name order, split into each directory's parts.
 
     All below a directory come together, so the walk keeps only the directories
     it is in, from the root down: those ``open``. A name not below the deepest
     one closes it, for none below it comes later. A directory's entry may come
     apart from what is below it, as "a/b-x" comes between "a/b" and "a/b/c" in
     name order: it waits as ``pending`` in its parent until a path below it
-    opens it, or the listing passes it, empty.
+    opens it, or the listing passes it, empty. Depth first, its siblings may
+    come in any order: what is below it comes right after it, so any other
+    name tells it is empty. A sibling sorting before it only keeps it pending
+    longer, never wrongly.
 
     A directory not listed, as an object store lists only files, gets an entry
     in its parent from the paths below it. A directory's entry comes in a part
@@ -508,7 +511,7 @@ class _Open:
         self.depth = depth
         self.entries: list[dict[str, Any]] = []
         self.first = True
-        # Its subdirectories listed, below which nothing has come yet, in name order.
+        # Its subdirectories listed, below which nothing has come yet, in listing order.
         self.pending: dict[str, None] = {}
 
     def hold(self, entry: dict[str, Any]) -> None:

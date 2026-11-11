@@ -105,9 +105,9 @@ class MyFileSystem(TreeFileSystem):
     storage_profile = StorageProfile()  # Nothing known: right on any storage.
 
     async def _ils(self, path, recursive=False, **kwargs):
-        # A directory's entries in name order, as they come. With recursive=True,
-        # all below it, in name order too: the storage's own recursive listing,
-        # or one per directory where it has none.
+        # A directory's entries, as they come. With recursive=True, all below
+        # it, depth first or sorted by name: the storage's own recursive
+        # listing, or one per directory where it has none.
         if recursive:
             async for entry in self._ils_by_directory(path, **kwargs):
                 yield entry

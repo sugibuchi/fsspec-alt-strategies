@@ -279,6 +279,54 @@ async def test_entries_apart_from_their_directory_in_name_order(
         assert all(ended.index(d) < ended.index(directory) for d in below)
 
 
+def _reversed_ils(fs: SimulatedFileSystem) -> Any:
+    """A directory's listing in reverse name order: a recursive one is depth first, siblings unsorted."""
+
+    async def ils(path: str, **kwargs: Any) -> Any:
+        listing = await fs._ls(path, detail=True, **kwargs)
+        for entry in sorted(listing, key=lambda e: e["name"], reverse=True):
+            yield entry
+
+    return ils
+
+
+async def test_depth_first_with_siblings_in_any_order(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    for path in ("data/a/f", "data/a-x/g", "data/a.txt", "data/b/h"):
+        hierarchical_fs.add_file(path)
+    hierarchical_fs.add_dir("data/a/empty")
+    hierarchical_fs.add_dir("data/a-empty")
+    view = TreeView(hierarchical_fs, ils=_reversed_ils(hierarchical_fs))
+
+    parts = [p async for p in _chunks(view, "data")]
+
+    entries: dict[str, list[str]] = {}
+    for part in parts:
+        assert part.first == (part.directory not in entries)
+        entries.setdefault(part.directory, []).extend(e["name"] for e in part.entries)
+    assert {d: sorted(names) for d, names in entries.items()} == {
+        "data": ["data/a", "data/a-empty", "data/a-x", "data/a.txt", "data/b"],
+        "data/a": ["data/a/empty", "data/a/f"],
+        "data/a/empty": [],
+        "data/a-empty": [],
+        "data/a-x": ["data/a-x/g"],
+        "data/b": ["data/b/h"],
+    }
+    # Each directory ends once, all below it ending first.
+    ended = [p.directory for p in parts if p.last]
+    assert sorted(ended) == sorted(entries)
+    for directory in ended:
+        below = [d for d in ended if d.startswith(directory + "/")]
+        assert all(ended.index(d) < ended.index(directory) for d in below)
+
+    found, errors = await _collect_with_errors(_tree_find(view, "data", withdirs=True))
+    assert errors == []
+    assert sorted(e["name"] for e in found) == sorted(
+        await AsyncFileSystem._find(hierarchical_fs, "data", withdirs=True)
+    )
+
+
 async def test_a_directory_ends_before_the_listing_does(
     flat_fs: SimulatedFileSystem,
 ) -> None:
