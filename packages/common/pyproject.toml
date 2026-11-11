@@ -4,9 +4,7 @@ dynamic = ["version", "readme"]
 description = "The interface the strategies of fsspec-alt-strategies-impl share: operations, monitors and storage profiles"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [
-    { name = "Tsuyoshi SUGIBUCHI", email = "sugibuchi@gmail.com" }
-]
+authors = [{ name = "Tsuyoshi SUGIBUCHI" }]
 keywords = ["fsspec", "filesystem", "async", "monitoring"]
 classifiers = [
     "Development Status :: 3 - Alpha",

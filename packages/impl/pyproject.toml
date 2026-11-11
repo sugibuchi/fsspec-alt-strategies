@@ -4,9 +4,7 @@ dynamic = ["version", "readme"]
 description = "Alternative, filesystem-independent strategies for fsspec: streaming tree operations, monitors, adaptive files and a router"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [
-    { name = "Tsuyoshi SUGIBUCHI", email = "sugibuchi@gmail.com" }
-]
+authors = [{ name = "Tsuyoshi SUGIBUCHI" }]
 keywords = [
     "fsspec",
     "filesystem",
