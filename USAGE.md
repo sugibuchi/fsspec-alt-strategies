@@ -78,7 +78,8 @@ uv run --with "fsspec-alt-strategies-impl[cli]" fsspec-alt-strategies-impl copy 
 ```
 
 It copies the package as installed. It replaces a previous copy, and refuses any other directory that is not empty.
-Delete the modules you do not use afterwards.
+Delete the modules you do not use afterwards. Keep the `LICENSE` file it copies: the Apache License asks that the
+code goes with it.
 
 ### The modules to copy for each feature
 

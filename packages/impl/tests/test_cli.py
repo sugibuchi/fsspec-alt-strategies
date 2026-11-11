@@ -23,6 +23,13 @@ def test_copy_carries_the_version(tmp_path: Path) -> None:
     assert not list(target.rglob("__pycache__"))
 
 
+def test_copy_carries_the_license(tmp_path: Path) -> None:
+    target = tmp_path / "strategy"
+    result = CliRunner().invoke(main, ["copy", str(target)])
+    assert result.exit_code == 0, result.output
+    assert "Apache License" in (target / "LICENSE").read_text(encoding="utf-8")
+
+
 def test_copy_replaces_a_previous_copy(tmp_path: Path) -> None:
     target = tmp_path / "strategy"
     CliRunner().invoke(main, ["copy", str(target)])

@@ -301,7 +301,8 @@ changes with a release. The interface is installed instead, so that every copy s
 - no `__init__.py` but the package's own re-exports anything, so a copy can leave modules out.
 
 `packages/impl/tests/test_copyable.py` checks these rules. The command line, `fsspec-alt-strategies-impl copy`,
-copies the package as installed, with the `_version.py` its build wrote. It lives in its own package,
+copies the package as installed, with the `_version.py` its build wrote. It adds the `LICENSE` file the distribution
+records, as the Apache License asks that the code goes with it. It lives in its own package,
 `fsspec_alt_strategies_impl_cli`, so that copies leave it and click out.
 
 ### File objects
