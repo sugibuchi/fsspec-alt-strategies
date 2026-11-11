@@ -246,6 +246,19 @@ class TreeFileSystem(_BaseFileSystem):
         saves those requests.
         """
 
+    async def _rm_tree(self, path: str) -> None:
+        """Delete a directory with everything in it, in one request.
+
+        Optional: a subclass whose storage has a recursive delete implements
+        it, and its profile's ``deletes_directories=True`` says so. A recursive
+        ``rm`` then deletes each root by it, with no walk. It is called only
+        then. It takes a file too, which it deletes as ``_rm_file`` does, as a
+        root may be either. A missing path raises FileNotFoundError, as a walk
+        would find it: a storage whose recursive delete succeeds on a missing
+        path asks first.
+        """
+        raise NotImplementedError(f"{type(self).__name__} deletes no directory whole")
+
     @abstractmethod
     async def _cp_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
@@ -269,6 +282,19 @@ class TreeFileSystem(_BaseFileSystem):
         one request renames it. One with no rename copies, then deletes the
         source. A directory moved whole goes by `_mv_tree`.
         """
+
+    async def _mv_tree(self, path1: str, path2: str) -> None:
+        """Move a directory with everything in it to ``path2``, in one request.
+
+        Optional: a subclass whose storage renames a directory implements it,
+        and its profile's ``renames_directories=True`` says so. A recursive
+        ``mv`` then moves each root by it where it can, with no walk. It is
+        called only then, with ``path2`` missing and its parent existing,
+        having made it: a rename need not make it. It takes a file too, which
+        it moves as ``_mv_file_entry`` does, as a root may be either. A missing
+        ``path1`` raises FileNotFoundError.
+        """
+        raise NotImplementedError(f"{type(self).__name__} moves no directory whole")
 
     @abstractmethod
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
@@ -308,35 +334,6 @@ class TreeFileSystem(_BaseFileSystem):
     @abstractmethod
     def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         """Open a file, as fsspec's ``_open`` does, for the sync ``open``."""
-
-    # What a subclass may implement: a storage's requests on a directory whole,
-    # used where its profile declares them.
-
-    async def _rm_tree(self, path: str) -> None:
-        """Delete a directory with everything in it, in one request.
-
-        A subclass whose storage has a recursive delete implements it, and its
-        profile's ``deletes_directories=True`` says so. A recursive ``rm`` then
-        deletes each root by it, with no walk. It is called only then. It takes
-        a file too, which it deletes as ``_rm_file`` does, as a root may be
-        either. A missing path raises FileNotFoundError, as a walk would find
-        it: a storage whose recursive delete succeeds on a missing path asks
-        first.
-        """
-        raise NotImplementedError(f"{type(self).__name__} deletes no directory whole")
-
-    async def _mv_tree(self, path1: str, path2: str) -> None:
-        """Move a directory with everything in it to ``path2``, in one request.
-
-        A subclass whose storage renames a directory implements it, and its
-        profile's ``renames_directories=True`` says so. A recursive ``mv`` then
-        moves each root by it where it can, with no walk. It is called only
-        then, with ``path2`` missing and its parent existing, having made it:
-        a rename need not make it. It takes a file too, which it moves as
-        ``_mv_file_entry`` does, as a root may be either. A missing ``path1``
-        raises FileNotFoundError.
-        """
-        raise NotImplementedError(f"{type(self).__name__} moves no directory whole")
 
     async def _walk(
         self,
