@@ -59,7 +59,6 @@ The choices below shape the whole project. Keep to them, or change them on purpo
 
 The library aims at large cloud storages, such as data lakes holding millions of files across many directories.
 
-- **A third party.** The library offers alternatives to fsspec's algorithms, and never patches fsspec.
 - **Streaming first.** `_ils` is the primitive every strategy lists with: an async generator yielding paths as the
   storage is scanned, where fsspec lists every path first with `expand_path`. A strategy acts on each part of a listing
   as it arrives, and never holds a whole directory or tree. Only `_walk` holds a directory whole, as fsspec's `walk`
@@ -70,11 +69,8 @@ The library aims at large cloud storages, such as data lakes holding millions of
 - **One implementation, many storages.** A storage's behaviour is declared in its `StorageProfile`, never detected, and
   the strategies pick their way from it. fsspec's implementations override its methods instead, each for its own
   storage.
-- **Developers choose the family.** The library never picks a family or a strategy for a filesystem: the profile picks
-  the way only within the one chosen. Each docstring says what it assumes of the storage, and when it wins or loses.
 - **Adaptive file objects.** The file classes resize their blocks as a file is read or written, and send their
   requests in the background, in parallel.
-- **Async first.** Strategies are async. Sync filesystems get them through the sync wrappers.
 - **Observable and cancellable.** A `Monitor` sees each step of an operation, and can stop it through the operation's
   `OperationHandler`.
 
