@@ -204,3 +204,30 @@ async def test_a_file_copied_or_moved_into_a_missing_dir(
     await getattr(fs, method)(path, "new/", recursive=recursive)
     assert sim._file_data["new/1.txt"].data == b"1"
     assert "new" not in sim._file_data
+
+
+class _NoPermit(AsyncTreeWrapper):
+    """A subclass whose data methods send their request holding no permit of io_limit."""
+
+    async def _cat_file(
+        self, path: str, start: Any = None, end: Any = None, **kwargs: Any
+    ) -> bytes:
+        return await self.fs._cat_file(path, start=start, end=end)
+
+    async def _pipe_file(self, path: str, value: bytes, **kwargs: Any) -> None:
+        await self.fs._pipe_file(path, value)
+
+
+@pytest.mark.parametrize("batch_size", [None, 5])
+async def test_many_paths_go_io_concurrency_at_a_time(batch_size: int | None) -> None:
+    inner = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
+    fs = _NoPermit(inner, asynchronous=True, **{**_LIMITS, "io_concurrency": 3})
+    paths = [f"many/{i}" for i in range(20)]
+
+    await fs._pipe(dict.fromkeys(paths, b"x"), batch_size=batch_size)
+    piped = inner.stats.max_concurrency
+    inner.reset_stats()
+    assert await fs._cat(paths, batch_size=batch_size) == dict.fromkeys(paths, b"x")
+
+    # io_concurrency by default, though the subclass takes no permit; the call's own if given.
+    assert piped == inner.stats.max_concurrency == (batch_size or 3)

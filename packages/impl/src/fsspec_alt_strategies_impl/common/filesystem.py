@@ -6,7 +6,9 @@
 file objects: its ``_cat_file``, ``_pipe_file``, ``_get_file`` and
 ``_put_file`` open the file with ``open_async``, which a subclass implements.
 Its ``_cp_file`` and ``_mv_file`` ask a path's ``_info``, then copy or move by
-the families' ``_cp_file_entry`` and ``_mv_file_entry``.
+the families' ``_cp_file_entry`` and ``_mv_file_entry``. fsspec's methods on
+many paths, such as ``_cat``, call those on one path ``io_concurrency`` at a
+time.
 The functions below it shape the answers and errors of fsspec's methods, as
 the families' classes give them.
 
@@ -204,6 +206,15 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     async def _cat_file(
         self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any
     ) -> bytes:
+        """Read a file, or a range of it, through a file of ``open_async``.
+
+        The file's requests each hold a permit of ``io_limit``. A subclass
+        overriding this, or ``_pipe_file``, ``_get_file`` or ``_put_file``, e.g.
+        with one download, holds a permit for each request it sends itself,
+        and none while it calls the filesystem's files, which take their own:
+        held around them, it would wait for itself. fsspec's methods on many
+        paths call it at most ``io_concurrency`` at a time, whatever it does.
+        """
         f = await self.open_async(path, "rb", **kwargs)
         async with f:
             position = 0
@@ -220,6 +231,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     async def _pipe_file(
         self, path: str, value: bytes, mode: str = "overwrite", **kwargs: Any
     ) -> None:
+        """Write a file whole, through a file of ``open_async``: see `_cat_file` for ``io_limit``."""
         f = await self.open_async(path, "xb" if mode == "create" else "wb", **kwargs)
         async with f:
             await f.write(value)
@@ -231,6 +243,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
+        """Copy a file to a local path, through a file of ``open_async``: see `_cat_file` for ``io_limit``."""
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
             return  # A directory, which fsspec's get makes itself.
 
@@ -254,6 +267,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
+        """Copy a local file to the storage, through a file of ``open_async``: see `_cat_file` for ``io_limit``."""
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
             return  # A directory: a storage needs none for the files put in it.
 
@@ -264,6 +278,78 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
                 while chunk := local.read(self.transfer_size):
                     await f.write(chunk)
                     callback.relative_update(len(chunk))
+
+    # fsspec's methods on many paths call the method on one path for each, up to
+    # batch_size at a time: by default, io_concurrency. So a subclass's
+    # _cat_file holding no permit of io_limit, e.g. one download, is still
+    # bounded when cat gives it many paths, and needs no permit taken for it:
+    # a permit held around a call reading through files would deadlock, as
+    # each of their requests takes one more.
+
+    def _io_batch_size(self, batch_size: int | None) -> int | None:
+        """The paths handled at a time: the call's, else the instance's, else ``io_concurrency``.
+
+        ``io_concurrency`` given as a semaphore tells no number: fsspec's own
+        default then holds, and only the permits bound the requests.
+        """
+        if batch_size is not None:
+            return batch_size
+        if self.batch_size is not None:
+            return self.batch_size  # type: ignore[no-any-return]
+        if isinstance(self.io_concurrency, int):
+            return self.io_concurrency
+        return None
+
+    async def _cat(
+        self,
+        path: Any,
+        recursive: bool = False,
+        on_error: str = "raise",
+        batch_size: int | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        return await super()._cat(
+            path,
+            recursive=recursive,
+            on_error=on_error,
+            batch_size=self._io_batch_size(batch_size),
+            **kwargs,
+        )
+
+    async def _cat_ranges(
+        self,
+        paths: list[str],
+        starts: Any,
+        ends: Any,
+        max_gap: int | None = None,
+        batch_size: int | None = None,
+        on_error: str = "return",
+        **kwargs: Any,
+    ) -> Any:
+        return await super()._cat_ranges(
+            paths,
+            starts,
+            ends,
+            max_gap=max_gap,
+            batch_size=self._io_batch_size(batch_size),
+            on_error=on_error,
+            **kwargs,
+        )
+
+    async def _pipe(
+        self, path: Any, value: Any = None, batch_size: int | None = None, **kwargs: Any
+    ) -> Any:
+        return await super()._pipe(
+            path, value, batch_size=self._io_batch_size(batch_size), **kwargs
+        )
+
+    async def _get(self, rpath: Any, lpath: Any, **kwargs: Any) -> Any:
+        kwargs["batch_size"] = self._io_batch_size(kwargs.get("batch_size"))
+        return await super()._get(rpath, lpath, **kwargs)
+
+    async def _put(self, lpath: Any, rpath: Any, **kwargs: Any) -> Any:
+        kwargs["batch_size"] = self._io_batch_size(kwargs.get("batch_size"))
+        return await super()._put(lpath, rpath, **kwargs)
 
 
 def _strip_only_protocol(fs: AbstractFileSystem, path: str | Sequence[str]) -> Any:

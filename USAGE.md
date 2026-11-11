@@ -165,7 +165,9 @@ None of these is right for every storage, and the library never picks one for yo
   them at 1.
 - **`io_concurrency` bounds memory too.** Each read or write in flight holds a block or a part, shared by all the
   filesystem's files. So the data in flight is at most `io_concurrency` times the file class's `max_block_size`, e.g.
-  16 × 16 MiB = 256 MiB of writes, however many files are open. Each file written also fills one part.
+  16 × 16 MiB = 256 MiB of writes, however many files are open. Each file written also fills one part. fsspec's
+  methods on many paths, such as `cat`, `pipe`, `get` and `put`, handle `io_concurrency` paths at a time, unless given
+  a `batch_size`.
 
 #### Costs to know
 
