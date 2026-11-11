@@ -7,13 +7,16 @@ How to get the library's features, and how to use them. See the
 
 ### File tree operation strategies
 
-The strategies walk, find, glob, measure, delete, copy and move file trees. They come in two families, by a
-storage's namespace:
+The strategies walk, find, glob, measure, delete, copy and move file trees. Each lists with `_ils`, which yields
+paths as the storage is scanned, and acts on them as they arrive. They come in two families, by what a storage's
+directories are:
 
-- the `tree` family, in `tree/`, for storages with a hierarchical namespace, a tree of directories, such as Azure Data
-  Lake Storage Gen2, SFTP or HDFS;
-- the `flat` family, in `flat/`, for storages with a flat namespace, keys whose directories are only prefixes, such as
-  S3.
+- the `tree` family, in `tree/`, for storages whose directories are real, such as Azure Data Lake Storage Gen2, SFTP
+  or HDFS. It deletes and renames directories, and can scan them a directory at a time, several at once;
+- the `flat` family, in `flat/`, for storages whose directories are only prefixes of keys, such as S3. It lists by
+  prefix, and deletes keys in batches.
+
+Both list a whole tree in one paginated listing wherever the storage has one.
 
 Each family replaces fsspec's recursive methods, such as `find`, `rm` and `copy`, with its strategies. They come in
 two forms:
@@ -168,11 +171,18 @@ A wrapper is light and not cached: make one when you need it, and drop it after.
 
 None of these is right for every storage, and the library never picks one for you.
 
-- **The family** follows the storage's namespace. A hierarchical namespace, a tree of directories, suits `tree`. A flat
-  namespace, keys whose directories are only prefixes, suits `flat`. An exception is a filesystem listing a flat namespace
-  one directory per request, such as adlfs on Azure Blob Storage: it suits `tree`.
-- **The profile** only saves requests, or data copied. A field left unknown is right on any storage. A field declared
-  wrongly gives wrong results: declare only what you know.
+- **The family** follows what a storage's directories are. Where they are real, `tree` deletes and renames them. Where
+  they are only prefixes of keys, `flat` lists by prefix and deletes in batches. A filesystem whose keys have no
+  listing by prefix but one directory per request, such as adlfs on Azure Blob Storage, suits `tree` too.
+- **One recursive listing usually wins.** Both families list a whole tree in one paginated request where the storage
+  has one. On Azure, a find of 340 directories took 1 request instead of 342. A storage with none, such as SFTP, is
+  scanned a directory at a time, several at once.
+- **Pruning trades requests for listing less.** A glob or `maxdepth` on a `tree` filesystem lists only the directories
+  it can match, one per request. That wins on a large tree whose pattern has a wildcard early. It loses on a small
+  subtree, which one recursive listing would cover.
+- **The profile** picks the way within a family, e.g. deleting a directory in one request where the storage can. It only
+  saves requests, or data copied. A field left unknown is right on any storage. A field declared wrongly gives wrong
+  results: declare only what you know.
 - **The concurrency limits** are yours to set. A filesystem unsafe to call from several threads, such as SFTP, needs
   them at 1.
 - **`io_concurrency` bounds memory too.** Each read or write in flight holds a block or a part, shared by all the
@@ -189,6 +199,8 @@ None of these is right for every storage, and the library never picks one for yo
 - A flat wrapper lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix in pages. That
   listing is held in memory, and covers the prefix's whole directory. A subclass overriding `_ils` with the storage's own
   listing by prefix streams it instead, as `S3fsWrapper` does.
+- A tree wrapper scans a tree a directory per request, as fsspec has no recursive listing in pages. A subclass
+  overriding `_ils` with the storage's own recursive listing lists it in one, as `AdlfsWrapper` does.
 - `known_implementations` is shared by every copy in a project. Change it with care, or pass your own table.
 
 #### Choosing with numbers

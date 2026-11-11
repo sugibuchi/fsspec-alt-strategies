@@ -57,12 +57,24 @@ The choices below shape the whole project. Keep to them, or change them on purpo
 
 ### Principles
 
+The library aims at large cloud storages, such as data lakes holding millions of files across many directories.
+
 - **A third party.** The library offers alternatives to fsspec's algorithms, and never patches fsspec.
-- **Developers choose.** The library never picks a strategy. Each docstring says what it assumes of the storage, and
-  when it wins or loses.
+- **Streaming first.** `_ils` is the primitive every strategy lists with: an async generator yielding paths as the
+  storage is scanned, where fsspec lists every path first with `expand_path`. A strategy acts on each part of a listing
+  as it arrives, and never holds a whole directory or tree. Only `_walk` holds a directory whole, as fsspec's `walk`
+  answers a directory at a time.
+- **Hierarchical namespaces, used.** Where a storage lists by directory, the tree strategies scan directories
+  recursively, several at once, e.g. to prune a tree by a pattern. A storage's own operations on a whole tree plug in
+  as optional primitives, such as `_rm_tree` and `_mv_tree`.
+- **One implementation, many storages.** A storage's behaviour is declared in its `StorageProfile`, never detected, and
+  the strategies pick their way from it. fsspec's implementations override its methods instead, each for its own
+  storage.
+- **Developers choose the family.** The library never picks a family or a strategy for a filesystem: the profile picks
+  the way only within the one chosen. Each docstring says what it assumes of the storage, and when it wins or loses.
+- **Adaptive file objects.** The file classes resize their blocks as a file is read or written, and send their
+  requests in the background, in parallel.
 - **Async first.** Strategies are async. Sync filesystems get them through the sync wrappers.
-- **Streaming.** A strategy acts on each part of a listing as it arrives, and never holds a whole directory or tree. Only
-  `_walk` holds a directory whole, as fsspec's `walk` answers a directory at a time.
 - **Observable and cancellable.** A `Monitor` sees each step of an operation, and can stop it through the operation's
   `OperationHandler`.
 
@@ -209,14 +221,19 @@ below a directory, at any depth, in one of two orders, which tell the walk when 
   "a/b-x" comes between "a/b" and "a/b/c".
 - A directory may be left out, as object stores list only files. The walk tells it from the paths below it.
 - A storage with no recursive listing answers with `_tree_ils` of `tree/listing.py`. It lists
-  depth first, a directory per request, several ahead at a time. The wrappers list so.
+  depth first, a directory per request, several ahead at a time. The generic tree wrappers list so, but `AdlfsWrapper`
+  lists by Azure's own recursive listing.
 
 The strategies walk with a private engine, `tree.walk._chunks`. It streams each directory in parts of at most 1000
 entries. A huge directory is never held whole, except by `_tree_walk`, which answers as fsspec's `walk` does.
 
 - A tree that nothing prunes is listed by one recursive `_ils` per root. Its order tells when each directory is done.
+  Where the storage has a recursive listing, that is one paginated request, which usually beats a directory per
+  request.
 - A tree pruned, by `maxdepth` or a glob's pattern, is listed a directory per request, many at once. Below a glob's
-  `**`, nothing is pruned, so it is listed recursively again.
+  `**`, nothing is pruned, so it is listed recursively again. Pruning wins on a large tree, and loses on a small
+  subtree that one recursive listing would cover. The library cannot tell which without guessing the tree's size, so
+  it always prunes.
 - A failure ends a recursive listing, as there is no way past it. The root's error is yielded, noting the directory that
   failed. Listed a directory per request, the rest of the tree goes on.
 - `_tree_walk` top down lists a directory per request: a recursive listing ends a directory after all below it, so the
