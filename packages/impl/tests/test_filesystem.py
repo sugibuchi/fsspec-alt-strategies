@@ -176,10 +176,15 @@ def test_a_dir_failing_to_list_is_raised_reported_or_empty() -> None:
 
 
 class _Flat(AsyncFlatWrapper):
-    """A simulated storage as a `FlatFileSystem`, listed by its own ``_iexpand``."""
+    """A simulated storage as a `FlatFileSystem`, listed by its own prefix listing."""
 
-    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        return self.fs._iexpand(prefix)
+    def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            return self.fs._list_prefix(f"{path}/{prefix}" if path else prefix)
+        else:
+            return super()._ils(path, prefix=prefix, **kwargs)
 
 
 @pytest.mark.parametrize("family", ["tree", "flat"])

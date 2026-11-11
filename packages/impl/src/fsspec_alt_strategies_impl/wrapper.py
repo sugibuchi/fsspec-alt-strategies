@@ -17,18 +17,18 @@ A wrapper is light, and not cached, as fsspec caches filesystems: make one on
 demand, e.g. to watch a call with a monitor, and drop it after. The developer
 chooses the wrapper: none is chosen for a filesystem.
 
-fsspec has no listing by prefix, which the flat strategies list with. A flat
-wrapper's ``_iexpand`` lists with the wrapped filesystem's ``find`` of the
-prefix's directory, which object stores answer in one paginated listing. That
-costs twice:
+fsspec has no listing by prefix in pages, which the flat strategies list with.
+A flat wrapper's recursive ``_ils`` lists with the wrapped filesystem's
+``find`` of the directory, which object stores answer in one paginated
+listing. That costs twice:
 
 - ``find`` returns the whole listing at once, so the strategies start only
   once all of it has arrived, and it is held in memory, not streamed.
-- It lists the prefix's whole directory: for "data/2024-", all of "data/", the
-  keys not starting with the prefix then left out.
+- It lists the whole directory: for "data" with the prefix "2024-", all of
+  "data/", the keys not starting with the prefix then left out.
 
-A subclass overriding ``_iexpand`` with the storage's own listing by prefix,
-e.g. from its SDK, streams it page by page, and lists only the prefix.
+A subclass overriding ``_ils`` with the storage's own listing by prefix, e.g.
+from its SDK, streams it page by page, and lists only the prefix.
 
 This module depends on `sync_client` of `common`, `filesystem` and `listing`
 of `tree`, `filesystem` of `flat`, and `files.fsspec_async`.
@@ -471,8 +471,8 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
     as ``_cat_file``, and its files. The wrapper runs on the same loop, sync or
     not as the wrapped one is.
 
-    Its ``_iexpand`` lists with the wrapped one's ``_find`` of the prefix's directory,
-    and its ``_rm_files`` deletes with its ``_rm``, as s3fs deletes a batch in
+    Its recursive ``_ils`` lists with the wrapped one's ``_find`` of the
+    directory, and its ``_rm_files`` deletes with its ``_rm``, as s3fs deletes a batch in
     one request. It wins on object stores, as `FlatFileSystem` does. It is not
     cached: each is new, and may be dropped once used.
 
@@ -537,9 +537,16 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
             **kwargs,
         )
 
-    async def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        found = await self.fs._find(prefix.rpartition("/")[0], detail=True)
-        for entry in _under(found, prefix):
+    async def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            # fsspec has no listing in pages: the wrapped one's find, all at once.
+            found = await self.fs._find(path, detail=True, **kwargs)
+            listing = list(found.values())
+        else:
+            listing = await self.fs._ls(path, detail=True, **kwargs)
+        for entry in _starting(listing, path, prefix):
             yield entry
 
     async def _rm_files(self, paths: list[str]) -> None:
@@ -563,8 +570,8 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
     wrapped one's too, and its files are the wrapped one's, awaited through a
     `SyncFileAdapter`.
 
-    Its ``_iexpand`` lists with the wrapped one's ``find`` of the prefix's directory,
-    and its ``_rm_files`` deletes with its ``rm``. A filesystem unsafe to call
+    Its recursive ``_ils`` lists with the wrapped one's ``find`` of the
+    directory, and its ``_rm_files`` deletes with its ``rm``. A filesystem unsafe to call
     from several threads needs both concurrencies at 1. It is not cached: each
     is new, and may be dropped once used.
 
@@ -627,11 +634,16 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
             **kwargs,
         )
 
-    async def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        found = await self._run_in_thread(
-            self.fs.find, prefix.rpartition("/")[0], detail=True
-        )
-        for entry in _under(found, prefix):
+    async def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            # fsspec has no listing in pages: the wrapped one's find, all at once.
+            found = await self._run_in_thread(self.fs.find, path, detail=True, **kwargs)
+            listing = list(found.values())
+        else:
+            listing = await self._run_in_thread(self.fs.ls, path, detail=True, **kwargs)
+        for entry in _starting(listing, path, prefix):
             yield entry
 
     async def _rm_files(self, paths: list[str]) -> None:
@@ -646,6 +658,13 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
             await self._run_in_thread(self.fs.rm_file, path)
 
 
-def _under(found: dict[str, dict[str, Any]], prefix: str) -> list[dict[str, Any]]:
-    """The entries of a ``find`` starting with ``prefix``, as ``iexpand`` yields them."""
-    return [e for name, e in found.items() if name.startswith(prefix)]
+def _starting(
+    listing: list[dict[str, Any]], path: str, prefix: str
+) -> list[dict[str, Any]]:
+    """A listing's entries whose names start with ``path/prefix``, in name order, as ``_ils`` yields them."""
+    if not prefix:
+        return sorted(listing, key=lambda e: e["name"])
+    start = f"{path}/{prefix}" if path else prefix
+    return sorted(
+        (e for e in listing if e["name"].startswith(start)), key=lambda e: e["name"]
+    )

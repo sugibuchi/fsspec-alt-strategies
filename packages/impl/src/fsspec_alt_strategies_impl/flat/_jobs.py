@@ -20,7 +20,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _Jobs
-from ._keys import _close
+from ._keys import _close, _listing
 from .find import _within
 from .glob import _flat_glob
 
@@ -47,7 +47,7 @@ def _keys_of(paths: tuple[str, ...]) -> str:
 class _FlatJobs(_Jobs):
     """The jobs of one operation, run while the keys under its roots are listed.
 
-    ``fs`` is the filesystem listed, by its ``_iexpand`` and ``_info``. With
+    ``fs`` is the filesystem listed, by its recursive ``_ils`` and ``_info``. With
     ``maxdepth``, the keys deeper than it are listed, but left out, as
     fsspec's ``_expand_path`` finds paths. A prefix lists every key under it.
     """
@@ -74,7 +74,7 @@ class _FlatJobs(_Jobs):
         return []
 
     async def _keys(self, directories: Sequence[str]) -> AsyncGenerator[dict[str, Any]]:
-        """The keys under each directory, as ``_iexpand`` lists them.
+        """The keys under each directory, as its recursive ``_ils`` lists them.
 
         A directory with nothing under it is asked for with ``_info``: a file is
         yielded as a key, and a missing one raises FileNotFoundError, ending the
@@ -89,7 +89,7 @@ class _FlatJobs(_Jobs):
 
             under = False
             prefix = f"{directory}/" if directory else ""
-            entries = self.fs._iexpand(prefix)
+            entries = _listing(self.fs, prefix)
             try:
                 async for entry in entries:
                     under = True

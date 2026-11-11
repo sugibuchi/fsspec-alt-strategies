@@ -86,8 +86,8 @@ code: read it before adding a strategy.
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
 - Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
-- The flat strategies list with `_iexpand(prefix)`, an async iterator of entries in name order, never pages: see
-  DEVELOPMENT.md's "The flat strategies". Those that only read derive directories with `flat._keys`. Those changing the
+- The flat strategies list with `flat._keys._listing(fs, prefix)`, a recursive `_ils` of the prefix's directory, an
+  async iterator of entries in name order, never pages: see DEVELOPMENT.md's "The flat strategies". Those that only read derive directories with `flat._keys`. Those changing the
   storage build on `flat._jobs._FlatJobs`.
 - The strategies changing a storage, in any family, run on `common.jobs._Jobs`, and start with `_Jobs.operation`. A
   copy or move also builds on `common.jobs._CopyJobs`, which places its paths: `_CopyOrMove(_CopyJobs, _TreeJobs)`.

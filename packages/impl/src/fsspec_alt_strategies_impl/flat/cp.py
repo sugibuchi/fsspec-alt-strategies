@@ -96,7 +96,7 @@ def _flat_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests
-    of their `_flat_glob`. The pages of one ``_iexpand`` per directory copied,
+    of their `_flat_glob`. The pages of one recursive ``ils`` per directory copied,
     one after another, one ``cp_entry`` per key, and one ``dst_makedirs`` per
     destination directory with keys or a marker. A destination refusing to
     overwrite costs a ``dst_info``, a ``dst_rm_file`` and a ``cp_entry`` more
@@ -109,14 +109,14 @@ def _flat_cp(
     keys, as their copies create it. ``implicit_directories=True`` saves those of
     the markers too.
 
-    The primitives are called above by what they do: ``_iexpand`` and
-    ``info`` are the source's ``_iexpand`` and ``_info``, ``dst_info``,
+    The primitives are called above by what they do: ``ils`` and
+    ``info`` are the source's ``_ils`` and ``_info``, ``dst_info``,
     ``dst_makedirs`` and ``dst_rm_file`` the destination's ``_info``,
     ``_makedirs`` and ``_rm_file``.
 
     ``src_fs`` is the filesystem copied from, and ``dst_fs`` the one copied
     to, ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
-    glob pattern, or a list of them, as the source's ``_iexpand`` takes paths.
+    glob pattern, or a list of them, as the source's ``_ils`` takes paths.
     ``cp_entry(entry, destination)`` copies a file: the source's ``_cp_file_entry``
     by default, within one storage. ``same_storage`` is whether ``dst_fs`` is
     ``src_fs``, unless given. ``maxdepth`` of 1 copies only the keys right in

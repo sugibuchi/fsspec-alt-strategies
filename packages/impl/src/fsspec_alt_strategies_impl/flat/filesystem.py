@@ -56,17 +56,18 @@ class FlatFileSystem(_BaseFileSystem):
     prefix in one paginated request. It overrides fsspec's ``_walk``,
     ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``_mv`` when
     recursive, with the flat strategies. These list every key under a prefix
-    with ``_iexpand``, and act on each key as it arrives. Their answers are
+    with a recursive ``_ils``, and act on each key as it arrives. Their answers are
     fsspec's, and their failures are raised, a single one as it is, several in
     an ExceptionGroup.
 
     A subclass implements the storage's primitives:
 
-    - ``_iexpand``, the listing by prefix, which fsspec has not;
+    - ``_ils``, a directory's listing, which ``_ls`` and so fsspec's own
+      methods list with, and with ``recursive=True`` every key below it, which
+      the strategies list with;
     - ``_rm_files``, a deletion of several files in one request, with
       ``rm_batch_size``;
-    - ``_ils``, a directory's listing, which ``_ls`` and so fsspec's own methods
-      list with, and ``_info`` and ``_rm_file``;
+    - ``_info`` and ``_rm_file``;
     - ``_cp_file_entry`` and ``_mv_file_entry``, a copy and a move of a key by its entry,
       as its listing gave it, e.g. with its size. fsspec's ``_cp_file`` and
       ``_mv_file`` ask the entry, then call them;
@@ -116,9 +117,8 @@ class FlatFileSystem(_BaseFileSystem):
     ...     storage_profile = StorageProfile()  # Unknown.
     ...     rm_batch_size = 1000  # As S3's DeleteObjects takes.
     ...
-    ...     async def _iexpand(self, prefix): ...
+    ...     async def _ils(self, path, recursive=False, prefix="", **kwargs): ...
     ...     async def _rm_files(self, paths): ...
-    ...     async def _ils(self, path, **kwargs): ...
     ...     async def _info(self, path, **kwargs): ...
     ...     async def _rm_file(self, path, **kwargs): ...
     ...     async def _cp_file_entry(self, entry, path2, **kwargs): ...
@@ -160,17 +160,34 @@ class FlatFileSystem(_BaseFileSystem):
         if not isinstance(size, int) or size < 1:
             raise ValueError(f"rm_batch_size must be set, to at least 1: {size}")
 
-    # What a subclass implements: the storage's primitives, the flat ones first.
+    # What a subclass implements: the storage's primitives.
 
     @abstractmethod
-    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        """List every key starting with ``prefix``, as an async iterator of entries.
+    def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        """List a directory, or every key below it, as an async iterator of entries.
 
-        ``prefix`` is raw text, e.g. "data/2024-". The entries are as ``_ls``
-        gives them, a key ending with "/" being a directory's marker. They come in
-        order of their names, as object stores list them: ``_walk`` counts on
-        it to know when a directory is done. Each key comes once: a key listed
-        twice is copied, moved, deleted or counted twice.
+        The entries are as fsspec's ``_ls`` gives them with ``detail``, a key
+        ending with "/" being a directory's marker. A storage listing in pages
+        yields each page's as it comes. ``prefix`` keeps the names starting
+        with ``path/prefix``, or ``prefix`` at the root: object stores list so
+        in one request, with a delimiter or without.
+
+        Without ``recursive``, it lists ``path``'s files and subdirectories,
+        e.g. by an object store's listing with the delimiter "/". A file yields
+        itself, as fsspec's ``_ls`` lists it, and a missing ``path`` raises
+        FileNotFoundError. fsspec's own methods list so, through ``_ls``.
+
+        With ``recursive=True``, it lists every key below ``path``, at any
+        depth, with no directory but markers: the strategies list so, e.g.
+        "data" with the prefix "2024-" for the glob "data/2024-*". Nothing
+        below ``path``, or ``path`` missing, lists nothing: the strategies
+        then ask ``_info``. The keys come in order of their whole names, as
+        object stores list them, across buckets too at the root: the
+        strategies count on it to know when a directory is done. Each key
+        comes once: a key listed twice is copied, moved, deleted or counted
+        twice.
         """
 
     @abstractmethod
@@ -180,17 +197,6 @@ class FlatFileSystem(_BaseFileSystem):
         A key missing is no error. It raises if any is not deleted. The
         strategies give it only keys they listed, or found by an ``info``: it
         need not check them again.
-        """
-
-    @abstractmethod
-    def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
-        """List one directory, as an async iterator of its entries, for fsspec's own methods.
-
-        The entries are as fsspec's ``_ls`` gives them with ``detail``: the
-        files in the directory, and its subdirectories, e.g. by an object store's
-        listing with a delimiter, a page at a time. A file yields itself, as
-        fsspec's ``_ls`` lists it. The strategies never call it: they list
-        with ``_iexpand``.
         """
 
     async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
@@ -216,7 +222,7 @@ class FlatFileSystem(_BaseFileSystem):
     ) -> None:
         """Copy a key within the storage, by its entry, to ``path2``.
 
-        ``entry`` is the source's, as ``_iexpand`` or ``_info`` gave it, its
+        ``entry`` is the source's, as ``_ils`` or ``_info`` gave it, its
         ``"name"`` the source key. Its other keys, e.g. the size, may save a
         request, e.g. one telling whether a copy goes in parts. They may be
         stale, listed before the copy: a copy must still succeed, or fail as

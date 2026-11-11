@@ -25,7 +25,7 @@ from fsspec_alt_strategies.states import GlobState
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _Search
-from ._keys import _close, _dir, _dirs, _new
+from ._keys import _close, _dir, _dirs, _listing, _new
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
@@ -66,12 +66,13 @@ def _flat_glob(
     Once cancelled, it takes nothing more from the listings. An error from a
     listing ends the operation, raised by its iteration.
 
-    Requests: the pages of one ``_iexpand`` per listing, one after another.
+    Requests: the pages of one recursive ``_ils`` per listing, one after
+    another: of the prefix's directory, narrowed to the rest of the prefix.
     One ``_info`` per pattern without wildcards, each holding a permit of the
     filesystem's ``operation_limit``. The listings hold none.
 
-    ``path`` is a pattern, or patterns, of paths on ``fs``, as its
-    ``_iexpand`` takes them: a trailing "/" matches only directories. ``maxdepth``
+    ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``_ils``
+    takes them: a trailing "/" matches only directories. ``maxdepth``
     is how deep a ``**`` goes, and ``withdirs`` whether directories can match, as
     with fsspec's ``_glob``. The listing still lists every key under the
     prefix.
@@ -133,7 +134,7 @@ async def _matches(
     # The directories of the key listed last.
     before: list[str] = []
 
-    entries = fs._iexpand(prefix)
+    entries = _listing(fs, prefix)
     try:
         async for entry in entries:
             name = entry["name"]

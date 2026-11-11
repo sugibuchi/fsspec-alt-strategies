@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
-_SOURCE = {"iexpand", "info", "rm_files", "mv_file"}
+_SOURCE = {"list_prefix", "info", "rm_files", "mv_file"}
 """The keyword arguments that replace a primitive of the source."""
 
 _DESTINATION = {
@@ -221,7 +221,7 @@ async def test_mv_file_moves_each_key(flat_fs: SimulatedFileSystem) -> None:
 async def test_mv_file_moves_markers_without_yielding_them() -> None:
     keys = {"data/": b"", "data/empty/": b"", "data/a.txt": b"a"}
 
-    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in sorted(keys):
             if name.startswith(prefix):
                 yield {"name": name, "size": len(keys[name]), "type": "file"}
@@ -236,7 +236,7 @@ async def test_mv_file_moves_markers_without_yielding_them() -> None:
         None,
         "data",
         "moved",
-        iexpand=iexpand,
+        list_prefix=list_prefix,
         info=info,
         mv_file=mv_file,
         dst_info=info,
@@ -277,7 +277,7 @@ async def test_batches_delete_markers_without_copying_them() -> None:
     copied: list[str] = []
     deleted: list[list[str]] = []
 
-    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in sorted(keys):
             if name.startswith(prefix):
                 yield {"name": name, "size": len(keys[name]), "type": "file"}
@@ -299,7 +299,7 @@ async def test_batches_delete_markers_without_copying_them() -> None:
         None,
         "data",
         "moved",
-        iexpand=iexpand,
+        list_prefix=list_prefix,
         info=info,
         cp_entry=cp_entry,
         rm_files=rm_files,
@@ -322,7 +322,7 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
     copied: list[str] = []
     deleted: list[list[str]] = []
 
-    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
         # A listing may give a key twice, e.g. across pages of a changing prefix.
         for name in ["data/a.txt", "data/a.txt", "data/b.txt"]:
             yield {"name": name, "size": 1, "type": "file"}
@@ -344,7 +344,7 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
         None,
         "data",
         "moved",
-        iexpand=iexpand,
+        list_prefix=list_prefix,
         info=info,
         cp_entry=cp_entry,
         rm_files=rm_files,

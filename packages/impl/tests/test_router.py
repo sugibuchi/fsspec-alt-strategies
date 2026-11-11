@@ -111,8 +111,13 @@ class _Tree(_Files, AsyncTreeWrapper):
 
 
 class _Flat(_Files, AsyncFlatWrapper):
-    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        return self.fs._iexpand(prefix)
+    def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            return self.fs._list_prefix(f"{path}/{prefix}" if path else prefix)
+        else:
+            return super()._ils(path, prefix=prefix, **kwargs)
 
 
 _OPTIONS = {"operation_concurrency": 4, "io_concurrency": 2, "asynchronous": True}

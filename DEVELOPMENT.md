@@ -92,7 +92,7 @@ Each family declares the primitives its subclasses implement, and overrides fssp
 | Class            | Its own primitives                                    | Overrides                                               |
 |------------------|-------------------------------------------------------|---------------------------------------------------------|
 | `TreeFileSystem` | `_ils`, `_rmdir`, and optional `_rm_tree`, `_mv_tree` | `_walk`, `_find`, `_du`, `_glob`, `_rm`, `_copy`, `_mv` |
-| `FlatFileSystem` | `_iexpand`, `_rm_files`, `rm_batch_size`              | The same                                                |
+| `FlatFileSystem` | `_ils`, `_rm_files`, `rm_batch_size`                  | The same                                                |
 
 Both also take `_info`, `_rm_file`, `_makedirs`, `open_async` and `_open`, and copy and move a file with:
 
@@ -227,10 +227,12 @@ They come in two layers:
 
 ### The flat strategies
 
-The flat strategies list with `_iexpand(prefix)`: every key under a prefix, at any depth, in name order, as object
-stores list them.
+The flat strategies list with `_ils(path, recursive=True, prefix=...)`: every key below `path` starting with
+`path/prefix`, at any depth, in name order, as object stores list them. Without `recursive`, `_ils` lists one directory,
+for fsspec's own methods. The two are one request with or without a delimiter, as on S3, GCS and Azure.
 
-- The prefix is raw text, so `_flat_glob` lists only keys starting as its pattern does.
+- The strategies list by a raw prefix, split at its last "/" by `flat._keys._listing`. So `_flat_glob` lists only keys
+  starting as its pattern does, e.g. `data` with the prefix `2024-` for `data/2024-*`.
 - Name order tells when a directory is done, so `_flat_walk` streams its directories. Each key is listed once.
 - Directories are derived from the keys, by `flat/_keys.py`. A key ending with "/" marks a directory.
 - `_flat_rm` deletes in batches of `rm_batch_size`, with `_rm_files`.

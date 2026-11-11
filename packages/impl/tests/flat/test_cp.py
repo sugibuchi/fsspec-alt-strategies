@@ -23,7 +23,7 @@ async def _nothing(*args: Any, **kwargs: Any) -> None:
     pass
 
 
-_SOURCE = {"iexpand", "info", "rm_files", "mv_file"}
+_SOURCE = {"list_prefix", "info", "rm_files", "mv_file"}
 """The keyword arguments that replace a primitive of the source."""
 
 _DESTINATION = {
@@ -181,7 +181,7 @@ async def test_markers_are_not_copied() -> None:
     keys = ["data/", "data/empty/", "data/a.txt"]
     copied: list[tuple[str, str]] = []
 
-    async def iexpand(prefix: str) -> Any:
+    async def list_prefix(prefix: str) -> Any:
         for name in keys:
             if name.startswith(prefix):
                 yield {"name": name, "size": 0, "type": "file"}
@@ -196,7 +196,7 @@ async def test_markers_are_not_copied() -> None:
     source, destination = _views(
         None,
         {
-            "iexpand": iexpand,
+            "list_prefix": list_prefix,
             "info": info,
             "dst_info": info,
             "dst_makedirs": _nothing,

@@ -166,9 +166,9 @@ None of these is right for every storage, and the library never picks one for yo
 
 #### Costs to know
 
-- A flat wrapper lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix. That listing
-  is held in memory, and covers the prefix's whole directory. A subclass overriding `_iexpand` with the storage's own listing
-  by prefix streams it instead.
+- A flat wrapper lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix in pages. That
+  listing is held in memory, and covers the prefix's whole directory. A subclass overriding `_ils` with the storage's own
+  listing by prefix streams it instead.
 - `known_implementations` is shared by every copy in a project. Change it with care, or pass your own table.
 
 #### Choosing with numbers

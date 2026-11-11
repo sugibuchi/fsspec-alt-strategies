@@ -89,15 +89,20 @@ class _Flat(FlatFileSystem):
         super().__init__(**{**options, **kwargs})
         self.inner = inner
 
-    def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
-        return self.inner._iexpand(prefix)
+    def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            return self.inner._list_prefix(f"{path}/{prefix}" if path else prefix)
+        else:
+            return self._ls_directory(path)
+
+    async def _ls_directory(self, path: str) -> AsyncIterator[dict[str, Any]]:
+        for entry in await self.inner._ls(path, detail=True):
+            yield entry
 
     async def _rm_files(self, paths: list[str]) -> None:
         await self.inner._rm_files(paths)
-
-    async def _ils(self, path: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
-        for entry in await self.inner._ls(path, detail=True):
-            yield entry
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         return await self.inner._info(path)
@@ -287,9 +292,9 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
 
 def test_a_subclass_missing_a_primitive_is_refused() -> None:
     class Incomplete(_Flat):
-        _iexpand = FlatFileSystem._iexpand  # Still abstract, as if not written.
+        _rm_files = FlatFileSystem._rm_files  # Still abstract, as if not written.
 
-    with pytest.raises(TypeError, match="_iexpand"):
+    with pytest.raises(TypeError, match="_rm_files"):
         Incomplete(SimulatedFileSystem(), asynchronous=True)
 
 

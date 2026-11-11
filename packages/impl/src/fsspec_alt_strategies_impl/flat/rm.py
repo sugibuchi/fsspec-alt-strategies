@@ -67,13 +67,13 @@ def _flat_rm(
     without yielding them. Iterating it raises FileNotFoundError if ``path``
     does not exist, or matches nothing. An error from the listing ends it too.
 
-    Requests: the pages of one ``_iexpand`` per directory, one after another, and
+    Requests: the pages of one recursive ``_ils`` per directory, one after another, and
     one ``_rm_files`` per batch. One ``_info`` for ``path`` if nothing is
     under it. Patterns, or a list, add the requests of their `_flat_glob`.
     Each request but the listing holds a permit of the filesystem's
     ``operation_limit`` while it runs.
 
-    ``path`` is the directory deleted from ``fs``, as its ``_iexpand`` takes
+    ``path`` is the directory deleted from ``fs``, as its ``_ils`` takes
     paths. A file is deleted alone. A glob pattern, or a list of paths and
     patterns, deletes all they match. ``maxdepth`` of 1 deletes only the keys
     right in ``path``.

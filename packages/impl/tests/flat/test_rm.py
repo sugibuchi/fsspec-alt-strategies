@@ -20,7 +20,9 @@ if TYPE_CHECKING:
 
 def _view(fs: Any, kwargs: dict[str, Any]) -> FlatView:
     """``fs`` as a `FlatView`, with the primitives, limit and batch size ``kwargs`` give."""
-    view = {k: kwargs.pop(k) for k in ("iexpand", "info", "rm_files") if k in kwargs}
+    view = {
+        k: kwargs.pop(k) for k in ("list_prefix", "info", "rm_files") if k in kwargs
+    }
     if "concurrency_limit" in kwargs:
         view["operation_limit"] = kwargs.pop("concurrency_limit")
     if "batch_size" in kwargs:
@@ -71,8 +73,8 @@ async def test_deletes_while_the_listing_goes_on(flat_fs: SimulatedFileSystem) -
     _tree(flat_fs)
     events: list[str] = []
 
-    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
-        async for entry in flat_fs._iexpand(prefix):
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
+        async for entry in flat_fs._list_prefix(prefix):
             events.append("listed")
             yield entry
 
@@ -81,7 +83,7 @@ async def test_deletes_while_the_listing_goes_on(flat_fs: SimulatedFileSystem) -
         await flat_fs._rm_files(paths)
 
     await _collect_with_errors(
-        _rm(flat_fs, "data", iexpand=iexpand, rm_files=rm_files, batch_size=2)
+        _rm(flat_fs, "data", list_prefix=list_prefix, rm_files=rm_files, batch_size=2)
     )
     # The first batch is deleted before the listing has given the last key.
     assert events.index("deleted") < len(events) - 1 - events[::-1].index("listed")
@@ -151,7 +153,7 @@ async def test_markers_are_deleted_as_keys() -> None:
     keys = {"data/": 0, "data/empty/": 0, "data/a.txt": 1}
     deleted_keys: list[str] = []
 
-    async def iexpand(prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in sorted(keys):
             if name.startswith(prefix):
                 yield {"name": name, "size": keys[name], "type": "file"}
@@ -165,7 +167,7 @@ async def test_markers_are_deleted_as_keys() -> None:
     view = _view(
         None,
         {
-            "iexpand": iexpand,
+            "list_prefix": list_prefix,
             "info": info,
             "rm_files": rm_files,
             "batch_size": 10,

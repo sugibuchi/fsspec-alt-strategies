@@ -99,7 +99,7 @@ def _flat_mv(
 
     ``src_fs`` is the filesystem moved from, and ``dst_fs`` the one moved to,
     ``src_fs`` again within one storage. ``path1`` is a directory, a file, a glob
-    pattern, or a list of them, as the source's ``_iexpand`` takes paths.
+    pattern, or a list of them, as the source's ``_ils`` takes paths.
     ``path2`` places them as `_flat_cp` does. ``cp_entry(entry,
     destination)`` copies a file by its source entry when the move copies: the source's
     ``_cp_file_entry`` by default, within one storage. ``same_storage`` is whether

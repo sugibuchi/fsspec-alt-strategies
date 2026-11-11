@@ -316,10 +316,11 @@ class SimulatedFileSystem(AsyncFileSystem):
             for name in names[start : start + self.page_size]:
                 yield self._entry(name)
 
-    async def _iexpand(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def _list_prefix(self, prefix: str) -> AsyncIterator[dict[str, Any]]:
         """List the files whose paths start with ``prefix``, as object stores do.
 
-        It is no fsspec method: the flat strategies list with it.
+        It is no fsspec method: a `FlatView` lists with it, for a recursive
+        ``_ils``.
         ``prefix`` is a raw string, e.g. "data/2024-" lists "data/2024-01.csv".
         The files come in path order, a page per request: a page is asked for
         only once the one before it is all taken.
@@ -623,7 +624,7 @@ class SimulatedFileSystem(AsyncFileSystem):
 def dir_ils(fs: Any) -> Callable[[str], AsyncIterator[dict[str, Any]]]:
     """A tree strategy's ``ils`` of one directory, by ``fs._ls``, or by ``fs`` itself.
 
-    A `SimulatedFileSystem`'s own ``_iexpand`` lists by prefix, as the flat
+    A `SimulatedFileSystem`'s own ``_list_prefix`` lists by prefix, as the flat
     strategies take it. This one lists one directory, as the tree strategies take
     it, in name order. ``fs._ls`` is looked up at each call, so that a test may
     replace it.
@@ -725,12 +726,14 @@ class TreeView:
 class FlatView:
     """A filesystem as the flat strategies take it, its primitives replaceable.
 
-    The flat strategies take a filesystem, and call its ``_iexpand``,
+    The flat strategies take a filesystem, and call its recursive ``_ils``,
     ``_info``, ``_rm_files``, ``_cp_file_entry``, ``_mv_file_entry``, ``_makedirs`` and
     ``_rm_file``. Each is the filesystem's own, unless given, so that a test
-    may replace one, e.g. with one that fails. A ``cp_file`` or ``mv_file``
-    given takes paths, the entry's name. ``fs`` may be None when all
-    that a test calls is given.
+    may replace one, e.g. with one that fails. ``list_prefix``, a listing of
+    every key starting with a raw prefix, e.g. "data/2024-", answers a
+    recursive ``_ils``: the filesystem's own unless given. A ``cp_file`` or
+    ``mv_file`` given takes paths, the entry's name. ``fs`` may be None when
+    all that a test calls is given.
 
     ``operation_limit``, ``storage_profile`` and ``rm_batch_size`` are a
     filesystem's: 32 requests at a time, a storage unknown, and 1000 keys
@@ -741,7 +744,7 @@ class FlatView:
         self,
         fs: Any,
         *,
-        iexpand: Any = None,
+        list_prefix: Any = None,
         info: Any = None,
         rm_files: Any = None,
         cp_file: Any = None,
@@ -756,7 +759,7 @@ class FlatView:
             return getattr(fs, name, None) if given is None else given
 
         self.fs = fs
-        self._iexpand = own("_iexpand", iexpand)
+        self._list_prefix = own("_list_prefix", list_prefix)
         self._info = own("_info", info)
         self._rm_files = own("_rm_files", rm_files)
         self._cp_file_entry = (
@@ -770,6 +773,14 @@ class FlatView:
         self.storage_profile = storage_profile or StorageProfile()
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
         self.rm_batch_size = rm_batch_size
+
+    def _ils(
+        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            return self._list_prefix(f"{path}/{prefix}" if path else prefix)
+        else:
+            return dir_ils(self.fs)(path, **kwargs)
 
     async def _get_storage_profile(self) -> StorageProfile:
         return self.storage_profile

@@ -18,7 +18,7 @@ from fsspec_alt_strategies.states import FindState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
-from ._keys import _close, _dir, _dirs, _new
+from ._keys import _close, _dir, _dirs, _listing, _new
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -55,13 +55,13 @@ def _flat_find(
     Once cancelled, it takes nothing more from the listing. An error from the
     listing ends the operation, raised by its iteration.
 
-    Requests: the pages of one ``_iexpand`` of ``path``, one after another.
-    One ``_info`` for ``path`` itself, if nothing is under it, or with
-    ``withdirs``, holding a permit of the filesystem's ``operation_limit``.
-    The listing holds none.
+    Requests: the pages of one recursive ``_ils`` of ``path``, one after
+    another. One ``_info`` for ``path`` itself, if nothing is under it, or
+    with ``withdirs``, holding a permit of the filesystem's
+    ``operation_limit``. The listing holds none.
 
-    ``path`` is the directory searched on ``fs``. Its ``_iexpand`` lists every
-    key starting with a prefix, in name order, each key once. ``maxdepth`` of
+    ``path`` is the directory searched on ``fs``. Its recursive ``_ils``
+    lists every key below a directory, in name order, each key once. ``maxdepth`` of
     1 finds only the files in ``path``, though the listing still lists every
     key under it. ``withdirs`` finds directories too, ``path`` included.
 
@@ -118,7 +118,7 @@ async def _find_entries(
     # The directories of the key listed last.
     before: list[str] = []
 
-    entries = fs._iexpand(prefix)
+    entries = _listing(fs, prefix)
     try:
         async for entry in entries:
             under = True

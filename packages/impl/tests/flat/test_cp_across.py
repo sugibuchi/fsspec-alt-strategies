@@ -213,7 +213,7 @@ async def test_a_marker_makes_its_dir() -> None:
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     written: list[tuple[str, str]] = []
 
-    async def iexpand(prefix: str) -> Any:
+    async def list_prefix(prefix: str) -> Any:
         for name, data in keys.items():
             if name.startswith(prefix):
                 yield {"name": name, "size": len(data), "type": "file"}
@@ -230,7 +230,7 @@ async def test_a_marker_makes_its_dir() -> None:
         _flat_cp(
             FlatView(
                 None,
-                iexpand=iexpand,
+                list_prefix=list_prefix,
                 info=info,
                 operation_limit=asyncio.Semaphore(4),
             ),
