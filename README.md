@@ -44,8 +44,7 @@ directories. It is a third-party project, not part of fsspec.
 
 - The adaptive file classes aim at good read and write performance across access patterns, from random reads of short
   ranges to bulk sequential reads. No parameter or buffering strategy needs tuning for each workload.
-- The adaptive file classes are the skeleton of a file-like object whose buffers resize as the data is read or
-  written.
+- The adaptive file classes resize their buffers as the data is read or written.
 - They fetch and send a file's blocks on an event loop, in the background and in parallel, as far as they can.
 
 ### Observability and control
