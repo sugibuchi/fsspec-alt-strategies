@@ -105,12 +105,12 @@ implement the storage's primitives, and declare its profile:
 ```python
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_impl.tree.listing import _tree_ils
-from fsspec_alt_strategies import StorageProfile
+from fsspec_alt_strategies import UNKNOWN
 
 
 class MyFileSystem(TreeFileSystem):
     protocol = "my"
-    storage_profile = StorageProfile()  # Nothing known: right on any storage.
+    storage_profile = UNKNOWN  # Nothing known: right on any storage.
 
     def _ils(self, path, recursive=False, **kwargs):
         # A directory's entries, as they come. With recursive=True, all below
@@ -157,7 +157,7 @@ concurrency limits. The wrapper is async if the filesystem is. Pass your own tab
 request at a time, with nothing known of the storage.
 
 A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper,
-overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_tree`
+overriding `_load_storage_profile(path)` and the primitives the storage does better itself. Examples are `_mv_tree`
 renaming a directory, or `_rm_tree` deleting one whole. The strategies then use them where the profile says so,
 streamed and monitored. Use such a wrapper directly, or name it in an entry's `wrapper`.
 

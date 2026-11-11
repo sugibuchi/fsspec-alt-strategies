@@ -95,7 +95,8 @@ AsyncRoutingFileSystem             router.py, holding filesystems of the above
 `_BaseFileSystem` holds what both families share:
 
 - the two limits: `operation_limit` for the strategies' requests, `io_limit` for reads and writes of data;
-- the profile: `storage_profile`, or `async _load_storage_profile()` overridden to find it with a request;
+- the profile: `storage_profile`, `UNKNOWN` unless set, and `async _load_storage_profile(path)` overridden to find
+  it with a request;
 - the data methods, `_cat_file`, `_pipe_file`, `_get_file` and `_put_file`, through `open_async`'s files.
 
 Each family declares the primitives its subclasses implement, and overrides fsspec's recursive methods:
@@ -280,8 +281,8 @@ profile only saves requests:
   finds with a request, asking the storage at that path, e.g. the container a credential is limited to.
 - A strategy awaits it with `_get_storage_profile(paths)`, in its jobs' `setup()`, with the paths it is given. Once
   loaded, `storage_profile` is returned. Until then, each path is tried in turn, under a lock, and the first profile
-  loaded is set as `storage_profile`. If all fail, it raises. A profile found by a request is `StorageProfile()`
-  until loaded, right on any storage.
+  loaded is set as `storage_profile`. If all fail, it raises. `storage_profile` is `UNKNOWN` unless a
+  subclass sets what it knows.
 - Paths of one filesystem whose storages differ go to a router, each storage with a filesystem of its own.
 - A deletion reads the profile of the filesystem it deletes from.
 - A copy or move reads the destination's. `renames_files` and `renames_directories` count only within one storage.

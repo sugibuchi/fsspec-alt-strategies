@@ -72,7 +72,7 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
         The data methods' calls at a time, such as ``_cat_file``.
         A semaphore is used as it is, shared with what else holds it.
     storage_profile : StorageProfile
-        What the storage does. ``StorageProfile()`` if it is unknown.
+        What the storage does. ``UNKNOWN`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`.
 
@@ -92,7 +92,7 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
     ...     rm_batch_size=1000,
     ...     operation_concurrency=64,
     ...     io_concurrency=8,
-    ...     storage_profile=StorageProfile(),
+    ...     storage_profile=UNKNOWN,
     ... )
     >>> with monitoring(Progress()):
     ...     flat.rm("bucket/data/2024", recursive=True)
@@ -170,7 +170,7 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
         The data methods' calls at a time, such as ``_cat_file``.
         A semaphore is used as it is, shared with what else holds it.
     storage_profile : StorageProfile
-        What the storage does. ``StorageProfile()`` if it is unknown.
+        What the storage does. ``UNKNOWN`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
@@ -190,7 +190,7 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
     ...     rm_batch_size=1000,
     ...     operation_concurrency=8,
     ...     io_concurrency=4,
-    ...     storage_profile=StorageProfile(),
+    ...     storage_profile=UNKNOWN,
     ... )
     >>> flat.find("bucket/data")
     """

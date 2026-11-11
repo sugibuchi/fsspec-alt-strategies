@@ -43,8 +43,6 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 
-    from fsspec_alt_strategies.profile import StorageProfile
-
 
 __all__ = ["FlatFileSystem"]
 
@@ -106,9 +104,7 @@ class FlatFileSystem(_BaseFileSystem):
     Raises
     ------
     ValueError
-        If a concurrency or ``rm_batch_size`` is less than 1, or not set. Also
-        if ``storage_profile`` is not set while ``_load_storage_profile`` is
-        not overridden.
+        If a concurrency or ``rm_batch_size`` is less than 1, or not set.
 
     See Also
     --------
@@ -118,7 +114,7 @@ class FlatFileSystem(_BaseFileSystem):
     --------
     >>> class MyFileSystem(FlatFileSystem):
     ...     protocol = "my"
-    ...     storage_profile = StorageProfile()  # Unknown.
+    ...     storage_profile = UNKNOWN
     ...     rm_batch_size = 1000  # As S3's DeleteObjects takes.
     ...
     ...     async def _ils(self, path, recursive=False, prefix="", **kwargs): ...
@@ -141,13 +137,6 @@ class FlatFileSystem(_BaseFileSystem):
 
     rm_batch_size: int
     """The most keys ``_rm_files`` deletes in one request, e.g. 1000 on S3."""
-
-    storage_profile: StorageProfile
-    """What the storage does, for the strategies.
-
-    A subclass sets it, or overrides ``_load_storage_profile`` too: it is
-    then ``StorageProfile()`` until `_get_storage_profile` loads it.
-    """
 
     def __init__(
         self,

@@ -9,7 +9,7 @@ them, but sends fewer requests, or copies less data, when it knows.
 
 A filesystem has one profile, which never changes. A strategy reads it from the
 filesystem it works on, or from the destination's for a copy or move.
-`StorageProfile()` knows nothing, and is right on any storage.
+`UNKNOWN`, `StorageProfile()`, knows nothing, and is right on any storage.
 
 The library never detects a storage's behaviour: the developer declares it. A
 field left None is unknown, and a strategy then takes the way that is right on
@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-__all__ = ["StorageProfile"]
+__all__ = ["UNKNOWN", "StorageProfile"]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -106,3 +106,7 @@ class StorageProfile:
                 "parents_required cannot be True with implicit_directories: a file's"
                 " parents exist as soon as it does"
             )
+
+
+UNKNOWN = StorageProfile()
+"""The profile of a storage nothing is known of: every field None, right on any storage."""

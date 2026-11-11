@@ -21,6 +21,7 @@ from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveWritableFile,
 )
 from fsspec_alt_strategies_impl.files.fsspec_async import AsyncFileAdapter
+from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
@@ -414,13 +415,13 @@ async def test_storage_profile_is_the_profile_loaded(
     found = StorageProfile(renames_files=True)
 
     class Found(_Tree):
-        storage_profile = None  # type: ignore[assignment]
+        storage_profile = StorageProfile()  # Nothing known until loaded.
 
         async def _load_storage_profile(self, path: str) -> StorageProfile:
             return found
 
     fs = Found(inner, asynchronous=True)
-    # Unknown, right on any storage, until loaded: then the profile found.
+    # As set until loaded: then the profile found.
     assert fs.storage_profile == StorageProfile()
     assert await fs._get_storage_profile("data") is found
     assert fs.storage_profile is found
@@ -443,21 +444,6 @@ async def test_mkdir_makes_a_directory(fs: _Tree, inner: SimulatedFileSystem) ->
     inner.add_file("new/file", b"f")
     with pytest.raises(NotADirectoryError):
         await fs._mkdir("new/file/deep", create_parents=False)
-
-
-def test_a_profile_is_set_or_found_by_the_hook(inner: SimulatedFileSystem) -> None:
-    class Unset(_Tree):
-        storage_profile = None  # type: ignore[assignment]
-
-    with pytest.raises(ValueError, match="storage_profile"):
-        Unset(inner)
-
-    class Found(Unset):
-        # E.g. found by a request: none set beside it.
-        async def _load_storage_profile(self) -> StorageProfile:
-            return StorageProfile(fs_type="tree")
-
-    Found(inner)
 
 
 async def test_failures_are_raised(fs: _Tree, inner: SimulatedFileSystem) -> None:
@@ -647,12 +633,10 @@ def test_a_subclass_missing_a_primitive_is_refused() -> None:
         Incomplete(SimulatedFileSystem(), asynchronous=True)
 
 
-def test_storage_profile_must_be_set(inner: SimulatedFileSystem) -> None:
-    class Unset(_Tree):
-        storage_profile = None  # type: ignore[assignment]
-
-    with pytest.raises(ValueError, match="storage_profile"):
-        Unset(inner)
+def test_storage_profile_is_unknown_unless_set() -> None:
+    # The base's own: what a subclass setting none has.
+    assert TreeFileSystem.storage_profile == StorageProfile()
+    assert FlatFileSystem.storage_profile == StorageProfile()
 
 
 def _copied(fs: SimulatedFileSystem) -> dict[str, bytes]:

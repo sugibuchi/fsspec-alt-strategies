@@ -31,7 +31,7 @@ from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 from fsspec.callbacks import DEFAULT_CALLBACK
 
 from fsspec_alt_strategies.monitor import Monitored
-from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -62,20 +62,26 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     of the number given.
 
     ``storage_profile`` tells the strategies what the storage does. It is one
-    for the whole filesystem. One whose storage is unknown says so, with
-    ``StorageProfile()``. Where it is found by a request, e.g. whether an
-    account has a hierarchical namespace, a subclass overrides
-    ``_load_storage_profile(path)`` too, which may ask the storage at one of
-    the paths the first operation needing it is given. ``storage_profile`` is
-    then ``StorageProfile()`` until loaded, and the profile found after, never
-    changing again. Either way, the strategies and the subclass's primitives
-    get it with ``await self._get_storage_profile(paths)``, which loads it once
-    and returns ``storage_profile``.
+    for the whole filesystem, and always set: one whose storage is unknown says
+    so, with ``UNKNOWN``. Where a request finds it, e.g. whether an
+    account has a hierarchical namespace, a subclass sets what it knows and
+    overrides ``_load_storage_profile(path)`` too, which may ask the storage at
+    one of the paths the first operation needing it is given. The strategies
+    and the subclass's primitives get it with
+    ``await self._get_storage_profile(paths)``, which loads it once, sets it as
+    ``storage_profile``, and returns it.
     A storage whose profile differs by path, e.g. per bucket, is several
     filesystems under a router.
 
     Each family's class declares the abstract methods its subclasses implement,
     so that a reader finds them all in one place.
+    """
+
+    storage_profile: StorageProfile = UNKNOWN
+    """What the storage does, for the strategies: unknown, right on any storage, by default.
+
+    A subclass sets what it knows. One overriding ``_load_storage_profile``
+    too has it replaced by the profile `_get_storage_profile` loads.
     """
 
     transfer_size: int = 8 * _MiB
@@ -107,18 +113,6 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         super().__init__(*args, **kwargs)
 
-        # A profile found by a request needs none set beside it: it is unknown,
-        # right on any storage, until loaded.
-        load = type(self)._load_storage_profile
-        profile = getattr(self, "storage_profile", None)
-        if not isinstance(profile, StorageProfile):
-            if load is _BaseFileSystem._load_storage_profile:
-                raise ValueError(
-                    "storage_profile must be set, to a StorageProfile, unless"
-                    f" _load_storage_profile is overridden: {profile!r}"
-                )
-            else:
-                self.storage_profile = StorageProfile()
         # Named apart from a subclass's own members.
         self._storage_profile_loaded = False
         self._storage_profile_lock = asyncio.Lock()
@@ -141,7 +135,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         `_get_storage_profile` sets what it returns as ``storage_profile``,
         then never calls it again. One that cannot tell at ``path`` raises: the
         next path is tried, or the next operation's. Returning
-        ``StorageProfile()`` instead keeps it, right on any storage.
+        ``UNKNOWN`` instead keeps it, right on any storage.
         """
         return self.storage_profile
 

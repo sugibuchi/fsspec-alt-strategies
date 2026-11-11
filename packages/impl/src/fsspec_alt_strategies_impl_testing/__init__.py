@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 
-from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 
 if TYPE_CHECKING:
@@ -708,7 +708,7 @@ class TreeView:
             fs._mv_file_entry if mv_file is None else _by_name(mv_file)
         )
         self._makedirs = fs._makedirs if makedirs is None else makedirs
-        self.storage_profile = storage_profile or StorageProfile()
+        self.storage_profile = storage_profile or UNKNOWN
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
 
     def _ils(
@@ -771,7 +771,7 @@ class FlatView:
         )
         self._makedirs = own("_makedirs", makedirs)
         self._rm_file = own("_rm_file", rm_file)
-        self.storage_profile = storage_profile or StorageProfile()
+        self.storage_profile = storage_profile or UNKNOWN
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
         self.rm_batch_size = rm_batch_size
 

@@ -66,7 +66,7 @@ code: read it before adding a strategy.
 - A strategy's name tells its family, e.g. `_tree_rm`, never a bare `_rm`: that is the method's name.
 - A strategy replacing an fsspec method answers as it does. Where it departs on purpose, its docstring says why.
 - What a storage does that fsspec leaves open is declared in `profile.StorageProfile`, never detected. A strategy reads
-  it with `await fs._get_storage_profile(paths)`, in its jobs' `setup`, so `StorageProfile()` must be correct on any
+  it with `await fs._get_storage_profile(paths)`, in its jobs' `setup`, so `UNKNOWN`, `StorageProfile()`, must be correct on any
   storage. A copy or move reads the destination's. Add a field only when a strategy saves requests or data copied with
   it.
 - A filesystem has one profile, which never changes. A storage whose behaviour differs by path, e.g. per bucket or
