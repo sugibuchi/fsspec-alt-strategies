@@ -42,8 +42,7 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
     - ``_mv_tree``, the wrapped one's ``_mv_tree``, or else its
       ``_mv_file``, where ``renames_directories=True``.
 
-    The wrapper runs
-    on the same loop, sync or not as the wrapped one is.
+    The wrapper runs on the same loop, sync or not as the wrapped one is.
 
     It wins on storages listing one directory per request, as `TreeFileSystem`
     does. It is not cached: each is new, and may be dropped once used.
@@ -62,6 +61,11 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
         What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`.
+
+    Raises
+    ------
+    ValueError
+        If a concurrency is less than 1.
 
     See Also
     --------
@@ -122,9 +126,9 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
     ``_mv_file`` and ``_mv_tree`` are the wrapped one's ``mv``, e.g. a local
     rename, and its ``_rm_tree`` its recursive ``rm``. They move or delete a
     directory whole where the profile's ``renames_directories=True`` or
-    ``deletes_directories=True`` says it is one request. Its data methods call the
-    wrapped one's too, and its files are the wrapped one's, awaited through a
-    `SyncFileAdapter`.
+    ``deletes_directories=True`` says it is one request. Its data methods call
+    the wrapped one's too, and its files are the wrapped one's, awaited through
+    a `SyncFileAdapter`.
 
     It wins on storages listing one directory per request, such as a local disk
     or SFTP, as `TreeFileSystem` does. A filesystem unsafe to call from several
@@ -145,6 +149,11 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
         What the storage does. ``StorageProfile()`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
+
+    Raises
+    ------
+    ValueError
+        If a concurrency is less than 1.
 
     See Also
     --------

@@ -7,8 +7,8 @@
 pass the wrapped one's data methods, such as ``_cat_file``, on as they are,
 under ``io_limit``. A family's wrapper adds its own primitives.
 
-This module depends on `sync_client` of `common`, `listing` of `tree`, and
-`files.fsspec_async`.
+This module depends on `sync_client` of `common`, `fsspec_async` of `files`,
+and `listing` of `tree`.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ class _FileSystemWrapper:
         self.fs.invalidate_cache(path)
 
     def _unwrapped(self) -> Any:
-        """The filesystem wrapped, unwrapped too if a wrapper: a monitor's `Call` names it.
+        """The filesystem wrapped, itself unwrapped if a wrapper: a `Call` names it.
 
         A wrapper is made on demand, and dropped after: the filesystem it wraps
         is the one its callers know.
@@ -177,16 +177,17 @@ class _AsyncFileSystemWrapper(_FileSystemWrapper):
 class _SyncFileSystemWrapper(SyncClientSupport, _FileSystemWrapper):
     """The primitives of a sync filesystem, each run in a thread of the wrapper's own.
 
-    There are as many threads as the wrapper's requests and data calls at a
-    time, ``operation_concurrency`` and ``io_concurrency``, when both are
-    numbers. ``operation_limit`` and ``io_limit`` bound how many run at once: a
-    filesystem unsafe to call from several threads needs them at 1.
+    There are as many threads as ``operation_concurrency`` and
+    ``io_concurrency`` together, when both are numbers. ``operation_limit`` and
+    ``io_limit`` bound how many run at once: a filesystem unsafe to call from
+    several threads needs both at 1.
     """
 
     fs: AbstractFileSystem
 
     def _thread_count(self) -> int | None:
-        # The data methods hold no permit of operation_limit: their own too.
+        # The data methods hold no permit of operation_limit: they need threads
+        # of their own.
         concurrencies = (self.operation_concurrency, self.io_concurrency)  # type: ignore[attr-defined]
         if all(isinstance(c, int) for c in concurrencies):
             return sum(concurrencies)

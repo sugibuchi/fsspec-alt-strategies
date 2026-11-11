@@ -92,8 +92,8 @@ class OperationHandler(ABC):
 
     Its methods follow `asyncio.Task`'s:
 
-    - `cancel` asks it to stop. It starts no new request, but goes on with the
-      outcomes of those already sent, then ends.
+    - `cancel` asks it to stop: it starts nothing new, and ends once the
+      requests already sent are done.
     - `cancelling` tells whether a stop was asked, and `cancelled` whether it
       ended so.
     - `done` tells whether it ended, whatever the reason.

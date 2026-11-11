@@ -5,8 +5,8 @@
 An operation of each family, e.g. the ``find`` of a ``TreeFileSystem`` and of
 a ``FlatFileSystem``, reports its progress with one state class, which a
 monitor reads. A field that only some of them can count is None in the
-others: e.g. ``directories_listed`` of a ``FlatFileSystem``'s ``find``, which lists
-keys, not directories.
+others: e.g. ``directories_listed`` of a ``FlatFileSystem``'s ``find``, which
+lists keys, not directories.
 
 This module depends on `monitor`.
 """
@@ -30,8 +30,7 @@ __all__ = [
 
 @dataclass(frozen=True, kw_only=True)
 class WalkState(State):
-    """The progress of a walk, such as a ``TreeFileSystem``'s or a
-    ``FlatFileSystem``'s.
+    """The progress of a walk, of either family.
 
     Attributes
     ----------
@@ -48,8 +47,7 @@ class WalkState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class FindState(State):
-    """The progress of a find, such as a ``TreeFileSystem``'s or a
-    ``FlatFileSystem``'s.
+    """The progress of a find, of either family.
 
     Attributes
     ----------
@@ -66,8 +64,7 @@ class FindState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class DuState(State):
-    """The progress of a du, such as a ``TreeFileSystem``'s or a
-    ``FlatFileSystem``'s.
+    """The progress of a du, of either family.
 
     Attributes
     ----------
@@ -88,8 +85,7 @@ class DuState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class GlobState(State):
-    """The progress of a glob, such as a ``TreeFileSystem``'s or a
-    ``FlatFileSystem``'s.
+    """The progress of a glob, of either family.
 
     Attributes
     ----------
@@ -106,8 +102,7 @@ class GlobState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class RmState(State):
-    """The progress of a recursive delete, such as a ``TreeFileSystem``'s or a
-    ``FlatFileSystem``'s.
+    """The progress of a recursive delete, of either family.
 
     Attributes
     ----------
@@ -127,8 +122,7 @@ class RmState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class CpState(State):
-    """The progress of a recursive copy, such as a ``TreeFileSystem``'s or a
-    ``FlatFileSystem``'s.
+    """The progress of a recursive copy, of either family.
 
     Attributes
     ----------
@@ -144,8 +138,7 @@ class CpState(State):
 
 @dataclass(frozen=True, kw_only=True)
 class MvState(State):
-    """The progress of a recursive move, such as a ``TreeFileSystem``'s or a
-    ``FlatFileSystem``'s.
+    """The progress of a recursive move, of either family.
 
     Attributes
     ----------
@@ -157,7 +150,7 @@ class MvState(State):
         The source directories deleted so far, once all in them was moved. None
         for a ``FlatFileSystem``, which deletes no directories.
     roots_renamed : int or None
-        The directories moved whole, each by one ``_mv_file_entry``, what is in them
+        The directories moved whole, each by one ``_mv_tree``, what is in them
         neither found nor counted. None unless the storage moves directories so.
     """
 

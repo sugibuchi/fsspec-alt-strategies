@@ -47,9 +47,9 @@ def _keys_of(paths: tuple[str, ...]) -> str:
 class _FlatJobs(_Jobs):
     """The jobs of one operation, run while the keys under its roots are listed.
 
-    ``fs`` is the filesystem listed, by its recursive ``_ils`` and ``_info``. With
-    ``maxdepth``, the keys deeper than it are listed, but left out, as
-    fsspec's ``_expand_path`` finds paths. A prefix lists every key under it.
+    ``fs`` is the filesystem listed, by its recursive ``_ils`` and ``_info``.
+    With ``maxdepth``, the keys deeper than it are listed, as a prefix lists
+    every key under it, but left out, as fsspec's ``_expand_path`` finds paths.
 
     A batch deletion runs by `delete`, and its outcome is told by `refused`:
     the keys ``_rm_files`` could not delete, each with its error.

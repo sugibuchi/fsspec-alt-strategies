@@ -100,8 +100,8 @@ def monitored(
 
     An entry's ``wrapper`` names another class, of the same family:
 
-    - a bare class name is a wrapper built in, e.g. "S3fsWrapper", which the
-      known entries of s3fs, gcsfs and adlfs name;
+    - a bare class name is a wrapper built in, e.g. "S3fsWrapper", as the
+      known entries of s3fs, gcsfs and adlfs name theirs;
     - a full name is a class of the caller's own, e.g.
       "mypkg.wrappers.MyWrapper", imported here.
 

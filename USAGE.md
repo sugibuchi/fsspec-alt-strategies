@@ -16,8 +16,6 @@ directories are:
 - the `flat` family, in `flat/`, for storages whose directories are only prefixes of keys, such as S3. It lists by
   prefix, and deletes keys in batches.
 
-Both list a whole tree in one paginated listing wherever the storage has one.
-
 Each family replaces fsspec's recursive methods, such as `find`, `rm` and `copy`, with its strategies. They come in
 two forms:
 
@@ -131,10 +129,12 @@ class MyFileSystem(TreeFileSystem):
 fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
 ```
 
-A filesystem has one profile, which never changes. Where a request finds it, e.g. whether an account has a hierarchical
-namespace, override `async def _load_storage_profile(self)` instead: it is awaited once, and the profile kept. A storage
-whose behaviour differs by path, e.g. per bucket, is several filesystems under a router. A method of fsspec's own can
-come back, e.g. `_rm = AsyncFileSystem._rm`, and a storage's own operation can override a method.
+A filesystem has one profile, which never changes. Where only a request can find it, e.g. whether an account has a
+hierarchical namespace, override `async def _load_storage_profile(self)` instead: it is awaited once, and the profile
+kept. A storage whose behaviour differs by path, e.g. per bucket, is several filesystems under a router.
+
+A method of fsspec's own can come back, e.g. `_rm = AsyncFileSystem._rm`. A storage's own operation can override a
+method too.
 
 #### Wrappers
 
@@ -151,8 +151,8 @@ fs.rm("data/2024", recursive=True)  # Deletes by the tree family's strategy.
 The known filesystems are those in `known_implementations`, by class: the local filesystem, s3fs, gcsfs, adlfs,
 fsspec's memory, SFTP and HDFS filesystems. Each entry says its profile, whose `fs_type` is its family, and its
 concurrency limits. The wrapper is async if the filesystem is. Pass your own table to `monitored()`, or
-`wrap_unknown_fs=True` to wrap any other filesystem the way right on every storage. That is as a tree, one request at a
-time, with nothing known of the storage.
+`wrap_unknown_fs=True` to wrap any other filesystem. That wraps it the way right on every storage: as a tree, one
+request at a time, with nothing known of the storage.
 
 A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper,
 overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_tree`
@@ -171,9 +171,9 @@ A wrapper is light and not cached: make one when you need it, and drop it after.
 
 None of these is right for every storage, and the library never picks one for you.
 
-- **The family** follows what a storage's directories are. Where they are real, `tree` deletes and renames them. Where
-  they are only prefixes of keys, `flat` lists by prefix and deletes in batches. A filesystem whose keys have no
-  listing by prefix but one directory per request, such as adlfs on Azure Blob Storage, suits `tree` too.
+- **The family** follows what a storage's directories are: `tree` where they are real, `flat` where they are only
+  prefixes of keys. A filesystem whose keys have no listing by prefix but one directory per request, such as adlfs on
+  Azure Blob Storage, suits `tree` too.
 - **One recursive listing usually wins.** Both families list a whole tree in one paginated request where the storage
   has one. On Azure, a find of 340 directories took 1 request instead of 342. A storage with none, such as SFTP, is
   scanned a directory at a time, several at once.
@@ -221,8 +221,7 @@ print(fs.stats.calls)  # Counter({'delete': 1})
 
 ### Monitor
 
-A `Monitor` sees each operation behind fsspec's methods, on a filesystem running the strategies. It is given the
-operation's `OperationHandler`, to stop it:
+A `Monitor` is given each operation's `OperationHandler`, to stop it:
 
 ```python
 from fsspec_alt_strategies import Monitor, monitoring

@@ -56,9 +56,9 @@ class FlatFileSystem(_BaseFileSystem):
     prefix in one paginated request. It overrides fsspec's ``_walk``,
     ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``_mv`` when
     recursive, with the flat strategies. These list every key under a prefix
-    with a recursive ``_ils``, and act on each key as it arrives. Their answers are
-    fsspec's, and their failures are raised, a single one as it is, several in
-    an ExceptionGroup.
+    with a recursive ``_ils``, and act on each key as it arrives. Their answers
+    are fsspec's, and their failures are raised, a single one as it is, several
+    in an ExceptionGroup.
 
     A subclass implements the storage's primitives:
 
@@ -70,9 +70,9 @@ class FlatFileSystem(_BaseFileSystem):
     - ``_info`` and ``_rm_file``;
     - ``_rmdir`` and ``_makedirs``, for fsspec's own methods only, e.g. making
       or deleting a bucket: fsspec's defaults do nothing;
-    - ``_cp_file_entry`` and ``_mv_file_entry``, a copy and a move of a key by its entry,
-      as its listing gave it, e.g. with its size. fsspec's ``_cp_file`` and
-      ``_mv_file`` ask the entry, then call them;
+    - ``_cp_file_entry`` and ``_mv_file_entry``, a copy and a move of a key by
+      its entry, as its listing gave it, e.g. with its size. fsspec's
+      ``_cp_file`` and ``_mv_file`` ask the entry, then call them;
     - ``open_async``, giving its files ``io_limit`` as their concurrency
       limit, and ``_open``.
 
@@ -106,7 +106,7 @@ class FlatFileSystem(_BaseFileSystem):
     Raises
     ------
     ValueError
-        If a concurrency is less than 1, or ``rm_batch_size`` is not set. Also
+        If a concurrency or ``rm_batch_size`` is less than 1, or not set. Also
         if ``storage_profile`` is not set while ``_load_storage_profile`` is
         not overridden.
 
@@ -273,10 +273,10 @@ class FlatFileSystem(_BaseFileSystem):
     ) -> None:
         """Move a key within the storage, by its entry, to ``path2``.
 
-        ``entry`` is as `_cp_file_entry` takes it. The flat strategies call it only
-        where the profile's ``renames_files=True`` says the storage renames: a
-        directory's marker too, its name ending with "/". One with no rename
-        copies, then deletes the source, for fsspec's ``_mv_file``.
+        ``entry`` is as `_cp_file_entry` takes it. The flat strategies call it
+        only where the profile's ``renames_files=True`` says the storage
+        renames: a directory's marker too, its name ending with "/". One with no
+        rename copies, then deletes the source, for fsspec's ``_mv_file``.
         """
 
     @abstractmethod

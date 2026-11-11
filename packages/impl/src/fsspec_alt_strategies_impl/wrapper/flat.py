@@ -51,9 +51,12 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
     not as the wrapped one is.
 
     Its recursive ``_ils`` lists with the wrapped one's ``_find`` of the
-    directory, and its ``_rm_files`` deletes with its ``_rm``, as s3fs deletes a batch in
-    one request. It wins on object stores, as `FlatFileSystem` does. It is not
-    cached: each is new, and may be dropped once used.
+    directory. Its ``_rm_files`` gives a batch to the wrapped one's ``_rm``,
+    which s3fs, e.g., deletes in one request. That ``_rm`` tells no key
+    apart, so any failure but a missing key fails the whole batch.
+
+    It wins on object stores, as `FlatFileSystem` does. It is not cached: each
+    is new, and may be dropped once used.
 
     Parameters
     ----------
@@ -149,10 +152,10 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
     wrapped one's too, and its files are the wrapped one's, awaited through a
     `SyncFileAdapter`.
 
-    Its recursive ``_ils`` lists with the wrapped one's ``find`` of the
-    directory, and its ``_rm_files`` deletes with its ``rm``. A filesystem unsafe to call
-    from several threads needs both concurrencies at 1. It is not cached: each
-    is new, and may be dropped once used.
+    Its recursive ``_ils`` and its ``_rm_files`` are as `AsyncFlatWrapper`'s,
+    by the wrapped one's ``find`` and ``rm``. A filesystem unsafe to call from
+    several threads needs both concurrencies at 1. It is not cached: each is
+    new, and may be dropped once used.
 
     Parameters
     ----------
@@ -240,7 +243,7 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
 def _starting(
     listing: list[dict[str, Any]], path: str, prefix: str
 ) -> list[dict[str, Any]]:
-    """A listing's entries whose names start with ``path/prefix``, in name order, as ``_ils`` yields them."""
+    """A listing's entries starting with ``path/prefix``, in name order, as ``_ils`` yields them."""
     if not prefix:
         return sorted(listing, key=lambda e: e["name"])
     start = f"{path}/{prefix}" if path else prefix

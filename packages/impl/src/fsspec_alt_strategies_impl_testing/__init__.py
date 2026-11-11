@@ -9,14 +9,16 @@ bandwidth if one is set.
 
 Its two modes model the two kinds of storage that strategies are chosen for:
 
-- *flat*, an object store such as S3. Directories are only prefixes of keys, so a
-  directory without files does not exist, and deleting a directory deletes each file.
+- *flat*, an object store such as S3. Directories are only prefixes of keys,
+  so a directory without files does not exist, and deleting a directory
+  deletes each file.
 - *hierarchical*, a storage with a hierarchical namespace such as Azure Data
-  Lake Storage Gen2. Directories are real, and a directory is deleted in one request.
+  Lake Storage Gen2. Directories are real, and a directory is deleted in one
+  request.
 
-Whether a whole subtree can be listed in one paginated request is set apart, by
-``recursive_listing``. Some hierarchical storages have it, others list one directory
-per request.
+Whether a whole subtree can be listed in one paginated request is set apart,
+by ``recursive_listing``. Some hierarchical storages have it, others list one
+directory per request.
 
 It is a package of its own, apart from the strategies: copying them into
 another package leaves it out. It depends on fsspec, on the interface for
@@ -92,8 +94,8 @@ class SimulatedFileSystem(AsyncFileSystem):
     ----------
     hierarchical : bool
         True for a storage with real directories, False for an object store.
-        Only a hierarchical one keeps empty directories, and deletes a directory with
-        everything in it in one request.
+        Only a hierarchical one keeps empty directories, and deletes a
+        directory with everything in it in one request.
     recursive_listing : bool
         Whether `_find` lists a subtree in one paginated request, as object
         stores do. Otherwise, it walks the subtree a directory at a time.
@@ -121,8 +123,8 @@ class SimulatedFileSystem(AsyncFileSystem):
         The requests received since the filesystem was made, or since
         `reset_stats`.
     entries : list of dict
-        The source entries `_cp_file_entry` and `_mv_file_entry` were given, in order,
-        so that a test checks what a strategy handed on.
+        The source entries `_cp_file_entry` and `_mv_file_entry` were given,
+        in order, so that a test checks what a strategy handed on.
 
     Examples
     --------
@@ -320,10 +322,9 @@ class SimulatedFileSystem(AsyncFileSystem):
         """List the files whose paths start with ``prefix``, as object stores do.
 
         It is no fsspec method: a `FlatView` lists with it, for a recursive
-        ``_ils``.
-        ``prefix`` is a raw string, e.g. "data/2024-" lists "data/2024-01.csv".
-        The files come in path order, a page per request: a page is asked for
-        only once the one before it is all taken.
+        ``_ils``. ``prefix`` is a raw string, e.g. "data/2024-" lists
+        "data/2024-01.csv". The files come in path order, a page per request:
+        a page is asked for only once the one before it is all taken.
         """
         after: str | None = None
 
@@ -381,7 +382,7 @@ class SimulatedFileSystem(AsyncFileSystem):
     async def _mv_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
-        """Move a file by its entry, as fsspec's ``_mv_file`` does: a copy, then a deletion."""
+        """Move a file by its entry, noting the entry: a copy, then a deletion, as fsspec's ``_mv_file``."""
         self.entries.append(entry)
         await self._mv_file(entry["name"], path2)
 
@@ -396,7 +397,7 @@ class SimulatedFileSystem(AsyncFileSystem):
 
         It is no fsspec method: the flat strategies delete with it. A path
         that is no file is left out, as object stores leave out a key that
-        does not exist.
+        does not exist. It returns None: every key was deleted.
         """
         await self._request("delete")
         for path in map(self._strip_protocol, paths):
@@ -460,11 +461,11 @@ class SimulatedFileSystem(AsyncFileSystem):
     async def _rename(self, path1: str, path2: str) -> None:
         """Move a file, or a directory with all in it, in one request.
 
-        It is no fsspec method: it is a hierarchical storage's own, as Azure Data
-        Lake Storage Gen2 renames a path. A test gives it to the tree move as its
-        ``mv_file``, and as its ``mv_tree`` with a profile's
-        ``renames_directories=True``. It refuses a
-        ``path2`` that exists, and an object store has none.
+        It is no fsspec method: it is a hierarchical storage's own, as Azure
+        Data Lake Storage Gen2 renames a path. A test gives it to the tree move
+        as its ``mv_file``, and as its ``mv_tree`` with a profile's
+        ``renames_directories=True``. It refuses a ``path2`` that exists. An
+        object store has no rename: it raises NotImplementedError.
         """
         path1, path2 = self._strip_protocol(path1), self._strip_protocol(path2)
         if not self.hierarchical:
@@ -658,8 +659,8 @@ class TreeView:
     """A filesystem as the tree strategies take it, its primitives replaceable.
 
     The tree strategies take a filesystem, and call its ``_ils``, ``_info``,
-    ``_rm_file``, ``_rmdir``, ``_cp_file_entry``, ``_mv_file_entry``, ``_makedirs``,
-    ``_rm_tree`` and ``_mv_tree``. A `SimulatedFileSystem` has no ``_ils``: this
+    ``_rm_file``, ``_rmdir``, ``_cp_file_entry``, ``_mv_file_entry``,
+    ``_makedirs``, ``_rm_tree`` and ``_mv_tree``. A `SimulatedFileSystem` has no ``_ils``: this
     view lists a directory with `dir_ils`, or with ``ils`` if given. Each other
     primitive is the filesystem's own, unless given, so that a test may replace
     one, e.g. with one that fails. A ``cp_file`` or ``mv_file`` given takes
@@ -727,8 +728,8 @@ class FlatView:
     """A filesystem as the flat strategies take it, its primitives replaceable.
 
     The flat strategies take a filesystem, and call its recursive ``_ils``,
-    ``_info``, ``_rm_files``, ``_cp_file_entry``, ``_mv_file_entry``, ``_makedirs`` and
-    ``_rm_file``. Each is the filesystem's own, unless given, so that a test
+    ``_info``, ``_rm_files``, ``_cp_file_entry``, ``_mv_file_entry``,
+    ``_makedirs`` and ``_rm_file``. Each is the filesystem's own, unless given, so that a test
     may replace one, e.g. with one that fails. ``list_prefix``, a listing of
     every key starting with a raw prefix, e.g. "data/2024-", answers a
     recursive ``_ils``: the filesystem's own unless given. A ``cp_file`` or

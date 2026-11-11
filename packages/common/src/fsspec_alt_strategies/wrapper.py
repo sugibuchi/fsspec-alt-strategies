@@ -10,9 +10,9 @@ copy of the strategies wraps it:
 - optionally, its wrapper class, where the generic one of its family is not
   the best.
 
-Without a wrapper class, whether the wrapper is async is not declared: it is
-async if the filesystem is an ``AsyncFileSystem``. The strategies'
-``monitored`` reads the table, or a table of the caller's own.
+Without a wrapper class, the family's generic wrapper is used, async if the
+filesystem is an ``AsyncFileSystem``. The strategies' ``monitored`` reads the
+table, or a table of the caller's own.
 
 It is declared, never detected: an entry says what the developer knows of the
 storage. Each entry sets every field of its profile, None where the storage's

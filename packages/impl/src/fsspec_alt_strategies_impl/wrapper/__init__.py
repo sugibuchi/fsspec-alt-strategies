@@ -9,7 +9,8 @@
 
 A wrapper is light, and not cached, as fsspec caches filesystems: make one on
 demand, e.g. to watch a call with a monitor, and drop it after. The developer
-chooses the wrapper: none is chosen for a filesystem.
+chooses the wrapper, or declares it in the known implementations: none is
+detected.
 
 Each class is imported from its module. This package imports none of them.
 """
