@@ -344,14 +344,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         ``on_error="return"``, or raised otherwise. It fetches the gaps too, at
         most ``max_gap`` bytes each, for fewer requests.
         """
-        if not isinstance(paths, list):
-            raise TypeError(f"paths must be a list: {type(paths).__name__}")
-        count = len(paths)
-        starts = list(starts) if isinstance(starts, Iterable) else [starts] * count
-        ends = list(ends) if isinstance(ends, Iterable) else [ends] * count
-        if len(starts) != count or len(ends) != count:
-            raise ValueError("paths, starts and ends must be as many")
-
+        starts, ends = _range_bounds(paths, starts, ends)
         gap = self.ranges_max_gap if max_gap is None else max_gap
         fetches, plan = _merge_ranges(paths, starts, ends, gap, self.ranges_max_block)
         fetched = await self._fetch_ranges(fetches, batch_size, kwargs)
@@ -438,6 +431,24 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     async def _put(self, lpath: Any, rpath: Any, **kwargs: Any) -> Any:
         kwargs["batch_size"] = self._io_batch_size(kwargs.get("batch_size"))
         return await super()._put(lpath, rpath, **kwargs)
+
+
+def _range_bounds(
+    paths: list[str], starts: Any, ends: Any
+) -> tuple[list[int | None], list[int | None]]:
+    """``starts`` and ``ends`` as lists, one per path, as fsspec's ``cat_ranges`` takes them.
+
+    A single value is every range's. It raises as fsspec's does: TypeError for
+    paths not a list, ValueError for counts that differ.
+    """
+    if not isinstance(paths, list):
+        raise TypeError(f"paths must be a list: {type(paths).__name__}")
+    count = len(paths)
+    starts = list(starts) if isinstance(starts, Iterable) else [starts] * count
+    ends = list(ends) if isinstance(ends, Iterable) else [ends] * count
+    if len(starts) != count or len(ends) != count:
+        raise ValueError("paths, starts and ends must be as many")
+    return starts, ends
 
 
 def _cut(

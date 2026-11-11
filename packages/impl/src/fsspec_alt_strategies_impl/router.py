@@ -33,6 +33,7 @@ from .common.filesystem import (
     _AbstractFileSystemMeta,
     _copy_errors,
     _raise,
+    _range_bounds,
     _strip_only_protocol,
 )
 from .common.operation import _collect_with_monitors
@@ -497,6 +498,63 @@ class AsyncRoutingFileSystem(
         self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any
     ) -> bytes:
         return await self._forward(path, "_cat_file", start=start, end=end, **kwargs)
+
+    async def _cat_ranges(
+        self,
+        paths: list[str],
+        starts: Any,
+        ends: Any,
+        max_gap: int | None = None,
+        batch_size: int | None = None,
+        on_error: str = "return",
+        **kwargs: Any,
+    ) -> list[Any]:
+        """Read byte ranges of files, as fsspec's ``cat_ranges`` does, each storage's by its own.
+
+        fsspec's calls ``_cat_file`` once per range. This gives each inner
+        filesystem its ranges in one ``_cat_ranges``, all at once, so that a
+        filesystem merging nearby ranges, as the families' do, merges them. A
+        path no storage has, or above them, fails in place of its range. The
+        answers come in the order asked, as fsspec's do.
+        """
+        starts, ends = _range_bounds(paths, starts, ends)
+        out: list[Any] = [None] * len(paths)
+        # Each inner filesystem with the ranges it reads: their indices, and inner paths.
+        groups: dict[int, tuple[AsyncFileSystem, list[int], list[str]]] = {}
+        for i, path in enumerate(paths):
+            try:
+                fs, inner = self._required(path)
+            except Exception as e:
+                out[i] = e
+                continue
+            groups.setdefault(id(fs), (fs, [], []))[1].append(i)
+            groups[id(fs)][2].append(inner)
+
+        async def read(
+            fs: AsyncFileSystem, indices: list[int], inners: list[str]
+        ) -> None:
+            options = {} if max_gap is None else {"max_gap": max_gap}
+            with routing(self):
+                results = await fs._cat_ranges(
+                    inners,
+                    [starts[i] for i in indices],
+                    [ends[i] for i in indices],
+                    batch_size=batch_size,
+                    on_error="return",
+                    **options,
+                    **kwargs,
+                )
+            for i, inner, result in zip(indices, inners, results, strict=True):
+                if isinstance(result, BaseException):
+                    self._note(result, fs, inner, paths[i])
+                out[i] = result
+
+        await asyncio.gather(*(read(*group) for group in groups.values()))
+        if on_error != "return":
+            for result in out:
+                if isinstance(result, BaseException):
+                    raise result
+        return out
 
     async def _pipe_file(self, path: str, value: bytes, **kwargs: Any) -> None:
         if self._intrans:

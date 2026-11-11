@@ -723,7 +723,7 @@ _MIRRORED = {
 }  # fmt: skip
 # fsspec's own, built on the primitives passed on, as on any filesystem.
 _BUILT_ON_PRIMITIVES = {
-    "_cat", "_cat_ranges", "_get", "_pipe", "_put", "_size", "_sizes", "cat",
+    "_cat", "_get", "_pipe", "_put", "_size", "_sizes", "cat",
     "cat_ranges", "checksum", "get", "head", "open", "pipe", "put", "read_block",
     "read_bytes", "read_text", "sizes", "tail", "touch", "tree", "ukey",
     "write_bytes", "write_text",
@@ -748,3 +748,31 @@ def test_every_fsspec_method_is_passed_on_or_inherited_on_purpose() -> None:
     passed_on = set(vars(AsyncRoutingFileSystem))
     assert methods - passed_on - _INHERITED == set()
     assert not passed_on & _INHERITED
+
+
+async def test_cat_ranges_gives_each_storage_its_ranges(router: _Router) -> None:
+    data = bytes(range(256)) * 400
+    for sim in (router.tree, router.flat, router.plain):
+        sim.add_file("big", data)
+    starts = [i * 1000 for i in range(10)]
+    paths, all_starts, all_ends = [], [], []
+    for backend in ("tree", "flat", "plain"):
+        paths += [f"lake/{backend}/big"] * 10
+        all_starts += starts
+        all_ends += [s + 100 for s in starts]
+    paths.append("lake/missing/big")
+    all_starts.append(0)
+    all_ends.append(10)
+    _reset(router)
+
+    out = await router._cat_ranges(paths, all_starts, all_ends)
+
+    assert out[:-1] == [
+        data[s:e] for s, e in zip(all_starts[:-1], all_ends[:-1], strict=True)
+    ]
+    assert isinstance(out[-1], FileNotFoundError)
+    # The families' filesystems merge their ten ranges; the plain one reads each.
+    assert router.tree.stats.calls == router.flat.stats.calls == {"read": 1}
+    assert router.plain.stats.calls == {"read": 10}
+    with pytest.raises(FileNotFoundError):
+        await router._cat_ranges(paths, all_starts, all_ends, on_error="raise")
