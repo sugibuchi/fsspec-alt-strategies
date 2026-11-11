@@ -543,8 +543,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     and a multipart upload's start, parts, completion and abort.
 
     - Until ``min_multipart_size`` bytes are written, they are buffered. A file
-      closed by then is uploaded in one request, and so is one no bigger than
-      ``min_block_size`` when closed.
+      closed by then is uploaded in one request. So is one closed before any
+      part was sent that would go as one part, e.g. with ``spread`` 1, or one
+      no bigger than ``min_block_size``.
     - Beyond, parts are uploaded as soon as they fill, as the concurrency
       limit allows, while writing goes on. A file that has had n bytes
       written is assumed to get n more: its parts grow, so as to split that
@@ -875,15 +876,18 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         if not self._multipart and small and not closing:
             return
 
-        # Below min_multipart_size, or no bigger than the smallest part, one
-        # request uploads it, where a multipart upload would add its start and
-        # completion. A bigger file goes in parts, sent at once, which a storage
-        # may take faster than one request. Beyond the cap, even a small file
-        # goes in parts.
+        # Closed with nothing sent, below min_multipart_size, or as one part,
+        # e.g. with spread 1: one request uploads it, where a multipart upload
+        # would add its start and completion. A file of several parts goes in
+        # parts, sent at once, which a storage may take faster than one
+        # request. Beyond the cap, even a small file goes in parts.
+        one_part = len(buffer) - min(self._block_size(len(buffer)), cap) < (
+            self.min_block_size
+        )
         if (
             closing
             and not self._multipart
-            and (small or len(buffer) <= self.min_block_size)
+            and (small or len(buffer) <= self.min_block_size or one_part)
             and len(buffer) <= cap
         ):
             # Even an empty file is created.
