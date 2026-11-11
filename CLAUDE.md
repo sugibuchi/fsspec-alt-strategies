@@ -79,8 +79,10 @@ code: read it before adding a strategy.
 ### Families
 
 - A family, such as `tree/` or `flat/`, never imports another. What two share goes in `common/`, a module per
-  concern. What builds on both sits at the package's root: `wrapper.py` and `router.py`. The router imports a
+  concern. What builds on both sits at the package's root: `wrapper/` and `router.py`. The router imports a
   family only when copying or moving from a storage of it, as its profile's `fs_type` says.
+- A wrapper of one library, such as `wrapper/s3fs.py`, never imports it: it calls the wrapped filesystem's methods.
+  Write one only where the library saves requests or data beyond fsspec's API.
 - A family's modules export nothing public but its filesystem class, in `filesystem.py`.
 - The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.

@@ -11,12 +11,11 @@ from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
 from fsspec_alt_strategies_impl.router import AsyncRoutingFileSystem
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
-from fsspec_alt_strategies_impl.wrapper import (
-    AsyncTreeWrapper,
-    SyncTreeWrapper,
+from fsspec_alt_strategies_impl.wrapper._wrapped import (
     _AsyncFileSystemWrapper,
     _SyncFileSystemWrapper,
 )
+from fsspec_alt_strategies_impl.wrapper.tree import AsyncTreeWrapper, SyncTreeWrapper
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:

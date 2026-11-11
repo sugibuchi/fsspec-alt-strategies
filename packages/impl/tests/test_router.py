@@ -15,7 +15,8 @@ from fsspec.spec import AbstractFileSystem
 from fsspec_alt_strategies.monitor import Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.router import AsyncRoutingFileSystem
-from fsspec_alt_strategies_impl.wrapper import AsyncFlatWrapper, AsyncTreeWrapper
+from fsspec_alt_strategies_impl.wrapper.flat import AsyncFlatWrapper
+from fsspec_alt_strategies_impl.wrapper.tree import AsyncTreeWrapper
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:

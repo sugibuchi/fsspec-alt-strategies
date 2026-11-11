@@ -9,7 +9,7 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.wrapper import AsyncFlatWrapper, SyncFlatWrapper
+from fsspec_alt_strategies_impl.wrapper.flat import AsyncFlatWrapper, SyncFlatWrapper
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:

@@ -16,7 +16,7 @@ ruff, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
 | `.../tree/`, `.../flat/`                                | The two families: each one's abstract class and strategies                 |
 | `.../common/`                                           | What the families share: the base class, the jobs, operations and paths    |
 | `.../files/`                                            | File objects, their async adapters, and transactions                       |
-| `.../wrapper.py`, `.../monitor.py`                      | Wrappers of existing filesystems, and `monitored()`                        |
+| `.../wrapper/`, `.../monitor.py`                        | Wrappers of existing filesystems, s3fs's, gcsfs's and adlfs's own, and `monitored()` |
 | `.../router.py`                                         | `AsyncRoutingFileSystem`, spanning several storages                        |
 | `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem` and its views, apart so that copies leave them out   |
 | `packages/impl/src/fsspec_alt_strategies_impl_cli/`     | The command line copying the strategies, with the `cli` extra              |
@@ -72,10 +72,13 @@ The choices below shape the whole project. Keep to them, or change them on purpo
 AsyncFileSystem                    fsspec's
 └── _BaseFileSystem                common/filesystem.py
     ├── TreeFileSystem             tree/filesystem.py
-    │   ├── AsyncTreeWrapper       wrapper.py
+    │   ├── AsyncTreeWrapper       wrapper/tree.py
+    │   │   └── AdlfsWrapper       wrapper/adlfs.py
     │   └── SyncTreeWrapper
     └── FlatFileSystem             flat/filesystem.py
-        ├── AsyncFlatWrapper
+        ├── AsyncFlatWrapper       wrapper/flat.py
+        │   ├── S3fsWrapper        wrapper/s3fs.py
+        │   └── GcsfsWrapper       wrapper/gcsfs.py
         └── SyncFlatWrapper
 AsyncRoutingFileSystem             router.py, holding filesystems of the above
 ```

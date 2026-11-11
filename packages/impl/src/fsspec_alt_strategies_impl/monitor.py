@@ -7,7 +7,7 @@ block of its operations. One inheriting the interface's `Monitored`, such as a
 `TreeFileSystem` or a wrapper, already does. Any other is wrapped as its entry
 in the known implementations says: none is chosen for a filesystem not there.
 
-This module depends on `wrapper`.
+This module depends on `adlfs`, `flat`, `gcsfs`, `s3fs` and `tree` of `wrapper`.
 """
 
 from __future__ import annotations
@@ -20,12 +20,11 @@ from fsspec_alt_strategies.monitor import Monitored
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.wrapper import known_implementations
 
-from .wrapper import (
-    AsyncFlatWrapper,
-    AsyncTreeWrapper,
-    SyncFlatWrapper,
-    SyncTreeWrapper,
-)
+from .wrapper.adlfs import AdlfsWrapper
+from .wrapper.flat import AsyncFlatWrapper, SyncFlatWrapper
+from .wrapper.gcsfs import GcsfsWrapper
+from .wrapper.s3fs import S3fsWrapper
+from .wrapper.tree import AsyncTreeWrapper, SyncTreeWrapper
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -36,12 +35,23 @@ if TYPE_CHECKING:
 
 __all__ = ["monitored"]
 
+# The wrappers of a class of their own, each of the family it is written for.
+_OWN_WRAPPERS: dict[tuple[str, str], Any] = {
+    ("s3fs.core.S3FileSystem", "flat"): S3fsWrapper,
+    ("gcsfs.core.GCSFileSystem", "flat"): GcsfsWrapper,
+    ("adlfs.spec.AzureBlobFileSystem", "tree"): AdlfsWrapper,
+}
 
-def _wrapper(kind: str, asynchronous: bool) -> Any:
-    """The wrapper class of a family, async or not."""
-    if kind == "tree":
+
+def _wrapper(name: str, kind: str, asynchronous: bool) -> Any:
+    """The wrapper of the class named, of a family, async or not: its own if it has one."""
+    own = _OWN_WRAPPERS.get((name, kind))
+    if own is not None and asynchronous:
+        return own
+    elif kind == "tree":
         return AsyncTreeWrapper if asynchronous else SyncTreeWrapper
-    return AsyncFlatWrapper if asynchronous else SyncFlatWrapper
+    else:
+        return AsyncFlatWrapper if asynchronous else SyncFlatWrapper
 
 
 def monitored(
@@ -57,6 +67,10 @@ def monitored(
     `FlatFileSystem`, a tree if unknown, and the entry gives its limits. The
     wrapper is async if the filesystem is an `AsyncFileSystem`. It is new, and
     may be dropped once used.
+
+    s3fs, gcsfs and adlfs, or a class inheriting one, get a wrapper of their
+    own, e.g. `S3fsWrapper`, listing and copying as each does best. It is
+    used where the entry's family is the one it is written for.
 
     A filesystem no entry names is wrapped only if ``wrap_unknown_fs``: as
     a `TreeFileSystem`, one request at a time, with an unknown profile. That
@@ -95,7 +109,8 @@ def monitored(
 
     table = known_implementations if implementations is None else implementations
     for cls in type(fs).__mro__:
-        entry = table.get(f"{cls.__module__}.{cls.__qualname__}")
+        name = f"{cls.__module__}.{cls.__qualname__}"
+        entry = table.get(name)
         if entry is not None:
             break
     else:
@@ -110,7 +125,7 @@ def monitored(
 
     # A family unknown is a tree, the way right on any storage.
     fs_type = entry["storage_profile"].fs_type or "tree"
-    wrapper = _wrapper(fs_type, isinstance(fs, AsyncFileSystem))
+    wrapper = _wrapper(name, fs_type, isinstance(fs, AsyncFileSystem))
     options: dict[str, Any] = {
         "operation_concurrency": entry["operation_concurrency"],
         "io_concurrency": entry["io_concurrency"],

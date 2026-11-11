@@ -20,8 +20,14 @@ two forms:
 
 - **Abstract filesystem classes**, `TreeFileSystem` and `FlatFileSystem`, for a new filesystem implementation: you
   implement the storage's primitives, and the recursive methods are the strategies.
-- **Wrappers**, in `wrapper.py`, for existing filesystem implementations: they give a filesystem the strategies
+- **Wrappers**, in `wrapper/`, for existing filesystem implementations: they give a filesystem the strategies
   without changing it. `monitored()` picks the wrapper for a known filesystem.
+
+s3fs, gcsfs and adlfs have wrappers of their own, which use what each library has beyond fsspec's API:
+
+- `S3fsWrapper` streams a listing page by page, narrowed to a prefix, and copies a file without asking its size first;
+- `GcsfsWrapper` lists by a prefix, not the whole directory;
+- `AdlfsWrapper` lists a tree in one paginated request, not one per directory.
 
 ### Monitor
 
@@ -78,7 +84,7 @@ Delete the modules you do not use afterwards.
 | Feature                         | Modules to copy                                                            |
 |---------------------------------|----------------------------------------------------------------------------|
 | A family's abstract class       | `tree/` or `flat/`, and `common/`; `files/` for its file objects, if used  |
-| Wrappers and `monitored()`      | `wrapper.py`, `monitor.py`, `__init__.py`, `tree/`, `flat/`, `common/` and `files/` |
+| Wrappers and `monitored()`      | `wrapper/`, `monitor.py`, `__init__.py`, `tree/`, `flat/`, `common/` and `files/` |
 | Monitor                         | Nothing: it is in the interface package                                    |
 | Async file objects              | `files/`                                                                   |
 | Filesystem router               | `router.py`, `common/`, and the family of each storage copied or moved from |

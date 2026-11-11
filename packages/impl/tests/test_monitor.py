@@ -11,11 +11,11 @@ from fsspec.implementations.memory import MemoryFileSystem
 from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.monitor import monitored
-from fsspec_alt_strategies_impl.wrapper import (
-    AsyncFlatWrapper,
-    AsyncTreeWrapper,
-    SyncTreeWrapper,
-)
+from fsspec_alt_strategies_impl.wrapper.adlfs import AdlfsWrapper
+from fsspec_alt_strategies_impl.wrapper.flat import AsyncFlatWrapper
+from fsspec_alt_strategies_impl.wrapper.gcsfs import GcsfsWrapper
+from fsspec_alt_strategies_impl.wrapper.s3fs import S3fsWrapper
+from fsspec_alt_strategies_impl.wrapper.tree import AsyncTreeWrapper, SyncTreeWrapper
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -104,6 +104,38 @@ def test_the_known_memory_filesystem() -> None:
         assert tree.find("/test_monitored") == ["/test_monitored/data/a.txt"]
     finally:
         memory.rm("/test_monitored", recursive=True)
+
+
+@pytest.mark.parametrize(
+    ("name", "own"),
+    [
+        ("s3fs.core.S3FileSystem", S3fsWrapper),
+        ("gcsfs.core.GCSFileSystem", GcsfsWrapper),
+        ("adlfs.spec.AzureBlobFileSystem", AdlfsWrapper),
+    ],
+)
+def test_s3fs_gcsfs_and_adlfs_get_their_own_wrappers(name: str, own: type) -> None:
+    module, _, qualname = name.rpartition(".")
+    known = type(qualname, (SimulatedFileSystem,), {"__module__": module})
+    known.__qualname__ = qualname
+
+    # A subclass of theirs, as gcsfs's own ExtendedGcsFileSystem is.
+    class Extended(known):  # type: ignore[valid-type, misc]
+        pass
+
+    assert type(monitored(Extended())) is own
+    # Another family than the one it is written for: the generic wrapper.
+    other = "tree" if issubclass(own, AsyncFlatWrapper) else "flat"
+    entry: Any = {
+        "storage_profile": StorageProfile(fs_type=other),
+        "operation_concurrency": 1,
+        "io_concurrency": 1,
+        "rm_batch_size": 1,
+    }
+    assert type(monitored(Extended(), {name: entry})) in {
+        AsyncTreeWrapper,
+        AsyncFlatWrapper,
+    }
 
 
 @pytest.mark.parametrize("asynchronous", [True, False])

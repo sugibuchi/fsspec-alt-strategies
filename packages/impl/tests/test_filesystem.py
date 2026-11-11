@@ -23,11 +23,8 @@ from fsspec_alt_strategies_impl.common.filesystem import (
     _strip_only_protocol,
 )
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
-from fsspec_alt_strategies_impl.wrapper import (
-    AsyncFlatWrapper,
-    AsyncTreeWrapper,
-    SyncTreeWrapper,
-)
+from fsspec_alt_strategies_impl.wrapper.flat import AsyncFlatWrapper
+from fsspec_alt_strategies_impl.wrapper.tree import AsyncTreeWrapper, SyncTreeWrapper
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
