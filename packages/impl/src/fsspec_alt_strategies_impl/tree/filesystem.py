@@ -349,7 +349,6 @@ class TreeFileSystem(_BaseFileSystem):
         **kwargs: Any,
     ) -> AsyncGenerator[tuple[str, Any, Any]]:
         detail = kwargs.pop("detail", False)
-        await self._ensure_storage_profile(path)
         root = self._strip_protocol(path)
         walk = _tree_walk(
             self,
@@ -401,7 +400,6 @@ class TreeFileSystem(_BaseFileSystem):
         **kwargs: Any,
     ) -> Any:
         detail = kwargs.pop("detail", False)
-        await self._ensure_storage_profile(path)
         entries, _ = await _collect_with_monitors(
             _tree_find(
                 self,
@@ -423,7 +421,6 @@ class TreeFileSystem(_BaseFileSystem):
                 path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
             )
 
-        await self._ensure_storage_profile(path)
         op = _tree_du(
             self, self._strip_protocol(path), maxdepth=maxdepth, ils_kwargs=kwargs
         )
@@ -436,7 +433,6 @@ class TreeFileSystem(_BaseFileSystem):
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
         detail = kwargs.pop("detail", False)
         withdirs = kwargs.pop("withdirs", True)
-        await self._ensure_storage_profile(path)
         entries, _ = await _collect_with_monitors(
             _tree_glob(
                 self,
@@ -462,7 +458,6 @@ class TreeFileSystem(_BaseFileSystem):
             await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
             return
 
-        await self._ensure_storage_profile(path)
         _, errors = await _collect_with_monitors(
             _tree_rm(self, _strip_only_protocol(self, path), maxdepth=maxdepth),
             Call(self._unwrapped(), "rm", path),
@@ -487,8 +482,6 @@ class TreeFileSystem(_BaseFileSystem):
             )
             return
 
-        await self._ensure_storage_profile(path1)
-        await self._ensure_storage_profile(path2)
         _, errors = await _collect_with_monitors(
             _tree_cp(
                 self,
@@ -525,8 +518,6 @@ class TreeFileSystem(_BaseFileSystem):
             await self._rm(path1, recursive=recursive)
             return
 
-        await self._ensure_storage_profile(path1)
-        await self._ensure_storage_profile(path2)
         _, errors = await _collect_with_monitors(
             _tree_mv(
                 self,

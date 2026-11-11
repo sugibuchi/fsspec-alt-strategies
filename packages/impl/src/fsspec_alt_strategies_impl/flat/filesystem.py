@@ -302,7 +302,6 @@ class FlatFileSystem(_BaseFileSystem):
         **kwargs: Any,
     ) -> AsyncGenerator[tuple[str, Any, Any]]:
         detail = kwargs.pop("detail", False)
-        await self._ensure_storage_profile(path)
         root = self._strip_protocol(path)
         walk = _flat_walk(self, root, maxdepth=maxdepth, topdown=topdown)
 
@@ -332,7 +331,6 @@ class FlatFileSystem(_BaseFileSystem):
         **kwargs: Any,
     ) -> Any:
         detail = kwargs.pop("detail", False)
-        await self._ensure_storage_profile(path)
         entries, _ = await _collect_with_monitors(
             _flat_find(
                 self,
@@ -352,7 +350,6 @@ class FlatFileSystem(_BaseFileSystem):
                 path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
             )
 
-        await self._ensure_storage_profile(path)
         op = _flat_du(self, self._strip_protocol(path), maxdepth=maxdepth)
 
         entries, _ = await _collect_with_monitors(
@@ -362,7 +359,6 @@ class FlatFileSystem(_BaseFileSystem):
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
         detail = kwargs.pop("detail", False)
-        await self._ensure_storage_profile(path)
         entries, _ = await _collect_with_monitors(
             _flat_glob(
                 self,
@@ -386,7 +382,6 @@ class FlatFileSystem(_BaseFileSystem):
             await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
             return
 
-        await self._ensure_storage_profile(path)
         _, errors = await _collect_with_monitors(
             _flat_rm(self, _strip_only_protocol(self, path), maxdepth=maxdepth),
             Call(self._unwrapped(), "rm", path),
@@ -410,8 +405,6 @@ class FlatFileSystem(_BaseFileSystem):
             )
             return
 
-        await self._ensure_storage_profile(path1)
-        await self._ensure_storage_profile(path2)
         _, errors = await _collect_with_monitors(
             _flat_cp(
                 self,
@@ -448,8 +441,6 @@ class FlatFileSystem(_BaseFileSystem):
             await self._rm(path1, recursive=recursive)
             return
 
-        await self._ensure_storage_profile(path1)
-        await self._ensure_storage_profile(path2)
         _, errors = await _collect_with_monitors(
             _flat_mv(
                 self,

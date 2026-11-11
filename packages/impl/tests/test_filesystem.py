@@ -300,17 +300,17 @@ async def test_cat_ranges_fetches_a_large_merged_range_in_parts() -> None:
     assert inner.stats.calls == {"read": 3}
 
 
-# The profile, loaded with the paths of the operation first.
+# The profile, loaded with the paths of the operation that needs it.
 
 
 class _Noting:
-    """Notes each path the profile is ensured with, before a strategy loads it with none."""
+    """Notes each path the profile is loaded with."""
 
-    ensured: list[Any]
+    loaded: list[str]
 
-    async def _ensure_storage_profile(self, path: Any) -> StorageProfile:
-        self.ensured.append(path)
-        return await super()._ensure_storage_profile(path)  # type: ignore[misc]
+    async def _load_storage_profile(self, path: str) -> StorageProfile:
+        self.loaded.append(path)
+        return StorageProfile()
 
 
 class _NotingTree(_Noting, AsyncTreeWrapper):
@@ -321,42 +321,40 @@ class _NotingFlat(_Noting, AsyncFlatWrapper):
     pass
 
 
-async def _walked(fs: Any, path: str) -> list[Any]:
-    return [item async for item in fs._walk(path)]
-
-
 @pytest.mark.parametrize("family", ["tree", "flat"])
 @pytest.mark.parametrize(
     ("call", "paths"),
     [
-        (lambda fs: _walked(fs, "data"), ["data"]),
-        (lambda fs: fs._find("data"), ["data"]),
-        (lambda fs: fs._du("data"), ["data"]),
-        (lambda fs: fs._glob("data/*"), ["data/*"]),
-        (lambda fs: fs._rm("data", recursive=True), ["data"]),
-        (lambda fs: fs._copy("data", "copied", recursive=True), ["data", "copied"]),
-        (lambda fs: fs._mv("data", "moved", recursive=True), ["data", "moved"]),
-        # fsspec's own, starting no strategy.
-        (lambda fs: fs._rm("data/a.txt"), []),
+        # A tree deletion reads its own storage's profile, with its path; a flat one none.
+        (lambda fs: fs._rm("data", recursive=True), {"tree": ["data"], "flat": []}),
+        # A copy or a move reads the destination's, with its path.
+        (lambda fs: fs._copy("data", "copied", recursive=True), ["copied"]),
+        (lambda fs: fs._mv("data", "moved", recursive=True), ["moved"]),
+        # A strategy reading no profile loads none.
+        (lambda fs: fs._find("data"), []),
     ],
 )
-async def test_methods_starting_a_strategy_ensure_the_profile_first(
-    family: str, call: Any, paths: list[str]
+async def test_strategies_load_the_profile_with_their_paths(
+    family: str, call: Any, paths: Any
 ) -> None:
+    if isinstance(paths, dict):
+        paths = paths[family]
     inner = SimulatedFileSystem(hierarchical=family == "tree", asynchronous=True)
     inner.add_file("data/a.txt", b"a")
     inner.add_file("data/b/c.txt", b"c")
+    limits = {k: v for k, v in _LIMITS.items() if k != "storage_profile"}
     if family == "tree":
-        fs: Any = _NotingTree(inner, **_LIMITS)
+        fs: Any = _NotingTree(inner, storage_profile=StorageProfile(), **limits)
     else:
-        fs = _NotingFlat(inner, rm_batch_size=10, **_LIMITS)
-    fs.ensured = []
+        fs = _NotingFlat(
+            inner, rm_batch_size=10, storage_profile=StorageProfile(), **limits
+        )
+    fs.loaded = []
     await call(fs)
-    assert fs.ensured == paths
+    assert fs.loaded[: len(paths)] == paths
+    assert len(fs.loaded) == len(paths)  # Kept once loaded.
 
 
-async def test_ensure_storage_profile_is_the_profile_by_default() -> None:
+async def test_the_profile_set_is_loaded_with_any_path() -> None:
     fs = AsyncTreeWrapper(SimulatedFileSystem(asynchronous=True), **_LIMITS)
-    assert await fs._ensure_storage_profile("any/path") == StorageProfile(
-        fs_type="tree"
-    )
+    assert await fs._get_storage_profile("any/path") == StorageProfile(fs_type="tree")

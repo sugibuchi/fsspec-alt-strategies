@@ -41,7 +41,7 @@ from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 
 __all__ = ["CallStats", "FlatView", "SimulatedFileSystem", "TreeView", "dir_ils"]
 
@@ -720,7 +720,7 @@ class TreeView:
             return self.fs._ils_recursive(path)
         return _tree_ils(self, path, recursive=False, **kwargs)
 
-    async def _get_storage_profile(self) -> StorageProfile:
+    async def _get_storage_profile(self, path: str | Sequence[str]) -> StorageProfile:
         return self.storage_profile
 
 
@@ -783,5 +783,5 @@ class FlatView:
         else:
             return dir_ils(self.fs)(path, **kwargs)
 
-    async def _get_storage_profile(self) -> StorageProfile:
+    async def _get_storage_profile(self, path: str | Sequence[str]) -> StorageProfile:
         return self.storage_profile

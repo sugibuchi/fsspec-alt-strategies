@@ -65,8 +65,10 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     for the whole filesystem, and never changes. One whose storage is unknown
     says so, with ``StorageProfile()``. Where it is found by a request, e.g.
     whether an account has a hierarchical namespace, a subclass overrides
-    ``_load_storage_profile`` instead. Either way, the strategies and the
-    subclass's primitives get it with ``await self._get_storage_profile()``.
+    ``_load_storage_profile(path)`` instead, which may ask the storage at one of
+    the paths the first operation needing it is given. Either way, the
+    strategies and the subclass's primitives get it with
+    ``await self._get_storage_profile(paths)``.
     A storage whose profile differs by path, e.g. per bucket, is several
     filesystems under a router.
 
@@ -122,47 +124,60 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         self.operation_limit = operation_limit
         self.io_limit = io_limit
 
-    async def _load_storage_profile(self) -> StorageProfile:
-        """Find the profile: here, ``storage_profile``.
+    async def _load_storage_profile(self, path: str) -> StorageProfile:
+        """Find the profile, with a path the storage may be asked at: here, ``storage_profile``.
 
         A subclass overrides it where the profile is found by a request, e.g.
-        whether an account has a hierarchical namespace. It is awaited once,
-        by `_get_storage_profile`, which keeps what it returns. One that cannot
-        tell yet either raises, to be awaited again on the next call, or
-        returns ``StorageProfile()``, right on any storage and then kept.
+        whether an account has a hierarchical namespace, which a credential
+        limited to a container may be asked only there. ``path`` is one of the
+        paths the operation needing the profile is given, maybe a glob pattern.
+        It tells where to ask, never what the profile is: the profile is one
+        for the whole filesystem.
+
+        `_get_storage_profile` keeps what it returns. One that cannot tell at
+        ``path`` raises: the next path is tried, or the next operation's.
+        Returning ``StorageProfile()`` instead keeps it, right on any storage.
         """
         return self.storage_profile  # type: ignore[attr-defined, no-any-return]
 
-    async def _get_storage_profile(self) -> StorageProfile:
-        """The profile, loaded once by `_load_storage_profile`, then kept.
+    async def _get_storage_profile(self, path: str | Sequence[str]) -> StorageProfile:
+        """The profile, kept once `_load_storage_profile` has found it with one of ``path``.
 
-        The strategies await it once, when they start. The subclass's
-        primitives may await it too, e.g. a ``_rmdir`` depending on whether
-        directories are real, rather than keep a copy of what it knows.
-        A first call loads it while the others wait, then find it kept.
+        ``path`` is the path, or the paths, an operation is given, e.g. a
+        copy's destination. A profile kept is returned as it is. Otherwise each
+        path is tried in turn, until `_load_storage_profile` finds it. If it
+        fails at all of them, it raises: a single error as it is, several in an
+        ExceptionGroup. A first call loads it while the others wait, then find
+        it kept.
+
+        The strategies await it when they start. The subclass's primitives may
+        await it too, with the paths they are given, e.g. a ``_rmdir``
+        depending on whether directories are real.
         """
         # Once kept, no call waits for the lock.
         if (profile := self._storage_profile_loaded) is not None:
             return profile
+
+        paths = [path] if isinstance(path, str) else list(path)
+        if not paths:
+            raise ValueError("No path to load the storage profile with")
         async with self._storage_profile_lock:
-            if self._storage_profile_loaded is None:
-                self._storage_profile_loaded = await self._load_storage_profile()
-            return self._storage_profile_loaded
+            if self._storage_profile_loaded is not None:
+                return self._storage_profile_loaded
 
-    async def _ensure_storage_profile(
-        self, path: str | Sequence[str]
-    ) -> StorageProfile:
-        """The profile, loaded before an operation on ``path``: here, `_get_storage_profile`'s.
+            errors: list[Exception] = []
+            for p in paths:
+                try:
+                    self._storage_profile_loaded = await self._load_storage_profile(p)
+                except Exception as e:
+                    errors.append(e)
+                else:
+                    return self._storage_profile_loaded
 
-        The methods starting a strategy await it with their paths first, as do
-        the router's transfers, before the strategy loads the profile with
-        none. A subclass whose `_load_storage_profile` asks the storage
-        overrides it to note where it may ask, e.g. the container a credential
-        is limited to, then awaits `_get_storage_profile`. The profile is still
-        one for the whole filesystem: the path tells where loading may ask, never
-        what the profile is.
-        """
-        return await self._get_storage_profile()
+        if len(errors) == 1:
+            raise errors[0]
+        else:
+            raise ExceptionGroup("The storage profile could not be loaded", errors)
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""

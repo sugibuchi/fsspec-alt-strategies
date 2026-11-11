@@ -130,7 +130,8 @@ def _flat_mv(
         # A rename wins only where the storage is known to rename: the profile,
         # awaited, chooses the jobs.
         renames = (
-            same_storage and (await dst_fs._get_storage_profile()).renames_files is True
+            same_storage
+            and (await dst_fs._get_storage_profile(path2)).renames_files is True
         )
         jobs: _CopyOrMove = (
             _Rename(op=op, **options)

@@ -527,7 +527,7 @@ class _CopyJobs(_Jobs):
         # Any async filesystem may be a router's destination: fsspec gives it
         # no profile, so its storage is unknown.
         get = getattr(self.dst_fs, "_get_storage_profile", None)
-        self.profile = await get() if get is not None else StorageProfile()
+        self.profile = await get(self.path2) if get is not None else StorageProfile()
         # Unknown, directories are made first. Implicit directories need none.
         self.implicit_directories = bool(self.profile.implicit_directories)
         self.parents_required = (

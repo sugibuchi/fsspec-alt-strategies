@@ -780,20 +780,20 @@ async def test_cat_ranges_gives_each_storage_its_ranges(router: _Router) -> None
 
 
 @pytest.mark.parametrize("move", [False, True])
-async def test_transfers_across_storages_ensure_each_sides_profile(
+async def test_transfers_across_storages_load_each_sides_profile_with_its_path(
     router: _Router, move: bool
 ) -> None:
-    # Each side's profile is loaded with its own path, as its methods would.
-    ensured: list[tuple[str, Any]] = []
+    # The source's, for its family, and the destination's, which its jobs read.
+    loaded: list[tuple[str, Any]] = []
     for name in ("tree", "flat"):
         fs = router.backend(name)
-        original = fs._ensure_storage_profile
+        original = fs._get_storage_profile
 
         async def note(path: Any, name: str = name, original: Any = original) -> Any:
-            ensured.append((name, path))
+            loaded.append((name, path))
             return await original(path)
 
-        fs._ensure_storage_profile = note
+        fs._get_storage_profile = note
     method = router._mv if move else router._copy
     await method("lake/tree/data", "lake/flat/moved", recursive=True)
-    assert ensured == [("tree", "data"), ("flat", "moved")]
+    assert loaded[:2] == [("tree", "data"), ("flat", "moved")]

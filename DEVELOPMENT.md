@@ -276,12 +276,11 @@ profile only saves requests:
 | `renames_directories`  | True: every request in a directory moved whole by one `_mv_tree`   |
 | `deletes_directories`  | True: every request in a directory deleted whole by one `_rm_tree` |
 
-- A filesystem has one profile, which never changes. It is `storage_profile`, or what `_load_storage_profile()`
-  finds with a request.
-- A strategy awaits it with `_get_storage_profile()`, in its jobs' `setup()`. That loads it once, under a lock.
-- The methods starting a strategy, and the router's transfers, await `_ensure_storage_profile(path)` first, with the
-  paths they are given. By default it is `_get_storage_profile()`. A subclass loading its profile by a request
-  overrides it to note where it may ask, e.g. the container a credential is limited to.
+- A filesystem has one profile, which never changes. It is `storage_profile`, or what `_load_storage_profile(path)`
+  finds with a request, asking the storage at that path, e.g. the container a credential is limited to.
+- A strategy awaits it with `_get_storage_profile(paths)`, in its jobs' `setup()`, with the paths it is given. A
+  profile kept is returned. Otherwise each path is tried in turn, under a lock, and the first loaded is kept. If all
+  fail, it raises.
 - Paths of one filesystem whose storages differ go to a router, each storage with a filesystem of its own.
 - A deletion reads the profile of the filesystem it deletes from.
 - A copy or move reads the destination's. `renames_files` and `renames_directories` count only within one storage.
