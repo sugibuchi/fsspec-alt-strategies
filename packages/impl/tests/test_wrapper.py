@@ -11,7 +11,7 @@ from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
 from fsspec_alt_strategies_impl.router import AsyncRoutingFileSystem
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
-from fsspec_alt_strategies_impl.wrapper._wrapped import (
+from fsspec_alt_strategies_impl.wrapper._base import (
     _AsyncFileSystemWrapper,
     _SyncFileSystemWrapper,
 )

@@ -6,7 +6,7 @@
 so that its recursive methods are the tree strategies. They list a tree a
 directory per request, by the wrapped one's ``ls``.
 
-This module depends on `_wrapped`, and `filesystem` of `tree`.
+This module depends on `_base`, and `filesystem` of `tree`.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..tree.filesystem import TreeFileSystem
-from ._wrapped import _AsyncFileSystemWrapper, _SyncFileSystemWrapper
+from ._base import _AsyncFileSystemWrapper, _SyncFileSystemWrapper
 
 if TYPE_CHECKING:
     import asyncio

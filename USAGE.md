@@ -154,7 +154,13 @@ time, with nothing known of the storage.
 A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper,
 overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_tree`
 renaming a directory, or `_rm_tree` deleting one whole. The strategies then use them where the profile says so,
-streamed and monitored. Use such a wrapper directly: `monitored()` knows only the generic ones.
+streamed and monitored. Use such a wrapper directly, or name it in an entry's `wrapper`.
+
+An entry's optional `wrapper` names a wrapper class of its family, in place of the generic one:
+
+- a bare class name is a wrapper built into the strategies, e.g. `"S3fsWrapper"`, which the entries of s3fs, gcsfs and
+  adlfs name;
+- a full name is a class of your own, e.g. `"mypkg.wrappers.MyWrapper"`, imported when wrapping.
 
 A wrapper is light and not cached: make one when you need it, and drop it after.
 
@@ -182,7 +188,7 @@ None of these is right for every storage, and the library never picks one for yo
 
 - A flat wrapper lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix in pages. That
   listing is held in memory, and covers the prefix's whole directory. A subclass overriding `_ils` with the storage's own
-  listing by prefix streams it instead.
+  listing by prefix streams it instead, as `S3fsWrapper` does.
 - `known_implementations` is shared by every copy in a project. Change it with care, or pass your own table.
 
 #### Choosing with numbers

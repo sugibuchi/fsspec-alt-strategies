@@ -6,11 +6,13 @@
 copy of the strategies wraps it:
 
 - its `StorageProfile`, whose ``fs_type`` picks a tree or a flat wrapper;
-- its concurrency limits, and a flat wrapper's batch of deletions.
+- its concurrency limits, and a flat wrapper's batch of deletions;
+- optionally, its wrapper class, where the generic one of its family is not
+  the best.
 
-Whether the wrapper is async is not declared: it is async if the filesystem
-is an ``AsyncFileSystem``. The strategies' ``monitored`` reads the table, or a
-table of the caller's own.
+Without a wrapper class, whether the wrapper is async is not declared: it is
+async if the filesystem is an ``AsyncFileSystem``. The strategies'
+``monitored`` reads the table, or a table of the caller's own.
 
 It is declared, never detected: an entry says what the developer knows of the
 storage. Each entry sets every field of its profile, None where the storage's
@@ -47,6 +49,15 @@ class KnownImplementation(TypedDict):
     rm_batch_size: NotRequired[int]
     """A flat wrapper's batch of deletions, e.g. 1000 on S3."""
 
+    wrapper: NotRequired[str]
+    """The wrapper class, of the family the profile's ``fs_type`` says.
+
+    A bare class name, e.g. "S3fsWrapper", is one of the wrappers that every
+    copy of the strategies has. A full name, e.g. "mypkg.wrappers.MyWrapper",
+    is a class of the caller's own, imported when wrapping. Without it, the
+    generic wrapper of the family is used.
+    """
+
 
 known_implementations: dict[str, KnownImplementation] = {
     "fsspec.implementations.local.LocalFileSystem": {
@@ -77,6 +88,8 @@ known_implementations: dict[str, KnownImplementation] = {
         "operation_concurrency": 32,
         "io_concurrency": 8,
         "rm_batch_size": 1000,
+        # Streams its listing by prefix, and copies by the listed size.
+        "wrapper": "S3fsWrapper",
     },
     "gcsfs.core.GCSFileSystem": {
         # A bucket with a hierarchical namespace has directories of its own: one
@@ -95,6 +108,8 @@ known_implementations: dict[str, KnownImplementation] = {
         "io_concurrency": 8,
         # As GCS's batch requests take at most 100 calls.
         "rm_batch_size": 100,
+        # Lists by prefix.
+        "wrapper": "GcsfsWrapper",
     },
     "adlfs.spec.AzureBlobFileSystem": {
         # Its ls lists one directory per request, with walk_blobs and a delimiter,
@@ -112,6 +127,8 @@ known_implementations: dict[str, KnownImplementation] = {
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
+        # Lists a tree by one listing without a delimiter.
+        "wrapper": "AdlfsWrapper",
     },
     "fsspec.implementations.memory.MemoryFileSystem": {
         # Its directories are made by mkdir, or implied by the files in them: a

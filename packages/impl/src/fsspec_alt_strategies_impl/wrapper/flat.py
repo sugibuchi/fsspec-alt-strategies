@@ -18,7 +18,7 @@ listing. That costs twice:
 A subclass overriding ``_ils`` with the storage's own listing by prefix, e.g.
 from its SDK, streams it page by page, and lists only the prefix.
 
-This module depends on `_wrapped`, and `filesystem` of `flat`.
+This module depends on `_base`, and `filesystem` of `flat`.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..flat.filesystem import FlatFileSystem
-from ._wrapped import _AsyncFileSystemWrapper, _SyncFileSystemWrapper
+from ._base import _AsyncFileSystemWrapper, _SyncFileSystemWrapper
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

@@ -120,7 +120,9 @@ A developer chooses, per method:
 - a storage's recursive delete, by implementing `_rm_tree`, which `deletes_directories=True` declares;
 - a storage's rename of a directory, by implementing `_mv_tree`, which `renames_directories=True` declares.
 
-`monitored(fs)` picks the wrapper of a filesystem from `known_implementations`, a table the developer may replace.
+`monitored(fs)` picks the wrapper of a filesystem from `known_implementations`, a table the developer may replace. An
+entry's `wrapper` names a class by a string, as the interface never imports the strategies. A bare name is one of the
+built-in wrappers in `monitor.py`'s `_BUILT_IN`, and a full name is imported.
 
 ### Operations
 
