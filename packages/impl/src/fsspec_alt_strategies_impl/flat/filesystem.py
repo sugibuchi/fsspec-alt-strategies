@@ -172,7 +172,8 @@ class FlatFileSystem(_BaseFileSystem):
 
         The entries are as fsspec's ``_ls`` gives them with ``detail``, a key
         ending with "/" being a directory's marker. A storage listing in pages
-        yields each page's as it comes. ``prefix`` keeps the names starting
+        yields each page's as it comes, best through ``common.pages._pages_ahead``,
+        which asks for the next page while one is used. ``prefix`` keeps the names starting
         with ``path/prefix``, or ``prefix`` at the root: object stores list so
         in one request, with a delimiter or without.
 

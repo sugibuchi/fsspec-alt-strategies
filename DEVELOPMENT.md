@@ -239,6 +239,8 @@ for fsspec's own methods. The two are one request with or without a delimiter, a
 - `_flat_mv` renames with `_mv_file_entry` when the profile says the storage renames. Otherwise it copies, then
   deletes in batches.
 - A listing error ends the operation: there is no other listing to go on with.
+- A storage's pages come one after another, each asked with the last one's token. `common/pages.py`'s `_pages_ahead`
+  asks for the next page while one is used, so the storage's time to answer overlaps the client's to parse and use.
 
 ### Storage profiles
 
