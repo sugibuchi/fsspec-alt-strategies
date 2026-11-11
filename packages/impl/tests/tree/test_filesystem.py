@@ -103,7 +103,8 @@ class _Tree(TreeFileSystem):
         if recursive:
             # A storage with no recursive listing of its own.
             return _tree_ils(self, path, **kwargs)
-        return self._list_directory(path, **kwargs)
+        else:
+            return self._list_directory(path, **kwargs)
 
     async def _list_directory(
         self, path: str, **kwargs: Any

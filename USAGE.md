@@ -112,10 +112,8 @@ class MyFileSystem(TreeFileSystem):
         # directory by this _ils, without recursive.
         if recursive:
             return _tree_ils(self, path, **kwargs)
-        return self._list_directory(path, **kwargs)
-
-    async def _list_directory(self, path, **kwargs):
-        ...  # Yield each entry, a page at a time.
+        else:
+            ...  # List the entries in path, e.g. a page at a time.
 
     async def _info(self, path, **kwargs): ...
     # ... and the other primitives each class declares abstract.

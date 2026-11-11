@@ -221,7 +221,8 @@ class TreeFileSystem(_BaseFileSystem):
                 if recursive:
                     # kwargs hold no recursive: each directory is listed alone.
                     return _tree_ils(self, path, **kwargs)
-                return self._list_directory(path, **kwargs)
+                else:
+                    ...  # List the entries in path, e.g. a page at a time.
 
         Its listings hold permits of ``operation_limit``, beside the one held
         by the caller of ``_ils``. A directory that fails to list ends the
