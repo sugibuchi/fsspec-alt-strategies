@@ -109,40 +109,106 @@ def _tree_walk(
     if not (on_error in (None, "omit", "raise") or callable(on_error)):
         raise ValueError(f"on_error must be 'omit', 'raise' or callable: {on_error!r}")
 
+    # Top down, a directory on its own: a descend makes the walk list so.
+    walked = descend if descend is not None or not topdown else _every
+
     async def run(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
     ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
-        listings = _listings(
+        # Each directory's parts, held until its last, as fsspec's walk gives a
+        # directory whole. Bottom up, a directory then waits for those below it.
+        held: dict[str, list[dict[str, Any]]] = {}
+        bottom_up = None if topdown else _BottomUp()
+        chunks = _chunks(
             fs,
             path,
             maxdepth=maxdepth,
-            topdown=topdown,
-            # Top down, a directory on its own: a descend makes the walk list so.
-            descend=descend if descend is not None or not topdown else _every,
-            raise_on_error=on_error == "raise",
+            descend=walked,
             ils_kwargs=ils_kwargs,
             stopping=op.cancelling,
         )
-        state = op.state
 
-        async with aclosing(listings):
-            async for listing in listings:
-                op.state = state = WalkState(
-                    errors=state.errors + (listing.error is not None),
-                    current=listing.directory,
-                    directories_listed=state.directories_listed + 1,
-                    found=state.found + len(listing.entries),
-                )
+        async with aclosing(chunks):
+            async for part in chunks:
+                if (listing := _whole(part, held)) is None:
+                    continue
+                if listing.error is not None and on_error == "raise":
+                    raise listing.error
 
-                if listing.error is None:
-                    yield _triples(listing.directory, listing.entries, detail=True)
-                elif on_error is None:
-                    yield listing.error
-                elif callable(on_error):
-                    on_error(listing.error)
-                # Else "omit": left out.
+                ready = [listing]
+                if bottom_up is not None:
+                    subdirs = _walked_subdirs(listing, maxdepth, walked)
+                    ready = bottom_up.add(listing, subdirs)
+
+                for listing in ready:
+                    op.state = _walk_state(op.state, listing)
+                    if (item := _walked(listing, on_error)) is not None:
+                        yield item
 
     return Operation(run, WalkState(directories_listed=0))
+
+
+def _whole(part: _Listing, held: dict[str, list[dict[str, Any]]]) -> _Listing | None:
+    """A directory's whole listing once its last part comes, its parts held till then, or None.
+
+    A failed listing comes whole with its error and no entries.
+    """
+    held.setdefault(part.directory, []).extend(part.entries)
+    if not part.last:
+        return None
+    entries = held.pop(part.directory)
+    if part.error is not None:
+        return _Listing(part.directory, part.depth, [], part.error)
+    return _Listing(part.directory, part.depth, entries)
+
+
+def _walked(
+    listing: _Listing,
+    on_error: Literal["omit", "raise"] | Callable[[Exception], object] | None,
+) -> tuple[str, dict[str, Any], dict[str, Any]] | Exception | None:
+    """What the walk yields of a whole listing: its directory, its error, or None, as ``on_error`` says."""
+    if listing.error is None:
+        return _triples(listing.directory, listing.entries, detail=True)
+    if on_error is None:
+        return listing.error
+    if callable(on_error):
+        on_error(listing.error)
+    return None  # "omit", or handled by the callable: left out.
+
+
+def _walk_state(state: WalkState, listing: _Listing) -> WalkState:
+    """The walk's state once a directory's listing is out."""
+    return WalkState(
+        errors=state.errors + (listing.error is not None),
+        current=listing.directory,
+        directories_listed=state.directories_listed + 1,
+        found=state.found + len(listing.entries),
+    )
+
+
+def _walked_subdirs(
+    listing: _Listing,
+    maxdepth: int | None,
+    descend: Callable[[dict[str, Any]], bool] | None,
+) -> list[str]:
+    """The subdirectories of a whole listing that the walk lists too, each once."""
+    if listing.error is not None or (
+        maxdepth is not None and listing.depth >= maxdepth
+    ):
+        return []
+    return list(dict.fromkeys(_subdirs(listing.entries, descend)))
+
+
+def _subdirs(
+    entries: list[dict[str, Any]],
+    descend: Callable[[dict[str, Any]], bool] | None,
+) -> list[str]:
+    """The subdirectories among entries to list next."""
+    return [
+        e["name"].rstrip("/")
+        for e in entries
+        if e["type"] == "directory" and (descend is None or descend(e))
+    ]
 
 
 def _every(entry: dict[str, Any]) -> bool:
@@ -161,7 +227,7 @@ class _Listing:
     A directory's listing comes in parts, each of at most ``chunk_size`` entries,
     as ``_ils`` yields them: ``first`` on the first part, ``last`` on the last.
     So an empty directory is one part, both first and last, with no entries. A
-    failed listing ends with its error, as its last part. ``_listings`` yields
+    failed listing ends with its error, as its last part. `_tree_walk` holds
     each directory whole: one part, both first and last.
 
     ``depth`` 0 is no listing, but the walk's root itself, as `_find_listings`
@@ -188,7 +254,6 @@ async def _chunks(
     matched: Collection[str] = (),
     descend: Callable[[dict[str, Any]], bool] | None = None,
     whole: Callable[[dict[str, Any]], bool] | None = None,
-    raise_on_error: bool = False,
     ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
     chunk_size: int = _CHUNK_SIZE,
@@ -205,7 +270,7 @@ async def _chunks(
     first part raises, as fsspec's walk does, since nothing has been done yet:
     FileNotFoundError, or NotADirectoryError for a file. Any other failed
     listing is yielded as its last part, with its error, and its subdirectories not
-    listed yet are not walked. With ``raise_on_error``, it raises instead.
+    listed yet are not walked.
 
     The roots in ``matched`` start one level down, at depth 2: a pattern's
     matches are walked one level less deep than ``maxdepth``, as fsspec's
@@ -274,7 +339,7 @@ async def _chunks(
 
             if part.error is not None:
                 # Raised here, it stops the walk before another listing starts.
-                if (part.directory in roots and part.first) or raise_on_error:
+                if part.directory in roots and part.first:
                     raise part.error
                 _note(part.error, part.directory)
             elif not trees.listed(part.directory) and (
@@ -610,75 +675,6 @@ def _note(error: Exception, directory: str) -> None:
     """
     error.add_note(f"Listing {directory!r} failed.")
     error.directory = directory  # type: ignore[attr-defined]
-
-
-async def _listings(
-    fs: Any,
-    path: str,
-    *,
-    maxdepth: int | None = None,
-    topdown: bool = True,
-    descend: Callable[[dict[str, Any]], bool] | None = None,
-    raise_on_error: bool = False,
-    ils_kwargs: dict[str, Any] | None = None,
-    stopping: Callable[[], object] | None = None,
-) -> AsyncGenerator[_Listing]:
-    """Walk a directory tree as `_tree_walk` does, yielding each directory's listing whole.
-
-    It gathers the parts of `_chunks` into one listing per directory, as fsspec's
-    walk gives a directory at a time, so it holds each directory until it is done.
-    A failed listing comes as one, with its error and no entries. A directory
-    stopped before its last part is left out.
-
-    Bottom up, each directory waits for its subdirectories, which are only all known
-    once its listing ends.
-    """
-    held: dict[str, list[dict[str, Any]]] = {}
-    bottom_up = None if topdown else _BottomUp()
-    chunks = _chunks(
-        fs,
-        path,
-        maxdepth=maxdepth,
-        descend=descend,
-        raise_on_error=raise_on_error,
-        ils_kwargs=ils_kwargs,
-        stopping=stopping,
-    )
-
-    async with aclosing(chunks):
-        async for part in chunks:
-            entries = held.setdefault(part.directory, [])
-            entries.extend(part.entries)
-            if not part.last:
-                continue
-
-            del held[part.directory]
-            if part.error is not None:
-                listing = _Listing(part.directory, part.depth, [], part.error)
-            else:
-                listing = _Listing(part.directory, part.depth, entries)
-
-            if bottom_up is None:
-                yield listing
-                continue
-
-            subdirs = []
-            if listing.error is None and (maxdepth is None or listing.depth < maxdepth):
-                subdirs = list(dict.fromkeys(_subdirs(listing.entries, descend)))
-            for ready in bottom_up.add(listing, subdirs):
-                yield ready
-
-
-def _subdirs(
-    entries: list[dict[str, Any]],
-    descend: Callable[[dict[str, Any]], bool] | None,
-) -> list[str]:
-    """The subdirectories among entries to list next."""
-    return [
-        e["name"].rstrip("/")
-        for e in entries
-        if e["type"] == "directory" and (descend is None or descend(e))
-    ]
 
 
 class _BottomUp:

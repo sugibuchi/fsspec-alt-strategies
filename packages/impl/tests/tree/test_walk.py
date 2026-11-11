@@ -1,4 +1,4 @@
-"""Tests of `_tree_walk`, and of ``_listings``, the engine under the tree strategies."""
+"""Tests of `_tree_walk`, and of ``_chunks``, the engine under the tree strategies."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec_alt_strategies_impl.tree.walk import (
     WalkState,
     _chunks,
-    _listings,
     _tree_walk,
 )
 from fsspec_alt_strategies_impl_testing import (
@@ -300,27 +299,21 @@ def test_on_error_is_checked_at_once(any_fs: SimulatedFileSystem) -> None:
         _walk(any_fs, "data", on_error="ignore")
 
 
-async def test_listings_carry_dir_and_depth(any_fs: SimulatedFileSystem) -> None:
+async def test_parts_carry_dir_and_depth(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     # A trailing "/" is trimmed, as fsspec's _strip_protocol does.
-    listings = {
-        lst.directory: lst async for lst in _listings(TreeView(any_fs), "data/")
+    depths = {
+        part.directory: part.depth async for part in _chunks(TreeView(any_fs), "data/")
     }
-    assert listings["data"].depth == 1
-    assert [lst.depth for lst in listings.values()].count(3) == 4
+    assert depths["data"] == 1
+    assert list(depths.values()).count(3) == 4
 
 
-async def test_bottom_up_listings_come_after_their_subdirs() -> None:
+async def test_bottom_up_directories_come_after_their_subdirs() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.002, asynchronous=True)
     _tree(fs)
-    directories = [
-        lst.directory
-        async for lst in _listings(
-            TreeView(fs, operation_limit=asyncio.Semaphore(2)),
-            "data",
-            topdown=False,
-        )
-    ]
+    walk = _walk(fs, "data", topdown=False, concurrency_limit=asyncio.Semaphore(2))
+    directories = [directory async for directory, _, _ in walk]
     assert directories[-1] == "data"
     for i, directory in enumerate(directories):
         assert all(not f.startswith(directory + "/") for f in directories[i + 1 :])
