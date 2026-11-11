@@ -191,7 +191,8 @@ class _Rename(_CopyOrMove):
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "marker":
             return []
-        return super().done(job)
+        else:
+            return super().done(job)
 
 
 class _Move(_Copy):
@@ -257,7 +258,8 @@ class _Move(_Copy):
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "delete":
             return self.delete(job.paths)
-        return super().run(job)
+        else:
+            return super().run(job)
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":
