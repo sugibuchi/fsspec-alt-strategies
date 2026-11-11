@@ -191,11 +191,17 @@ jobs and their `Operation` at once.
 ### Routers
 
 `AsyncRoutingFileSystem`, in `router.py`, passes each call to the filesystem of the path's storage. A subclass
-implements three methods:
+implements two methods, and a third when some paths are above every storage:
 
 - `_route(path)` gives the inner filesystem and its path, or None above every storage;
 - `_outer(fs, path)` gives the router's path of an inner one;
-- `_roots(path)` lists a directory above the storages.
+- `_roots(path)` lists a directory above the storages. Without such paths, e.g. for URLs naming their storage, the
+  default raises FileNotFoundError.
+
+`_route` makes each inner filesystem once, with `_backend`, in the router's mode and on its loop: a sync router's
+`open` and `sign` call their sync methods. `backends_loop` is the loop they run on, where a subclass closes what
+they share, e.g. a credential. The class is generic in its inner filesystems' class, e.g.
+`AsyncRoutingFileSystem[S3FileSystem]`, which its hooks then take.
 
 Within one storage, a call is that storage's own. Between two, a recursive copy or move runs the source family's
 strategy on the two inner filesystems, chosen by the source profile's `fs_type`, with `maxdepth` too. Without one, it

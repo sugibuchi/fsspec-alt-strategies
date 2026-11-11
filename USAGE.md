@@ -331,11 +331,14 @@ with fs.transaction:
 
 ### Filesystem router
 
-`AsyncRoutingFileSystem` is abstract. A subclass implements three methods:
+`AsyncRoutingFileSystem` is abstract. A subclass implements these methods:
 
 - `_route(path)` gives the inner filesystem and its path, or None for a path above every storage;
 - `_outer(fs, path)` gives the router's path of an inner one;
-- `_roots(path)` lists a directory above the storages.
+- `_roots(path)` lists a directory above the storages, if any path is there.
+
+`_route` makes each inner filesystem with `_backend`, once. Make it with the router's `asynchronous` and `loop`, so
+that the router's sync methods, e.g. `open`, work.
 
 `transfer_concurrency` bounds the copies and moves between storages at a time. Override `_cross_fs_cp_entry` or
 `_cross_fs_mv_entry` for a storage with a faster way, such as a server-side copy. Each takes the source file's entry,
