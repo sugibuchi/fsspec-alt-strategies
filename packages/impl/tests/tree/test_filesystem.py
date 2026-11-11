@@ -102,7 +102,7 @@ class _Tree(TreeFileSystem):
     ) -> AsyncIterator[dict[str, Any]]:
         if recursive:
             # A storage with no recursive listing of its own.
-            return _tree_ils(self, path, **kwargs)
+            return _tree_ils(self, path, recursive=False, **kwargs)
         else:
             return self._list_directory(path, **kwargs)
 

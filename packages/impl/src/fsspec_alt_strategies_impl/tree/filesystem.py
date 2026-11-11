@@ -219,8 +219,7 @@ class TreeFileSystem(_BaseFileSystem):
 
             def _ils(self, path, recursive=False, **kwargs):
                 if recursive:
-                    # kwargs hold no recursive: each directory is listed alone.
-                    return _tree_ils(self, path, **kwargs)
+                    return _tree_ils(self, path, recursive=False, **kwargs)
                 else:
                     ...  # List the entries in path, e.g. a page at a time.
 

@@ -111,7 +111,7 @@ class MyFileSystem(TreeFileSystem):
         # listing, or _tree_ils where it has none. _tree_ils lists each
         # directory by this _ils, without recursive.
         if recursive:
-            return _tree_ils(self, path, **kwargs)
+            return _tree_ils(self, path, recursive=False, **kwargs)
         else:
             ...  # List the entries in path, e.g. a page at a time.
 

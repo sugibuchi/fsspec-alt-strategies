@@ -712,7 +712,7 @@ class TreeView:
             return self._dir_ils(path, **kwargs)
         if self.recursive_listing:
             return self.fs._ils_recursive(path)
-        return _tree_ils(self, path, **kwargs)
+        return _tree_ils(self, path, recursive=False, **kwargs)
 
     async def _get_storage_profile(self) -> StorageProfile:
         return self.storage_profile

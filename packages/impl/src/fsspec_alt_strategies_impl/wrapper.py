@@ -132,7 +132,7 @@ class _AsyncFileSystemWrapper(_FileSystemWrapper):
     ) -> AsyncIterator[dict[str, Any]]:
         if recursive:
             # fsspec's find gives all at once, in no stated order: one listing per directory.
-            async for entry in _tree_ils(self, path, **kwargs):
+            async for entry in _tree_ils(self, path, recursive=False, **kwargs):
                 yield entry
             return
 
@@ -227,7 +227,7 @@ class _SyncFileSystemWrapper(SyncClientSupport, _FileSystemWrapper):
     ) -> AsyncIterator[dict[str, Any]]:
         if recursive:
             # fsspec's find gives all at once, in no stated order: one listing per directory.
-            async for entry in _tree_ils(self, path, **kwargs):
+            async for entry in _tree_ils(self, path, recursive=False, **kwargs):
                 yield entry
             return
 
