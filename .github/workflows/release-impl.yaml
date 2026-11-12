@@ -80,6 +80,18 @@ jobs:
               for line in metadata.splitlines()
           ):
               sys.exit("the strategies do not require fsspec-alt-strategies")
+          # The interface of the release's own minor version, which the
+          # strategies need: an older one installed beside them fails on import.
+          major, minor = version.split(".")[:2]
+          bound = {f">={major}.{minor}", f"<{major}.{int(minor) + 1}"}
+          interface = [
+              line.removeprefix("Requires-Dist: fsspec-alt-strategies").strip()
+              for line in metadata.splitlines()
+              if line.startswith("Requires-Dist: fsspec-alt-strategies")
+              and not line.startswith("Requires-Dist: fsspec-alt-strategies-")
+          ]
+          if len(interface) != 1 or set(interface[0].split(",")) != bound:
+              sys.exit(f"the interface's bound is {interface}, not {sorted(bound)}")
           packages = {n.split("/")[0] for n in wheel.namelist()}
           for package in (name, f"{name}_testing"):
               if package not in packages:
