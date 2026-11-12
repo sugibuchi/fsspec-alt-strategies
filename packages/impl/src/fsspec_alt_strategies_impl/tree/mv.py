@@ -44,6 +44,7 @@ def _tree_mv(
     mv_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
+    root_entry: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], MvState]:
     """Move a directory and everything in it, moving while the tree is walked.
 
@@ -116,7 +117,7 @@ def _tree_mv(
     Requests: as `_tree_cp`, with one ``mv_entry`` per file instead of its
     ``cp_entry``, and one ``rm_dir`` per source directory. With
     ``renames_directories``, each directory root first costs a ``dst_info`` of
-    its target, unless ``path2`` was found missing already. One moving whole
+    its target, unless ``path2`` was found missing or existing already. One moving whole
     then costs a ``dst_makedirs`` of its parent, and its ``mv_tree``: nothing
     more. Each request holds a permit of the source's ``operation_limit``
     while it runs.
@@ -143,7 +144,10 @@ def _tree_mv(
     listing gave it: the source's ``_mv_file_entry`` by default, within one
     storage. A storage renaming a file in one request implements it so.
     ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given.
-    ``maxdepth`` of 1 moves only the files in ``path1``.
+    ``maxdepth`` of 1 moves only the files in ``path1``. ``root_entry`` is as
+    `_tree_cp` takes it: a single file moved so costs the ``dst_info`` of
+    ``path2``, a ``dst_makedirs`` unless its parent is known to exist, and its
+    ``mv_entry``.
 
     The operation yields ``(source, destination)`` for each file and directory
     moved, or an error, and its state is an `MvState`. The call raises
@@ -162,6 +166,7 @@ def _tree_mv(
         same_storage=same_storage,
         maxdepth=maxdepth,
         mv_entry=mv_entry,
+        root_entry=root_entry,
     )
 
 
@@ -256,6 +261,8 @@ class _Move(_CopyOrMove):
         target = self.target(source)
         if target in self.missing:
             return True
+        if target in self.existing:
+            return False
         try:
             async with self.concurrency_limit:
                 await self.dst_fs._info(target)

@@ -373,3 +373,40 @@ async def test_cp_file_asks_info_then_copies_the_entry(
     # The default _cp_file asks the source's entry once, then hands it on.
     assert inner.stats.calls == {"info": 1, "copy": 1}
     assert inner._file_data["copied.md"].data == b"x" * 10
+
+
+@pytest.mark.parametrize("path2", ["data/moved.md", "new/moved.md"])
+async def test_a_single_file_moves_asking_each_path_once(
+    inner: SimulatedFileSystem, path2: str
+) -> None:
+    class Renaming(_Flat):
+        storage_profile = StorageProfile(renames_files=True)
+
+    renaming = Renaming(inner, asynchronous=True)
+    inner.reset_stats()
+    await renaming._mv("data/README.md", path2)
+    # The source's info goes on as its entry: the key is not listed. The
+    # simulated object store's _mv_file is a copy, then a deletion, and its
+    # _makedirs sends nothing.
+    assert inner.stats.calls == {"info": 2, "copy": 1, "delete": 1}
+    assert inner._file_data[path2].data == b"x" * 10
+
+
+@pytest.mark.parametrize("path2", ["data/copied.md", "data/2024/", "new/copied.md"])
+async def test_a_single_file_copies_as_fsspecs_asking_each_path_once(
+    fs: _Flat, inner: SimulatedFileSystem, path2: str
+) -> None:
+    inner.reset_stats()
+    await fs._copy("data/README.md", path2)
+    # Asked once each, unless path2 ends with "/": the key is not listed.
+    assert inner.stats.calls["info"] == (1 if path2.endswith("/") else 2)
+    assert inner.stats.calls["copy"] == 1
+    assert "list" not in inner.stats.calls
+    reference = SimulatedFileSystem()
+    for path, file in inner._file_data.items():
+        if not path.startswith(("data/copied", "data/2024/README", "new/")):
+            reference.add_file(path, file.data)
+    reference.copy("data/README.md", path2)
+    assert {p: f.data for p, f in inner._file_data.items()} == {
+        p: f.data for p, f in reference._file_data.items()
+    }

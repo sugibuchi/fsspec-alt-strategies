@@ -40,6 +40,7 @@ def _tree_cp(
     cp_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
+    root_entry: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], CpState]:
     """Copy a directory and everything in it, copying while the tree is walked.
 
@@ -116,7 +117,12 @@ def _tree_cp(
 
     The destination's profile's ``parents_required=False``, or
     ``implicit_directories=True``, saves the ``dst_makedirs`` of each directory
-    with files, as their copies create it.
+    with files, as their copies create it. A directory known to exist needs
+    none: the ``dst_info`` of ``path2`` shows it or its parent, and within one
+    storage, ``path1``'s parent exists.
+
+    ``root_entry``, the entry of ``path1`` as the caller found it, saves the
+    listing of a single file: it is copied as the entry says.
 
     The primitives are called above by what they do: ``_ils`` is the source's
     ``_ils``, and ``dst_info``, ``dst_makedirs`` and ``dst_rm_file`` the
@@ -147,6 +153,7 @@ def _tree_cp(
         same_storage=same_storage,
         maxdepth=maxdepth,
         cp_entry=cp_entry,
+        root_entry=root_entry,
     )
 
 
@@ -162,11 +169,8 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         super().__init__(**kwargs)
 
         # The copies waiting for their destination directory, by that directory.
+        # A directory listed in several parts is made once, as `made` notes it.
         self.after_mkdir: dict[str, list[_Job]] = {}
-
-        # The destination directories made, or tried: a directory listed in several
-        # parts is made once, and its later copies need not wait.
-        self.made: set[str] = set()
 
     def file_root(self, entry: dict[str, Any]) -> None:
         self.files_found += 1

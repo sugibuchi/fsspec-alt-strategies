@@ -201,23 +201,25 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    async def _single_file(self, path: str | Sequence[str]) -> bool:
-        """Whether ``path`` names one existing file, with no pattern.
+    async def _single_file(self, path: str | Sequence[str]) -> dict[str, Any] | None:
+        """The entry of the one existing file ``path`` names, with no pattern, else None.
 
         fsspec's ``mv`` of a file that is not recursive copies it, then deletes
         it, never calling ``_mv_file``. The families move such a file with
         their recursive strategy instead, which moves it as a recursive move
-        would: by the storage's rename, where the class uses one.
+        would: by the storage's rename, where the class uses one. A copy goes
+        the same way. The entry goes to the strategy, which then need not list
+        the file to tell what it is.
         """
         if not isinstance(path, str) or has_magic(path) or path.endswith("/"):
-            return False
+            return None
 
         try:
             entry = await self._info(self._strip_protocol(path))
         except FileNotFoundError:
-            return False
+            return None
 
-        return entry["type"] != "directory"
+        return entry if entry["type"] != "directory" else None
 
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         """Copy a file, as fsspec's ``_cp_file`` does: by ``_cp_file_entry``, with its ``_info``.

@@ -42,6 +42,7 @@ def _flat_mv(
     cp_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
+    root_entry: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], MvState]:
     """Move the keys under a prefix, each as soon as it is listed.
 
@@ -104,7 +105,7 @@ def _flat_mv(
     copies a file by its source entry when the move copies: the source's
     ``_cp_file_entry`` by default, within one storage. ``same_storage`` is
     whether ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 moves
-    only the keys right in ``path1``.
+    only the keys right in ``path1``. ``root_entry`` is as `_flat_cp` takes it.
 
     The operation yields ``(source, destination)`` for each key moved, or an
     error, and its state is an `MvState`. The call raises ValueError if the
@@ -121,6 +122,7 @@ def _flat_mv(
         "path2": path2,
         "same_storage": same_storage,
         "maxdepth": maxdepth,
+        "root_entry": root_entry,
     }
 
     _check_batch_size(src_fs.rm_batch_size)

@@ -335,6 +335,73 @@ async def test_a_file_moves_by_mv_file_when_not_recursive(
     assert not await inner._exists("data/README.md")
 
 
+@pytest.mark.parametrize(
+    ("path2", "target", "calls"),
+    [
+        # Its directory exists, as the source is in it.
+        ("data/moved.md", "data/moved.md", {"info": 2, "rename": 1}),
+        # Into an existing directory, which its info shows.
+        ("data/2024", "data/2024/README.md", {"info": 2, "rename": 1}),
+        # A directory not known to exist is made first.
+        ("new/moved.md", "new/moved.md", {"info": 2, "mkdir": 1, "rename": 1}),
+    ],
+)
+async def test_a_single_file_moves_asking_each_path_once(
+    inner: SimulatedFileSystem, path2: str, target: str, calls: dict[str, int]
+) -> None:
+    class Renaming(_Tree):
+        storage_profile = StorageProfile(
+            renames_files=True, renames_directories=True, parents_required=True
+        )
+
+        async def _mv_file_entry(
+            self, entry: dict[str, Any], path2: str, **kwargs: Any
+        ) -> None:
+            await self.inner._rename(entry["name"], path2)
+
+    renaming = Renaming(inner, asynchronous=True)
+    inner.reset_stats()
+    await renaming._mv("data/README.md", path2)
+    # The source's info, which tells a file and goes on as its entry, and the
+    # destination's: the file is not listed, nor any path asked twice.
+    assert inner.stats.calls == calls
+    assert inner._file_data[target].data == b"readme"
+    assert not await inner._exists("data/README.md")
+
+
+@pytest.mark.parametrize(
+    ("path2", "calls"),
+    [
+        ("data/copied.md", {"info": 2, "copy": 1}),
+        # Onto an existing file, whose info shows its directory.
+        ("data/2024/01/part-0.parquet", {"info": 2, "copy": 1}),
+        ("data/2024", {"info": 2, "copy": 1}),
+        # Into it, unasked: it is made, as it may be missing.
+        ("data/2024/", {"info": 1, "mkdir": 1, "copy": 1}),
+        ("new/copied.md", {"info": 2, "mkdir": 1, "copy": 1}),
+    ],
+)
+async def test_a_single_file_copies_as_fsspecs_asking_each_path_once(
+    fs: _Tree, inner: SimulatedFileSystem, path2: str, calls: dict[str, int]
+) -> None:
+    inner.reset_stats()
+    await fs._copy("data/README.md", path2)
+    # The source's info goes on as its entry: the file is not listed.
+    assert inner.stats.calls == calls
+    reference = SimulatedFileSystem(hierarchical=True)
+    _tree(reference)
+    reference.copy("data/README.md", path2)
+    assert _copied(inner) == _copied(reference)
+
+
+async def test_a_single_file_copied_onto_itself_is_left(
+    fs: _Tree, inner: SimulatedFileSystem
+) -> None:
+    before = _copied(inner)
+    await fs._copy("data/README.md", "data/README.md")
+    assert _copied(inner) == before
+
+
 async def test_rm_uses_a_recursive_delete_of_the_storage(
     inner: SimulatedFileSystem,
 ) -> None:

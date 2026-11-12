@@ -246,7 +246,8 @@ The library logs none of its routine work. To log each operation's start and end
 
 - A monitor is awaited where the operation runs, so a slow monitor slows the call. For a sync call, it runs on
   fsspec's own loop, in its thread.
-- Only the calls a strategy runs are watched. A call fsspec answers itself, e.g. a copy that is not recursive, is not.
+- Only the calls a strategy runs are watched. A call fsspec answers itself is not, e.g. a copy of a pattern that is
+  not recursive. A single file's copy or move, recursive or not, goes by the strategy.
 
 ### Async file object
 

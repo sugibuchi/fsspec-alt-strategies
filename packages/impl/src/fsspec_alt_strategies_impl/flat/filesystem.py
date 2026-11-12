@@ -389,11 +389,27 @@ class FlatFileSystem(_BaseFileSystem):
         batch_size: int | None = None,
         **kwargs: Any,
     ) -> None:
-        if not recursive or not isinstance(path2, str):
+        """Copy files, as fsspec's ``copy`` does: with the flat copy when recursive.
+
+        A single file goes by the flat copy too, recursive or not, which needs
+        not ask it again, as fsspec's does.
+        """
+        if not isinstance(path2, str):
             await super()._copy(
                 path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
             )
             return
+
+        entry = None
+        if not recursive:
+            entry = await self._single_file(path1)
+            if entry is None:
+                await super()._copy(
+                    path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
+                )
+                return
+            # As fsspec's copy: a path given, not recursive, raises if missing.
+            on_error = on_error or "raise"
 
         _, errors = await _collect_with_monitors(
             _flat_cp(
@@ -402,6 +418,7 @@ class FlatFileSystem(_BaseFileSystem):
                 _strip_only_protocol(self, path1),
                 _strip_only_protocol(self, path2),
                 maxdepth=maxdepth,
+                root_entry=entry,
             ),
             Call(self._unwrapped(), "copy", path1, path2),
             kwargs.get("callback"),
@@ -425,11 +442,14 @@ class FlatFileSystem(_BaseFileSystem):
         if path1 == path2:
             return
 
-        if not recursive and not await self._single_file(path1):
-            # fsspec's own: a copy, then the deletion of its sources.
-            await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
-            await self._rm(path1, recursive=recursive)
-            return
+        entry = None
+        if not recursive:
+            entry = await self._single_file(path1)
+            if entry is None:
+                # fsspec's own: a copy, then the deletion of its sources.
+                await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
+                await self._rm(path1, recursive=recursive)
+                return
 
         _, errors = await _collect_with_monitors(
             _flat_mv(
@@ -438,6 +458,7 @@ class FlatFileSystem(_BaseFileSystem):
                 _strip_only_protocol(self, path1),
                 _strip_only_protocol(self, path2),
                 maxdepth=maxdepth,
+                root_entry=entry,
             ),
             Call(self._unwrapped(), "mv", path1, path2),
             kwargs.get("callback"),

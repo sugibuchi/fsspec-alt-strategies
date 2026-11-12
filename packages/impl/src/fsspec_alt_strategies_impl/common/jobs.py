@@ -482,6 +482,10 @@ class _CopyJobs(_Jobs):
     if it has none. Within one storage, it is the source, and ``same_storage``
     is True: a path copied onto itself, or under itself, is refused. Between two, a path may go to the same path, or under
     it, as that is another storage's.
+
+    ``root_entry`` is the entry of ``path1``, a single path, if the caller
+    found it already, e.g. to tell a file. A file's is then a root known to be
+    a file, not listed to find what it is.
     """
 
     verb = "copy"
@@ -494,6 +498,7 @@ class _CopyJobs(_Jobs):
         path2: str,
         dst_fs: Any,
         same_storage: bool,
+        root_entry: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -501,6 +506,7 @@ class _CopyJobs(_Jobs):
         self.path1 = path1
         self.path2 = path2
         self.same_storage = same_storage
+        self.root_entry = root_entry
 
         # The profile is the destination's, as what a copy saves depends on
         # where it writes. Within one storage, it is the source's too. Unknown
@@ -516,9 +522,14 @@ class _CopyJobs(_Jobs):
         # For a list: where each root goes, by the root.
         self.places: dict[str, str] = {}
 
-        # The destinations found missing, which need no asking again, e.g.
-        # by a move renaming a root onto one.
+        # The destinations found missing, and those found existing, which need
+        # no asking again, e.g. by a move renaming a root onto one.
         self.missing: set[str] = set()
+        self.existing: set[str] = set()
+
+        # The destination directories made, tried, or known to exist: their
+        # copies need not wait for a mkdir.
+        self.made: set[str] = set()
 
         self.files_found = 0
         self.files_done = 0
@@ -563,10 +574,8 @@ class _CopyJobs(_Jobs):
             root = _trim(self.path1)
             if root == destination and self.same_storage:
                 return None
-            roots = _Roots([{"name": root}])
+            roots = await self._single(root, destination)
             sources = [root]
-            self.prefix = root
-            self.base = await self._base(root, destination)
 
         for source in sources if self.same_storage else ():
             target = self.target(source)
@@ -611,17 +620,38 @@ class _CopyJobs(_Jobs):
             [files[s] for s in self.places if s in files],
         )
 
+    async def _single(self, root: str, destination: str) -> _Roots:
+        """Place a single path, and return it as a root: a file if its entry says so."""
+        self.prefix = root
+        self.base = await self._base(root, destination)
+        if self.same_storage:
+            # The root's parent exists: e.g. a file renamed in its directory needs no mkdir.
+            self.made.add(root.rpartition("/")[0])
+
+        entry = self.root_entry
+        if entry is not None and entry["type"] != "directory":
+            return _Roots([], [{**entry, "name": root}])
+        else:
+            return _Roots([{"name": root}])
+
     async def _base(self, root: str, destination: str) -> str:
-        """Where ``root``, a single path, goes: into ``destination``, or onto it."""
+        """Where ``root``, a single path, goes: into ``destination``, or onto it.
+
+        What its ``_info`` finds is kept: a destination missing or existing,
+        and the directory it shows to exist, which needs no mkdir.
+        """
         if self.path2.endswith("/"):
             into = True
         else:
             try:
                 entry = await self.dst_fs._info(destination)
-                into = entry["type"] == "directory"
             except FileNotFoundError:
                 self.missing.add(destination)
                 into = False
+            else:
+                self.existing.add(destination)
+                into = entry["type"] == "directory"
+                self.made.add(destination if into else destination.rpartition("/")[0])
 
         if not into or self.path1.endswith("/"):
             return destination

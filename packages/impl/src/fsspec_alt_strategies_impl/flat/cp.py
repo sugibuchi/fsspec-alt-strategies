@@ -39,6 +39,7 @@ def _flat_cp(
     cp_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
+    root_entry: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], CpState]:
     """Copy the keys under a prefix, copying as the listing goes on.
 
@@ -107,7 +108,12 @@ def _flat_cp(
     The destination's profile's ``parents_required=False``, or
     ``implicit_directories=True``, saves the ``dst_makedirs`` of each directory
     with keys, as their copies create it. ``implicit_directories=True`` saves
-    those of the markers too.
+    those of the markers too. A directory known to exist needs none: the
+    ``dst_info`` of ``path2`` shows it or its parent, and within one storage,
+    ``path1``'s parent exists.
+
+    ``root_entry``, the entry of ``path1`` as the caller found it, saves the
+    listing of a single file: it is copied as the entry says.
 
     The primitives are called above by what they do: ``_ils`` is the source's
     ``_ils``, and ``dst_info``, ``dst_makedirs`` and ``dst_rm_file`` the
@@ -138,6 +144,7 @@ def _flat_cp(
         same_storage=same_storage,
         maxdepth=maxdepth,
         cp_entry=cp_entry,
+        root_entry=root_entry,
     )
 
 
@@ -152,9 +159,6 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-
-        # The destination directories made, or tried: their keys need not wait.
-        self.made: set[str] = set()
 
         # The copies waiting for their destination directory, by that directory.
         self.after_mkdir: dict[str, list[_Job]] = {}
