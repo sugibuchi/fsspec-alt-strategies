@@ -14,7 +14,7 @@ ruff, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
 | `.../wrapper.py`                                        | `known_implementations`: how each known filesystem class is wrapped        |
 | `packages/impl/src/fsspec_alt_strategies_impl/`         | The strategies, copied into projects                                       |
 | `.../tree/`, `.../flat/`                                | The two families: each one's abstract class and strategies                 |
-| `.../common/`                                           | What the families share: the base class, the jobs, operations and paths    |
+| `.../common/`                                           | What the families share, e.g. the base class, the jobs and the operations  |
 | `.../files/`                                            | File objects, their async adapters, and transactions                       |
 | `.../wrapper/`, `.../monitor.py`                        | The generic wrappers, those of s3fs, gcsfs and adlfs, and `monitored()`    |
 | `.../router.py`                                         | `AsyncRoutingFileSystem`, spanning several storages                        |
@@ -49,7 +49,8 @@ CI runs ruff, zizmor and actionlint, and pytest on every supported Python versio
 - Assert the requests made, e.g. `fs.stats.calls == {"list": 1, "delete": 3}`: they are what a strategy is for.
 - Test a strategy replacing an fsspec method against fsspec's own, e.g. `AsyncFileSystem._glob(fs, ...)`.
 - `parents_required` and `overwrite` make the simulator fail as some storages do, to test profiles.
-- Async tests need no marker. Test directories have no `__init__.py`, and the interface's tests never import the strategies.
+- Async tests need no marker. Test directories have no `__init__.py`, and the interface's tests never import the
+  strategies.
 
 ## Design
 
@@ -108,7 +109,8 @@ Each family declares the primitives its subclasses implement, and overrides fssp
 
 Each family also makes the sync methods fsspec does not, `mv` and `rmdir`. Both declare abstract `_info`, `_rm_file`,
 `_rmdir`, `_makedirs`, `open_async` and `_open`. fsspec's default `_rmdir` and `_makedirs` do nothing, so a subclass
-forgetting them would fail silently. A `FlatFileSystem`'s handle buckets.
+forgetting them would fail silently. A `FlatFileSystem`'s `_rmdir` and `_makedirs` handle buckets, for fsspec's own
+methods only.
 
 Both also declare abstract the two methods copying and moving a file:
 
@@ -198,20 +200,20 @@ implements two methods, and a third when some paths are above every storage:
 - `_roots(path)` lists a directory above the storages. Without such paths, e.g. for URLs naming their storage, the
   default raises FileNotFoundError.
 
-`_route` makes each inner filesystem once, with `_backend`, in the router's mode and on its loop: a sync router's
-`open` and `sign` call their sync methods. `backends_loop` is the loop they run on, where a subclass closes what
-they share, e.g. a credential. The class is generic in its inner filesystems' class, e.g.
+`_route` makes each inner filesystem once, with `_backend`. It makes them in the router's mode and on its loop, as a
+sync router's `open` and `sign` call their sync methods. `backends_loop` is the loop they run on, where a subclass
+closes what they share, e.g. a credential. The class is generic in its inner filesystems' class, e.g.
 `AsyncRoutingFileSystem[S3FileSystem]`, which its hooks then take.
 
 Within one storage, a call is that storage's own. Between two, a recursive copy or move runs the source family's
-strategy on the two inner filesystems, chosen by the source profile's `fs_type`, with `maxdepth` too. Without one, it
-is fsspec's copy, a file at a time. A plain fsspec filesystem counts as one of unknown profile.
+strategy on the two inner filesystems, chosen by the source profile's `fs_type`, with `maxdepth` too. Without an
+`fs_type`, it is fsspec's copy, a file at a time. A plain fsspec filesystem counts as one of unknown profile.
 
 Each file goes through `_cross_fs_cp_entry` or `_cross_fs_mv_entry`, with the source's entry. By default these stream
 the data through both storages' `open_async`. A subclass can use a server-side copy instead, or the size to choose how
 the data goes.
 
-The router imports a family only when copying from it. Its inner filesystems must be async, and `close()` closes them.
+The router imports a family only when copying or moving from a storage of it. Its inner filesystems must be async, and `close()` closes them.
 Its transaction commits file by file, so it is not atomic across storages.
 
 ### The tree strategies
@@ -283,12 +285,12 @@ profile only saves requests:
 | `renames_directories`  | True: every request in a directory moved whole by one `_mv_tree`   |
 | `deletes_directories`  | True: every request in a directory deleted whole by one `_rm_tree` |
 
-- A filesystem has one profile, which never changes. It is `storage_profile`, or what `_load_storage_profile(path)`
-  finds with a request, asking the storage at that path, e.g. the container a credential is limited to.
-- A strategy awaits it with `_get_storage_profile(paths)`, in its jobs' `setup()`, with the paths it is given. Once
-  loaded, `storage_profile` is returned. Until then, each path is tried in turn, under a lock, and the first profile
-  loaded is set as `storage_profile`. If all fail, it raises. `storage_profile` is `UNKNOWN` unless a
-  subclass sets what it knows.
+- A filesystem has one profile, which never changes. It is `storage_profile`, `UNKNOWN` unless a subclass sets what
+  it knows. Or it is what `_load_storage_profile(path)` finds with a request, asking the storage at that path, e.g. the
+  container a credential is limited to.
+- A strategy awaits it with `_get_storage_profile(paths)`, e.g. in its jobs' `setup()`, with the paths it is given.
+  Once loaded, `storage_profile` is returned. Until then, each path is tried in turn, under a lock, and the first
+  profile loaded is set as `storage_profile`. If all fail, it raises.
 - Paths of one filesystem whose storages differ go to a router, each storage with a filesystem of its own.
 - A deletion reads the profile of the filesystem it deletes from.
 - A copy or move reads the destination's. `renames_files` and `renames_directories` count only within one storage.
@@ -306,7 +308,7 @@ changes with a release. The interface is installed instead, so that every copy s
 - each source file keeps its SPDX license header;
 - no `__init__.py` but the package's own re-exports anything, so a copy can leave modules out.
 
-`packages/impl/tests/test_copyable.py` checks these rules. The command line, `fsspec-alt-strategies-impl copy`,
+`packages/impl/tests/test_copyable.py` checks the first two. The command line, `fsspec-alt-strategies-impl copy`,
 copies the package as installed, with the `_version.py` its build wrote. It adds the `LICENSE` file the distribution
 records, as the Apache License asks that the code goes with it. It lives in its own package,
 `fsspec_alt_strategies_impl_cli`, so that copies leave it and click out.

@@ -295,9 +295,10 @@ class AsyncRoutingFileSystem(
         A subclass's ``_route`` makes its inner filesystems with it, e.g. one
         per volume, or per account and container. ``make`` gives them the
         router's mode and loop, ``asynchronous=self.asynchronous`` and
-        ``loop=self.loop``: a sync router's calls, e.g. ``open`` and ``sign``,
-        call their sync methods, which run on that loop. Made async, they would
-        have none. ``close()`` closes them.
+        ``loop=self.loop``. A sync router's calls, e.g. ``open`` and ``sign``,
+        call their sync methods, which run on that loop. Made with
+        ``asynchronous=True`` under a sync router, they would have no loop to
+        run on. ``close()`` closes them.
         """
         fs = self._backends.get(key)
         if fs is None:

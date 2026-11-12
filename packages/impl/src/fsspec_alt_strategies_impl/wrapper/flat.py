@@ -135,7 +135,7 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
         try:
             await self.fs._rm(list(paths))
         except FileNotFoundError:
-            # A key gone meanwhile: the rest one by one, a missing key no error.
+            # A key gone meanwhile: the batch again, key by key, a missing key no error.
             await asyncio.gather(*(self._rm_if_there(p) for p in paths))
 
     async def _rm_if_there(self, path: str) -> None:
@@ -232,7 +232,7 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
         try:
             await self._run_in_thread(self.fs.rm, list(paths))
         except FileNotFoundError:
-            # A key gone meanwhile: the rest one by one, a missing key no error.
+            # A key gone meanwhile: the batch again, key by key, a missing key no error.
             await asyncio.gather(*(self._rm_if_there(p) for p in paths))
 
     async def _rm_if_there(self, path: str) -> None:

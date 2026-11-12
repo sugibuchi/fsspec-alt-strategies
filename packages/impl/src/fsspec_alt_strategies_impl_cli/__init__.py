@@ -15,6 +15,9 @@ It is a package of its own, apart from the strategies, so that copies leave it
 out. It needs click, which the ``cli`` extra installs:
 
     uv run --with "fsspec-alt-strategies-impl[cli]" fsspec-alt-strategies-impl copy src/mypkg/_contrib/strategy
+
+This module depends on click, and on `fsspec_alt_strategies_impl`, the package
+it copies.
 """
 
 from __future__ import annotations

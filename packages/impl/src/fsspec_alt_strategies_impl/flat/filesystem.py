@@ -77,7 +77,7 @@ class FlatFileSystem(_BaseFileSystem):
     The data methods, ``_cat_file``, ``_pipe_file``, ``_get_file`` and
     ``_put_file``, read and write through ``open_async``'s files.
 
-    Two limits bound its requests, each an `asyncio.Semaphore` of its own:
+    Two limits bound its requests, each an `asyncio.Semaphore`:
 
     - ``operation_limit``, the strategies' requests, such as deletions and
       copies, but not their listings, which come one page after another;
