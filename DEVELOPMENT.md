@@ -340,6 +340,10 @@ A release is a version tag pushed to the repository, e.g. `git push origin v0.1.
 1. `release-interface.yaml` builds `fsspec-alt-strategies`, creates the GitHub release, and publishes to PyPI.
 2. `release-impl.yaml` then does the same for `fsspec-alt-strategies-impl`. It can be rerun by hand for a tag.
 
+The strategies require the interface of their own minor version, e.g. `fsspec-alt-strategies>=0.4,<0.5`, as they use
+what it adds. A release of a new minor version sets that bound in `packages/impl/pyproject.toml` in its pull request.
+`release-impl.yaml` refuses to publish a wheel whose bound is another version's.
+
 Before the first release, set up on PyPI a trusted publisher for each project, with its workflow and the `pypi`
 environment. The repository also needs the `pypi` environment, and the secret `CODECOV_TOKEN`.
 
