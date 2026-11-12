@@ -10,7 +10,9 @@ lists a directory per request, as ``_ils`` does without ``recursive``.
 It yields the entries depth first, as a walk visits them: each directory's
 entries in the order its listing gives them, and all below a subdirectory right
 after its entry. So it lists the directories in that order too, but starts the
-next ones ahead, as their entries arrive, so that their listings overlap.
+next ones ahead, as their entries arrive, so that their listings overlap. The
+filesystem's ``operation_limit`` bounds how many run at once, and `_HELD` how
+much they read ahead.
 
 This module depends on `paths` of `common`.
 """
@@ -30,11 +32,11 @@ if TYPE_CHECKING:
 __all__: list[str] = []
 
 
-_AHEAD = 32
-"""The most directories listed ahead of the one being yielded."""
-
 _BATCH = 1000
 """The most entries of a directory read ahead of those yielded: a page's worth."""
+
+_HELD = 32 * _BATCH
+"""The entries read and not yielded, past which no listing ahead starts."""
 
 
 async def _tree_ils(
@@ -48,12 +50,16 @@ async def _tree_ils(
     lists itself, as ``_ils`` lists it. A directory listed twice, e.g. as a
     prefix and as its marker object, is yielded twice, but listed once.
 
-    It lists the directories that come next while it yields, up to `_AHEAD` of
-    them, the nearest first. Each such listing holds a permit of the
-    filesystem's ``operation_limit`` while it reads a batch of entries, a
-    page's worth: what it read waits for its turn, holding no permit. The
-    directory being yielded is listed under the permit its caller holds, as for
-    any ``_ils``. So it needs no permit more to go on.
+    It lists the directories that come next while it yields, the nearest
+    first, as many at once as the filesystem's ``operation_limit`` lets it.
+    Each such listing holds a permit while it reads a batch of entries, a
+    page's worth: what it read waits for its turn, holding no permit. No
+    listing ahead starts while `_HELD` entries wait so, which bounds the
+    memory to that, plus a batch per listing in flight. Only the listings in
+    flight count, not those waiting: a tree of small directories is listed as
+    fast as the limit allows, whatever its size. The directory being yielded
+    is listed under the permit its caller holds, as for any ``_ils``. So it
+    needs no permit more to go on.
 
     A directory below ``path`` that fails to list raises its error, noted with
     its path, and ends the listing: a recursive listing cannot go on past a
@@ -105,7 +111,8 @@ class _Ahead:
         # The directories found and not listed yet, the nearest first: depth
         # first, a path comes before another as its parts do.
         self.queue: list[tuple[list[str], str]] = []
-        self.listed = 0  # The directories listed ahead, not taken yet.
+        self.held = 0  # The entries read and not yielded yet.
+        self.closed = False
 
     def add(self, directory: str) -> None:
         """Note a subdirectory read in a listing, to list it ahead."""
@@ -114,27 +121,35 @@ class _Ahead:
         self.start()
 
     def start(self) -> None:
-        """Start listing the nearest directories found, up to `_AHEAD` at a time."""
-        while self.queue and self.listed < _AHEAD:
+        """Start listing the nearest directories found, while few entries wait.
+
+        Each listing waits for a permit of ``operation_limit``, so the limit
+        bounds those in flight. Those waiting get theirs in the order they
+        started, the nearest first.
+        """
+        while not self.closed and self.queue and self.held < _HELD:
             _, directory = heapq.heappop(self.queue)
             listing = self.found.get(directory)
             if listing is not None:  # Else taken already, to be yielded.
                 listing.task = asyncio.ensure_future(listing.read_ahead())
-                self.listed += 1
+
+    def yielded(self) -> None:
+        """Note an entry yielded, which may let a listing ahead start."""
+        self.held -= 1
+        if self.held == _HELD - 1:
+            self.start()
 
     def take(self, directory: str) -> _DirListing:
         """The listing of the directory to yield next, listed ahead or not."""
         listing = self.found.pop(directory, None)
         if listing is None:
             return _DirListing(self, directory)
-
-        if listing.task is not None:
-            self.listed -= 1
-            self.start()
-        return listing
+        else:
+            return listing
 
     async def close(self, stack: list[_DirListing]) -> None:
         """Stop the listings ahead, and close those of every directory left."""
+        self.closed = True  # A listing cancelled below starts no other.
         listings = [*stack, *self.found.values()]
         tasks = [lst.task for lst in listings if lst.task is not None]
         for task in tasks:
@@ -176,6 +191,7 @@ class _DirListing:
                 return None
             else:
                 await self.read()
+        self.ahead.yielded()
         return self.entries.popleft()
 
     async def read_ahead(self) -> None:
@@ -195,6 +211,7 @@ class _DirListing:
         try:
             for _ in range(_BATCH):
                 entry = await anext(self.iterator)
+                self.ahead.held += 1
                 self.entries.append((entry, self.subdirectory(entry)))
         except StopAsyncIteration:
             self.done = True
