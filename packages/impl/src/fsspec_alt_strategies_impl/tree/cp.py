@@ -117,7 +117,12 @@ def _tree_cp(
 
     The destination's profile's ``parents_required=False``, or
     ``implicit_directories=True``, saves the ``dst_makedirs`` of each directory
-    with files, as their copies create it. A directory known to exist needs
+    with files, as their copies create it. Its ``parents_required=True``
+    makes every directory, each once its parent is made, as such a storage
+    makes a missing parent by more requests. That is one ``dst_makedirs``
+    per directory, those holding only directories too, unless ``maxdepth``
+    is given. A directory failing to be made then leaves out all below it,
+    reported by its error alone. A directory known to exist needs
     none: the ``dst_info`` of ``path2`` shows it or its parent, and within one
     storage, ``path1``'s parent exists.
 
@@ -196,15 +201,40 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             self.queue(
                 self.target(listing.directory), listing.directory, [], always=True
             )
-        elif copies:
-            # A directory holding only directories needs no mkdir: theirs create it.
+        elif copies or (listing.first and self.parents_first):
+            # Parents first, each directory is made once its parent is. Else, a
+            # directory holding only directories needs no mkdir: theirs create it.
             self.queue(self.target(listing.directory), listing.directory, copies)
         return None
+
+    @property
+    def parents_first(self) -> bool:
+        """Whether each directory is made after its parent, by one mkdir each.
+
+        A storage declaring ``parents_required=True`` makes a directory only
+        in an existing parent, as SFTP and Azure Files do. Its ``_makedirs``
+        then makes a missing parent by more requests: e.g. one refused, then
+        the parent's, then the directory's again. The walk lists each
+        directory before what is in it, so making them in that order costs
+        one mkdir each. A storage not declaring it may make the parents in
+        the same request: only the directories with files are made then, and
+        the empty ones. So it is with ``maxdepth``, as fsspec's copy makes no
+        empty directory.
+        """
+        return (
+            self.parents_required
+            and self.profile.parents_required is True
+            and self.maxdepth is None
+        )
 
     def queue(
         self, directory: str, source: str, copies: list[_Job], *, always: bool = False
     ) -> None:
-        """Queue copies into a destination directory, made first if needed."""
+        """Queue copies into a destination directory, made first if needed.
+
+        Parents first, a directory's mkdir waits for its parent's, if that is
+        not done yet.
+        """
         if (
             not directory
             or directory in self.made
@@ -214,7 +244,12 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             return
 
         if directory not in self.after_mkdir:
-            self.waiting.append(_Job("mkdir", {"name": source}, directory))
+            job = _Job("mkdir", {"name": source}, directory)
+            parent = directory.rpartition("/")[0]
+            if self.parents_first and parent in self.after_mkdir:
+                self.after_mkdir[parent].append(job)
+            else:
+                self.waiting.append(job)
         self.after_mkdir.setdefault(directory, []).extend(copies)
 
     def run(self, job: _Job) -> Awaitable[Any]:
@@ -239,7 +274,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         # A file's error is noted where it happened, in transfer_file.
         if job.kind == "mkdir":
             # Its copies, and those of the directory's later parts, are not sent:
-            # each would fail as it did.
+            # each would fail as it did. Parents first, nor are its directories'.
             error.add_note(f"Creating the directory {job.destination!r} failed.")
         return [error]
 

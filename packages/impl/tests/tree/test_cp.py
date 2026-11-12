@@ -246,6 +246,41 @@ async def test_a_storage_requiring_parents() -> None:
     assert errors == []
 
 
+async def test_a_storage_requiring_parents_gets_each_directory_once() -> None:
+    fs = SimulatedFileSystem(
+        hierarchical=True, parents_required=True, asynchronous=True
+    )
+    _tree(fs)
+    fs.add_dir("data/empty")
+    made: list[str] = []
+
+    async def mkdir(path: str, exist_ok: bool = False) -> None:
+        # One directory per request, as SFTP's MKDIR: its parent must exist.
+        made.append(path)
+        await fs._mkdir(path, create_parents=False)
+
+    profile = StorageProfile(parents_required=True)
+    _, errors = await _collect_with_errors(
+        _cp(fs, "data", "copied", profile=profile, dst_makedirs=mkdir)
+    )
+    assert errors == []
+    # Each directory once, after its parent: 2023 and 2024 too, holding only
+    # directories, so that theirs need no parent made.
+    assert sorted(made) == [
+        "copied",
+        "copied/2023",
+        "copied/2023/01",
+        "copied/2023/02",
+        "copied/2024",
+        "copied/2024/01",
+        "copied/empty",
+    ]
+    for path in made:
+        parent = path.rpartition("/")[0]
+        assert not parent or made.index(parent) < made.index(path)
+    assert await fs._exists("copied/2023/01/part-0.parquet")
+
+
 async def test_a_storage_refusing_to_overwrite() -> None:
     fs = SimulatedFileSystem(hierarchical=True, overwrite=False, asynchronous=True)
     _tree(fs)
