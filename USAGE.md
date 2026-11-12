@@ -78,7 +78,8 @@ uv run --with "fsspec-alt-strategies-impl[cli]" fsspec-alt-strategies-impl copy 
 ```
 
 It copies the package as installed. It replaces a previous copy, and refuses any other directory that is not empty.
-Delete the modules you do not use afterwards.
+Delete the modules you do not use afterwards. Keep the `LICENSE` file it copies: the Apache License asks that the
+code goes with it.
 
 ### The modules to copy for each feature
 
@@ -105,12 +106,12 @@ implement the storage's primitives, and declare its profile:
 ```python
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_impl.tree.listing import _tree_ils
-from fsspec_alt_strategies import StorageProfile
+from fsspec_alt_strategies import UNKNOWN
 
 
 class MyFileSystem(TreeFileSystem):
     protocol = "my"
-    storage_profile = StorageProfile()  # Nothing known: right on any storage.
+    storage_profile = UNKNOWN  # The default: nothing known, right on any storage.
 
     def _ils(self, path, recursive=False, **kwargs):
         # A directory's entries, as they come. With recursive=True, all below
@@ -130,8 +131,10 @@ fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
 ```
 
 A filesystem has one profile, which never changes. Where only a request can find it, e.g. whether an account has a
-hierarchical namespace, override `async def _load_storage_profile(self)` instead: it is awaited once, and the profile
-kept. A storage whose behaviour differs by path, e.g. per bucket, is several filesystems under a router.
+hierarchical namespace, override `async def _load_storage_profile(self, path)` instead. `path` is one of the paths
+of the first operation needing the profile, where the request may be sent, e.g. a container a credential may read.
+Each path is tried until one loads, and the profile is kept. A storage whose behaviour differs by path, e.g. per
+bucket, is several filesystems under a router.
 
 A method of fsspec's own can come back, e.g. `_rm = AsyncFileSystem._rm`. A storage's own operation can override a
 method too.
@@ -155,7 +158,7 @@ concurrency limits. The wrapper is async if the filesystem is. Pass your own tab
 request at a time, with nothing known of the storage.
 
 A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper,
-overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_tree`
+overriding `_load_storage_profile(path)` and the primitives the storage does better itself. Examples are `_mv_tree`
 renaming a directory, or `_rm_tree` deleting one whole. The strategies then use them where the profile says so,
 streamed and monitored. Use such a wrapper directly, or name it in an entry's `wrapper`.
 
@@ -328,11 +331,17 @@ with fs.transaction:
 
 ### Filesystem router
 
-`AsyncRoutingFileSystem` is abstract. A subclass implements three methods:
+`AsyncRoutingFileSystem` is abstract. A subclass implements the first two of these methods, and the third if some
+paths are above every storage:
 
 - `_route(path)` gives the inner filesystem and its path, or None for a path above every storage;
 - `_outer(fs, path)` gives the router's path of an inner one;
-- `_roots(path)` lists a directory above the storages.
+- `_roots(path)` lists a directory above the storages. By default, it raises FileNotFoundError.
+
+`_route` makes each inner filesystem with `_backend`, once. Make it with the router's `asynchronous` and `loop`, so
+that the router's sync methods, e.g. `open`, work. `backends_loop` is the loop the inner filesystems run on: close
+what they share there, e.g. a credential. A router whose inner filesystems are all of one class names it, e.g.
+`AsyncRoutingFileSystem[S3FileSystem]`, so that its hooks take that class.
 
 `transfer_concurrency` bounds the copies and moves between storages at a time. Override `_cross_fs_cp_entry` or
 `_cross_fs_mv_entry` for a storage with a faster way, such as a server-side copy. Each takes the source file's entry,

@@ -33,7 +33,7 @@ from .monitor import (
     monitoring,
     routing,
 )
-from .profile import StorageProfile
+from .profile import UNKNOWN, StorageProfile
 from .states import CpState, DuState, FindState, GlobState, MvState, RmState, WalkState
 from .wrapper import KnownImplementation, known_implementations
 
@@ -43,6 +43,7 @@ except ImportError:  # A source tree never built: no version file.
     __version__ = "0.0.0"
 
 __all__ = [
+    "UNKNOWN",
     "Call",
     "CallCancelled",
     "CpState",

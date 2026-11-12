@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import pickle
 from contextlib import nullcontext
@@ -777,3 +778,84 @@ async def test_cat_ranges_gives_each_storage_its_ranges(router: _Router) -> None
     assert router.plain.stats.calls == {"read": 10}
     with pytest.raises(FileNotFoundError):
         await router._cat_ranges(paths, all_starts, all_ends, on_error="raise")
+
+
+@pytest.mark.parametrize("move", [False, True])
+async def test_transfers_across_storages_load_each_sides_profile_with_its_path(
+    router: _Router, move: bool
+) -> None:
+    # The source's, for its family, and the destination's, which its jobs read.
+    loaded: list[tuple[str, Any]] = []
+    for name in ("tree", "flat"):
+        fs = router.backend(name)
+        original = fs._get_storage_profile
+
+        async def note(path: Any, name: str = name, original: Any = original) -> Any:
+            loaded.append((name, path))
+            return await original(path)
+
+        fs._get_storage_profile = note
+    method = router._mv if move else router._copy
+    await method("lake/tree/data", "lake/flat/moved", recursive=True)
+    assert loaded[:2] == [("tree", "data"), ("flat", "moved")]
+
+
+# What a subclass may leave out, and what it may hold.
+
+
+class _EveryPathRoutes(AsyncRoutingFileSystem[SimulatedFileSystem]):
+    """Paths "<backend>/<path>", each naming its storage: none is above them."""
+
+    protocol = "everywhere"
+    root_marker = ""
+    cachable = False
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(transfer_concurrency=2, **kwargs)
+        self.made: list[SimulatedFileSystem] = []
+
+    def _route(self, path: str) -> tuple[SimulatedFileSystem, str]:
+        name, _, inner = path.partition("/")
+        return self._backend(name, self._make), inner
+
+    def _make(self) -> SimulatedFileSystem:
+        fs = SimulatedFileSystem(
+            hierarchical=True, asynchronous=self.asynchronous, loop=self.loop
+        )
+        self.made.append(fs)
+        return fs
+
+    def _outer(self, fs: SimulatedFileSystem, path: str) -> str:
+        return f"s{self.made.index(fs)}/{path}".rstrip("/")
+
+
+async def test_a_router_whose_every_path_routes_needs_no_roots() -> None:
+    router = _EveryPathRoutes(asynchronous=True)
+    with pytest.raises(FileNotFoundError):
+        await router._roots("")
+    fs, _ = router._route("s0/x.txt")
+    fs.add_file("x.txt", b"x")
+    assert await router._cat_file("s0/x.txt") == b"x"
+    assert await router._ls("s0", detail=False) == ["s0/x.txt"]
+
+
+async def test_backends_loop_of_an_async_router() -> None:
+    router = _EveryPathRoutes(asynchronous=True)
+    assert router.backends_loop is None
+    router._route("s0/x.txt")
+    # The loop running when the first inner filesystem was made.
+    assert router.backends_loop is asyncio.get_running_loop()
+    router.close()
+    assert router.backends_loop is None
+
+
+def test_backends_loop_of_a_sync_router() -> None:
+    router = _EveryPathRoutes(asynchronous=False)
+    # Made from the calling thread, e.g. by a sync open: the router's own loop.
+    fs, _ = router._route("s0/x.txt")
+    assert router.backends_loop is router.loop
+    # Made in the router's mode, its sync methods run on that loop.
+    fs.add_file("x.txt", b"x")
+    with router.open("s0/x.txt", "rb") as f:
+        assert f.read() == b"x"
+    assert router.cat_file("s0/x.txt") == b"x"

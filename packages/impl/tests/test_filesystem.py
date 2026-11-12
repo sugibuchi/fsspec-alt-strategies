@@ -298,3 +298,63 @@ async def test_cat_ranges_fetches_a_large_merged_range_in_parts() -> None:
     ours = await fs._cat_ranges(["r/3", "r/3"], [0, size // 2], [size // 2, size])
     assert b"".join(ours) == inner._file_data["r/3"].data
     assert inner.stats.calls == {"read": 3}
+
+
+# The profile, loaded with the paths of the operation that needs it.
+
+
+class _Noting:
+    """Notes each path the profile is loaded with."""
+
+    loaded: list[str]
+
+    async def _load_storage_profile(self, path: str) -> StorageProfile:
+        self.loaded.append(path)
+        return StorageProfile()
+
+
+class _NotingTree(_Noting, AsyncTreeWrapper):
+    pass
+
+
+class _NotingFlat(_Noting, AsyncFlatWrapper):
+    pass
+
+
+@pytest.mark.parametrize("family", ["tree", "flat"])
+@pytest.mark.parametrize(
+    ("call", "paths"),
+    [
+        # A tree deletion reads its own storage's profile, with its path; a flat one none.
+        (lambda fs: fs._rm("data", recursive=True), {"tree": ["data"], "flat": []}),
+        # A copy or a move reads the destination's, with its path.
+        (lambda fs: fs._copy("data", "copied", recursive=True), ["copied"]),
+        (lambda fs: fs._mv("data", "moved", recursive=True), ["moved"]),
+        # A strategy reading no profile loads none.
+        (lambda fs: fs._find("data"), []),
+    ],
+)
+async def test_strategies_load_the_profile_with_their_paths(
+    family: str, call: Any, paths: Any
+) -> None:
+    if isinstance(paths, dict):
+        paths = paths[family]
+    inner = SimulatedFileSystem(hierarchical=family == "tree", asynchronous=True)
+    inner.add_file("data/a.txt", b"a")
+    inner.add_file("data/b/c.txt", b"c")
+    limits = {k: v for k, v in _LIMITS.items() if k != "storage_profile"}
+    if family == "tree":
+        fs: Any = _NotingTree(inner, storage_profile=StorageProfile(), **limits)
+    else:
+        fs = _NotingFlat(
+            inner, rm_batch_size=10, storage_profile=StorageProfile(), **limits
+        )
+    fs.loaded = []
+    await call(fs)
+    assert fs.loaded[: len(paths)] == paths
+    assert len(fs.loaded) == len(paths)  # Kept once loaded.
+
+
+async def test_the_profile_set_is_loaded_with_any_path() -> None:
+    fs = AsyncTreeWrapper(SimulatedFileSystem(asynchronous=True), **_LIMITS)
+    assert await fs._get_storage_profile("any/path") == StorageProfile(fs_type="tree")

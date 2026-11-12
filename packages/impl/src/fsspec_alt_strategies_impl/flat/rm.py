@@ -106,7 +106,8 @@ class _Deletion(_FlatJobs):
     async def prepare(self) -> _Roots:
         if not isinstance(self.path, str) or has_magic(self.path):
             return await self.glob_roots(self.path)
-        return _Roots([{"name": _trim(self.path)}])
+        else:
+            return _Roots([{"name": _trim(self.path)}])
 
     def state(self) -> RmState:
         return RmState(

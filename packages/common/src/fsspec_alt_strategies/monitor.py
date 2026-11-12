@@ -285,7 +285,8 @@ class LoggingMonitor(Monitor):
     def _paths(call: Call) -> str:
         if call.path2 is None:
             return repr(call.path)
-        return f"{call.path!r} to {call.path2!r}"
+        else:
+            return f"{call.path!r} to {call.path2!r}"
 
     async def started(self, call: Call, state: State, op: OperationHandler) -> None:
         self.logger.log(self.level, "%s of %s started", call.method, self._paths(call))

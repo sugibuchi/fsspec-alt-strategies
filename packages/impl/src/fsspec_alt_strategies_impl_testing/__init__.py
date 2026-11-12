@@ -37,11 +37,11 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 
-from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 
 __all__ = ["CallStats", "FlatView", "SimulatedFileSystem", "TreeView", "dir_ils"]
 
@@ -179,7 +179,8 @@ class SimulatedFileSystem(AsyncFileSystem):
     def _strip_protocol(cls, path: Any) -> Any:
         if isinstance(path, list):
             return [cls._strip_protocol(p) for p in path]
-        return super()._strip_protocol(path).lstrip("/")
+        else:
+            return super()._strip_protocol(path).lstrip("/")
 
     # --- Setting up, without requests ---------------------------------------
 
@@ -297,7 +298,8 @@ class SimulatedFileSystem(AsyncFileSystem):
 
         if detail:
             return {n: self._entry(n) for n in names}
-        return names
+        else:
+            return names
 
     async def _ils_recursive(self, path: str) -> AsyncIterator[dict[str, Any]]:
         """List all below a directory, a page per request, as a recursive listing does.
@@ -531,12 +533,13 @@ class SimulatedFileSystem(AsyncFileSystem):
         file = self._file_data.get(path)
         if file is None:
             return {"name": path, "size": 0, "type": "directory"}
-        return {
-            "name": path,
-            "size": len(file.data),
-            "type": "file",
-            "mtime": file.mtime,
-        }
+        else:
+            return {
+                "name": path,
+                "size": len(file.data),
+                "type": "file",
+                "mtime": file.mtime,
+            }
 
     def _file(self, path: str) -> _File:
         if path in self._file_data:
@@ -564,13 +567,13 @@ class SimulatedFileSystem(AsyncFileSystem):
             return [path]
         if path not in self._dirs:
             return []
-
-        # A hierarchical storage lists its directories too; an object store only keys.
-        return [
-            p
-            for p in self._descendants(path)
-            if self.hierarchical or p in self._file_data
-        ]
+        else:
+            # A hierarchical storage lists its directories too; an object store only keys.
+            return [
+                p
+                for p in self._descendants(path)
+                if self.hierarchical or p in self._file_data
+            ]
 
     def _check_writable(self, path: str) -> None:
         """Raise as a storage would, if its settings forbid writing ``path``."""
@@ -708,7 +711,7 @@ class TreeView:
             fs._mv_file_entry if mv_file is None else _by_name(mv_file)
         )
         self._makedirs = fs._makedirs if makedirs is None else makedirs
-        self.storage_profile = storage_profile or StorageProfile()
+        self.storage_profile = storage_profile or UNKNOWN
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
 
     def _ils(
@@ -718,9 +721,10 @@ class TreeView:
             return self._dir_ils(path, **kwargs)
         if self.recursive_listing:
             return self.fs._ils_recursive(path)
-        return _tree_ils(self, path, recursive=False, **kwargs)
+        else:
+            return _tree_ils(self, path, recursive=False, **kwargs)
 
-    async def _get_storage_profile(self) -> StorageProfile:
+    async def _get_storage_profile(self, path: str | Sequence[str]) -> StorageProfile:
         return self.storage_profile
 
 
@@ -771,7 +775,7 @@ class FlatView:
         )
         self._makedirs = own("_makedirs", makedirs)
         self._rm_file = own("_rm_file", rm_file)
-        self.storage_profile = storage_profile or StorageProfile()
+        self.storage_profile = storage_profile or UNKNOWN
         self.operation_limit = operation_limit or asyncio.Semaphore(32)
         self.rm_batch_size = rm_batch_size
 
@@ -783,5 +787,5 @@ class FlatView:
         else:
             return dir_ils(self.fs)(path, **kwargs)
 
-    async def _get_storage_profile(self) -> StorageProfile:
+    async def _get_storage_profile(self, path: str | Sequence[str]) -> StorageProfile:
         return self.storage_profile

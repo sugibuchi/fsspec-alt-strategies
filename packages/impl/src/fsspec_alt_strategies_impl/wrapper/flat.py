@@ -72,7 +72,7 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
         The data methods' calls at a time, such as ``_cat_file``.
         A semaphore is used as it is, shared with what else holds it.
     storage_profile : StorageProfile
-        What the storage does. ``StorageProfile()`` if it is unknown.
+        What the storage does. ``UNKNOWN`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`.
 
@@ -92,7 +92,7 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
     ...     rm_batch_size=1000,
     ...     operation_concurrency=64,
     ...     io_concurrency=8,
-    ...     storage_profile=StorageProfile(),
+    ...     storage_profile=UNKNOWN,
     ... )
     >>> with monitoring(Progress()):
     ...     flat.rm("bucket/data/2024", recursive=True)
@@ -135,7 +135,7 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
         try:
             await self.fs._rm(list(paths))
         except FileNotFoundError:
-            # A key gone meanwhile: the rest one by one, a missing key no error.
+            # A key gone meanwhile: the batch again, key by key, a missing key no error.
             await asyncio.gather(*(self._rm_if_there(p) for p in paths))
 
     async def _rm_if_there(self, path: str) -> None:
@@ -170,7 +170,7 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
         The data methods' calls at a time, such as ``_cat_file``.
         A semaphore is used as it is, shared with what else holds it.
     storage_profile : StorageProfile
-        What the storage does. ``StorageProfile()`` if it is unknown.
+        What the storage does. ``UNKNOWN`` if it is unknown.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
@@ -190,7 +190,7 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
     ...     rm_batch_size=1000,
     ...     operation_concurrency=8,
     ...     io_concurrency=4,
-    ...     storage_profile=StorageProfile(),
+    ...     storage_profile=UNKNOWN,
     ... )
     >>> flat.find("bucket/data")
     """
@@ -232,7 +232,7 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
         try:
             await self._run_in_thread(self.fs.rm, list(paths))
         except FileNotFoundError:
-            # A key gone meanwhile: the rest one by one, a missing key no error.
+            # A key gone meanwhile: the batch again, key by key, a missing key no error.
             await asyncio.gather(*(self._rm_if_there(p) for p in paths))
 
     async def _rm_if_there(self, path: str) -> None:

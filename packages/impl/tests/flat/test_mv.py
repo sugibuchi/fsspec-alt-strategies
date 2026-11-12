@@ -60,7 +60,8 @@ def _views(fs: Any, kwargs: dict[str, Any]) -> tuple[FlatView, FlatView]:
     if not replaced:
         view = FlatView(fs, **source, **profile)
         return view, view
-    return FlatView(fs, **source), FlatView(fs, **replaced, **profile)
+    else:
+        return FlatView(fs, **source), FlatView(fs, **replaced, **profile)
 
 
 def _mv(fs: Any, path1: Any, path2: Any, **kwargs: Any) -> Any:
