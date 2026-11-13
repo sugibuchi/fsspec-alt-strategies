@@ -217,15 +217,13 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     def __init__(self, handler: StorageHandler, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        if not self._concrete:
-            # A handler serving another filesystem's paths, as a wrapper does,
-            # gives its own protocol's handling, and its root.
-            if (strip := getattr(handler, "strip_protocol", None)) is not None:
-                self._strip_protocol = strip  # type: ignore[method-assign]
-            if (unstrip := getattr(handler, "unstrip_protocol", None)) is not None:
-                self.unstrip_protocol = unstrip  # type: ignore[method-assign]
-            self.root_marker = handler.root
-
+        # A handler serving another filesystem's paths, as a wrapper does, gives
+        # its own protocol's handling. The root is the handler's.
+        if (strip := getattr(handler, "strip_protocol", None)) is not None:
+            self._strip_protocol = strip  # type: ignore[method-assign]
+        if (unstrip := getattr(handler, "unstrip_protocol", None)) is not None:
+            self.unstrip_protocol = unstrip  # type: ignore[method-assign]
+        self.root_marker = handler.root
         self.handler = handler
         self.operation_concurrency = handler.operation_concurrency
         self.io_concurrency = handler.io_concurrency

@@ -374,8 +374,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
     def __init__(self, handler: RoutingHandler, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        if not self._concrete:
-            self.root_marker = handler.root
+        self.root_marker = handler.root
         self.handler = handler
         self.transfer_concurrency = handler.transfer_concurrency
         self.transfer_limit = handler.transfer_limit
