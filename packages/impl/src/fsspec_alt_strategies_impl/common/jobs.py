@@ -33,7 +33,7 @@ from fsspec.utils import common_prefix
 from fsspec_alt_strategies.profile import UNKNOWN
 from fsspec_alt_strategies.states import CpState
 
-from .handler import _handler_of
+from .handler import StoragePath, _handler_of
 from .operation import Operation, _collect_with_errors
 from .paths import _trim
 
@@ -95,7 +95,7 @@ class _Job(NamedTuple):
 
     kind: str
     source: dict[str, Any]
-    destination: str = ""
+    destination: StoragePath = StoragePath("")
     paths: tuple[str, ...] = ()
 
     @property
@@ -525,11 +525,12 @@ class _CopyJobs(_Jobs):
         self.parents_required = True
         self.case_insensitive = False
 
+        # Set by prepare: the destination's path, verified, where the prefix goes.
         self.prefix = ""
-        self.base = ""
+        self.base = StoragePath("")
 
         # For a list: where each root goes, by the root.
-        self.places: dict[str, str] = {}
+        self.places: dict[str, StoragePath] = {}
 
         # The destinations found missing, and those found existing, which need
         # no asking again, e.g. by a move renaming a root onto one.
@@ -577,7 +578,8 @@ class _CopyJobs(_Jobs):
 
     async def prepare(self) -> _Roots | None:
         """Set where the paths go, as fsspec's ``copy`` places them."""
-        destination = _trim(self.path2)
+        # The caller's destination, as the handler verifies it: ValueError if refused.
+        destination = self.dst.verified(_trim(self.path2))
 
         if not isinstance(self.path1, str):
             roots = await self._place(destination)
@@ -614,7 +616,7 @@ class _CopyJobs(_Jobs):
 
         return roots
 
-    def recased(self, root: str, destination: str) -> _Roots:
+    def recased(self, root: str, destination: StoragePath) -> _Roots:
         """The root of a single path moved onto itself in another case, to be renamed.
 
         On a storage whose names are not case-sensitive, only a rename of the
@@ -626,7 +628,7 @@ class _CopyJobs(_Jobs):
             " case: the storage renames nothing whole"
         )
 
-    async def _place(self, destination: str) -> _Roots:
+    async def _place(self, destination: StoragePath) -> _Roots:
         """Place each root of a list into ``destination``, under its name.
 
         Two roots of the same name would go to the same place. As GNU's cp
@@ -636,7 +638,7 @@ class _CopyJobs(_Jobs):
         roots = await self.glob_roots(self.path1)
         directories = {d["name"]: d for d in roots.directories}
         files = {f["name"]: f for f in roots.files}
-        placed: dict[str, str] = {}
+        placed: dict[StoragePath, str] = {}
 
         for source in sorted(roots.paths):
             name = source.rpartition("/")[2]
@@ -658,7 +660,7 @@ class _CopyJobs(_Jobs):
             [files[s] for s in self.places if s in files],
         )
 
-    async def _single(self, root: str, destination: str) -> _Roots:
+    async def _single(self, root: str, destination: StoragePath) -> _Roots:
         """Place a single path, and return it as a root: a file if its entry says so."""
         self.prefix = root
         self.base = await self._base(root, destination)
@@ -672,7 +674,7 @@ class _CopyJobs(_Jobs):
         else:
             return _Roots([{"name": root}])
 
-    async def _base(self, root: str, destination: str) -> str:
+    async def _base(self, root: str, destination: StoragePath) -> StoragePath:
         """Where ``root``, a single path, goes: into ``destination``, or onto it.
 
         What its ``_info`` finds is kept: a destination missing or existing,
@@ -697,7 +699,7 @@ class _CopyJobs(_Jobs):
         name = root.rsplit("/", 1)[-1]
         return self.dst.join(destination, name)
 
-    def target(self, path: str) -> str:
+    def target(self, path: str) -> StoragePath:
         """Where a path goes, each name below its root checked by the destination's ``join``.
 
         A name the destination refuses, e.g. "..", raises ValueError: a path
@@ -716,7 +718,8 @@ class _CopyJobs(_Jobs):
             target = self.dst.join_all(self.base, path)
 
         if path.endswith("/") and not target.endswith("/"):
-            return f"{target}/"
+            # A flat storage's marker is a key: its directory's path and a "/".
+            return StoragePath(f"{target}/")
         else:
             return target
 
@@ -732,7 +735,7 @@ class _CopyJobs(_Jobs):
         return error
 
     async def copy_file(
-        self, cp_entry: _Transfer, entry: dict[str, Any], destination: str
+        self, cp_entry: _Transfer, entry: dict[str, Any], destination: StoragePath
     ) -> None:
         """Copy a file by ``cp_entry``, replacing a file there the destination keeps.
 

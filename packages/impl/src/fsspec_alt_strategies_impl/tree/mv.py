@@ -27,7 +27,7 @@ from .cp import _CopyOrMove
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
-    from ..common.handler import Entry
+    from ..common.handler import Entry, StoragePath
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
     from .walk import _Listing
@@ -223,7 +223,7 @@ class _Move(_CopyOrMove):
             roots_renamed=self.roots_whole,
         )
 
-    def recased(self, root: str, destination: str) -> _Roots:
+    def recased(self, root: str, destination: StoragePath) -> _Roots:
         """A single path moved onto itself in another case: renamed by one ``mv_tree``.
 
         The destination is the root itself. Found existing, it would take the
@@ -234,7 +234,7 @@ class _Move(_CopyOrMove):
 
         self.prefix, self.base = root, destination
         self.missing.add(destination)
-        self.made.add(root.rpartition("/")[0])
+        self.made.add(self.handler.parent(root))
         # A directory root, as mv_tree takes a file too.
         return _Roots([self.root_entry or {"name": root}])
 
@@ -256,10 +256,12 @@ class _Move(_CopyOrMove):
         else:
             return super().run(job)
 
-    def transfer_whole(self, entry: Entry, destination: str) -> Awaitable[None]:
+    def transfer_whole(self, entry: Entry, destination: StoragePath) -> Awaitable[None]:
         return self.handler.mv_tree(entry, destination)  # type: ignore[attr-defined, no-any-return]
 
-    async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
+    async def transfer_file(
+        self, entry: dict[str, Any], destination: StoragePath
+    ) -> None:
         try:
             await self.mv_entry(entry, destination)
         except Exception as e:

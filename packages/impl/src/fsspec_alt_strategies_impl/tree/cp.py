@@ -29,7 +29,7 @@ from ._jobs import _TreeJobs
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
-    from ..common.handler import Entry
+    from ..common.handler import Entry, StoragePath
     from ..common.jobs import _Roots, _Transfer
     from ..common.operation import Operation
     from .walk import _Listing
@@ -238,7 +238,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             # A job each, as a file's, after its parent is made: the storage's
             # request is not to make it.
             target = self.target(root["name"])
-            parent = target.rpartition("/")[0]
+            parent = self.dst.parent(target)
             job = _Job("whole", root, target)
             self.queue(parent, "", [job], always=not self.implicit_directories)
 
@@ -344,15 +344,21 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         )
 
     def queue(
-        self, directory: str, source: str, copies: list[_Job], *, always: bool = False
+        self,
+        directory: StoragePath,
+        source: str,
+        copies: list[_Job],
+        *,
+        always: bool = False,
     ) -> None:
-        """Queue copies into a destination directory, made first if needed.
+        """Queue copies into a destination directory, made first if needed: never the root.
 
         Parents first, a directory's mkdir waits for its parent's, if that is
         not done yet.
         """
         if (
-            not directory
+            directory == self.dst.root
+            or not directory
             or directory in self.made
             or not (always or self.parents_required)
         ):
@@ -361,7 +367,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
 
         if directory not in self.after_mkdir:
             job = _Job("mkdir", {"name": source}, directory)
-            parent = directory.rpartition("/")[0]
+            parent = self.dst.parent(directory)
             if self.parents_first and parent in self.after_mkdir:
                 self.after_mkdir[parent].append(job)
             else:
@@ -377,11 +383,13 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             return self.transfer_file(job.source, job.destination)
 
     @abstractmethod
-    async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
+    async def transfer_file(
+        self, entry: dict[str, Any], destination: StoragePath
+    ) -> None:
         """Copy or move a file, by its entry. An error raised notes its paths, as it is yielded."""
 
     @abstractmethod
-    def transfer_whole(self, entry: Entry, destination: str) -> Awaitable[None]:
+    def transfer_whole(self, entry: Entry, destination: StoragePath) -> Awaitable[None]:
         """Copy or move a root with all in it, by the storage's one request."""
 
     def done(self, job: _Job) -> list[Any]:
@@ -437,8 +445,10 @@ class _Copy(_CopyOrMove):
             roots_copied=self.roots_whole,
         )
 
-    async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
+    async def transfer_file(
+        self, entry: dict[str, Any], destination: StoragePath
+    ) -> None:
         await self.copy_file(self.cp_entry, entry, destination)
 
-    def transfer_whole(self, entry: Entry, destination: str) -> Awaitable[None]:
+    def transfer_whole(self, entry: Entry, destination: StoragePath) -> Awaitable[None]:
         return self.handler.cp_tree(entry, destination)  # type: ignore[attr-defined, no-any-return]

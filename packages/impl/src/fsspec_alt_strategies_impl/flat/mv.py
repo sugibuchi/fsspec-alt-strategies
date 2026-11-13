@@ -29,6 +29,7 @@ from .cp import _Copy, _CopyOrMove
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
 
+    from ..common.handler import StoragePath
     from ..common.jobs import _Transfer
 
 __all__: list[str] = []
@@ -162,7 +163,9 @@ class _Rename(_CopyOrMove):
         # writes only, and _mv_file_entry is called only where the parent exists.
         self.parents_required = not self.implicit_directories
 
-    async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
+    async def transfer_file(
+        self, entry: dict[str, Any], destination: StoragePath
+    ) -> None:
         try:
             await self.handler.mv_file(entry, destination)
         except Exception as e:

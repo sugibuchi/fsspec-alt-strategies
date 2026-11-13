@@ -17,7 +17,7 @@ from ..common.handler import StorageHandler
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from ..common.handler import Entry
+    from ..common.handler import Entry, StoragePath
 
 __all__: list[str] = []
 
@@ -64,7 +64,7 @@ class TreeHandler(StorageHandler):
         """Delete a directory with everything in it, in one request."""
         raise NotImplementedError(f"{type(self).__name__} deletes no directory whole")
 
-    async def mv_tree(self, entry: Entry, path2: str) -> None:
+    async def mv_tree(self, entry: Entry, path2: StoragePath) -> None:
         """Move a directory with everything in it to ``path2``, in one request.
 
         The strategies call it only with ``path2`` missing and its parent
@@ -72,6 +72,6 @@ class TreeHandler(StorageHandler):
         """
         raise NotImplementedError(f"{type(self).__name__} moves no directory whole")
 
-    async def cp_tree(self, entry: Entry, path2: str) -> None:
+    async def cp_tree(self, entry: Entry, path2: StoragePath) -> None:
         """Copy a directory with everything in it to ``path2``, in one request, as `mv_tree` moves one."""
         raise NotImplementedError(f"{type(self).__name__} copies no directory whole")

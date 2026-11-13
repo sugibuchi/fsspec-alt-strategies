@@ -144,6 +144,15 @@ class StorageHandler(ABC):
         a primitive take only verified paths, or entries a listing gave.
         """
 
+    def verified(self, path: str) -> StoragePath:
+        """A caller's path as a `StoragePath`, once `verify_path` accepts it, else ValueError.
+
+        It and `entry` are the only ways a string becomes a path. A strategy
+        builds the others by `join`, `join_all` and `parent`, which verify too.
+        """
+        self.verify_path(path)
+        return StoragePath(path)
+
     def entry(self, path: str) -> Entry:
         """The entry of a path alone, verified: for a primitive taking an item its caller knows only by its path.
 
@@ -151,10 +160,9 @@ class StorageHandler(ABC):
         gave is never wrapped so: the strategies pass on the entry the listing
         gave, as the storage holds what it lists, whatever its name.
         """
-        self.verify_path(path)
-        return {"name": StoragePath(path)}
+        return {"name": self.verified(path)}
 
-    def join(self, directory: str, name: str) -> StoragePath:
+    def join(self, directory: StoragePath, name: str) -> StoragePath:
         """The path of ``name`` in ``directory``, verified, raising ValueError for one refused.
 
         A name is refused if empty, ".", "..", or holding a "/". So a path built
@@ -166,7 +174,7 @@ class StorageHandler(ABC):
         self.verify_path(path)
         return path
 
-    def join_all(self, directory: str, relative: str) -> StoragePath:
+    def join_all(self, directory: StoragePath, relative: str) -> StoragePath:
         """The path of ``relative``, names joined by "/", in ``directory``, verified as `join` verifies one.
 
         Each name is checked as `join` checks one, and the path built is
@@ -185,6 +193,8 @@ class StorageHandler(ABC):
 
     def parent(self, path: str) -> StoragePath:
         """The directory a path is in, verified: the root for one at the root.
+
+        The path may be one a listing gave: its parent is verified all the same.
 
         The root is in no directory: it raises ValueError, as does a parent
         `verify_path` refuses, e.g. one too short for the storage's paths.
@@ -236,11 +246,11 @@ class StorageHandler(ABC):
         """
 
     @abstractmethod
-    async def makedirs(self, path: str, exist_ok: bool = False) -> None:
+    async def makedirs(self, path: StoragePath, exist_ok: bool = False) -> None:
         """Make a directory and its parents, raising FileExistsError unless ``exist_ok``."""
 
     @abstractmethod
-    async def cp_file(self, entry: Entry, path2: str) -> None:
+    async def cp_file(self, entry: Entry, path2: StoragePath) -> None:
         """Copy a file within the storage, to ``path2``.
 
         The entry's keys, e.g. its size, may save a request. They may be
@@ -250,7 +260,7 @@ class StorageHandler(ABC):
         """
 
     @abstractmethod
-    async def mv_file(self, entry: Entry, path2: str) -> None:
+    async def mv_file(self, entry: Entry, path2: StoragePath) -> None:
         """Move a file within the storage, to ``path2``, as `cp_file` copies one.
 
         A storage renaming a file in one request renames it. One with no rename
@@ -311,16 +321,16 @@ class _FileSystemHandler(StorageHandler):
     async def rmdir(self, entry: Entry) -> None:
         await self.fs._rmdir(entry["name"])
 
-    async def makedirs(self, path: str, exist_ok: bool = False) -> None:
+    async def makedirs(self, path: StoragePath, exist_ok: bool = False) -> None:
         await self.fs._makedirs(path, exist_ok=exist_ok)
 
-    async def cp_file(self, entry: Entry, path2: str) -> None:
+    async def cp_file(self, entry: Entry, path2: StoragePath) -> None:
         if (cp := getattr(self.fs, "_cp_file_entry", None)) is not None:
             await cp(entry, path2)
         else:
             await self.fs._cp_file(entry["name"], path2)
 
-    async def mv_file(self, entry: Entry, path2: str) -> None:
+    async def mv_file(self, entry: Entry, path2: StoragePath) -> None:
         if (mv := getattr(self.fs, "_mv_file_entry", None)) is not None:
             await mv(entry, path2)
         else:
@@ -332,10 +342,10 @@ class _FileSystemHandler(StorageHandler):
     async def rm_tree(self, entry: Entry) -> None:
         await self.fs._rm_tree(entry["name"])
 
-    async def mv_tree(self, entry: Entry, path2: str) -> None:
+    async def mv_tree(self, entry: Entry, path2: StoragePath) -> None:
         await self.fs._mv_tree(entry["name"], path2)
 
-    async def cp_tree(self, entry: Entry, path2: str) -> None:
+    async def cp_tree(self, entry: Entry, path2: StoragePath) -> None:
         await self.fs._cp_tree(entry["name"], path2)
 
 

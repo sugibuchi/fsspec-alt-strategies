@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
     from fsspec_alt_strategies.states import CpState
 
+    from ..common.handler import StoragePath
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
 
@@ -177,14 +178,15 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
         target = self.target(name)
         # The entry goes with its copy, so that cp_entry need not ask it.
         job = _Job("copy", entry, target)
-        self.queue(target.rpartition("/")[0], [job])
+        self.queue(self.dst.parent(target), [job])
 
     def queue(
-        self, directory: str, copies: list[_Job], *, always: bool = False
+        self, directory: StoragePath, copies: list[_Job], *, always: bool = False
     ) -> None:
-        """Queue copies into a destination directory, made first if needed."""
+        """Queue copies into a destination directory, made first if needed: never the root."""
         if (
-            not directory
+            directory == self.dst.root
+            or not directory
             or directory in self.made
             or not (always or self.parents_required)
         ):
@@ -202,7 +204,9 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
             return self.transfer_file(job.source, job.destination)
 
     @abstractmethod
-    async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
+    async def transfer_file(
+        self, entry: dict[str, Any], destination: StoragePath
+    ) -> None:
         """Copy or move a key, by its entry. An error raised notes its paths, as it is yielded."""
 
     def done(self, job: _Job) -> list[Any]:
@@ -232,5 +236,7 @@ class _Copy(_CopyOrMove):
         super().__init__(**kwargs)
         self.cp_entry = cp_entry
 
-    async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
+    async def transfer_file(
+        self, entry: dict[str, Any], destination: StoragePath
+    ) -> None:
         await self.copy_file(self.cp_entry, entry, destination)
