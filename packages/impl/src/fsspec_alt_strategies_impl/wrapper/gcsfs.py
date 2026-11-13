@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any
 from .flat import AsyncFlatWrapper
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Mapping
 
 __all__ = ["GcsfsWrapper"]
 
@@ -82,7 +82,7 @@ class GcsfsWrapper(AsyncFlatWrapper):
         for entry in sorted(found.values(), key=lambda e: e["name"]):
             yield entry
 
-    async def _rm_files(self, paths: list[str]) -> dict[str, Exception] | None:
+    async def _rm_files(self, paths: list[str]) -> Mapping[str, Exception] | None:
         # gcsfs batches deletions only on Google's own endpoint: elsewhere, e.g. on
         # an emulator, its _rm deletes one object per request.
         rm_files = getattr(self.fs, "_rm_files", None)

@@ -14,9 +14,10 @@ uv run pytest --cov                       # with coverage of both packages
 uv build --all-packages                   # both distributions
 uvx ruff check .                          # lint (ruff is not a dev dependency; config in pyproject.toml)
 uvx ruff format .                         # format
+uv run --with mypy==2.4.1 mypy            # types of both packages' sources (config in pyproject.toml)
 ```
 
-CI runs ruff, zizmor, actionlint and pytest on pull requests and pushes to `main`. In the workflows:
+CI runs ruff, mypy, zizmor, actionlint and pytest on pull requests and pushes to `main`. In the workflows:
 
 - Pin every action to a full commit SHA, with its version in a comment, e.g. `@<sha>  # v7.0.1`. Dependabot updates
   them. Also pin uv's `version`.

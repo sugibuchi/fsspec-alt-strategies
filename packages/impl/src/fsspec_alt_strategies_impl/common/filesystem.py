@@ -724,18 +724,19 @@ def _merge_ranges(
         indices.sort(key=lambda i: (starts[i] or 0, ends[i]))
         members: list[int] = []
         low = high = 0
-        for i in [*indices, None]:
-            if i is not None:
-                start, end = starts[i] or 0, ends[i]
-                assert end is not None
-                end = max(end, start)
+        for index in [*indices, None]:
+            begin = finish = 0
+            if index is not None:
+                begin, known_end = starts[index] or 0, ends[index]
+                assert known_end is not None
+                finish = max(known_end, begin)
                 if (
                     members
-                    and start - high <= max_gap
-                    and max(end, high) - low <= max_block
+                    and begin - high <= max_gap
+                    and max(finish, high) - low <= max_block
                 ):
-                    high = max(high, end)
-                    members.append(i)
+                    high = max(high, finish)
+                    members.append(index)
                     continue
             if members:
                 for m in members:
@@ -746,8 +747,8 @@ def _merge_ranges(
                         max(ends[m] or 0, first) - first,
                     )
                 fetches.append((path, low, high))
-            if i is not None:
-                members, low, high = [i], start, end
+            if index is not None:
+                members, low, high = [index], begin, finish
 
     return fetches, plan  # type: ignore[return-value]
 

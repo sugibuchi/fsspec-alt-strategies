@@ -44,7 +44,7 @@ if TYPE_CHECKING:
         Callable,
         Sequence,
     )
-    from typing import Self, TypeAlias
+    from typing import TypeAlias
 
     from .handler import StorageHandler
 
@@ -193,7 +193,10 @@ class _Queue(Generic[_T]):
         """The requests running, and the waiter for a permit if items wait."""
         if self.waiting and self.waiter is None:
             self.waiter = asyncio.ensure_future(self.limit.acquire())
-        return [*self.running, *([self.waiter] if self.waiting else [])]
+        pending = list(self.running)
+        if self.waiting and self.waiter is not None:
+            pending.append(self.waiter)
+        return pending
 
     def pop(self, task: asyncio.Task[Any]) -> _T | None:
         """The item of a request done, or None for the waiter, whose permit `start` takes."""
@@ -265,9 +268,9 @@ class _Jobs(ABC):
         Made at once, the jobs give the operation its first state, e.g. whether
         a move renames directories, as they read it from the profile once.
         """
-        jobs: Self | None = None
+        jobs: Any = None
         op: Operation[Any, Any] = Operation(
-            lambda _: jobs.outcomes(),  # type: ignore[union-attr]
+            lambda _: jobs.outcomes(),
             None,  # type: ignore[arg-type]  # The jobs' own, set below.
         )
         jobs = cls(op=op, **kwargs)
@@ -688,7 +691,7 @@ class _CopyJobs(_Jobs):
                 into = entry["type"] == "directory"
                 self.made.add(destination if into else destination.rpartition("/")[0])
 
-        if not into or self.path1.endswith("/"):
+        if not into or (isinstance(self.path1, str) and self.path1.endswith("/")):
             return destination
 
         name = root.rsplit("/", 1)[-1]

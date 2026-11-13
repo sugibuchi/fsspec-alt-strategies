@@ -11,13 +11,13 @@ A glob pattern is expanded first, with `_flat_glob`, as fsspec's
 ``_expand_path`` expands it: the keys under its matching directories are then
 listed.
 
-This module depends on `_keys`, `find`, `glob`, and `jobs` of `common`.
+This module depends on `_keys`, `find`, `glob`, `handler`, and `handler` and `jobs` of `common`.
 """
 
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ..common.jobs import _Jobs
 from ._keys import _close, _listing
@@ -27,15 +27,21 @@ from .glob import _flat_glob
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
-    from ..common.handler import Entry
+    from ..common.handler import Entry, StorageHandler
     from ..common.jobs import _Roots
     from ..common.operation import Operation
+    from .handler import FlatHandler
 
 
 def _check_batch_size(batch_size: int) -> None:
     """Refuse a filesystem's ``rm_batch_size`` below 1, as no batch could be sent."""
     if batch_size < 1:
         raise ValueError(f"batch_size must be at least 1: {batch_size}")
+
+
+def _batch_size(handler: StorageHandler) -> int:
+    """The most keys a flat handler's ``rm_files`` takes at once."""
+    return cast("FlatHandler", handler).rm_batch_size
 
 
 def _keys_of(paths: tuple[str, ...]) -> str:
@@ -75,7 +81,7 @@ class _FlatJobs(_Jobs):
 
     async def delete(self, paths: tuple[str, ...]) -> None:
         """Delete a batch of keys by ``rm_files``, by their entries, keeping those it refused for `refused`."""
-        entries = [self.batched.pop(p, None) or {"name": p} for p in paths]
+        entries = [self.batched.pop(p, {"name": p}) for p in paths]
         refused = await self.handler.rm_files(entries)  # type: ignore[attr-defined, arg-type]
         if refused:
             self._refused[paths] = {k: e for k, e in refused.items() if k in paths}

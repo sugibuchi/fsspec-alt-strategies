@@ -32,7 +32,7 @@ from ..flat.filesystem import FlatFileSystem
 from ._base import _AsyncFileSystemWrapper, _SyncFileSystemWrapper
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Mapping
 
     from fsspec.asyn import AsyncFileSystem
     from fsspec.spec import AbstractFileSystem
@@ -131,12 +131,14 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
         for entry in _starting(listing, path, prefix):
             yield entry
 
-    async def _rm_files(self, paths: list[str]) -> None:
+    async def _rm_files(self, paths: list[str]) -> Mapping[str, Exception] | None:
         try:
             await self.fs._rm(list(paths))
         except FileNotFoundError:
             # A key gone meanwhile: the batch again, key by key, a missing key no error.
             await asyncio.gather(*(self._rm_if_there(p) for p in paths))
+        # fsspec's rm tells no key refused apart: a failure is the batch's.
+        return None
 
     async def _rm_if_there(self, path: str) -> None:
         with contextlib.suppress(FileNotFoundError):
@@ -228,12 +230,14 @@ class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
         for entry in _starting(listing, path, prefix):
             yield entry
 
-    async def _rm_files(self, paths: list[str]) -> None:
+    async def _rm_files(self, paths: list[str]) -> Mapping[str, Exception] | None:
         try:
             await self._run_in_thread(self.fs.rm, list(paths))
         except FileNotFoundError:
             # A key gone meanwhile: the batch again, key by key, a missing key no error.
             await asyncio.gather(*(self._rm_if_there(p) for p in paths))
+        # fsspec's rm tells no key refused apart: a failure is the batch's.
+        return None
 
     async def _rm_if_there(self, path: str) -> None:
         with contextlib.suppress(FileNotFoundError):

@@ -188,7 +188,7 @@ def _walk_state(state: WalkState, listing: _Listing) -> WalkState:
     return WalkState(
         errors=state.errors + (listing.error is not None),
         current=listing.directory,
-        directories_listed=state.directories_listed + 1,
+        directories_listed=(state.directories_listed or 0) + 1,
         found=state.found + len(listing.entries),
     )
 
@@ -256,7 +256,7 @@ _CHUNK_SIZE = 1000
 
 async def _chunks(
     fs: Any,
-    path: str | Collection[str],
+    path: str | Entry | Collection[str | Entry],
     *,
     maxdepth: int | None = None,
     matched: Collection[str] = (),

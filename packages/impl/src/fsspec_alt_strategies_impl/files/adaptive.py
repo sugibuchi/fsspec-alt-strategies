@@ -19,6 +19,7 @@ import asyncio
 import errno
 import io
 import math
+import sys
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from typing import Any
@@ -425,7 +426,7 @@ class AdaptiveReadableFile(_AdaptiveFile, ABC):
             while queue and queue[0].end <= pos:
                 behind.append(queue.popleft())
             await self._drop(behind)
-        elif last < pos and pos - fetched <= min(self.max_gap, self._run - 1):
+        elif last < pos and pos - fetched <= min(self.max_gap or 0, self._run - 1):
             # A few bytes skipped, fewer than the run has read: still reading in
             # sequence, the run goes on fetching ahead, but the bytes skipped
             # are not fetched. Scattered small reads skip more than they read,
@@ -726,10 +727,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         else:
             self._sync(self._aexit_by(exc))
 
-    async def __aexit__(
-        self, exc_type: object, exc: BaseException | None, *rest: object
-    ) -> None:
-        if exc is None or self.closed:
+    async def __aexit__(self, *exc_info: object) -> None:
+        exc = exc_info[1] if len(exc_info) > 1 else None
+        if not isinstance(exc, BaseException) or self.closed:
             await self.aclose()
         else:
             await self._aexit_by(exc)
@@ -884,7 +884,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     async def _upload_buffer(self, closing: bool) -> None:
         """Upload the parts the buffer fills, or all of it when ``closing``."""
         buffer = self._buffer
-        cap = self.max_request_size or math.inf
+        cap = self.max_request_size or sys.maxsize
         small = len(buffer) < self.min_multipart_size
         if not self._multipart and small and not closing:
             return

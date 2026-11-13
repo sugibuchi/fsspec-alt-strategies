@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Literal, NewType, Required, TypedDict
+from typing import TYPE_CHECKING, Any, NewType, TypeAlias
 
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 
@@ -33,18 +33,16 @@ StoragePath = NewType("StoragePath", str)
 """A path of a storage, without its protocol or a trailing "/", as its handler checked it."""
 
 
-class Entry(TypedDict, total=False):
-    """An item of a storage, as its handler describes it.
+Entry: TypeAlias = dict[str, Any]
+"""An item of a storage, as its handler describes it, as fsspec's ``ls`` with ``detail`` gives it.
 
-    Only ``"name"`` is sure. The other keys, and the storage's own, e.g. an
-    ``"id"``, are there when the storage told them. A key missing is unknown,
-    never absent on the storage: a missing ``"size"`` is not 0. A key may be
-    stale, listed before a change.
-    """
-
-    name: Required[StoragePath]
-    type: Literal["file", "directory"]
-    size: int
+Only ``"name"`` is sure: its path, a `StoragePath` where `StorageHandler.entry`
+made it, else the name the storage listed, which is never verified again. The
+other keys, e.g. ``"type"``, ``"size"``, or the storage's own, e.g. an
+``"id"``, are there when the storage told them. A key missing is unknown, never
+absent on the storage: a missing ``"size"`` is not 0. A key may be stale,
+listed before a change.
+"""
 
 
 class StorageHandler(ABC):

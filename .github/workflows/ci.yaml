@@ -35,6 +35,10 @@ jobs:
       - name: Ruff format check
         run: uvx ruff format --check .
 
+      # The types, in the project's environment, as mypy reads its packages.
+      - name: Type check
+        run: uv run --with mypy==2.4.1 mypy
+
       # The workflows: their security (zizmor) and their syntax (actionlint).
       - name: Workflow check
         run: |

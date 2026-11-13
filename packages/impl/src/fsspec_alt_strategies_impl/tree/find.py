@@ -98,7 +98,7 @@ def _tree_find(
                     errors=state.errors + (listing.error is not None),
                     current=listing.directory,
                     # Depth 0 is the root's own entry: no directory listed.
-                    directories_listed=state.directories_listed
+                    directories_listed=(state.directories_listed or 0)
                     + (listing.depth > 0 and listing.last),
                     found=state.found + len(found),
                 )
@@ -172,8 +172,8 @@ async def _find_listings(
         async for listing in listings:
             yield listing
             if listing.directory == root and listing.last:
-                async for entry in _root_entry(handler, root, dir_root, stopping):
-                    yield entry
+                async for own in _root_entry(handler, root, dir_root, stopping):
+                    yield own
 
 
 async def _root_entry(

@@ -23,7 +23,7 @@ from ..common.handler import _handler_of, _profile
 from ..common.jobs import _Job, _transfer_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
-from ._jobs import _check_batch_size, _keys_of
+from ._jobs import _batch_size, _check_batch_size, _keys_of
 from .cp import _Copy, _CopyOrMove
 
 if TYPE_CHECKING:
@@ -126,7 +126,7 @@ def _flat_mv(
         "root_entry": root_entry,
     }
 
-    _check_batch_size(_handler_of(src_fs).rm_batch_size)
+    _check_batch_size(_batch_size(_handler_of(src_fs)))
     cp_entry, _ = _transfer_of(src_fs, dst_fs, cp_entry, same_storage, "cp_entry")
 
     async def run(op: Operation[Any, MvState]) -> AsyncGenerator[Any]:
@@ -204,7 +204,7 @@ class _Move(_Copy):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        self.batch_size: int = self.handler.rm_batch_size
+        self.batch_size: int = _batch_size(self.handler)
 
         # The keys to delete. Each key moving, from its listing to its
         # deletion, has where it is copied, None for a marker: listed again,

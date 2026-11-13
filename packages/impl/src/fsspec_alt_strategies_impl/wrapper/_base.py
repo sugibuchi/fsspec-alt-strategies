@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from fsspec.callbacks import DEFAULT_CALLBACK
+
 from ..common.sync_client import SyncClientSupport
 from ..files.fsspec_async import SyncFileAdapter
 from ..tree.listing import _tree_ils
@@ -24,6 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from fsspec.asyn import AsyncFileSystem
+    from fsspec.callbacks import Callback
     from fsspec.spec import AbstractFileSystem
 
     from fsspec_alt_strategies.profile import StorageProfile
@@ -97,7 +100,12 @@ class _AsyncFileSystemWrapper(_FileSystemWrapper):
             kwargs.setdefault("loop", fs.loop)
         super().__init__(fs, **kwargs)
 
-    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+    async def _ls(
+        self, path: str, detail: bool = True, refresh: bool = False, **kwargs: Any
+    ) -> Any:
+        # The wrapped filesystem's own listings kept, if any, refreshed if asked.
+        if refresh:
+            kwargs["refresh"] = True
         return await self.fs._ls(path, detail=detail, **kwargs)
 
     async def _ils(
@@ -159,9 +167,15 @@ class _AsyncFileSystemWrapper(_FileSystemWrapper):
         async with self.io_limit:
             await self.fs._pipe_file(path, value, **kwargs)
 
-    async def _get_file(self, rpath: str, lpath: str, **kwargs: Any) -> None:
+    async def _get_file(
+        self,
+        rpath: str,
+        lpath: str,
+        callback: Callback = DEFAULT_CALLBACK,
+        **kwargs: Any,
+    ) -> None:
         async with self.io_limit:
-            await self.fs._get_file(rpath, lpath, **kwargs)
+            await self.fs._get_file(rpath, lpath, callback=callback, **kwargs)
 
     async def _put_file(self, lpath: str, rpath: str, **kwargs: Any) -> None:
         async with self.io_limit:
@@ -194,7 +208,11 @@ class _SyncFileSystemWrapper(SyncClientSupport, _FileSystemWrapper):
         else:
             return None
 
-    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
+    async def _ls(
+        self, path: str, detail: bool = True, refresh: bool = False, **kwargs: Any
+    ) -> Any:
+        if refresh:
+            kwargs["refresh"] = True
         return await self._run_in_thread(self.fs.ls, path, detail=detail, **kwargs)
 
     async def _ils(
@@ -261,9 +279,17 @@ class _SyncFileSystemWrapper(SyncClientSupport, _FileSystemWrapper):
         async with self.io_limit:
             await self._run_in_thread(self.fs.pipe_file, path, value, **kwargs)
 
-    async def _get_file(self, rpath: str, lpath: str, **kwargs: Any) -> None:
+    async def _get_file(
+        self,
+        rpath: str,
+        lpath: str,
+        callback: Callback = DEFAULT_CALLBACK,
+        **kwargs: Any,
+    ) -> None:
         async with self.io_limit:
-            await self._run_in_thread(self.fs.get_file, rpath, lpath, **kwargs)
+            await self._run_in_thread(
+                self.fs.get_file, rpath, lpath, callback=callback, **kwargs
+            )
 
     async def _put_file(self, lpath: str, rpath: str, **kwargs: Any) -> None:
         async with self.io_limit:

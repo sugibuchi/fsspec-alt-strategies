@@ -283,11 +283,11 @@ class _Move(_CopyOrMove):
         else:
             self.files_done += 1
 
-        outcome: list[Any] = [(job.path, job.destination)]
+        moved: list[Any] = [(job.path, job.destination)]
         if (directory := self.child_done(job.path)) is not None:
-            outcome += self.remove(directory)
+            moved += self.remove(directory)
 
-        return outcome
+        return moved
 
     def remove(self, directory: str) -> list[Any]:
         """Delete a source directory now empty, and return what that moved at once.

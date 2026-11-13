@@ -20,7 +20,7 @@ from fsspec_alt_strategies.states import RmState
 from ..common.handler import _handler_of
 from ..common.jobs import _Job, _Roots
 from ..common.paths import _check_maxdepth, _trim
-from ._jobs import _check_batch_size, _FlatJobs, _keys_of
+from ._jobs import _batch_size, _check_batch_size, _FlatJobs, _keys_of
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
@@ -85,7 +85,7 @@ def _flat_rm(
     `RmState`. The call raises ValueError if ``rm_batch_size`` or ``maxdepth``
     is less than 1.
     """
-    _check_batch_size(_handler_of(fs).rm_batch_size)
+    _check_batch_size(_batch_size(_handler_of(fs)))
     _check_maxdepth(maxdepth)
 
     return _Deletion.operation(fs=fs, path=path, maxdepth=maxdepth)
@@ -98,7 +98,7 @@ class _Deletion(_FlatJobs):
         super().__init__(**kwargs)
 
         self.path = path
-        self.batch_size: int = self.handler.rm_batch_size
+        self.batch_size: int = _batch_size(self.handler)
 
         self.batch: list[str] = []
         self.files_found = 0

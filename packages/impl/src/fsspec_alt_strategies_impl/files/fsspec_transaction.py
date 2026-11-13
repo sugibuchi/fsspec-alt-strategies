@@ -56,10 +56,10 @@ import threading
 import uuid
 import warnings
 from abc import ABC, abstractmethod
-from typing import IO, TYPE_CHECKING, Any, Literal
+from typing import IO, TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Coroutine
 
     from .adaptive import AdaptiveWritableFile
 
@@ -580,7 +580,7 @@ class AdaptiveWritableTransaction(FileTransaction):
         self.hold_last_part = hold_last_part
 
         # The request making the file visible, once closing held it back.
-        self._last: Callable[[], Awaitable[None]] | None = None
+        self._last: Callable[[], Coroutine[Any, Any, None]] | None = None
         self._multipart = False
         self._discarding = False
 
@@ -621,7 +621,7 @@ class AdaptiveWritableTransaction(FileTransaction):
         if self.hold_last_part:
             file._upload_part = hold_last_part  # type: ignore[method-assign]
 
-        return file
+        return cast("IO[bytes]", file)
 
     def end_staging(self) -> None:
         self.file.close()

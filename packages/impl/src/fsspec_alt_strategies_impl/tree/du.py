@@ -87,7 +87,7 @@ def _tree_du(
                     errors=state.errors + (listing.error is not None),
                     current=listing.directory,
                     # Depth 0 is the root's own entry: no directory listed.
-                    directories_listed=state.directories_listed
+                    directories_listed=(state.directories_listed or 0)
                     + (listing.depth > 0 and listing.last),
                     files=state.files + len(files),
                     size=state.size + sum(e.get("size") or 0 for e in files),
