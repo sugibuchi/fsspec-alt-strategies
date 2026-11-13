@@ -131,10 +131,12 @@ fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
 ```
 
 A filesystem has one profile, which never changes. Where only a request can find it, e.g. whether an account has a
-hierarchical namespace, override `async def _load_storage_profile(self, path)` instead. `path` is one of the paths
-of the first operation needing the profile, where the request may be sent, e.g. a container a credential may read.
-Each path is tried until one loads, and the profile is kept. A storage whose behaviour differs by path, e.g. per
-bucket, is several filesystems under a router.
+hierarchical namespace, override `async def _load_storage_profile(self)` instead. The first operation needing the
+profile loads it, and it is kept. A load that fails raises, and the next operation tries again.
+
+It takes no path: the profile is one for the whole filesystem. A storage whose behaviour differs by path is several
+filesystems under a router. On GCS, for example, buckets differ in having a hierarchical namespace: make one
+filesystem per bucket, and a router for the whole namespace.
 
 A method of fsspec's own can come back, e.g. `_rm = AsyncFileSystem._rm`. A storage's own operation can override a
 method too.
@@ -158,7 +160,7 @@ concurrency limits. The wrapper is async if the filesystem is. Pass your own tab
 request at a time, with nothing known of the storage.
 
 A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper,
-overriding `_load_storage_profile(path)` and the primitives the storage does better itself. Examples are `_mv_tree`
+overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_tree`
 renaming a directory, `_cp_tree` copying one, or `_rm_tree` deleting one whole. The strategies then use them where the profile says so,
 streamed and monitored. Use such a wrapper directly, or name it in an entry's `wrapper`.
 

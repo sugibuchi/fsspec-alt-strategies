@@ -91,7 +91,7 @@ class TreeFileSystem(_BaseFileSystem):
     ``storage_profile``, a `StorageProfile`, tells the strategies what the
     storage does. It is `UNKNOWN` by default, and the strategies then take the
     way right on any storage. A subclass sets what it knows, or overrides
-    ``_load_storage_profile`` to find it with a request.
+    ``_load_storage_profile()`` to find it with a request.
 
     A recursive ``mv``, or one of a single file, moves each file with
     ``_mv_file_entry``: the storage's rename, or a copy then a delete where it

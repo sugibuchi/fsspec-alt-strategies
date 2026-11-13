@@ -1063,7 +1063,7 @@ class AsyncRoutingFileSystem(
         get = getattr(fs1, "_get_storage_profile", None)
         if get is None:
             return None  # A plain fsspec filesystem: fsspec's own copy.
-        fs_type = (await get(path1)).fs_type
+        fs_type = (await get()).fs_type
         if fs_type is None:
             return None
 
@@ -1113,7 +1113,7 @@ class AsyncRoutingFileSystem(
         get = getattr(fs1, "_get_storage_profile", None)
         if get is None:
             return None  # A plain fsspec filesystem: fsspec's own copy, then rm.
-        fs_type = (await get(path1)).fs_type
+        fs_type = (await get()).fs_type
         if fs_type is None:
             return None
 

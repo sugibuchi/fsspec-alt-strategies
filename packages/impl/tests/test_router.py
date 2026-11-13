@@ -785,19 +785,19 @@ async def test_transfers_across_storages_load_each_sides_profile_with_its_path(
     router: _Router, move: bool
 ) -> None:
     # The source's, for its family, and the destination's, which its jobs read.
-    loaded: list[tuple[str, Any]] = []
+    loaded: list[str] = []
     for name in ("tree", "flat"):
         fs = router.backend(name)
         original = fs._get_storage_profile
 
-        async def note(path: Any, name: str = name, original: Any = original) -> Any:
-            loaded.append((name, path))
-            return await original(path)
+        async def note(name: str = name, original: Any = original) -> Any:
+            loaded.append(name)
+            return await original()
 
         fs._get_storage_profile = note
     method = router._mv if move else router._copy
     await method("lake/tree/data", "lake/flat/moved", recursive=True)
-    assert loaded[:2] == [("tree", "data"), ("flat", "moved")]
+    assert loaded[:2] == ["tree", "flat"]
 
 
 # What a subclass may leave out, and what it may hold.

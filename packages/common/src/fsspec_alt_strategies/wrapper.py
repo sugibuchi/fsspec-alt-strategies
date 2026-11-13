@@ -99,8 +99,9 @@ known_implementations: dict[str, KnownImplementation] = {
     "gcsfs.core.GCSFileSystem": {
         # For buckets without a hierarchical namespace. One with it has folders of
         # their own, which the flat strategies leave after a recursive rm or mv:
-        # wrap it as a tree, under a router where both kinds are served. The
-        # wrapper moves by _mv_file, which is fsspec's copy, then a delete.
+        # wrap it as a tree. Both kinds served are a router, a filesystem per
+        # bucket. The wrapper moves by _mv_file, which is fsspec's copy, then a
+        # delete.
         "storage_profile": StorageProfile(
             fs_type="flat",
             parents_required=False,

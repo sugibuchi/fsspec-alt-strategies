@@ -66,13 +66,13 @@ code: read it before adding a strategy.
 - A strategy's name tells its family, e.g. `_tree_rm`, never a bare `_rm`: that is the method's name.
 - A strategy replacing an fsspec method answers as it does. Where it departs on purpose, its docstring says why.
 - What a storage does that fsspec leaves open is declared in `profile.StorageProfile`, never detected. A strategy
-  needing it awaits `fs._get_storage_profile(paths)` as its operation starts, e.g. in its jobs' `setup`. The default,
+  needing it awaits `fs._get_storage_profile()` as its operation starts, e.g. in its jobs' `setup`. The default,
   `UNKNOWN`, is `StorageProfile()`: a strategy must be correct with it on any storage. A copy or move reads the
   destination's. Add a field only when a strategy saves requests or data copied with it.
-- A filesystem has one profile, which never changes. A storage whose behaviour differs by path, e.g. per bucket or
-  container, is several filesystems under a router. Never add a strategy hook taking a path to tell them apart.
-- `_load_storage_profile(path)` may ask the storage at one path of the operation needing the profile, e.g. a
-  container a credential is limited to. The path tells where to ask, never what the profile is.
+- A filesystem has one profile, which never changes. `_load_storage_profile()` and `_get_storage_profile()` take no
+  path, so that the API enforces it. A storage whose behaviour differs by path, e.g. per bucket or container, is
+  several filesystems under a router: one per bucket, and the router for the whole namespace. Never add a hook taking
+  a path to tell them apart.
 - The library never chooses a strategy for the developer. Each docstring says what the strategy assumes of the
   storage, and when it wins or loses.
 - Async first: write the async version, and a sync one only when asked.

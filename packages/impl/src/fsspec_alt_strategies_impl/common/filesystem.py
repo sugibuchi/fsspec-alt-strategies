@@ -68,13 +68,12 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     for the whole filesystem, and always set: one whose storage is unknown says
     so, with ``UNKNOWN``. Where a request finds it, e.g. whether an
     account has a hierarchical namespace, a subclass sets what it knows and
-    overrides ``_load_storage_profile(path)`` too, which may ask the storage at
-    one of the paths the first operation needing it is given. The strategies
-    and the subclass's primitives get it with
-    ``await self._get_storage_profile(paths)``, which loads it once, sets it as
-    ``storage_profile``, and returns it.
-    A storage whose profile differs by path, e.g. per bucket, is several
-    filesystems under a router.
+    overrides ``_load_storage_profile()`` too. The strategies and the
+    subclass's primitives get it with ``await self._get_storage_profile()``,
+    which loads it once, sets it as ``storage_profile``, and returns it.
+    Neither takes a path, so that the profile cannot differ by path. A storage
+    whose behaviour does, e.g. per bucket, is several filesystems under a
+    router: one per bucket, and the router for the whole namespace.
 
     Each family's class declares the abstract methods its subclasses implement,
     so that a reader finds them all in one place.
@@ -125,64 +124,42 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         self.operation_limit = operation_limit
         self.io_limit = io_limit
 
-    async def _load_storage_profile(self, path: str) -> StorageProfile:
-        """Find the profile, with a path the storage may be asked at: here, ``storage_profile``.
+    async def _load_storage_profile(self) -> StorageProfile:
+        """Find the profile by a request: here, ``storage_profile`` as declared.
 
-        A subclass overrides it where the profile is found by a request, e.g.
-        whether an account has a hierarchical namespace. A credential limited
-        to a container may ask that only within the container. ``path`` is one
-        of the paths the operation needing the profile is given, maybe a glob
-        pattern. It tells where to ask, never what the profile is: the profile
-        is one for the whole filesystem.
+        A subclass overrides it where a request finds the profile, e.g.
+        whether an account has a hierarchical namespace. It takes no path: the
+        profile is one for the whole filesystem. A storage whose behaviour
+        differs by path, e.g. per bucket, is several filesystems under a
+        router, each loading its own.
 
         `_get_storage_profile` sets what it returns as ``storage_profile``,
-        then never calls it again. One that cannot tell at ``path`` raises: the
-        next path is tried, or the next operation's. Returning ``UNKNOWN``
+        then never calls it again. One that cannot tell raises: the next
+        operation needing the profile tries again. Returning ``UNKNOWN``
         instead sets that for good, which is right on any storage.
         """
         return self.storage_profile
 
-    async def _get_storage_profile(self, path: str | Sequence[str]) -> StorageProfile:
-        """``storage_profile``, loaded first by `_load_storage_profile` with one of ``path``.
+    async def _get_storage_profile(self) -> StorageProfile:
+        """``storage_profile``, loaded first by `_load_storage_profile`.
 
-        ``path`` is the path, or the paths, an operation is given, e.g. a
-        copy's destination. Once loaded, ``storage_profile`` is returned as it
-        is. Until then, each path is tried in turn, until
-        `_load_storage_profile` finds the profile, then set as
-        ``storage_profile``. If it fails at all of them, it raises: a single
-        error as it is, several in an ExceptionGroup. A first call loads it
-        while the others wait, then find it loaded.
+        Once loaded, ``storage_profile`` is returned as it is. A first call
+        loads it while the others wait, then find it loaded. A load that
+        raises is tried again by the next call.
 
         The strategies await it when they start. The subclass's primitives may
-        await it too, with the paths they are given, e.g. a ``_rmdir``
-        depending on whether directories are real.
+        await it too, e.g. a ``_rmdir`` depending on whether directories are
+        real.
         """
         # Once loaded, no call waits for the lock.
         if self._storage_profile_loaded:
             return self.storage_profile
 
-        paths = [path] if isinstance(path, str) else list(path)
-        if not paths:
-            raise ValueError("No path to load the storage profile with")
         async with self._storage_profile_lock:
-            if self._storage_profile_loaded:
-                return self.storage_profile
-
-            errors: list[Exception] = []
-            for p in paths:
-                try:
-                    profile = await self._load_storage_profile(p)
-                except Exception as e:
-                    errors.append(e)
-                else:
-                    self.storage_profile = profile
-                    self._storage_profile_loaded = True
-                    return profile
-
-        if len(errors) == 1:
-            raise errors[0]
-        else:
-            raise ExceptionGroup("The storage profile could not be loaded", errors)
+            if not self._storage_profile_loaded:
+                self.storage_profile = await self._load_storage_profile()
+                self._storage_profile_loaded = True
+        return self.storage_profile
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""

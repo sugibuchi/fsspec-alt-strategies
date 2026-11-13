@@ -427,15 +427,16 @@ async def test_rm_uses_a_recursive_delete_of_the_storage(
 async def test_a_profile_found_by_a_request_is_loaded_once(
     inner: SimulatedFileSystem,
 ) -> None:
-    loads: list[str] = []
+    loads: list[bool] = []
 
     class Found(_Tree):
-        # E.g. whether an account has a hierarchical namespace, asked at a path.
-        async def _load_storage_profile(self, path: str) -> StorageProfile:
-            loads.append(path)
+        # E.g. whether an account has a hierarchical namespace.
+        async def _load_storage_profile(self) -> StorageProfile:
+            refused = not loads
+            loads.append(refused)
             await asyncio.sleep(0)
-            if path.startswith("refused"):
-                raise ConnectionError(path)  # Another path is tried, or asked again.
+            if refused:
+                raise ConnectionError("refused")  # Asked again by the next call.
             return StorageProfile(deletes_directories=True)
 
         async def _rm_tree(self, path: str) -> None:
@@ -443,37 +444,15 @@ async def test_a_profile_found_by_a_request_is_loaded_once(
 
     fs = Found(inner, asynchronous=True)
     with pytest.raises(ConnectionError):
-        await fs._get_storage_profile("refused")
-    with pytest.raises(ExceptionGroup) as group:
-        await fs._get_storage_profile(["refused/a", "refused/b"])
-    assert [str(e) for e in group.value.exceptions] == ["refused/a", "refused/b"]
+        await fs._get_storage_profile()
 
-    # The strategy loads it with its own path: deleted whole, as declared.
-    await fs._copy("data", "copied", recursive=True)
+    # The strategy loads it: deleted whole, as declared.
     inner.reset_stats()
     await fs._rm("data", recursive=True)
     assert inner.stats.calls == {"delete": 1}
-    # Kept: concurrent calls, of any paths, load nothing more.
-    await asyncio.gather(*(fs._get_storage_profile("refused") for _ in range(3)))
-    assert loads == ["refused", "refused/a", "refused/b", "copied"]
-
-
-async def test_each_path_is_tried_until_one_loads(inner: SimulatedFileSystem) -> None:
-    loads: list[str] = []
-
-    class Found(_Tree):
-        async def _load_storage_profile(self, path: str) -> StorageProfile:
-            loads.append(path)
-            if path != "c":
-                raise PermissionError(path)
-            return StorageProfile(renames_files=True)
-
-    fs = Found(inner, asynchronous=True)
-    profile = await fs._get_storage_profile(["a", "b", "c", "d"])
-    assert profile == StorageProfile(renames_files=True)
-    assert loads == ["a", "b", "c"]
-    with pytest.raises(ValueError, match="No path"):
-        await Found(inner, asynchronous=True)._get_storage_profile([])
+    # Kept: concurrent calls load nothing more.
+    await asyncio.gather(*(fs._get_storage_profile() for _ in range(3)))
+    assert loads == [True, False]
 
 
 async def test_storage_profile_is_the_profile_loaded(
@@ -484,18 +463,18 @@ async def test_storage_profile_is_the_profile_loaded(
     class Found(_Tree):
         storage_profile = StorageProfile()  # Nothing known until loaded.
 
-        async def _load_storage_profile(self, path: str) -> StorageProfile:
+        async def _load_storage_profile(self) -> StorageProfile:
             return found
 
     fs = Found(inner, asynchronous=True)
     # As set until loaded: then the profile found.
     assert fs.storage_profile == StorageProfile()
-    assert await fs._get_storage_profile("data") is found
+    assert await fs._get_storage_profile() is found
     assert fs.storage_profile is found
 
     # A profile set loads as itself.
     declared = _Tree(inner, asynchronous=True)
-    assert await declared._get_storage_profile("data") is declared.storage_profile
+    assert await declared._get_storage_profile() is declared.storage_profile
 
 
 async def test_mkdir_makes_a_directory(fs: _Tree, inner: SimulatedFileSystem) -> None:

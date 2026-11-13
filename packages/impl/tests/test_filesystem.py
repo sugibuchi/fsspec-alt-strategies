@@ -300,16 +300,16 @@ async def test_cat_ranges_fetches_a_large_merged_range_in_parts() -> None:
     assert inner.stats.calls == {"read": 3}
 
 
-# The profile, loaded with the paths of the operation that needs it.
+# The profile, loaded once, by the operations that need it.
 
 
 class _Noting:
-    """Notes each path the profile is loaded with."""
+    """Counts the loads of the profile."""
 
-    loaded: list[str]
+    loaded: int
 
-    async def _load_storage_profile(self, path: str) -> StorageProfile:
-        self.loaded.append(path)
+    async def _load_storage_profile(self) -> StorageProfile:
+        self.loaded += 1
         return StorageProfile()
 
 
@@ -323,22 +323,22 @@ class _NotingFlat(_Noting, AsyncFlatWrapper):
 
 @pytest.mark.parametrize("family", ["tree", "flat"])
 @pytest.mark.parametrize(
-    ("call", "paths"),
+    ("call", "loads"),
     [
-        # A tree deletion reads its own storage's profile, with its path; a flat one none.
-        (lambda fs: fs._rm("data", recursive=True), {"tree": ["data"], "flat": []}),
-        # A copy or a move reads the destination's, with its path.
-        (lambda fs: fs._copy("data", "copied", recursive=True), ["copied"]),
-        (lambda fs: fs._mv("data", "moved", recursive=True), ["moved"]),
+        # A tree deletion reads its storage's profile; a flat one none.
+        (lambda fs: fs._rm("data", recursive=True), {"tree": 1, "flat": 0}),
+        # A copy or a move reads the destination's: here, the same.
+        (lambda fs: fs._copy("data", "copied", recursive=True), 1),
+        (lambda fs: fs._mv("data", "moved", recursive=True), 1),
         # A strategy reading no profile loads none.
-        (lambda fs: fs._find("data"), []),
+        (lambda fs: fs._find("data"), 0),
     ],
 )
-async def test_strategies_load_the_profile_with_their_paths(
-    family: str, call: Any, paths: Any
+async def test_strategies_load_the_profile_once(
+    family: str, call: Any, loads: Any
 ) -> None:
-    if isinstance(paths, dict):
-        paths = paths[family]
+    if isinstance(loads, dict):
+        loads = loads[family]
     inner = SimulatedFileSystem(hierarchical=family == "tree", asynchronous=True)
     inner.add_file("data/a.txt", b"a")
     inner.add_file("data/b/c.txt", b"c")
@@ -349,12 +349,11 @@ async def test_strategies_load_the_profile_with_their_paths(
         fs = _NotingFlat(
             inner, rm_batch_size=10, storage_profile=StorageProfile(), **limits
         )
-    fs.loaded = []
+    fs.loaded = 0
     await call(fs)
-    assert fs.loaded[: len(paths)] == paths
-    assert len(fs.loaded) == len(paths)  # Kept once loaded.
+    assert fs.loaded == loads
 
 
-async def test_the_profile_set_is_loaded_with_any_path() -> None:
+async def test_the_profile_set_is_returned() -> None:
     fs = AsyncTreeWrapper(SimulatedFileSystem(asynchronous=True), **_LIMITS)
-    assert await fs._get_storage_profile("any/path") == StorageProfile(fs_type="tree")
+    assert await fs._get_storage_profile() == StorageProfile(fs_type="tree")

@@ -19,8 +19,9 @@ first.
 On a bucket with a hierarchical namespace, folders are objects of their own,
 which the flat strategies never delete: a recursive ``rm`` or ``mv`` leaves
 them. Such a bucket suits `AsyncTreeWrapper`, whose ``_rmdir`` is gcsfs's,
-deleting a folder. A filesystem serving both kinds of bucket is two under a
-router.
+deleting a folder. As a filesystem has one profile, the whole of GCS is a
+router, holding a filesystem per bucket: each wrapped as its kind of bucket
+suits.
 
 It imports nothing of gcsfs: it calls the wrapped filesystem's own methods.
 Those are private, as of gcsfs 2026.x: where ``_find`` takes no ``prefix``, or

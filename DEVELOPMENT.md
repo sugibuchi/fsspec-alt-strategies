@@ -96,7 +96,7 @@ AsyncRoutingFileSystem             router.py, holding filesystems of the above
 `_BaseFileSystem` holds what both families share:
 
 - the two limits: `operation_limit` for the strategies' requests, `io_limit` for reads and writes of data;
-- the profile: `storage_profile`, `UNKNOWN` unless set, and `async _load_storage_profile(path)` overridden to find
+- the profile: `storage_profile`, `UNKNOWN` unless set, and `async _load_storage_profile()` overridden to find
   it with a request;
 - the data methods, `_cat_file`, `_pipe_file`, `_get_file` and `_put_file`, through `open_async`'s files;
 - `_copy` and `_mv`, which start the copy and move its family's class names, `_cp_strategy` and `_mv_strategy`;
@@ -290,12 +290,13 @@ profile only saves requests:
 | `case_sensitive`       | False: a path moved onto itself in another case, by one `_mv_tree` |
 
 - A filesystem has one profile, which never changes. It is `storage_profile`, `UNKNOWN` unless a subclass sets what
-  it knows. Or it is what `_load_storage_profile(path)` finds with a request, asking the storage at that path, e.g. the
-  container a credential is limited to.
-- A strategy awaits it with `_get_storage_profile(paths)`, e.g. in its jobs' `setup()`, with the paths it is given.
-  Once loaded, `storage_profile` is returned. Until then, each path is tried in turn, under a lock, and the first
-  profile loaded is set as `storage_profile`. If all fail, it raises.
-- Paths of one filesystem whose storages differ go to a router, each storage with a filesystem of its own.
+  it knows. Or it is what `_load_storage_profile()` finds with a request.
+- A strategy awaits it with `_get_storage_profile()`, e.g. in its jobs' `setup()`. Once loaded, `storage_profile` is
+  returned. Until then, it is loaded under a lock, and set as `storage_profile`. A load that fails raises, and the next
+  call tries again.
+- Neither method takes a path, so that the profile cannot differ by path. A storage whose behaviour does, e.g. GCS's
+  buckets with or without a hierarchical namespace, is several filesystems under a router: one per bucket, and the
+  router for the whole namespace.
 - A deletion reads the profile of the filesystem it deletes from.
 - A copy or move reads the destination's. `renames_files`, `renames_directories`, `copies_directories` and
   `case_sensitive` count only within one storage.
