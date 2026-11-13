@@ -8,12 +8,13 @@ file objects: its ``_cat_file``, ``_pipe_file``, ``_get_file`` and
 Its ``_cp_file`` and ``_mv_file`` ask a path's ``_info``, then copy or move by
 the families' ``_cp_file_entry`` and ``_mv_file_entry``. fsspec's methods on
 many paths, such as ``_cat``, call those on one path ``io_concurrency`` at a
-time.
+time. Its ``_copy`` and ``_mv`` start the family's copy and move, which each
+family's class names.
 
 The functions below it shape the answers and errors of fsspec's methods, as
 the families' classes give them.
 
-This module depends on nothing else in the package.
+This module depends on `operation`.
 """
 
 from __future__ import annotations
@@ -27,11 +28,13 @@ from collections.abc import Iterable
 from glob import has_magic
 from typing import TYPE_CHECKING, Any, Self
 
-from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
+from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks, sync
 from fsspec.callbacks import DEFAULT_CALLBACK
 
-from fsspec_alt_strategies.monitor import Monitored
+from fsspec_alt_strategies.monitor import Call, Monitored
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
+
+from .operation import _collect_with_monitors
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -220,6 +223,99 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
             return None
 
         return entry if entry["type"] != "directory" else None
+
+    # The family's copy and move, e.g. _tree_cp and _tree_mv: each family's class sets them.
+    _cp_strategy: Callable[..., Any]
+    _mv_strategy: Callable[..., Any]
+
+    async def _copy(
+        self,
+        path1: str | list[str],
+        path2: str | list[str],
+        recursive: bool = False,
+        on_error: str | None = None,
+        maxdepth: int | None = None,
+        batch_size: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Copy files, as fsspec's ``copy`` does: with the family's copy when recursive.
+
+        A single file goes by the family's copy too, recursive or not, which
+        needs not ask it again, as fsspec's does.
+        """
+        entry = None
+        if isinstance(path2, str) and not recursive:
+            entry = await self._single_file(path1)
+        if not isinstance(path2, str) or (not recursive and entry is None):
+            await super()._copy(
+                path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
+            )
+            return
+        if entry is not None:
+            # As fsspec's copy: a path given, not recursive, raises if missing.
+            on_error = on_error or "raise"
+
+        _, errors = await _collect_with_monitors(
+            self._cp_strategy(
+                self,
+                self,
+                _strip_only_protocol(self, path1),
+                _strip_only_protocol(self, path2),
+                maxdepth=maxdepth,
+                root_entry=entry,
+            ),
+            Call(self._unwrapped(), "copy", path1, path2),
+            kwargs.get("callback"),
+        )
+        _raise(_copy_errors(errors, on_error), "Copying")
+
+    async def _mv(
+        self,
+        path1: str | list[str],
+        path2: str,
+        recursive: bool = False,
+        maxdepth: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Move files, as fsspec's ``mv`` does: with the family's move when recursive.
+
+        A single file goes by the family's move too, recursive or not, so that
+        it moves by ``_mv_file_entry``, the storage's rename where it has one.
+        """
+        if path1 == path2:
+            return
+
+        entry = None
+        if not recursive:
+            entry = await self._single_file(path1)
+            if entry is None:
+                # fsspec's own: a copy, then the deletion of its sources.
+                await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
+                await self._rm(path1, recursive=recursive)
+                return
+
+        _, errors = await _collect_with_monitors(
+            self._mv_strategy(
+                self,
+                self,
+                _strip_only_protocol(self, path1),
+                _strip_only_protocol(self, path2),
+                maxdepth=maxdepth,
+                root_entry=entry,
+            ),
+            Call(self._unwrapped(), "mv", path1, path2),
+            kwargs.get("callback"),
+        )
+        _raise(errors, "Moving")
+
+    # fsspec makes sync methods only from the async ones it knows: _mv and _rmdir are
+    # not. Each awaits the instance's own, so that a subclass's override is the one run.
+
+    def mv(self, path1: str | list[str], path2: str, **kwargs: Any) -> None:
+        return sync(self.loop, self._mv, path1, path2, **kwargs)
+
+    def rmdir(self, path: str) -> None:
+        return sync(self.loop, self._rmdir, path)
 
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         """Copy a file, as fsspec's ``_cp_file`` does: by ``_cp_file_entry``, with its ``_info``.

@@ -98,7 +98,9 @@ AsyncRoutingFileSystem             router.py, holding filesystems of the above
 - the two limits: `operation_limit` for the strategies' requests, `io_limit` for reads and writes of data;
 - the profile: `storage_profile`, `UNKNOWN` unless set, and `async _load_storage_profile(path)` overridden to find
   it with a request;
-- the data methods, `_cat_file`, `_pipe_file`, `_get_file` and `_put_file`, through `open_async`'s files.
+- the data methods, `_cat_file`, `_pipe_file`, `_get_file` and `_put_file`, through `open_async`'s files;
+- `_copy` and `_mv`, which start the copy and move its family's class names, `_cp_strategy` and `_mv_strategy`;
+- the sync methods fsspec does not make, `mv` and `rmdir`.
 
 Each family declares the primitives its subclasses implement, and overrides fsspec's recursive methods:
 
@@ -107,9 +109,8 @@ Each family declares the primitives its subclasses implement, and overrides fssp
 | `TreeFileSystem` | `_ils`, and optional `_rm_tree`, `_mv_tree`, `_cp_tree` | `_walk`, `_find`, `_du`, `_glob`, `_rm`, `_copy`, `_mv` |
 | `FlatFileSystem` | `_ils`, `_rm_files`, `rm_batch_size`         | The same                                                |
 
-Each family also makes the sync methods fsspec does not, `mv` and `rmdir`. Both declare abstract `_info`, `_rm_file`,
-`_rmdir`, `_makedirs`, `open_async` and `_open`. fsspec's default `_rmdir` and `_makedirs` do nothing, so a subclass
-forgetting them would fail silently. A `FlatFileSystem`'s `_rmdir` and `_makedirs` handle buckets, for fsspec's own
+Both declare abstract `_info`, `_rm_file`, `_rmdir`, `_makedirs`, `open_async` and `_open`. fsspec's default `_rmdir`
+and `_makedirs` do nothing, so a subclass forgetting them would fail silently. A `FlatFileSystem`'s `_rmdir` and `_makedirs` handle buckets, for fsspec's own
 methods only.
 
 Both also declare abstract the two methods copying and moving a file:

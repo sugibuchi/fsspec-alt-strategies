@@ -221,17 +221,14 @@ class _Move(_CopyOrMove):
             roots_renamed=self.roots_whole,
         )
 
-    def onto_itself(self, root: str, destination: str) -> _Roots | None:
+    def recased(self, root: str, destination: str) -> _Roots:
         """A single path moved onto itself in another case: renamed by one ``mv_tree``.
 
-        On a storage whose names are not case-sensitive, the destination is
-        the root itself. Found existing, it would take the root into itself:
-        it is taken as missing instead, so that the root is renamed whole.
+        The destination is the root itself. Found existing, it would take the
+        root into itself: it is taken as missing instead.
         """
-        if not self.goes_whole or root == destination:
-            return super().onto_itself(root, destination)
-        if self.path1.endswith("/") or self.path2.endswith("/"):  # type: ignore[union-attr]
-            return super().onto_itself(root, destination)
+        if not self.goes_whole:
+            return super().recased(root, destination)
 
         self.prefix, self.base = root, destination
         self.missing.add(destination)

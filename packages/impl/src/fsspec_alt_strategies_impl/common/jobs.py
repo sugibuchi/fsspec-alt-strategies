@@ -551,18 +551,9 @@ class _CopyJobs(_Jobs):
             self.same_storage and self.profile.case_sensitive is False
         )
 
-    def same(self, path: str, other: str) -> bool:
-        """Whether two paths of the storage are one, folded unless case-sensitive."""
-        if self.case_insensitive:
-            return path.lower() == other.lower()
-        else:
-            return path == other
-
-    def inside(self, path: str, directory: str) -> bool:
-        """Whether a path of the storage is below a directory, folded unless case-sensitive."""
-        if self.case_insensitive:
-            path, directory = path.lower(), directory.lower()
-        return path.startswith(directory + "/")
+    def folded(self, path: str) -> str:
+        """A path as the storage compares it: folded unless its names are case-sensitive."""
+        return path.lower() if self.case_insensitive else path
 
     def state(self) -> Any:
         return CpState(
@@ -591,40 +582,33 @@ class _CopyJobs(_Jobs):
             self.base = destination
         else:
             root = _trim(self.path1)
-            if self.same_storage and self.same(root, destination):
-                return self.onto_itself(root, destination)
+            if self.same_storage and self.folded(root) == self.folded(destination):
+                # Onto itself: left as it is, unless a move to another case.
+                recased = root != destination and self.verb == "move"
+                if not recased or self.path1.endswith("/") or self.path2.endswith("/"):
+                    return None
+                return self.recased(root, destination)
             roots = await self._single(root, destination)
             sources = [root]
 
         for source in sources if self.same_storage else ():
-            target = self.target(source)
-            if self.same(target, source) and len(sources) == 1:
+            target, folded = self.folded(self.target(source)), self.folded(source)
+            if target == folded and len(sources) == 1:
                 return None
-            if not source or self.same(target, source) or self.inside(target, source):
+            if not source or target == folded or target.startswith(folded + "/"):
                 raise ValueError(
-                    f"Cannot {self.verb} {source!r} into itself: {target!r}"
+                    f"Cannot {self.verb} {source!r} into itself: {self.target(source)!r}"
                 )
 
         return roots
 
-    def onto_itself(self, root: str, destination: str) -> _Roots | None:
-        """The root of a single path going onto itself, or None if nothing is to do.
+    def recased(self, root: str, destination: str) -> _Roots:
+        """The root of a single path moved onto itself in another case, to be renamed.
 
-        A path onto itself is left as it is. So is one in another case, on a
-        storage whose names are not case-sensitive, when copied. Moved, it is
-        to be renamed: a move renaming roots whole places it, as a root
+        On a storage whose names are not case-sensitive, only a rename of the
+        root whole changes its case: a move doing so places it, as a root
         going to a destination found missing. Here, it raises ValueError.
-        Its contents go onto themselves if ``path1`` ends with "/", and it
-        goes into itself if ``path2`` does: those are left too, as a path
-        onto itself in the same case is.
         """
-        if (
-            root == destination
-            or self.verb == "copy"
-            or self.path1.endswith("/")  # type: ignore[union-attr]
-            or self.path2.endswith("/")
-        ):
-            return None
         raise ValueError(
             f"Cannot {self.verb} {root!r} to {destination!r}, itself in another"
             " case: the storage renames nothing whole"

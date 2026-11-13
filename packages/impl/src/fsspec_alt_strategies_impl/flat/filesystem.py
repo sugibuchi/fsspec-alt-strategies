@@ -17,14 +17,11 @@ from abc import abstractmethod
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
-from fsspec.asyn import sync
-
 from fsspec_alt_strategies.monitor import Call
 
 from ..common.filesystem import (
     _answer,
     _BaseFileSystem,
-    _copy_errors,
     _du_answer,
     _failed_dir,
     _raise,
@@ -379,97 +376,6 @@ class FlatFileSystem(_BaseFileSystem):
         )
         _raise(errors, "Deleting")
 
-    async def _copy(
-        self,
-        path1: str | list[str],
-        path2: str | list[str],
-        recursive: bool = False,
-        on_error: str | None = None,
-        maxdepth: int | None = None,
-        batch_size: int | None = None,
-        **kwargs: Any,
-    ) -> None:
-        """Copy files, as fsspec's ``copy`` does: with the flat copy when recursive.
-
-        A single file goes by the flat copy too, recursive or not, which needs
-        not ask it again, as fsspec's does.
-        """
-        if not isinstance(path2, str):
-            await super()._copy(
-                path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
-            )
-            return
-
-        entry = None
-        if not recursive:
-            entry = await self._single_file(path1)
-            if entry is None:
-                await super()._copy(
-                    path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
-                )
-                return
-            # As fsspec's copy: a path given, not recursive, raises if missing.
-            on_error = on_error or "raise"
-
-        _, errors = await _collect_with_monitors(
-            _flat_cp(
-                self,
-                self,
-                _strip_only_protocol(self, path1),
-                _strip_only_protocol(self, path2),
-                maxdepth=maxdepth,
-                root_entry=entry,
-            ),
-            Call(self._unwrapped(), "copy", path1, path2),
-            kwargs.get("callback"),
-        )
-        _raise(_copy_errors(errors, on_error), "Copying")
-
-    async def _mv(
-        self,
-        path1: str | list[str],
-        path2: str,
-        recursive: bool = False,
-        maxdepth: int | None = None,
-        **kwargs: Any,
-    ) -> None:
-        """Move files, as fsspec's ``mv`` does: with the flat move when recursive.
-
-        A single file goes by the flat move too, recursive or not, so that it
-        moves by ``_mv_file_entry`` where the profile's ``renames_files`` says it
-        renames.
-        """
-        if path1 == path2:
-            return
-
-        entry = None
-        if not recursive:
-            entry = await self._single_file(path1)
-            if entry is None:
-                # fsspec's own: a copy, then the deletion of its sources.
-                await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
-                await self._rm(path1, recursive=recursive)
-                return
-
-        _, errors = await _collect_with_monitors(
-            _flat_mv(
-                self,
-                self,
-                _strip_only_protocol(self, path1),
-                _strip_only_protocol(self, path2),
-                maxdepth=maxdepth,
-                root_entry=entry,
-            ),
-            Call(self._unwrapped(), "mv", path1, path2),
-            kwargs.get("callback"),
-        )
-        _raise(errors, "Moving")
-
-    # fsspec makes sync methods only from the async ones it knows: _mv and _rmdir are
-    # not. Each awaits the instance's own, so that a subclass's override is the one run.
-
-    def mv(self, path1: str | list[str], path2: str, **kwargs: Any) -> None:
-        return sync(self.loop, self._mv, path1, path2, **kwargs)
-
-    def rmdir(self, path: str) -> None:
-        return sync(self.loop, self._rmdir, path)
+    # The copy and move that _BaseFileSystem's _copy and _mv start, as fsspec's methods.
+    _cp_strategy = staticmethod(_flat_cp)
+    _mv_strategy = staticmethod(_flat_mv)

@@ -469,74 +469,51 @@ class SimulatedFileSystem(AsyncFileSystem):
         ``renames_directories=True``. It refuses a ``path2`` that exists. An
         object store has no rename: it raises NotImplementedError.
         """
-        path1, path2 = self._strip_protocol(path1), self._strip_protocol(path2)
-        if not self.hierarchical:
-            raise NotImplementedError("An object store renames nothing at once.")
-
-        await self._request("rename")
-        if path1 not in self._file_data and path1 not in self._dirs:
-            raise FileNotFoundError(path1)
-        if path2 in self._file_data or path2 in self._dirs:
-            raise FileExistsError(path2)
-        if not path1 or path2 == path1 or path2.startswith(path1 + "/"):
-            raise OSError(errno.EINVAL, "Cannot move a directory into itself", path2)
-        if self.parents_required and _parent_of(path2) not in self._dirs:
-            raise FileNotFoundError(_parent_of(path2))
-
-        if path1 in self._file_data:
-            file = self._file_data[path1]
-            self._unlink(path1)
-            self._write(path2, file.data, file.mtime)
-            return
-
-        # Parents first, so that each directory is made before what is in it.
-        paths = [path1, *self._descendants(path1)]
-        files = {p: self._file_data[p] for p in paths if p in self._file_data}
-        directories = [p for p in paths if p in self._dirs]
-
-        self._drop(path1)
-        self._detach(path1)
-
-        for directory in directories:
-            self._make_dirs(path2 + directory[len(path1) :])
-        for path, file in files.items():
-            self._write(path2 + path[len(path1) :], file.data, file.mtime)
+        await self._relocate(path1, path2, move=True)
 
     async def _copy_tree(self, path1: str, path2: str) -> None:
         """Copy a file, or a directory with all in it, in one request.
 
         It is no fsspec method: it is a storage's own, as Dropbox copies a
         folder. A test gives it to the tree copy as its ``cp_tree``, with a
-        profile's ``copies_directories=True``. It refuses a ``path2`` that
-        exists, or is inside ``path1``. An object store copies no directory: it
-        raises NotImplementedError.
+        profile's ``copies_directories=True``. It refuses as `_rename` does.
         """
-        path1, path2 = self._strip_protocol(path1), self._strip_protocol(path2)
-        if not self.hierarchical:
-            raise NotImplementedError("An object store copies no directory at once.")
+        await self._relocate(path1, path2, move=False)
 
-        await self._request("copy")
+    async def _relocate(self, path1: str, path2: str, *, move: bool) -> None:
+        """Move or copy a path with all in it, in one request: `_rename`'s and `_copy_tree`'s."""
+        path1, path2 = self._strip_protocol(path1), self._strip_protocol(path2)
+        verb = "move" if move else "copy"
+        if not self.hierarchical:
+            raise NotImplementedError(
+                f"An object store cannot {verb} anything at once."
+            )
+
+        await self._request("rename" if move else "copy")
         if path1 not in self._file_data and path1 not in self._dirs:
             raise FileNotFoundError(path1)
         if path2 in self._file_data or path2 in self._dirs:
             raise FileExistsError(path2)
         if not path1 or path2 == path1 or path2.startswith(path1 + "/"):
-            raise OSError(errno.EINVAL, "Cannot copy a directory into itself", path2)
+            raise OSError(errno.EINVAL, f"Cannot {verb} a directory into itself", path2)
         if self.parents_required and _parent_of(path2) not in self._dirs:
             raise FileNotFoundError(_parent_of(path2))
 
-        if path1 in self._file_data:
-            file = self._file_data[path1]
-            self._write(path2, file.data, file.mtime)
-            return
+        # Parents first, so that each directory is made before what is in it.
+        paths = [path1, *self._descendants(path1)] if path1 in self._dirs else [path1]
+        files = {p: self._file_data[p] for p in paths if p in self._file_data}
+        directories = [p for p in paths if p in self._dirs]
 
-        paths = [path1, *self._descendants(path1)]
-        for path in paths:
-            if path in self._dirs:
-                self._make_dirs(path2 + path[len(path1) :])
-            else:
-                file = self._file_data[path]
-                self._write(path2 + path[len(path1) :], file.data, file.mtime)
+        if move and path1 in self._dirs:
+            self._drop(path1)
+            self._detach(path1)
+        elif move:
+            self._unlink(path1)
+
+        for directory in directories:
+            self._make_dirs(path2 + directory[len(path1) :])
+        for path, file in files.items():
+            self._write(path2 + path[len(path1) :], file.data, file.mtime)
 
     async def _mkdir(
         self, path: str, create_parents: bool = True, **kwargs: Any
