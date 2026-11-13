@@ -55,12 +55,12 @@ def _flat_find(
     Once cancelled, it takes nothing more from the listing. An error from the
     listing ends the operation, raised by its iteration.
 
-    Requests: the pages of one recursive ``_ils`` of ``path``, one after
-    another. One ``_info`` for ``path`` itself, if nothing is under it, or
+    Requests: the pages of one ``ils_recursive`` of ``path``, one after
+    another. One ``info`` for ``path`` itself, if nothing is under it, or
     with ``withdirs``, holding a permit of the filesystem's
     ``operation_limit``. The listing holds none.
 
-    ``path`` is the directory searched on ``fs``. Its recursive ``_ils`` lists
+    ``path`` is the directory searched on ``fs``. Its ``ils_recursive`` lists
     every key below a directory, in name order, each key once. ``maxdepth`` of
     1 finds only the files in ``path``, though the listing still lists every
     key under it. ``withdirs`` finds directories too, ``path`` included.
@@ -104,8 +104,8 @@ async def _find_entries(
     treated as fsspec's ``_find`` treats it:
 
     - missing, it yields nothing;
-    - a file, it yields the file's ``_info`` entry;
-    - a directory, it yields the directory's own ``_info`` entry with
+    - a file, it yields the file's ``info`` entry;
+    - a directory, it yields the directory's own ``info`` entry with
       ``withdirs``, unless stopping.
 
     Once ``stopping`` returns true, it takes no more from the listing. An error

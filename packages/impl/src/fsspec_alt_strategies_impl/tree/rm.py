@@ -82,24 +82,23 @@ def _tree_rm(
     unknown. Iterating it raises FileNotFoundError if ``path`` does not exist,
     or matches nothing.
 
-    Requests: one recursive ``_ils`` per root, which a storage without a
-    recursive listing answers with one per directory, or one ``_ils`` per
+    Requests: one ``ils_recursive`` per root, which a storage without a
+    recursive listing answers with one per directory, or one ``ils`` per
     directory with ``maxdepth``. One ``rm_file`` per file, and one ``rm_dir``
     per directory. Patterns, or a list, add the requests of their `_tree_glob`.
     With ``deletes_directories``, a root costs one ``rm_tree`` instead. Each
-    request holds a permit of the filesystem's ``operation_limit`` while it
+    request holds a permit of the handler's ``operation_limit`` while it
     runs.
 
     The filesystem's profile's ``implicit_directories=True`` saves the
     ``rm_dir`` of each directory, as a directory goes with its last file. Such
     a directory is not yielded, as one found already gone is not.
 
-    The filesystem's primitives are called above by what they do: ``_ils`` is
-    its ``_ils``, ``rm_file`` its ``_rm_file``, ``rm_dir`` its ``_rmdir``, and
-    ``rm_tree`` its ``_rm_tree``. A FileNotFoundError from ``rm_dir`` counts as
+    The primitives are named above as the handler's own, but ``rm_dir``, its
+    ``rmdir``. A FileNotFoundError from ``rm_dir`` counts as
     deleted, as object stores have no directories to delete.
 
-    ``path`` is the directory deleted from ``fs``, as its ``_ils`` takes it. A
+    ``path`` is the directory deleted from ``fs``, as its ``ils`` takes it. A
     file is deleted alone. A glob pattern, or a list of paths and patterns,
     deletes all they match. ``maxdepth`` of 1 deletes only what is in
     ``path``, and ``path`` if it is then empty.

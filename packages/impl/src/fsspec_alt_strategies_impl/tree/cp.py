@@ -7,7 +7,7 @@ whole tree first, then copies each path. `_tree_cp` copies each directory's file
 as soon as the directory is listed. The destination may be another storage:
 within one, it is the same filesystem given twice.
 
-Where the filesystem's ``_cp_tree`` copies a directory in one request, the
+Where the filesystem's ``cp_tree`` copies a directory in one request, the
 profile says so. `_tree_cp` then copies each root whole with it where it can,
 and walks only what it cannot copy so.
 
@@ -124,9 +124,9 @@ def _tree_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests of
-    their `_tree_glob`. One recursive ``_ils`` per root, which a storage
+    their `_tree_glob`. One ``ils_recursive`` per root, which a storage
     without a recursive listing answers with one per directory, or one
-    ``_ils`` per directory with ``maxdepth``. One ``cp_entry`` per file, and
+    ``ils`` per directory with ``maxdepth``. One ``cp_entry`` per file, and
     one ``dst_makedirs`` per destination directory with files or empty. A
     destination refusing to overwrite costs a ``dst_info``, a ``dst_rm_file``
     and a ``cp_entry`` more per file it refused. The ``dst_info`` checks it is
@@ -152,13 +152,13 @@ def _tree_cp(
     ``root_entry``, the entry of ``path1`` as the caller found it, saves the
     listing of a single file: it is copied as the entry says.
 
-    The primitives are called above by what they do: ``_ils`` and ``cp_tree``
-    are the source's ``_ils`` and ``_cp_tree``, and ``dst_info``, ``dst_makedirs`` and ``dst_rm_file`` the
-    destination's ``_info``, ``_makedirs`` and ``_rm_file``.
+    The primitives are named above as the handlers' own: ``ils`` and
+    ``cp_tree`` are the source's, and ``dst_info``, ``dst_makedirs`` and
+    ``dst_rm_file`` the destination's ``info``, ``makedirs`` and ``rm_file``.
 
-    ``src_fs`` is the filesystem copied from, and ``dst_fs`` the one copied
+    ``src_fs`` is the handler copied from, and ``dst_fs`` the one copied
     to, ``src_fs`` again within one storage. ``path1`` is a directory, a file,
-    a glob pattern, or a list of them, as the source's ``_ils`` takes paths.
+    a glob pattern, or a list of them, as the source's ``ils`` takes paths.
     ``cp_entry(entry, destination)`` copies a file: by default, the source's
     ``cp_file`` within one storage, and `transfer._across` between two. ``same_storage`` is
     whether ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 copies
@@ -327,7 +327,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         """Whether each directory is made after its parent, by one mkdir each.
 
         A storage declaring ``parents_required=True`` makes a directory only
-        in an existing parent, as SFTP and Azure Files do. Its ``_makedirs``
+        in an existing parent, as SFTP and Azure Files do. Its ``makedirs``
         then makes a missing parent by more requests: e.g. one refused, then
         the parent's, then the directory's again. The walk lists each
         directory before what is in it, so making them in that order costs

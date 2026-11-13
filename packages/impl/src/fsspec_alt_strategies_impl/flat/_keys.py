@@ -8,8 +8,8 @@ whose key ends with "/". fsspec's ``_find`` and ``_glob`` answer with
 directories too, so the strategies derive them from the keys, as `_dirs` does.
 
 The strategies list by a raw prefix, e.g. "data/2024-", as `_listing` lists
-it: a recursive ``_ils`` of its directory, narrowed to the rest of its name.
-The listing holds no permit of the filesystem's ``operation_limit``: its pages
+it: an ``ils_recursive`` of its directory, narrowed to the rest of its name.
+The listing holds no permit of the handler's ``operation_limit``: its pages
 come one after another, and the strategy never sees them. Only the other
 requests, such as an ``info``, hold one.
 
@@ -29,7 +29,7 @@ def _listing(
 ) -> AsyncIterator[dict[str, Any]]:
     """Every key starting with ``prefix``, raw text, in name order.
 
-    It is the recursive ``_ils`` of the prefix's directory, narrowed to the rest
+    It is the ``ils_recursive`` of the prefix's directory, narrowed to the rest
     of its name: "data/2024-" lists "data" with the prefix "2024-", and "data/"
     all of "data".
 

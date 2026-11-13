@@ -5,7 +5,7 @@
 `_tree_find` is an alternative to fsspec's ``_find``, with the same paths.
 fsspec's walks a tree one directory at a time, unless the filesystem lists
 whole trees. `_tree_find` lists the tree as `_tree_walk` does: by one recursive
-``_ils``, or a directory per request, several at a time.
+``ils``, or a directory per request, several at a time.
 
 This module depends on `walk`, and `handler`, `operation` and `paths` of `common`.
 """
@@ -56,18 +56,18 @@ def _tree_find(
     Once cancelled, it lists no new directory, and yields the paths of the
     listings in flight.
 
-    Requests: one recursive ``_ils`` of ``path``, which a storage without a
+    Requests: one ``ils_recursive`` of ``path``, which a storage without a
     recursive listing answers with one per directory. With ``maxdepth``, one
-    ``_ils`` per directory instead, as the filesystem's ``operation_limit``
+    ``ils`` per directory instead, as the handler's ``operation_limit``
     allows. One ``info`` more for ``path`` itself, if a file, or a directory
     with ``withdirs``.
 
-    ``path`` is the directory searched on ``fs``, by its ``_ils`` and ``_info``.
+    ``path`` is the directory searched on ``fs``, by its ``ils`` and ``info``.
     ``maxdepth`` of 1 finds only the files in ``path``. ``withdirs`` finds
-    directories too, ``path`` included. ``ils_kwargs`` go to each ``_ils``, as
+    directories too, ``path`` included. ``ils_kwargs`` go to each ``ils``, as
     fsspec's ``find`` passes its own on.
 
-    The operation yields the ``_ils`` entry of each path found, or the error
+    The operation yields the ``ils`` entry of each path found, or the error
     of a directory that failed to list, and its state is a `FindState`. The call
     raises ValueError if ``maxdepth`` is less than 1.
     """

@@ -487,7 +487,7 @@ class _CopyJobs(_Jobs):
     a path under a root of ``places`` goes there instead. `prepare` sets them,
     before `target` is used.
 
-    ``dst_fs`` is the filesystem copied to, described by its profile, unknown
+    ``dst_fs`` is the handler copied to, described by its profile, unknown
     if it has none. Within one storage, it is the source, and ``same_storage``
     is True: a path copied onto itself, or under itself, is refused. Between two, a path may go to the same path, or under
     it, as that is another storage's. The paths are compared folded on a storage

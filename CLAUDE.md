@@ -37,27 +37,41 @@ packages, each built and published on its own:
   - `fsspec_alt_strategies_impl_cli`, the click command line copying the strategies, with the `cli` extra.
 
 The workspace root holds the tooling and the docs. DEVELOPMENT.md's Design section has the choices that shape the
-code: read it before adding a strategy.
+code: read it before adding a strategy or a handler.
 
 ## The traps
 
+### Handlers and filesystems
+
+- A storage is a handler, `TreeHandler` or `FlatHandler`, which a developer writes: its primitives, paths, profile,
+  limits and clients. The strategies take handlers, never filesystems.
+- `TreeFileSystem` and `FlatFileSystem` implement fsspec's API on a handler, a required argument. Nobody overrides
+  their methods. Their recursive methods, such as `_rm` and `_copy`, start a private strategy, e.g. `_tree_rm`, and
+  answer as fsspec's method does.
+- A filesystem copies nothing from its handler: no profile, no limit, no `rm_batch_size`. It reads them from
+  `self.handler` where it uses them.
+- A storage's own class, by convention, writes its `__init__`, making its handler from its storage options. It names
+  `protocol`, `root_marker` and `_strip_protocol` as its handler class's, and overrides nothing else. There is no
+  metaclass, no `__init_subclass__` and no decorator reflecting on a class.
+- `TreeFileSystemWrapper` and `FlatFileSystemWrapper` alone take their handler's paths at runtime, and alone are not
+  cached: they serve a wrapped filesystem.
+- A primitive takes an entry for an item that exists, and a `StoragePath` for one to be made. Build paths only by the
+  handler's `verified`, `entry`, `join`, `join_all` and `parent`, which verify them. Never concatenate strings.
+- A name a listing gave is never verified again. Pass a listing's entries on whole, never wrapped again from their
+  names: a storage may need their size or id.
+
 ### Strategies
 
-- The abstract classes, `TreeFileSystem` and `FlatFileSystem`, and the wrappers are the API. Their recursive methods,
-  such as `_rm` and `_copy`, start a private strategy, e.g. `_tree_rm`, and answer as fsspec's method does.
-- A strategy takes the filesystem it works on, never its methods as functions: `_tree_rm(fs, path, maxdepth=...)`. A
-  copy or move takes `src_fs` and `dst_fs`, the same within one storage. It reads the primitives, `operation_limit`
-  and `storage_profile` from them.
+- A strategy takes the handler it works on, never its methods as functions: `_tree_rm(handler, path, maxdepth=...)`.
+  A copy or move takes `src_fs` and `dst_fs`, handlers, the same within one storage.
 - The only function a strategy takes is a copy's or a move's `cp_entry` or `mv_entry`, a `common.jobs._Transfer`,
   taking the source's entry. Between two storages it defaults to `common.transfer._across`, which streams the data
   and leaves no part of a file. The router passes its routing handler's `cp_across` or `mv_across` so.
-- A copy or move hands each file's entry, as its listing found it, to `_cp_file_entry` or `_mv_file_entry`. Never drop
-  it for the path alone: a storage may need its size.
-- A strategy calls only a storage's primitives, such as `_ils`, `_info` and `_rm_file`, never a high-level method such
-  as `_find` or `_glob`: another strategy may have replaced it.
+- A strategy calls only a handler's primitives, such as `ils`, `info` and `rm_file`, never a filesystem's method: the
+  filesystem is the caller's.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
 - Every strategy follows DEVELOPMENT.md's "Operations":
-  - paths come without a protocol;
+  - paths come without a protocol, verified;
   - it returns a private `Operation`, an `OperationHandler` working as it is iterated. No public method returns one:
     callers watch operations with a `Monitor`, which stops one through its `OperationHandler`;
   - the operation yields what it did, mixed with an exception per failed path, each noting its path;
@@ -68,18 +82,18 @@ code: read it before adding a strategy.
 - A strategy replacing an fsspec method answers as it does. Where it departs on purpose, its docstring says why.
 - What a storage does that fsspec leaves open is declared in `profile.StorageProfile`, never detected. A strategy
   needing it awaits its handler's `open()`, then reads `handler.profile`, as its operation starts, e.g. in its jobs'
-  `setup`. The filesystem exposes no profile: it is the handler's alone. The default,
-  `UNKNOWN`, is `StorageProfile()`: a strategy must be correct with it on any storage. A copy or move reads the
-  destination's. Add a field only when a strategy saves requests or data copied with it.
+  `setup`. The default, `UNKNOWN`, is `StorageProfile()`: a strategy must be correct with it on any storage. A copy or
+  move reads the destination's. Add a field only when a strategy saves requests or data copied with it.
 - A storage has one profile, which never changes. The handler's `load_profile()` and `open()` take no path, so that
-  the API enforces it. A storage whose behaviour differs by path, e.g. per bucket or container, is
-  several filesystems under a router: one per bucket, and the router for the whole namespace. Never add a hook taking
-  a path to tell them apart.
+  the API enforces it. A storage whose behaviour differs by path, e.g. per bucket or container, is several handlers
+  under a router. Never add a hook taking a path to tell them apart.
+- The callers hold the limits' permits, never the primitives: the strategies hold `operation_limit` around each
+  primitive, and the filesystem holds `io_limit` around each data call.
 - The library never chooses a strategy for the developer. Each docstring says what the strategy assumes of the
   storage, and when it wins or loses.
 - fsspec's `dircache` is for fsspec's own methods and callers only. `_BaseFileSystem._ls` keeps a listing once it has
-  listed it whole. The strategies list with `_ils`, which never reads or fills it, and `_info` never reads it. Every
-  method changing the storage calls `self._drop_listings()` in a `finally`: a new one does too.
+  listed it whole. The strategies list by the handler, which never reads or fills it, and `_info` never reads it.
+  Every method changing the storage calls `self._drop_listings()` in a `finally`: a new one does too.
 - Async first: write the async version, and a sync one only when asked.
 - Never swallow `CancelledError`.
 
@@ -89,20 +103,21 @@ code: read it before adding a strategy.
   concern. What builds on both sits at the package's root: `wrapper/` and `router.py`. The router imports a
   family's filesystem only when routing to a storage of it, and its strategies only when copying or moving from one,
   as the storage handler's `family` says.
-- A wrapper of one library, such as `wrapper/s3fs.py`, never imports it: it calls the wrapped filesystem's methods.
-  Write one only where the library saves requests or data beyond fsspec's API.
-- A family's modules export nothing public but its filesystem class, in `filesystem.py`.
+- A wrapper of one library, such as `wrapper/s3fs.py`, is a handler, and never imports the library: it calls the
+  wrapped filesystem's methods. Write one only where the library saves requests or data beyond fsspec's API.
+- A family's modules export nothing public but its handler class, in `handler.py`, and its filesystem class, in
+  `filesystem.py`.
 - The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
 - Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
-- The flat strategies list with `flat._keys._listing(fs, prefix)`, a recursive `_ils` of the prefix's directory, an
-  async iterator of entries in name order, never pages: see DEVELOPMENT.md's "The flat strategies". Those that only
-  read derive directories with `flat._keys`. Those changing the storage build on `flat._jobs._FlatJobs`.
+- The flat strategies list with `flat._keys._listing(handler, prefix)`, the handler's `ils_recursive` of the prefix's
+  directory, an async iterator of entries in name order, never pages: see DEVELOPMENT.md's "The flat strategies".
+  Those that only read derive directories with `flat._keys`. Those changing the storage build on
+  `flat._jobs._FlatJobs`.
 - The strategies changing a storage, in any family, run on `common.jobs._Jobs`, and start with `_Jobs.operation`. A
-  copy or move also builds on `common.jobs._CopyJobs`, which places its paths: `_CopyOrMove(_CopyJobs, _TreeJobs)`.
-  Their constructors take keywords only, and pass the rest on.
-
+  copy or move also builds on `common.jobs._CopyJobs`, which places its paths by the destination's `join_all`:
+  `_CopyOrMove(_CopyJobs, _TreeJobs)`. Their constructors take keywords only, and pass the rest on.
 ### Packages
 
 - Never use names suggesting ownership of fsspec's fundamentals, such as "base" or "core" packages of fsspec.
@@ -122,8 +137,8 @@ code: read it before adding a strategy.
 - Test directories have no `__init__.py`. Never import one test file from another. The interface's tests never import
   the strategies.
 - Test strategies on `SimulatedFileSystem`, with the fixtures `flat_fs`, `hierarchical_fs` and `any_fs`, which runs a
-  test on both. Start a strategy on a `TreeView` or `FlatView` of it, which replaces a primitive and sets the profile
-  and limit. Assert the requests made, from `fs.stats.calls`.
+  test on both. Start a strategy on a `TreeView` or `FlatView` of it, a handler which replaces a primitive and sets
+  the profile and limit. Assert the requests made, from `fs.stats.calls`.
 - Test a strategy replacing an fsspec method against fsspec's own, e.g. `AsyncFileSystem._glob(fs, ...)`.
 
 ## Conventions

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 class _TreeJobs(_Jobs):
     """The jobs of one operation, run while the tree of ``fs`` is walked.
 
-    ``fs`` is the filesystem walked, by its ``_ils`` and ``_info``, each
+    ``fs`` is the handler walked, by its ``ils`` and ``info``, each
     request holding a permit of its ``operation_limit``. With ``maxdepth``, the
     walk lists no directory deeper than it, as fsspec's ``_expand_path`` finds
     paths. Each subdirectory the walk leaves unlisted goes to `at_limit`, as

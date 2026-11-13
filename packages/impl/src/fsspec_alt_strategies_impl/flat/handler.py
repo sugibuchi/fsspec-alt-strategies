@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
     from ..common.handler import Entry
 
-__all__: list[str] = []
+__all__ = ["FlatHandler"]
 
 
 class FlatHandler(StorageHandler):

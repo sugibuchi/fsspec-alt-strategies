@@ -55,12 +55,12 @@ def _keys_of(paths: tuple[str, ...]) -> str:
 class _FlatJobs(_Jobs):
     """The jobs of one operation, run while the keys under its roots are listed.
 
-    ``fs`` is the filesystem listed, by its recursive ``_ils`` and ``_info``.
+    ``fs`` is the handler listed, by its ``ils_recursive`` and ``info``.
     With ``maxdepth``, the keys deeper than it are listed, as a prefix lists
     every key under it, but left out, as fsspec's ``_expand_path`` finds paths.
 
     A batch deletion runs by `delete`, and its outcome is told by `refused`:
-    the keys ``_rm_files`` could not delete, each with its error.
+    the keys ``rm_files`` could not delete, each with its error.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -128,7 +128,7 @@ class _FlatJobs(_Jobs):
     ) -> AsyncGenerator[dict[str, Any]]:
         """The keys under each root directory, as its recursive ``ils`` lists them, by its entry.
 
-        A directory with nothing under it is asked for with ``_info``: a file is
+        A directory with nothing under it is asked for with ``info``: a file is
         yielded as a key, and a missing one raises FileNotFoundError, ending the
         operation, as a missing root does.
         """

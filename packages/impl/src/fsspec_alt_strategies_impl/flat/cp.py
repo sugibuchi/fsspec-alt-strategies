@@ -97,7 +97,7 @@ def _flat_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests
-    of their `_flat_glob`. The pages of one recursive ``_ils`` per root, one
+    of their `_flat_glob`. The pages of one ``ils_recursive`` per root, one
     after another, one ``cp_entry`` per key, and one ``dst_makedirs`` per
     destination directory with keys or a marker. A destination refusing to
     overwrite costs a ``dst_info``, a ``dst_rm_file`` and a ``cp_entry`` more
@@ -116,13 +116,13 @@ def _flat_cp(
     ``root_entry``, the entry of ``path1`` as the caller found it, saves the
     listing of a single file: it is copied as the entry says.
 
-    The primitives are called above by what they do: ``_ils`` is the source's
-    ``_ils``, and ``dst_info``, ``dst_makedirs`` and ``dst_rm_file`` the
-    destination's ``_info``, ``_makedirs`` and ``_rm_file``.
+    The primitives are named above as the handlers' own: ``ils`` is the
+    source's ``ils_recursive``, and ``dst_info``, ``dst_makedirs`` and
+    ``dst_rm_file`` the destination's ``info``, ``makedirs`` and ``rm_file``.
 
-    ``src_fs`` is the filesystem copied from, and ``dst_fs`` the one copied
+    ``src_fs`` is the handler copied from, and ``dst_fs`` the one copied
     to, ``src_fs`` again within one storage. ``path1`` is a directory, a file,
-    a glob pattern, or a list of them, as the source's ``_ils`` takes paths.
+    a glob pattern, or a list of them, as the source's ``ils`` takes paths.
     ``cp_entry(entry, destination)`` copies a file: by default, the source's
     ``cp_file`` within one storage, and `transfer._across` between two.
     ``same_storage`` is

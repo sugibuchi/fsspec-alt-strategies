@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     from ..common.handler import Entry, StoragePath
 
-__all__: list[str] = []
+__all__ = ["TreeHandler"]
 
 
 class TreeHandler(StorageHandler):

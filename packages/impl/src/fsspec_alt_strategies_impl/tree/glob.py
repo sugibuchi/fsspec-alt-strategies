@@ -15,7 +15,7 @@ pattern is ruled out too, as nothing below it can match.
 
 Below a ``**``, nothing is pruned. So a directory below which a pattern prunes
 nothing, e.g. ``data`` for ``data/**/*.csv``, is listed by one recursive
-``_ils``.
+``ils``.
 
 Several patterns are matched in one walk per tree: a directory is listed once if
 any of them can match in it, and each path is matched with all of them.
@@ -95,20 +95,20 @@ def _tree_glob(
     Once cancelled, it lists no new directory, and yields the matches of the
     listings in flight.
 
-    Requests: one ``_ils`` per directory a pattern can match in, as the
+    Requests: one ``ils`` per directory a pattern can match in, as the
     filesystem's ``operation_limit`` allows. Without ``maxdepth``, a directory
-    at the pattern's first ``**`` is listed by one recursive ``_ils``, with all
+    at the pattern's first ``**`` is listed by one ``ils_recursive``, with all
     below it: ``data/*/**/*.csv`` lists ``data``, then each directory in it.
     One ``info`` per pattern without wildcards, and per literal root directory
     walked that a pattern matches, e.g. that of ``data/**``.
 
-    ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``_ils``
+    ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``ils``
     takes them: a trailing "/" matches only directories. ``maxdepth`` is how
     deep a ``**`` goes, and ``withdirs`` whether directories can match, as with
-    fsspec's ``_glob``. ``ils_kwargs`` go to each ``_ils``, as fsspec's
+    fsspec's ``_glob``. ``ils_kwargs`` go to each ``ils``, as fsspec's
     ``glob`` passes its own on.
 
-    The operation yields the ``_ils`` entry of each path matched, or the error
+    The operation yields the ``ils`` entry of each path matched, or the error
     of a directory that failed to list, and its state is a `GlobState`. The call
     raises ValueError if ``maxdepth`` is less than 1, or a ``**`` is not a
     whole segment.

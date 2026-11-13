@@ -5,7 +5,7 @@
 `_flat_mv` is an alternative to fsspec's recursive ``mv`` for flat storages.
 fsspec's copies every key, then deletes them all, each stage listing the
 prefix first. `_flat_mv` moves each key as soon as the listing gives it: by
-one ``_mv_file_entry``, or by a copy, deleting the copied keys in batches while
+one ``mv_file``, or by a copy, deleting the copied keys in batches while
 the listing goes on.
 
 This module depends on `_jobs`, `cp`, and `handler`, `jobs`, `operation` and `paths` of
@@ -52,24 +52,24 @@ def _flat_mv(
 
     It moves each key in one of two ways, by the destination's profile:
 
-    - by the source's ``_mv_file_entry``: each key is moved by one as soon as
+    - by the source's ``mv_file``: each key is moved by one as soon as
       the listing gives it, and yielded once moved. It wins on storages
       renaming a key in one request, which copies no data.
     - by copies: each key is copied by one ``cp_entry`` as soon as the listing
       gives it. The keys copied are deleted in batches of the source's
-      ``rm_batch_size``, each by one of its ``_rm_files``, and the last,
+      ``rm_batch_size``, each by one of its ``rm_files``, and the last,
       smaller batch once all is copied. A key is moved, and yielded, once its
       batch is deleted. It wins on object stores, which rename nothing, but
       delete many keys in one request.
 
-    It moves by ``_mv_file_entry`` only within one storage whose profile's
+    It moves by ``mv_file`` only within one storage whose profile's
     ``renames_files`` is True. Unknown, it copies and deletes in batches,
     which is right on any storage: about one request per key either way, but
     a rename copies no data.
 
     The destination is described by ``dst_fs`` and its profile, as with
     `_flat_cp`. Between two storages, ``same_storage`` is False, and
-    ``cp_entry`` copies to the other storage. ``_rm_files`` always deletes the
+    ``cp_entry`` copies to the other storage. ``rm_files`` always deletes the
     source's.
 
     A directory's marker, a key ending with "/", is moved too, but not yielded.
@@ -96,12 +96,12 @@ def _flat_mv(
     FileNotFoundError if ``path1`` does not exist, or matches nothing, and
     ValueError if ``path2`` is inside it within one storage.
 
-    Requests: as `_flat_cp`, with one ``_mv_file_entry`` per key instead of its
-    ``cp_entry``, or with one ``_rm_files`` more per batch.
+    Requests: as `_flat_cp`, with one ``mv_file`` per key instead of its
+    ``cp_entry``, or with one ``rm_files`` more per batch.
 
-    ``src_fs`` is the filesystem moved from, and ``dst_fs`` the one moved to,
+    ``src_fs`` is the handler moved from, and ``dst_fs`` the one moved to,
     ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
-    glob pattern, or a list of them, as the source's ``_ils`` takes paths.
+    glob pattern, or a list of them, as the source's ``ils`` takes paths.
     ``path2`` places them as `_flat_cp` does. ``cp_entry(entry, destination)``
     copies a file by its source entry when the move copies: by default, the
     source's ``cp_file`` within one storage, and `transfer._across` between
@@ -147,9 +147,9 @@ def _flat_mv(
 
 
 class _Rename(_CopyOrMove):
-    """The jobs of one `_flat_mv` by ``_mv_file_entry``: one move per key.
+    """The jobs of one `_flat_mv` by ``mv_file``: one move per key.
 
-    The source's ``_mv_file_entry`` moves each key where a copy would put it. A
+    The source's ``mv_file`` moves each key where a copy would put it. A
     directory's marker is moved too, but not yielded.
     """
 

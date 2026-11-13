@@ -51,7 +51,7 @@ def _flat_rm(
     key under it, but kept.
 
     The keys are grouped in batches of the handler's ``rm_batch_size``, each
-    deleted by one ``_rm_files``, while the listing goes on. The last batch,
+    deleted by one ``rm_files``, while the listing goes on. The last batch,
     smaller, goes once the listing ends. It yields each key once its batch is
     deleted, the error of each key its batch could not delete, noting the key,
     and the error of each batch that failed whole, noting its keys.
@@ -68,16 +68,16 @@ def _flat_rm(
     without yielding them. Iterating it raises FileNotFoundError if ``path``
     does not exist, or matches nothing. An error from the listing ends it too.
 
-    Requests: the pages of one recursive ``_ils`` per root, one after another,
-    and one ``_rm_files`` per batch. One ``_info`` for ``path`` if nothing is
+    Requests: the pages of one ``ils_recursive`` per root, one after another,
+    and one ``rm_files`` per batch. One ``info`` for ``path`` if nothing is
     under it. Patterns, or a list, add the requests of their `_flat_glob`.
     Each request but the listing holds a permit of the filesystem's
     ``operation_limit`` while it runs.
 
-    ``path`` is the directory deleted from ``fs``, as its ``_ils`` takes
+    ``path`` is the directory deleted from ``fs``, as its ``ils`` takes
     paths. A file is deleted alone. A glob pattern, or a list of paths and
     patterns, deletes all they match. ``maxdepth`` of 1 deletes only the keys
-    right in ``path``. The filesystem's ``_rm_files`` takes a key missing as
+    right in ``path``. The filesystem's ``rm_files`` takes a key missing as
     no error, and returns the keys it could not delete.
 
     The operation yields each key deleted, or an error, and its state is an

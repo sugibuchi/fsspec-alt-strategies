@@ -7,12 +7,12 @@ arrives, as fsspec's ``walk`` gives them. A ``descend`` predicate prunes the
 directories it lists, as glob needs.
 
 Its engine, ``_chunks``, is the walk under the other tree strategies, such as
-find, rm and du. It streams each directory's listing in parts, as ``_ils``
+find, rm and du. It streams each directory's listing in parts, as ``ils``
 yields it, so that they act on a directory of hundreds of thousands of files as
 it is listed. ``_tree_walk`` gathers the parts, as fsspec's ``walk`` gives a
 directory whole.
 
-A tree that nothing prunes is listed by one recursive ``_ils``, which gives it
+A tree that nothing prunes is listed by one ``ils_recursive``, which gives it
 depth first or in name order. Its entries are split into the same parts, each
 directory's as soon as the listing has passed it. A storage with no recursive
 listing of its own answers it with a directory per request, several at a time.
@@ -20,7 +20,7 @@ Where the walk prunes, it lists each directory it enters on its own, several at
 a time, breadth first.
 
 The tree strategies, and the engines under them, take the filesystem they
-work on, and call its primitives, such as ``_ils``, under its
+work on, and call its primitives, such as ``ils``, under its
 ``operation_limit``.
 
 This module depends on `listing`, and `handler`, `jobs`, `operation` and `paths` of `common`.
@@ -63,7 +63,7 @@ def _tree_walk(
     It yields each directory listed as ``(path, dirs, files)``, as fsspec's
     ``walk`` does with ``detail=True``: ``path`` itself first, then each
     directory below it. ``dirs`` and ``files`` map the names in the directory
-    to their ``_ils`` entries. An empty directory yields empty ones. The
+    to their ``ils`` entries. An empty directory yields empty ones. The
     directories come in the order their listings arrive, not in the tree's
     order. A directory that fails to list yields its error instead, and the
     walk goes on with the others. The error names its directory in its note,
@@ -74,7 +74,7 @@ def _tree_walk(
     listed on its own: a recursive listing passes a directory only after all
     below it, and the whole tree would be held. Without, a directory comes
     after all of those below it, as fsspec's ``walk`` orders them, and the tree
-    is listed by one recursive ``_ils``, unless ``maxdepth`` or ``descend``
+    is listed by one ``ils_recursive``, unless ``maxdepth`` or ``descend``
     prunes it. A failure then ends the walk of the whole tree, yielding its
     error as ``path``'s. A walk bottom up that is cancelled leaves out the
     directories whose subtrees were not done.
@@ -87,16 +87,16 @@ def _tree_walk(
     - with ``on_error="raise"``, the error of the first directory that failed to
       list.
 
-    Requests: top down, or when pruned, one ``_ils`` per directory walked, as
-    the filesystem's ``operation_limit`` allows. Bottom up otherwise, one
-    recursive ``_ils`` of ``path``, which a storage without a recursive listing
+    Requests: top down, or when pruned, one ``ils`` per directory walked, as
+    the handler's ``operation_limit`` allows. Bottom up otherwise, one
+    ``ils_recursive`` of ``path``, which a storage without a recursive listing
     answers with one per directory.
 
-    ``path`` is the directory the walk starts from, listed by the ``_ils`` of
+    ``path`` is the directory the walk starts from, listed by the ``ils`` of
     ``fs``. ``maxdepth`` of 1 lists only ``path``. ``topdown`` puts a directory
     before those below it. ``descend``, called with the entry of each
     subdirectory found, lets the walk list it only if it returns True.
-    ``ils_kwargs`` go to each ``_ils``, as fsspec's ``walk`` passes its own on.
+    ``ils_kwargs`` go to each ``ils``, as fsspec's ``walk`` passes its own on.
 
     ``on_error`` says what becomes of the error of a directory that fails to
     list:
@@ -228,11 +228,11 @@ class _Listing:
     """A part of a directory's listing, as ``_chunks`` yields it, or all of it.
 
     ``depth`` is 1 for the directory the walk started from, 2 for its subdirectories,
-    and so on. ``entries`` are as ``_ils`` gives them, without the directory itself,
+    and so on. ``entries`` are as ``ils`` gives them, without the directory itself,
     and empty if the listing failed with ``error``.
 
     A directory's listing comes in parts, each of at most ``chunk_size`` entries,
-    as ``_ils`` yields them: ``first`` on the first part, ``last`` on the last.
+    as ``ils`` yields them: ``first`` on the first part, ``last`` on the last.
     So an empty directory is one part, both first and last, with no entries. A
     failed listing ends with its error, as its last part. `_tree_walk` holds
     each directory whole: one part, both first and last.
@@ -290,7 +290,7 @@ async def _chunks(
     Once ``stopping`` returns true, no new listing starts, and those in flight
     stop after their current part: a directory stopped so has no last part.
 
-    A tree that nothing prunes is listed whole by one recursive ``_ils``, split
+    A tree that nothing prunes is listed whole by one ``ils_recursive``, split
     into the same parts, as `_produce_tree` says. A failure in it then ends
     the listing of the whole tree. Without ``maxdepth`` and ``descend``, that
     is each root. With ``descend``, ``whole`` tells of a directory's entry
@@ -482,7 +482,7 @@ async def _produce_tree(
     chunk_size: int,
     stopped: Callable[[], bool],
 ) -> None:
-    """List a tree by one recursive ``_ils``, putting each directory's parts as a walk would.
+    """List a tree by one ``ils_recursive``, putting each directory's parts as a walk would.
 
     The entries come depth first or in name order, all below a directory
     together, so a directory is done once the listing has passed it: `_Split`
@@ -672,7 +672,7 @@ def _new_subdirs(
 
 
 class _Trees:
-    """The directories a walk lists whole, by one recursive ``_ils`` each.
+    """The directories a walk lists whole, by one ``ils_recursive`` each.
 
     A directory is so listed when the walk prunes nothing below it: it has no
     ``maxdepth``, and no ``descend``, or ``whole`` holds for it. The directories
@@ -713,7 +713,7 @@ class _Trees:
 def _not_a_directory(root: str, entry: dict[str, Any]) -> NotADirectoryError:
     """The error of a root that is a file, with its entry as the listing gave it.
 
-    A copy or move of the root then hands the entry on, with no ``_info``.
+    A copy or move of the root then hands the entry on, with no ``info``.
     """
     error = NotADirectoryError(root)
     error.entry = {**entry, "name": root}  # type: ignore[attr-defined]

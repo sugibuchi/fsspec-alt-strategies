@@ -20,11 +20,11 @@ directories. It is a third-party project, not part of fsspec.
 
 ### Streaming first
 
-- Its file operations list with one primitive, `_ils`. fsspec's own operations list every path first, with
-  `expand_path`. `_ils` is an async generator instead: it scans the storage step by step, and yields each path as it
-  is found.
-- The operations built on `_ils` act on its paths as they arrive, as far as they can. So a large file tree is processed
-  without ever being held in memory whole.
+- Its file operations list with one primitive, a storage's listing. fsspec's own operations list every path first,
+  with `expand_path`. The listing is an async iterator instead: it scans the storage step by step, and yields each
+  path as it is found.
+- The operations act on the paths as they arrive, as far as they can. So a large file tree is processed without ever
+  being held in memory whole.
 
 ### Hierarchical namespaces, used
 
@@ -61,10 +61,11 @@ directories. It is a third-party project, not part of fsspec.
 
 ## It also offers
 
-- **Copies between storages:** one filesystem can span several storages, and copy or move files between them.
+- **Copies between storages:** one filesystem can span several storages, and copy or move files between them. A copy
+  leaves no part of a file, and checks each file's size.
 - **Transactions:** writes can wait for fsspec's transaction to commit.
-- **Works with what you have:** existing fsspec filesystems, such as s3fs, get these features with a single call, and
-  a new one by implementing a few basic operations.
+- **Works with what you have:** existing fsspec filesystems, such as s3fs, get these features with a single call. A
+  new one implements a storage handler: a few basic operations, and the checks of its paths.
 
 ## Getting started
 

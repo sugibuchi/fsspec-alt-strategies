@@ -7,28 +7,28 @@ How to get the library's features, and how to use them. See the
 
 ### File tree operation strategies
 
-The strategies walk, find, glob, measure, delete, copy and move file trees. Each lists with `_ils`, which yields
-paths as the storage is scanned, and acts on them as they arrive. They come in two families, by what a storage's
-directories are:
+The strategies walk, find, glob, measure, delete, copy and move file trees. Each lists through a storage handler,
+which yields entries as the storage is scanned, and acts on them as they arrive. They come in two families, by what a
+storage's directories are:
 
 - the `tree` family, in `tree/`, for storages whose directories are real, such as Azure Data Lake Storage Gen2, SFTP
   or HDFS. It deletes and renames directories, and can scan them a directory at a time, several at once;
 - the `flat` family, in `flat/`, for storages whose directories are only prefixes of keys, such as S3. It lists by
   prefix, and deletes keys in batches.
 
-Each family replaces fsspec's recursive methods, such as `find`, `rm` and `copy`, with its strategies. They come in
-two forms:
+Each family's filesystem, `TreeFileSystem` or `FlatFileSystem`, answers fsspec's recursive methods, such as `find`,
+`rm` and `copy`, with its strategies. It runs on a storage handler, in one of two forms:
 
-- **Abstract filesystem classes**, `TreeFileSystem` and `FlatFileSystem`, for a new filesystem implementation: you
-  implement the storage's primitives, and the recursive methods are the strategies.
-- **Wrappers**, in `wrapper/`, for existing filesystem implementations: they give a filesystem the strategies
-  without changing it. `monitored()` picks the wrapper for a known filesystem.
+- **Your own handler**, for a new filesystem implementation: you implement the storage's primitives in a
+  `TreeHandler` or a `FlatHandler`, and the filesystem implements fsspec's API on it.
+- **Wrappers**, in `wrapper/`, for existing filesystem implementations: a handler calling the filesystem, and a
+  filesystem serving its paths. `monitored()` picks the wrapper for a known filesystem.
 
-s3fs, gcsfs and adlfs have wrappers of their own, which use what each library has beyond fsspec's API:
+s3fs, gcsfs and adlfs have handlers of their own, which use what each library has beyond fsspec's API:
 
-- `S3fsWrapper` streams a listing page by page, narrowed to a prefix, and copies a file without asking its size first;
-- `GcsfsWrapper` lists by a prefix, not the whole directory;
-- `AdlfsWrapper` lists a tree in one paginated request, not one per directory.
+- `S3fsHandler` streams a listing page by page, narrowed to a prefix, and copies a file without asking its size first;
+- `GcsfsHandler` lists by a prefix, not the whole directory, and deletes in GCS's batches of 100;
+- `AdlfsHandler` lists a tree in one paginated request, not one per directory.
 
 ### Monitor
 
@@ -46,8 +46,8 @@ which add fsspec's file features to an existing file-like object, e.g. an SDK's 
 
 ### Filesystem router
 
-`AsyncRoutingFileSystem`, in `router.py`, spans several storages, e.g. a cloud's volumes. It routes each path to the
-storage holding it, and copies or moves files between different storages.
+`RoutingFileSystem`, in `router.py`, spans several storages, e.g. a cloud's volumes. Its `RoutingHandler` routes each
+path to the storage holding it. It copies or moves files between different storages, leaving no part of a file.
 
 ## Installation
 
@@ -83,69 +83,101 @@ code goes with it.
 
 ### The modules to copy for each feature
 
-| Feature                         | Modules to copy                                                            |
-|---------------------------------|----------------------------------------------------------------------------|
-| A family's abstract class       | `tree/` or `flat/`, and `common/`; `files/` for its file objects, if used  |
+| Feature                         | Modules to copy                                                                    |
+|---------------------------------|------------------------------------------------------------------------------------|
+| A family's handler and filesystem | `tree/` or `flat/`, and `common/`; `files/` for its file objects               |
 | Wrappers and `monitored()`      | `wrapper/`, `monitor.py`, `__init__.py`, `tree/`, `flat/`, `common/` and `files/` |
-| Monitor                         | Nothing: it is in the interface package                                    |
-| Async file objects              | `files/`                                                                   |
-| Filesystem router               | `router.py`, `common/`, and the family of each storage copied or moved from |
+| Monitor                         | Nothing: it is in the interface package                                            |
+| Async file objects              | `files/`                                                                           |
+| Filesystem router               | `router.py`, `common/`, `files/`, and the family of each storage routed to         |
 
-A monitor watches only filesystems whose methods run the strategies: the abstract classes' subclasses and the
-wrappers.
+A monitor watches only filesystems whose methods run the strategies: the families' filesystems, the wrappers and the
+router.
 
 ## Usage
 
 ### File tree operation strategies
 
-#### Abstract filesystem classes
+#### Storage handlers
 
-`TreeFileSystem` and `FlatFileSystem` are abstract async filesystems whose recursive methods are the strategies. You
-implement the storage's primitives, and declare its profile:
+A storage handler holds what is particular to a storage: its primitives, its paths, its profile, its limits and its
+clients. Subclass `TreeHandler` or `FlatHandler`, and implement the primitives each declares abstract:
+
+```python
+from fsspec_alt_strategies import UNKNOWN
+from fsspec_alt_strategies_impl.tree.handler import TreeHandler
+
+
+class MyHandler(TreeHandler):
+    protocol = "my"
+    root = ""
+    profile = UNKNOWN  # The default: nothing known, right on any storage.
+
+    def __init__(self, account, **kwargs):
+        super().__init__(operation_concurrency=32, io_concurrency=8)
+        self.account = account
+
+    def verify_path(self, path):
+        # Refuse what the storage would, without a request.
+        if "\\" in path:
+            raise ValueError(f"Not a path of the storage: {path!r}")
+
+    async def ils(self, entry, **kwargs):
+        # A directory's entries, as they come, e.g. a page at a time.
+        ...
+
+    async def info(self, entry, **kwargs): ...
+    # ... and rm_file, rmdir, makedirs, cp_file, mv_file, open_reader, open_writer.
+```
+
+- A primitive takes an entry for an item that exists, and a path for one to be made. An entry is a dict whose
+  `"name"` alone is sure. The other keys, e.g. a size or an id, are there when a listing found them, so a primitive
+  needs no request to ask them again.
+- The strategies build paths only by the handler's `join`, `join_all` and `parent`, each verified by `verify_path`.
+  So a name another storage listed, e.g. one holding "..", can never leave the directory it is copied into.
+- `open_reader` and `open_writer` return files used sync or async, e.g. the adaptive files below.
+- A tree handler with a recursive listing of its own implements `ils_recursive`, and declares its order in
+  `recursive_order`: "depth first" or "name". Without it, a tree is listed a directory per request, several at once.
+- A flat handler implements `ils_recursive(entry, prefix=...)`, every key below a directory starting with the prefix,
+  in name order, and `rm_files`, deleting at most `rm_batch_size` keys by one request.
+- `rm_tree`, `mv_tree` and `cp_tree`, a storage's own operations on a whole directory, are optional. The profile
+  declares them.
+
+A handler is made without a request. `await handler.open()` makes its clients on the running loop, and loads its
+profile, once. A storage whose profile only a request can find, e.g. whether an account has a hierarchical namespace,
+overrides `async def load_profile(self)`. A load that fails raises, and the next operation tries again.
+
+It takes no path: the profile is one for the whole storage. A storage whose behaviour differs by path is several
+handlers under a router. On GCS, for example, buckets differ in having a hierarchical namespace: make one handler per
+bucket, and a router for the whole namespace.
+
+#### Filesystems on a handler
+
+`TreeFileSystem` and `FlatFileSystem` implement fsspec's whole API on a handler. Make one on a handler, or give the
+storage a class of its own, so that fsspec makes it from a URL:
 
 ```python
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
-from fsspec_alt_strategies_impl.tree.listing import _tree_ils
-from fsspec_alt_strategies import UNKNOWN
+
+fs = TreeFileSystem(MyHandler("mine"), asynchronous=True)
 
 
 class MyFileSystem(TreeFileSystem):
-    protocol = "my"
-    storage_profile = UNKNOWN  # The default: nothing known, right on any storage.
+    protocol = MyHandler.protocol
+    root_marker = MyHandler.root
+    _strip_protocol = MyHandler.strip_protocol
 
-    def _ils(self, path, recursive=False, **kwargs):
-        # A directory's entries, as they come. With recursive=True, all below
-        # it, depth first or sorted by name: the storage's own recursive
-        # listing, or _tree_ils where it has none. _tree_ils lists each
-        # directory by this _ils, without recursive.
-        if recursive:
-            return _tree_ils(self, path, recursive=False, **kwargs)
-        else:
-            ...  # List the entries in path, e.g. a page at a time.
-
-    async def _info(self, path, **kwargs): ...
-    # ... and the other primitives each class declares abstract.
-
-
-fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
+    def __init__(self, account, **kwargs):
+        super().__init__(MyHandler(account), **kwargs)
 ```
 
-A filesystem has one profile, which never changes. Where only a request can find it, e.g. whether an account has a
-hierarchical namespace, override `async def _load_storage_profile(self)` instead. The first operation needing the
-profile loads it, and it is kept. A load that fails raises, and the next operation tries again.
-
-It takes no path: the profile is one for the whole filesystem. A storage whose behaviour differs by path is several
-filesystems under a router. On GCS, for example, buckets differ in having a hierarchical namespace: make one
-filesystem per bucket, and a router for the whole namespace.
+A storage's class takes its storage options, makes its handler from them, and names its paths as its handler's. It
+overrides nothing else: what the storage does is the handler's.
 
 `ls` keeps each listing in fsspec's `dircache`, as fsspec's implementations do: pass `refresh=True` to list again, or
 `use_listings_cache=False` to keep none. Only `ls` uses it. The recursive operations always list the storage, and
-`info` always asks it. Any change made through the filesystem drops the listings kept, so an implementation's own
-primitives need not. A change by another client is seen once a change is made, or with `refresh=True` or
-`invalidate_cache()`.
-
-A method of fsspec's own can come back, e.g. `_rm = AsyncFileSystem._rm`. A storage's own operation can override a
-method too.
+`info` always asks it. Any change made through the filesystem drops the listings kept. A change by another client is
+seen once a change is made, or with `refresh=True` or `invalidate_cache()`.
 
 #### Wrappers
 
@@ -159,22 +191,38 @@ fs = monitored(fsspec.filesystem("file"))
 fs.rm("data/2024", recursive=True)  # Deletes by the tree family's strategy.
 ```
 
+It returns a `TreeFileSystemWrapper` or a `FlatFileSystemWrapper`, on a handler calling the filesystem. They take the
+wrapped filesystem's URLs, and make one directly:
+
+```python
+from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler, TreeFileSystemWrapper
+
+fs = TreeFileSystemWrapper(
+    FsspecTreeHandler(
+        fsspec.filesystem("file"),
+        operation_concurrency=8,
+        io_concurrency=8,
+        storage_profile=UNKNOWN,
+    )
+)
+```
+
 The known filesystems are those in `known_implementations`, by class: the local filesystem, s3fs, gcsfs, adlfs,
 fsspec's memory, SFTP and HDFS filesystems. Each entry says its profile, whose `fs_type` is its family, and its
-concurrency limits. The wrapper is async if the filesystem is. Pass your own table to `monitored()`, or
-`wrap_unknown_fs=True` to wrap any other filesystem. That wraps it the way right on every storage: as a tree, one
-request at a time, with nothing known of the storage.
+concurrency limits. The handler calls the filesystem's async methods if it has them. Pass your own table to
+`monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem. That wraps it the way right on every storage:
+as a tree, one request at a time, with nothing known of the storage.
 
-A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper,
-overriding `_load_storage_profile()` and the primitives the storage does better itself. Examples are `_mv_tree`
-renaming a directory, `_cp_tree` copying one, or `_rm_tree` deleting one whole. The strategies then use them where the profile says so,
-streamed and monitored. Use such a wrapper directly, or name it in an entry's `wrapper`.
+A filesystem whose profile is found at runtime, e.g. per account, needs a handler of its own. It subclasses a
+wrapper's handler, overriding `load_profile()` and the primitives the storage does better itself. Examples are
+`mv_tree` renaming a directory, `cp_tree` copying one, or `rm_tree` deleting one whole. The strategies then use them
+where the profile says so, streamed and monitored.
 
-An entry's optional `wrapper` names a wrapper class of its family, in place of the generic one:
+An entry's optional `handler` names a handler class of its family, in place of the generic one:
 
-- a bare class name is a wrapper built into the strategies, e.g. `"S3fsWrapper"`, which the entries of s3fs, gcsfs and
-  adlfs name;
-- a full name is a class of your own, e.g. `"mypkg.wrappers.MyWrapper"`, imported when wrapping.
+- a bare class name is a handler built into the strategies, e.g. `"S3fsHandler"`, which the entries of s3fs, gcsfs
+  and adlfs name;
+- a full name is a class of your own, e.g. `"mypkg.handlers.MyHandler"`, imported when wrapping.
 
 A wrapper is light and not cached: make one when you need it, and drop it after.
 
@@ -194,10 +242,10 @@ None of these is right for every storage, and the library never picks one for yo
 - **The profile** picks the way within a family, e.g. deleting a directory in one request where the storage can. It only
   saves requests, or data copied. A field left unknown is right on any storage. A field declared wrongly gives wrong
   results: declare only what you know.
-- **The concurrency limits** are yours to set. A filesystem unsafe to call from several threads, such as SFTP, needs
-  them at 1.
+- **The concurrency limits** are the handler's, yours to set. A filesystem unsafe to call from several threads, such as
+  SFTP, needs them at 1.
 - **`io_concurrency` bounds memory too.** Each read or write in flight holds a block or a part, shared by all the
-  filesystem's files. So the data in flight is at most `io_concurrency` times the file class's `max_block_size`, e.g.
+  handler's files. So the data in flight is at most `io_concurrency` times the file class's `max_block_size`, e.g.
   16 × 16 MiB = 256 MiB of writes, however many files are open. Each file written also fills one part. fsspec's
   methods on many paths, such as `cat`, `pipe`, `get` and `put`, handle `io_concurrency` paths at a time, unless given
   a `batch_size`.
@@ -207,11 +255,12 @@ None of these is right for every storage, and the library never picks one for yo
 
 #### Costs to know
 
-- A flat wrapper lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix in pages. That
-  listing is held in memory, and covers the prefix's whole directory. A subclass overriding `_ils` with the storage's own
-  listing by prefix streams it instead, as `S3fsWrapper` does.
-- A tree wrapper scans a tree a directory per request, as fsspec has no recursive listing in pages. A subclass
-  overriding `_ils` with the storage's own recursive listing lists it in one, as `AdlfsWrapper` does.
+- The generic flat handler lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix in
+  pages. That listing is held in memory, and covers the prefix's whole directory. A handler overriding `ils_recursive`
+  with the storage's own listing by prefix streams it instead, as `S3fsHandler` does.
+- The generic tree handler scans a tree a directory per request, as fsspec has no recursive listing in pages. A
+  handler implementing `ils_recursive` with the storage's own recursive listing lists it in one, as `AdlfsHandler`
+  does.
 - `known_implementations` is shared by every copy in a project. Change it with care, or pass your own table.
 
 #### Choosing with numbers
@@ -229,6 +278,8 @@ fs.add_file("data/2024/01/a.parquet", b"...")
 fs.rm("data", recursive=True)
 print(fs.stats.calls)  # Counter({'delete': 1})
 ```
+
+Its `TreeView` and `FlatView` are handlers of it, to run a strategy on, each primitive replaceable.
 
 ### Monitor
 
@@ -261,8 +312,8 @@ The library logs none of its routine work. To log each operation's start and end
 
 #### Adaptive files
 
-The adaptive files give a filesystem ready-made file objects, fast for both random and bulk sequential access,
-with no parameter to tune by hand:
+The adaptive files give a handler ready-made file objects, fast for both random and bulk sequential access, with no
+parameter to tune by hand:
 
 - scattered reads fetch small blocks, and long sequential reads ever larger ones, fetched ahead;
 - writes go in one request for a small file, and in parts growing with the bytes written for a large one;
@@ -276,25 +327,26 @@ A subclass of an adaptive file implements the storage's requests, and leaves the
 - `AdaptiveWritableFile` implements `_upload_all`, for a small file, and the multipart upload's requests:
   `_start_multipart_upload`, `_upload_part`, `_complete_multipart_upload` and `_abort_multipart_upload`.
 
-An `AdaptiveWritableFile` opened with mode "xb" creates the file only if none is at the path. Its `exclusive` is then
+A handler's `open_reader` and `open_writer` return them, with its `io_limit` as their `concurrency_limit`. An
+`AdaptiveWritableFile` opened with mode "xb" creates the file only if none is at the path. Its `exclusive` is then
 True, and the subclass checks it by the storage's conditional write where there is one.
 
 The file decides which requests to send, and when. Whether a write is atomic is the storage's:
 
 - where an upload is invisible until completed, as on S3, Google Cloud Storage or Azure, a file is written whole, or not
-  at all;
+  at all. Declare `atomic_writes=True` in the handler's profile;
 - where a file is visible while it is written, as on DBFS, a failed write may leave part of it.
 
 #### Async file support
 
-A filesystem's `open_async` returns its own files through `AsyncFileAdapter`. It returns a sync file, such as an
-SDK's handle, through `SyncFileAdapter`:
+A handler whose storage gives files of its own, e.g. an SDK's sync handle, opens them by `open_async_file` instead, and
+gives them the API of `open_async`'s files through `SyncFileAdapter`:
 
 ```python
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
 
 
-async def open_async(self, path, mode="rb", **kwargs):
+async def open_async_file(self, path, mode, **kwargs):
     return SyncFileAdapter(self.client.open(path, mode))
 ```
 
@@ -316,13 +368,14 @@ strategy of file-level transactions. The package provides these:
 
 A storage with a way of its own, such as a staged upload, subclasses `FileTransaction`.
 
-A filesystem's `_open` returns a `TransactionFile` when fsspec asks for no autocommit:
+A filesystem's `_open` wraps a handler's adaptive writer so when fsspec asks for no autocommit. A handler opening
+files of its own by `open_sync_file` returns a `TransactionFile` itself:
 
 ```python
 from fsspec_alt_strategies_impl.files.fsspec_transaction import LocalBufferTransaction, TransactionFile
 
 
-def _open(self, path, mode="rb", autocommit=True, **kwargs):
+def open_sync_file(self, path, mode, autocommit=True, **kwargs):
     if autocommit:
         return MyFile(self, path, mode)
     return TransactionFile(LocalBufferTransaction(path, lambda p: MyFile(self, p, mode)))
@@ -340,18 +393,50 @@ with fs.transaction:
 
 ### Filesystem router
 
-`AsyncRoutingFileSystem` is abstract. A subclass implements the first two of these methods, and the third if some
-paths are above every storage:
+A `RoutingHandler` says where each path of a namespace goes. Implement the first three of these methods, and the
+fourth if some paths are above every storage:
 
-- `_route(path)` gives the inner filesystem and its path, or None for a path above every storage;
-- `_outer(fs, path)` gives the router's path of an inner one;
-- `_roots(path)` lists a directory above the storages. By default, it raises FileNotFoundError.
+- `verify_path(path)` checks the router's own paths;
+- `route(path)` gives the handler of the path's storage and its path there, or None for a path above every storage;
+- `outer(handler, path)` gives the router's path of a path of one of its handlers;
+- `roots(entry)` lists a directory above the storages. By default, it raises FileNotFoundError.
 
-`_route` makes each inner filesystem with `_backend`, once. Make it with the router's `asynchronous` and `loop`, so
-that the router's sync methods, e.g. `open`, work. `backends_loop` is the loop the inner filesystems run on: close
-what they share there, e.g. a credential. A router whose inner filesystems are all of one class names it, e.g.
-`AsyncRoutingFileSystem[S3FileSystem]`, so that its hooks take that class.
+```python
+from fsspec_alt_strategies_impl.router import RoutingFileSystem, RoutingHandler
 
-`transfer_concurrency` bounds the copies and moves between storages at a time. Override `_cross_fs_cp_entry` or
-`_cross_fs_mv_entry` for a storage with a faster way, such as a server-side copy. Each takes the source file's entry,
-with its size, as the listing found it.
+
+class Lake(RoutingHandler):
+    protocol = "lake"
+
+    def verify_path(self, path): ...
+
+    def route(self, path):
+        volume, _, inner = path.partition("/")
+        if not volume:
+            return None  # The root, above every volume.
+        return self.inner(volume, lambda: VolumeHandler(volume)), inner
+
+    def outer(self, handler, path):
+        return f"{handler.volume}/{path}".rstrip("/")
+
+
+fs = RoutingFileSystem(Lake(transfer_concurrency=8), asynchronous=True)
+```
+
+- `route` makes each handler once, by `inner`, without a request. The routing handler's `close()` closes them.
+- Each path is checked twice: by the routing handler, then its path in the storage by the storage's handler.
+- `route` may give another routing handler, which routes the path again. The names answered are the outermost
+  router's.
+- A storage's class for the router follows the families' convention: it names its paths as its handler's, and makes
+  its handler from its storage options.
+
+`transfer_concurrency` bounds the files copied between storages at a time. Each file is streamed by default, a block
+at a time:
+
+- On a storage whose profile declares `atomic_writes`, it is written in place. Elsewhere, it is written to a temporary
+  name beside the destination, then moved there, so that no reader sees part of a file.
+- Its size is checked against the source's. A file of another size raises OSError, and leaves nothing.
+- A move deletes the source file once its copy succeeds.
+
+Override `cp_across` or `mv_across` for a storage with a faster way, such as a copy on the server. Each takes the
+source file's entry, with its size, as the listing found it.

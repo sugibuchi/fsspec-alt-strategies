@@ -7,7 +7,7 @@ whole tree, then deletes it, each stage listing the tree first. `_tree_mv`
 moves each directory's files as soon as the directory is listed, each by one
 ``mv_entry``, and deletes each source directory once it is empty.
 
-Where the filesystem's ``_mv_tree`` moves a directory in one request, as a
+Where the filesystem's ``mv_tree`` moves a directory in one request, as a
 storage's rename does, the profile says so. `_tree_mv` then moves each root
 whole with it where it can, and walks only what it cannot move so.
 
@@ -141,14 +141,13 @@ def _tree_mv(
     file. It alone saves the ``dst_makedirs`` before a directory is moved
     whole.
 
-    The primitives are called above by what they do: ``_ils``, ``rm_dir`` and
-    ``mv_tree`` are the source's ``_ils``, ``_rmdir`` and ``_mv_tree``, and
-    ``dst_info`` and ``dst_makedirs`` the destination's ``_info`` and
-    ``_makedirs``.
+    The primitives are named above as the handlers' own: ``ils`` and
+    ``mv_tree`` are the source's, ``rm_dir`` its ``rmdir``, and ``dst_info``
+    and ``dst_makedirs`` the destination's ``info`` and ``makedirs``.
 
-    ``src_fs`` is the filesystem moved from, and ``dst_fs`` the one moved to,
+    ``src_fs`` is the handler moved from, and ``dst_fs`` the one moved to,
     ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
-    glob pattern, or a list of them, as the source's ``_ils`` takes paths.
+    glob pattern, or a list of them, as the source's ``ils`` takes paths.
     ``mv_entry(entry, destination)`` moves a file by its source entry, as its
     listing gave it: by default, the source's ``mv_file`` within one storage,
     and `transfer._across` between two. A storage renaming a file in one

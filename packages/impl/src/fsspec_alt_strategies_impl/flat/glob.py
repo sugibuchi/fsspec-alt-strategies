@@ -66,12 +66,12 @@ def _flat_glob(
     Once cancelled, it takes nothing more from the listings. An error from a
     listing ends the operation, raised by its iteration.
 
-    Requests: the pages of one recursive ``_ils`` per listing, one after
+    Requests: the pages of one ``ils_recursive`` per listing, one after
     another: of the prefix's directory, narrowed to the rest of the prefix.
-    One ``_info`` per pattern without wildcards, each holding a permit of the
+    One ``info`` per pattern without wildcards, each holding a permit of the
     filesystem's ``operation_limit``. The listings hold none.
 
-    ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``_ils``
+    ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``ils``
     takes them: a trailing "/" matches only directories. ``maxdepth`` is how
     deep a ``**`` goes, and ``withdirs`` whether directories can match, as with
     fsspec's ``_glob``. The listing still lists every key under the prefix.

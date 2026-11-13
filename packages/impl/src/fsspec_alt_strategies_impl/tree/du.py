@@ -36,7 +36,7 @@ def _tree_du(
 ) -> Operation[dict[str, Any], DuState]:
     """Measure a tree's size from its listings, listing several directories at a time.
 
-    It assumes that ``_ils`` gives each file's size, as fsspec's filesystems do.
+    It assumes that ``ils`` gives each file's size, as fsspec's filesystems do.
     It yields the entry of each file counted, with its ``size``, as fsspec's
     ``_du`` gives with ``total=False``. Its state's ``size`` is their total, as
     fsspec's ``_du`` gives by default.
@@ -52,16 +52,16 @@ def _tree_du(
 
     Once cancelled, it lists no new directory, and counts the listings in flight.
 
-    Requests: one recursive ``_ils`` of ``path``, which a storage without a
+    Requests: one ``ils_recursive`` of ``path``, which a storage without a
     recursive listing answers with one per directory. With ``maxdepth``, one
-    ``_ils`` per directory instead, as the filesystem's ``operation_limit``
+    ``ils`` per directory instead, as the handler's ``operation_limit``
     allows. One ``info`` for ``path``, if a file.
 
-    ``path`` is the directory measured on ``fs``, by its ``_ils`` and ``_info``.
+    ``path`` is the directory measured on ``fs``, by its ``ils`` and ``info``.
     ``maxdepth`` of 1 counts only the files in ``path``. ``ils_kwargs`` go to
-    each ``_ils``, as fsspec's ``du`` passes its own on.
+    each ``ils``, as fsspec's ``du`` passes its own on.
 
-    The operation yields the ``_ils`` entry of each file counted, or the error
+    The operation yields the ``ils`` entry of each file counted, or the error
     of a directory that failed to list, and its state is a `DuState`. The call
     raises ValueError if ``maxdepth`` is less than 1.
     """

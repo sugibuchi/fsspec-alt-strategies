@@ -28,7 +28,7 @@ from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-__all__: list[str] = []
+__all__ = ["Entry", "StorageHandler", "StoragePath"]
 
 
 StoragePath = NewType("StoragePath", str)

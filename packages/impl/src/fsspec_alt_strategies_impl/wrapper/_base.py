@@ -96,13 +96,6 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
         else:
             return None
 
-    def release(self) -> None:
-        self._shutdown_threads()
-
-    async def close(self) -> None:  # type: ignore[override]
-        # The handler's, async: SyncClientSupport's sync close would shadow it.
-        await StorageHandler.close(self)
-
     async def call(self, name: str, *args: Any, **kwargs: Any) -> Any:
         """The wrapped filesystem's method ``name``: its ``_name`` awaited, or ``name`` in a thread."""
         if self.asynchronous:

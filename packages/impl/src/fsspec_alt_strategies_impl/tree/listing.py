@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """A recursive listing made of one listing per directory, several at a time.
 
-A `TreeFileSystem`'s ``_ils`` lists all below a directory with
+A `TreeFileSystem`'s ``ils`` lists all below a directory with
 ``recursive=True``, depth first or in name order. A storage with a recursive
 listing of its own answers with it. One without answers with `_tree_ils`, which
-lists a directory per request, as ``_ils`` does without ``recursive``.
+lists a directory per request, as ``ils`` does without ``recursive``.
 
 It yields the entries depth first, as a walk visits them: each directory's
 entries in the order its listing gives them, and all below a subdirectory right
@@ -44,29 +44,29 @@ _HELD = 32 * _BATCH
 async def _tree_ils(
     fs: Any, path: str, *, entry: Entry | None = None, **ils_kwargs: Any
 ) -> AsyncGenerator[dict[str, Any]]:
-    """List all below a directory depth first, by one ``_ils`` per directory.
+    """List all below a directory depth first, by one ``ils`` per directory.
 
-    It yields what a recursive ``_ils`` yields: each entry below ``path``, at
+    It yields what an ``ils_recursive`` yields: each entry below ``path``, at
     any depth, depth first. A directory's entries come in the order its
-    ``_ils`` gives them, each subdirectory's followed by all below it. A file
-    lists itself, as ``_ils`` lists it. A directory listed twice, e.g. as a
+    ``ils`` gives them, each subdirectory's followed by all below it. A file
+    lists itself, as ``ils`` lists it. A directory listed twice, e.g. as a
     prefix and as its marker object, is yielded twice, but listed once.
 
     It lists the directories that come next while it yields, the nearest
-    first, as many at once as the filesystem's ``operation_limit`` lets it.
+    first, as many at once as the handler's ``operation_limit`` lets it.
     Each such listing holds a permit while it reads a batch of entries, a
     page's worth: what it read waits for its turn, holding no permit. No
     listing ahead starts while `_HELD` entries wait so, which bounds the
     memory to that, plus a batch per listing in flight. Only the listings in
     flight count, not those waiting: a tree of small directories is listed as
     fast as the limit allows, whatever its size. The directory being yielded
-    is listed under the permit its caller holds, as for any ``_ils``. So it
+    is listed under the permit its caller holds, as for any ``ils``. So it
     needs no permit more to go on.
 
     A directory below ``path`` that fails to list raises its error, noted with
     its path, and ends the listing: a recursive listing cannot go on past a
     failure. A missing ``path`` raises FileNotFoundError, when the iteration
-    starts, as its own ``_ils`` raises it.
+    starts, as its own ``ils`` raises it.
 
     ``path`` is listed by ``entry``, its entry, where given, e.g. as its parent's
     listing gave it, else by its path. ``ils_kwargs`` go to each ``ils``.
@@ -180,7 +180,7 @@ class _Ahead:
 
 
 class _DirListing:
-    """A directory's ``_ils``, read a batch at a time, ahead of its turn or in it."""
+    """A directory's ``ils``, read a batch at a time, ahead of its turn or in it."""
 
     def __init__(
         self, ahead: _Ahead, directory: str, entry: Entry | None = None
