@@ -75,6 +75,9 @@ The library aims at large cloud storages, such as data lakes holding millions of
   requests in the background, in parallel.
 - **Observable and cancellable.** A `Monitor` sees each step of an operation, and can stop it through the operation's
   `OperationHandler`.
+- **AI oriented.** We assume AI assistants will largely develop and maintain the fsspec implementations built on the
+  library. Its docs and docstrings are material for them: each says what an implementation must do and why, so that
+  an assistant has enough context to write one, and to keep it right as the library changes.
 
 ### The classes
 
@@ -100,7 +103,22 @@ AsyncRoutingFileSystem             router.py, holding filesystems of the above
   it with a request;
 - the data methods, `_cat_file`, `_pipe_file`, `_get_file` and `_put_file`, through `open_async`'s files;
 - `_copy` and `_mv`, which start the copy and move its family's class names, `_cp_strategy` and `_mv_strategy`;
-- the sync methods fsspec does not make, `mv` and `rmdir`.
+- the sync methods fsspec does not make, `mv` and `rmdir`;
+- fsspec's `dircache`, as the next section says.
+
+#### fsspec's listings cache
+
+fsspec lets a filesystem keep its listings in `dircache`, for its own methods and callers. Here:
+
+- `_ls` keeps a directory's listing once it has listed it whole, and answers a later `_ls` from it, unless
+  `refresh=True`. `use_listings_cache=False` keeps none, as in fsspec.
+- The strategies never read or fill it: they list with `_ils`. `_info` never reads it either. So a listing kept never
+  changes what an operation does, and the strategies need not handle a stale one.
+- Each method changing the storage, listed in `_CHANGING`, drops every listing kept once it ends. `_BaseFileSystem`'s
+  `__init_subclass__` wraps a subclass's own, so an implementation writing `_rm_file` need not drop them itself.
+- Opening a file to write drops them too, as the file is opened: the file knows no filesystem, so its closing cannot.
+  A listing taken while it is written may then miss it once it is closed.
+- `invalidate_cache(path)` drops the listings of `path`, of what is below it, and of its parents.
 
 Each family declares the primitives its subclasses implement, and overrides fsspec's recursive methods:
 

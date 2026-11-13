@@ -138,6 +138,12 @@ It takes no path: the profile is one for the whole filesystem. A storage whose b
 filesystems under a router. On GCS, for example, buckets differ in having a hierarchical namespace: make one
 filesystem per bucket, and a router for the whole namespace.
 
+`ls` keeps each listing in fsspec's `dircache`, as fsspec's implementations do: pass `refresh=True` to list again, or
+`use_listings_cache=False` to keep none. Only `ls` uses it. The recursive operations always list the storage, and
+`info` always asks it. Any change made through the filesystem drops the listings kept, so an implementation's own
+primitives need not. A change by another client is seen once a change is made, or with `refresh=True` or
+`invalidate_cache()`.
+
 A method of fsspec's own can come back, e.g. `_rm = AsyncFileSystem._rm`. A storage's own operation can override a
 method too.
 

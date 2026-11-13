@@ -224,11 +224,6 @@ class FlatFileSystem(_BaseFileSystem):
         """Create a directory, as fsspec's ``_mkdir`` does: by ``_makedirs``."""
         await self._makedirs(path, exist_ok=False)
 
-    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
-        """List a directory, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names."""
-        entries = [entry async for entry in self._ils(path, **kwargs)]
-        return entries if detail else [e["name"] for e in entries]
-
     @abstractmethod
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Describe a path, raising FileNotFoundError if there is none."""

@@ -52,6 +52,13 @@ directories. It is a third-party project, not part of fsspec.
 - Follow a long operation file by file, see which files failed, and stop it at any time, through the familiar fsspec
   calls.
 
+### AI oriented
+
+- We assume that AI assistants will do much of the work of developing and maintaining fsspec implementations.
+- The library offers material that gives an AI assistant enough context to do that work. That includes its documented
+  design and conventions, the docstrings of the primitives an implementation writes, and a simulated filesystem to test
+  against.
+
 ## It also offers
 
 - **Copies between storages:** one filesystem can span several storages, and copy or move files between them.

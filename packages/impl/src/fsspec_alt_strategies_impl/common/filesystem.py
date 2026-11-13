@@ -20,6 +20,8 @@ This module depends on `operation`.
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 import io
 import math
 import os
@@ -44,6 +46,68 @@ if TYPE_CHECKING:
 
 
 _MiB = 1024 * 1024
+
+
+_CHANGING = frozenset(
+    {
+        "_rm_file",
+        "_rm_files",
+        "_rmdir",
+        "_rm_tree",
+        "_rm",
+        "_makedirs",
+        "_mkdir",
+        "_pipe_file",
+        "_put_file",
+        "_cp_file",
+        "_cp_file_entry",
+        "_cp_tree",
+        "_copy",
+        "_mv_file",
+        "_mv_file_entry",
+        "_mv_tree",
+        "_mv",
+    }
+)
+"""The methods changing the storage: each drops the listings kept in ``dircache``.
+
+``_open`` and ``open_async`` do too, when they open a file to write.
+"""
+
+
+def _drops_listings(method: Callable[..., Any]) -> Callable[..., Any]:
+    """``method``, dropping the filesystem's listings kept once it ends, failed or not.
+
+    A method opening a file drops them as it opens one to write: the file
+    knows no filesystem, so its closing cannot.
+    """
+    opens = method.__name__ in ("_open", "open_async")
+
+    def writes(args: tuple[Any, ...], kwargs: dict[str, Any]) -> bool:
+        mode = kwargs.get("mode", args[1] if len(args) > 1 else "rb")
+        return not opens or any(c in mode for c in "wax+")
+
+    if inspect.iscoroutinefunction(method):
+
+        @functools.wraps(method)
+        async def changing(self: Any, *args: Any, **kwargs: Any) -> Any:
+            try:
+                return await method(self, *args, **kwargs)
+            finally:
+                if writes(args, kwargs):
+                    self.dircache.clear()
+
+        return changing
+
+    @functools.wraps(method)
+    def changing_sync(self: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            if writes(args, kwargs):
+                self.dircache.clear()
+
+    return changing_sync
 
 
 class _AbstractFileSystemMeta(type(AsyncFileSystem), ABCMeta):  # type: ignore[misc]
@@ -165,6 +229,57 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
         return self
 
+    # fsspec's dircache: listings kept by _ls, for fsspec's own methods and callers.
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Make each method of `_CHANGING` a subclass defines drop the listings kept.
+
+        A subclass implementing a primitive, e.g. ``_rm_file``, need not drop
+        them itself, as fsspec's implementations must.
+        """
+        super().__init_subclass__(**kwargs)
+        for name in _CHANGING | {"_open", "open_async"}:
+            method = cls.__dict__.get(name)
+            if callable(method) and not getattr(method, "__isabstractmethod__", False):
+                setattr(cls, name, _drops_listings(method))
+
+    async def _ls(
+        self, path: str, detail: bool = True, refresh: bool = False, **kwargs: Any
+    ) -> Any:
+        """List a directory, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names.
+
+        As in fsspec's implementations, the listing is kept in ``dircache``
+        once listed whole, and a later ``_ls`` of the path answers from it,
+        unless ``refresh=True``. ``use_listings_cache=False`` keeps none. A
+        listing with other keyword arguments, e.g. a version, is not kept.
+
+        Only ``_ls`` uses the listings kept. The strategies list with ``_ils``,
+        which neither reads nor fills them, so a listing kept never changes
+        what they do. ``_info`` asks the storage, never them. Any change made
+        through the filesystem drops them all: see `_CHANGING`. A change made
+        by another client is not seen until then, or until ``refresh=True`` or
+        ``invalidate_cache()``.
+        """
+        key = self._strip_protocol(path)
+        entries = None if refresh or kwargs else self.dircache.get(key)
+        if entries is None:
+            entries = [entry async for entry in self._ils(path, **kwargs)]  # type: ignore[attr-defined]
+            if not kwargs:
+                self.dircache[key] = entries
+        return list(entries) if detail else [e["name"] for e in entries]
+
+    def invalidate_cache(self, path: str | None = None) -> None:
+        """Drop the listings kept of ``path``, of what is below it, and of its parents: all, without one."""
+        if path is None:
+            self.dircache.clear()
+        else:
+            path = self._strip_protocol(path)
+            for key in list(self.dircache):
+                below, above = key.startswith(f"{path}/"), path.startswith(f"{key}/")
+                if key == path or below or above or not key:
+                    self.dircache.pop(key, None)
+        super().invalidate_cache(path)
+
     def close(self) -> None:
         """Release what the filesystem holds: here, nothing.
 
@@ -205,6 +320,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     _cp_strategy: Callable[..., Any]
     _mv_strategy: Callable[..., Any]
 
+    @_drops_listings
     async def _copy(
         self,
         path1: str | list[str],
@@ -246,6 +362,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         )
         _raise(_copy_errors(errors, on_error), "Copying")
 
+    @_drops_listings
     async def _mv(
         self,
         path1: str | list[str],
@@ -294,6 +411,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     def rmdir(self, path: str) -> None:
         return sync(self.loop, self._rmdir, path)
 
+    @_drops_listings
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         """Copy a file, as fsspec's ``_cp_file`` does: by ``_cp_file_entry``, with its ``_info``.
 
@@ -305,6 +423,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         entry = await self._info(path1)
         await self._cp_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
 
+    @_drops_listings
     async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         """Move a file, as fsspec's ``_mv_file`` does: by ``_mv_file_entry``, with its ``_info``.
 
@@ -339,6 +458,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
             else:
                 return await f.read()
 
+    @_drops_listings
     async def _pipe_file(
         self, path: str, value: bytes, mode: str = "overwrite", **kwargs: Any
     ) -> None:
@@ -370,6 +490,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
                     local.write(chunk)
                     callback.relative_update(len(chunk))
 
+    @_drops_listings
     async def _put_file(
         self,
         lpath: str,

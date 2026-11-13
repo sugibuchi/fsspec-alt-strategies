@@ -410,3 +410,17 @@ async def test_a_single_file_copies_as_fsspecs_asking_each_path_once(
     assert {p: f.data for p, f in inner._file_data.items()} == {
         p: f.data for p, f in reference._file_data.items()
     }
+
+
+async def test_ls_keeps_the_listing_and_a_change_drops_it(
+    fs: _Flat, inner: SimulatedFileSystem
+) -> None:
+    listed = await fs._ls("data", detail=False)
+    inner.reset_stats()
+    assert await fs._ls("data", detail=False) == listed
+    assert inner.stats.calls == {}
+    # The strategies list the storage, never the listing kept.
+    inner.add_file("data/new.txt", b"new")
+    assert "data/new.txt" in await fs._find("data")
+    await fs._rm_file("data/new.txt")
+    assert len(fs.dircache) == 0

@@ -797,3 +797,75 @@ async def test_cp_file_asks_info_then_copies_the_entry(
     # The default _cp_file asks the source's entry once, then hands it on.
     assert inner.stats.calls == {"info": 1, "copy": 1}
     assert inner._file_data["copied.md"].data == b"readme"
+
+
+# fsspec's dircache: kept by _ls, never by the strategies nor _info.
+
+
+async def test_ls_keeps_the_listing(fs: _Tree) -> None:
+    first = await fs._ls("data")
+    assert await fs._ls("treetest://data/", detail=False) == [e["name"] for e in first]
+    assert len(fs.ls_kwargs) == 1
+    # refresh=True lists again, and keeps the new listing.
+    assert await fs._ls("data", refresh=True) == first
+    assert len(fs.ls_kwargs) == 2
+    assert fs.ls_kwargs[-1] == {}
+
+
+async def test_ls_keeps_none_when_told(inner: SimulatedFileSystem) -> None:
+    fs = _Tree(inner, asynchronous=True, use_listings_cache=False)
+    await fs._ls("data")
+    await fs._ls("data")
+    assert len(fs.ls_kwargs) == 2
+
+
+async def test_strategies_and_info_never_use_the_listings_kept(
+    fs: _Tree, inner: SimulatedFileSystem
+) -> None:
+    await fs._ls("data")
+    inner.add_file("data/new.txt", b"new")  # By another client.
+    # The listing kept is stale, but the strategies and _info ask the storage.
+    assert "data/new.txt" not in await fs._ls("data", detail=False)
+    assert "data/new.txt" in await fs._find("data")
+    assert (await fs._info("data/new.txt"))["size"] == 3
+
+
+async def test_strategies_keep_no_listing(fs: _Tree) -> None:
+    await fs._find("data")
+    assert len(fs.dircache) == 0
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda fs: fs._pipe_file("data/new.txt", b"new"),
+        lambda fs: fs._rm_file("data/README.md"),
+        lambda fs: fs._rm("data/2023", recursive=True),
+        lambda fs: fs._copy("data/README.md", "data/copy.md"),
+        lambda fs: fs._makedirs("data/empty", exist_ok=True),
+    ],
+)
+async def test_a_change_drops_the_listings_kept(fs: _Tree, change: Any) -> None:
+    before = await fs._ls("data", detail=False)
+    await change(fs)
+    assert len(fs.dircache) == 0
+    assert await fs._ls("data", detail=False) != before
+
+
+async def test_opening_a_file_to_write_drops_the_listings_kept(fs: _Tree) -> None:
+    await fs._ls("data")
+    f = await fs.open_async("data/README.md")  # Reading keeps them.
+    await f.close()
+    assert len(fs.dircache) == 1
+    f = await fs.open_async("data/new.txt", "wb")
+    assert len(fs.dircache) == 0
+    await f.close()
+
+
+async def test_invalidate_cache_drops_a_path_below_and_above(fs: _Tree) -> None:
+    for path in ("", "data", "data/2023", "data/2023/01", "data/2024"):
+        await fs._ls(path)
+    fs.invalidate_cache("data/2023")
+    assert sorted(fs.dircache) == ["data/2024"]
+    fs.invalidate_cache()
+    assert len(fs.dircache) == 0

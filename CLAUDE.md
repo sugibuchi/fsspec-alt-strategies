@@ -75,6 +75,9 @@ code: read it before adding a strategy.
   a path to tell them apart.
 - The library never chooses a strategy for the developer. Each docstring says what the strategy assumes of the
   storage, and when it wins or loses.
+- fsspec's `dircache` is for fsspec's own methods and callers only. `_BaseFileSystem._ls` keeps a listing once it has
+  listed it whole. The strategies list with `_ils`, which never reads or fills it, and `_info` never reads it. Every
+  method changing the storage is in `common.filesystem._CHANGING`, which drops the listings kept: add a new one there.
 - Async first: write the async version, and a sync one only when asked.
 - Never swallow `CancelledError`.
 

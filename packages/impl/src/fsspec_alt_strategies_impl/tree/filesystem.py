@@ -211,11 +211,6 @@ class TreeFileSystem(_BaseFileSystem):
         that fails to list ends the whole listing, with its error.
         """
 
-    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
-        """List a directory, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names."""
-        entries = [entry async for entry in self._ils(path, **kwargs)]
-        return entries if detail else [e["name"] for e in entries]
-
     @abstractmethod
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Describe a path, raising FileNotFoundError if there is none."""
