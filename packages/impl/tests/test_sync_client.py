@@ -78,7 +78,7 @@ async def test_a_sync_filesystems_handler_calls_in_its_threads() -> None:
         io_concurrency=2,
         storage_profile=StorageProfile(),
     )
-    tree = TreeFileSystem.of(handler, asynchronous=True)
+    tree = TreeFileSystem(handler, asynchronous=True)
     try:
         assert await tree._cat_file("/test_sync_client/a.txt") == b"a"
         # Its requests and its data calls, each with threads enough.
@@ -96,7 +96,7 @@ def test_with_closes_its_threads() -> None:
         io_concurrency=1,
         storage_profile=StorageProfile(),
     )
-    with TreeFileSystem.of(handler) as tree:
+    with TreeFileSystem(handler) as tree:
         assert tree.ls("/") is not None
         pool = handler._thread_pool()
     assert pool._shutdown

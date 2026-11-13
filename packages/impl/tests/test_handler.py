@@ -174,7 +174,7 @@ def _storage() -> SimulatedFileSystem:
 
 async def test_a_filesystem_on_a_handler_calls_its_primitives() -> None:
     inner = _storage()
-    fs = TreeFileSystem.of(_Strict(inner), asynchronous=True)
+    fs = TreeFileSystem(_Strict(inner), asynchronous=True)
     assert fs.handler is not None
     assert await fs._find("data") == ["data/a/x", "data/y"]
     assert (await fs._info("data/y"))["size"] == 2
@@ -186,7 +186,7 @@ async def test_a_filesystem_on_a_handler_calls_its_primitives() -> None:
 
 
 async def test_a_filesystem_on_a_handler_verifies_a_callers_paths() -> None:
-    fs = TreeFileSystem.of(_Strict(_storage()), asynchronous=True)
+    fs = TreeFileSystem(_Strict(_storage()), asynchronous=True)
     with pytest.raises(ValueError, match="holds ':'"):
         await fs._info("data/a:b")
     with pytest.raises(ValueError, match="holds ':'"):
@@ -215,8 +215,27 @@ def test_a_handler_class_takes_the_storage_options() -> None:
 
 
 def test_a_filesystem_needs_a_handler() -> None:
-    with pytest.raises(TypeError, match="needs a handler"):
-        TreeFileSystem()
+    with pytest.raises(TypeError, match="handler"):
+        TreeFileSystem()  # type: ignore[call-arg]
+
+
+def test_a_storages_class_makes_its_handler_and_is_cached() -> None:
+    class Mine(TreeFileSystem):
+        protocol = "mine-cached"
+        handler_class = TreeView
+
+    inner = _storage()
+    with pytest.raises(TypeError, match="makes its handler from its storage options"):
+        Mine(handler=TreeView(inner))
+    # Made from its storage options, it is cached as fsspec caches any.
+    assert Mine(inner, asynchronous=True) is Mine(inner, asynchronous=True)
+    # On a handler, the family's class is never cached.
+    handler = TreeView(inner)
+    assert TreeFileSystem(handler) is not TreeFileSystem(handler)
+    with pytest.raises(TypeError, match="names no handler_class"):
+
+        class Unnamed(TreeFileSystem):
+            protocol = "unnamed"
 
 
 def test_a_storages_class_names_its_protocol_and_handler_only() -> None:

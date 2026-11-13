@@ -35,7 +35,7 @@ def _tree(fs: Any, **options: Any) -> TreeFileSystem:
     """A `TreeFileSystem` on a handler of `fs`, on its loop, as `monitored` makes one."""
     asynchronous = options.pop("asynchronous", getattr(fs, "asynchronous", False))
     loop = {"loop": fs.loop} if fs.async_impl and not asynchronous else {}
-    return TreeFileSystem.of(
+    return TreeFileSystem(
         FsspecTreeHandler(fs, **options), asynchronous=asynchronous, **loop
     )
 

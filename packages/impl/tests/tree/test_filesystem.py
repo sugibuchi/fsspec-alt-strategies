@@ -146,7 +146,7 @@ class _Tree(TreeFileSystem):
 
 def _on(handler: TreeHandler) -> Any:
     """A TreeFileSystem on a handler, async."""
-    return TreeFileSystem.of(handler, asynchronous=True)
+    return TreeFileSystem(handler, asynchronous=True)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:

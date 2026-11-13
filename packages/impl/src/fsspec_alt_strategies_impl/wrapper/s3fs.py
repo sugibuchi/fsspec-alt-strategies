@@ -45,7 +45,7 @@ class S3fsHandler(FsspecFlatHandler):
 
     Examples
     --------
-    >>> flat = FlatFileSystem.of(
+    >>> flat = FlatFileSystem(
     ...     S3fsHandler(
     ...         s3fs.S3FileSystem(),
     ...         rm_batch_size=1000,

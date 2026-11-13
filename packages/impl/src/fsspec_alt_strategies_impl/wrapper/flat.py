@@ -84,7 +84,7 @@ class FsspecFlatHandler(_FsspecHandler, FlatHandler):
 
     Examples
     --------
-    >>> flat = FlatFileSystem.of(
+    >>> flat = FlatFileSystem(
     ...     FsspecFlatHandler(
     ...         s3,
     ...         rm_batch_size=1000,

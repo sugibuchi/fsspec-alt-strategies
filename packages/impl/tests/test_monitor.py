@@ -28,7 +28,7 @@ _SIMULATED = "fsspec_alt_strategies_impl_testing.SimulatedFileSystem"
 
 
 def test_a_monitored_filesystem_is_returned_as_it_is() -> None:
-    tree = TreeFileSystem.of(
+    tree = TreeFileSystem(
         FsspecTreeHandler(
             SimulatedFileSystem(),
             operation_concurrency=1,

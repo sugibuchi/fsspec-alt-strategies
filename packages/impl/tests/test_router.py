@@ -200,7 +200,9 @@ def _router(
     Its handler's storages are reached as ``router.tree``, ``router.flat`` and
     ``router.plain`` too, for the tests.
     """
-    router = _Router.of(lake(), asynchronous=asynchronous)
+    # A class per lake, which it makes from its storage options: none here.
+    routed = type(f"_{lake.__name__}Router", (_Router,), {"handler_class": lake})
+    router = routed(asynchronous=asynchronous)
     for name in ("tree", "flat", "plain"):
         sim = getattr(router.handler, name)
         setattr(router, name, sim)
@@ -757,8 +759,17 @@ def test_transfer_concurrency_is_checked() -> None:
 
 
 def test_a_router_needs_a_handler() -> None:
-    with pytest.raises(TypeError, match="needs a routing handler"):
-        RoutingFileSystem()
+    with pytest.raises(TypeError, match="handler"):
+        RoutingFileSystem()  # type: ignore[call-arg]
+
+
+def test_a_routers_class_makes_its_handler() -> None:
+    with pytest.raises(TypeError, match="makes its handler from its storage options"):
+        _Router(handler=_Lake())
+    with pytest.raises(TypeError, match="names no handler_class"):
+
+        class Unnamed(RoutingFileSystem):
+            protocol = "unnamed"
 
 
 def test_a_routers_class_names_its_protocol_and_handler_only() -> None:
@@ -891,7 +902,7 @@ class _Everywhere(RoutingHandler):
 
 
 async def test_a_router_whose_every_path_routes_needs_no_roots() -> None:
-    router = RoutingFileSystem.of(_Everywhere(), asynchronous=True)
+    router = RoutingFileSystem(_Everywhere(), asynchronous=True)
     with pytest.raises(FileNotFoundError):
         await router._ls("", detail=False)
     fs, _ = router._route("s0/x.txt")
@@ -901,7 +912,7 @@ async def test_a_router_whose_every_path_routes_needs_no_roots() -> None:
 
 
 def test_a_sync_router_runs_its_storages_on_its_loop() -> None:
-    router = RoutingFileSystem.of(_Everywhere(asynchronous=False), asynchronous=False)
+    router = RoutingFileSystem(_Everywhere(asynchronous=False), asynchronous=False)
     fs, _ = router._route("s0/x.txt")
     # Made in the router's mode, the storage's filesystem runs on its loop.
     assert fs.loop is router.loop
@@ -945,7 +956,7 @@ class _Region(RoutingHandler):
 
 
 async def test_a_router_may_route_to_another() -> None:
-    router = RoutingFileSystem.of(_Region(), asynchronous=True)
+    router = RoutingFileSystem(_Region(), asynchronous=True)
     assert await router._ls("", detail=False) == ["eu", "us"]
     # Above the storages of the inner router: its roots, named by the outer's paths.
     assert await router._ls("eu/lake", detail=False) == [
@@ -967,7 +978,7 @@ async def test_a_router_may_route_to_another() -> None:
 
 
 async def test_a_copy_between_storages_of_two_nested_routers() -> None:
-    router = RoutingFileSystem.of(_Region(), asynchronous=True)
+    router = RoutingFileSystem(_Region(), asynchronous=True)
     router._route("eu/lake/tree")
     router._route("us/lake/flat")
     router.handler.lakes["eu"].tree.add_file("data/x.txt", b"x")

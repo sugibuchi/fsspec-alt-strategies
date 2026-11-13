@@ -47,7 +47,7 @@ def test_every_primitive_is_passed_on(handler: type) -> None:
 def _tree(fs: Any, **options: Any) -> TreeFileSystem:
     """A ``TreeFileSystem`` on a handler of ``fs``."""
     asynchronous = options.pop("asynchronous", getattr(fs, "asynchronous", False))
-    return TreeFileSystem.of(
+    return TreeFileSystem(
         FsspecTreeHandler(fs, **_LIMITS, **options), asynchronous=asynchronous
     )
 

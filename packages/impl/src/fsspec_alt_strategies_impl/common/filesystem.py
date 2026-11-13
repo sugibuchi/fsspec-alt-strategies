@@ -135,7 +135,54 @@ class _AbstractFileSystemMeta(type(AsyncFileSystem), ABCMeta):  # type: ignore[m
 
     A filesystem class has fsspec's metaclass already. ABCMeta must join it, so
     that a subclass missing an abstract method fails at once, when made.
+
+    A family's class, made on a handler, is never cached: fsspec would key the
+    instance by the handler, and keep it alive. A developer's class, made from
+    its storage options, is cached as fsspec caches any filesystem.
     """
+
+    def __call__(cls, *args: Any, **kwargs: Any) -> Any:
+        if not getattr(cls, "_concrete", False):
+            kwargs.setdefault("skip_instance_cache", True)
+        return super().__call__(*args, **kwargs)
+
+
+def _check_named(cls: type) -> None:
+    """Refuse a developer's class naming anything but `_NAMED`: the rest is its handler's."""
+    own = {n for n in vars(cls) if not (n.startswith("__") and n.endswith("__"))}
+    if extra := own - _NAMED:
+        raise TypeError(
+            f"{cls.__name__} may name only {', '.join(sorted(_NAMED))}: "
+            f"{', '.join(sorted(extra))} belongs to its handler"
+        )
+
+
+def _make_concrete(cls: Any, family: Any) -> None:
+    """Make a developer's class below ``family`` build its handler from its storage options.
+
+    The family's class takes a handler. A class below it names its
+    ``handler_class`` instead, which its storage options make, so that fsspec
+    makes it from a URL or a registry, and pickles it by those options. It
+    takes no handler: one made elsewhere goes to the family's class.
+    """
+    if cls.handler_class is None:
+        raise TypeError(
+            f"{cls.__name__} names no handler_class: a class below "
+            f"{family.__name__} makes its handler from its storage options"
+        )
+
+    def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
+        if "handler" in kwargs:
+            raise TypeError(
+                f"{type(self).__name__} makes its handler from its storage options:"
+                f" a handler made elsewhere goes to {family.__name__}(handler)"
+            )
+        # fsspec's own options are the filesystem's: the rest, the handler's.
+        own = {k: kwargs.pop(k) for k in list(kwargs) if k in _FSSPEC_OPTIONS}
+        family.__init__(self, type(self).handler_class(*args, **kwargs), **own)
+
+    cls.__init__ = __init__
+    cls._concrete = True
 
 
 class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemMeta):
@@ -170,7 +217,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     """The bytes read or written at a time by ``_get_file`` and ``_put_file``."""
 
     handler_class: ClassVar[type[StorageHandler] | None] = None
-    """The class of the handler a filesystem of this class makes, from its storage options."""
+    """The class of the handler a developer's class makes, from its storage options."""
 
     handler: StorageHandler
     """The storage's handler, whose primitives the filesystem calls."""
@@ -178,22 +225,20 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     # The family's class, set once made: a class below it is a developer's.
     _family: ClassVar[type | None] = None
 
-    def __init__(
-        self, *args: Any, handler: StorageHandler | None = None, **kwargs: Any
-    ) -> None:
-        if handler is None:
-            if self.handler_class is None:
-                raise TypeError(
-                    f"{type(self).__name__} needs a handler: a class names its "
-                    "handler_class, or of(handler) makes one on a handler"
-                )
-            # fsspec's own options are the filesystem's: the rest, the handler's.
-            options = {
-                k: kwargs.pop(k) for k in list(kwargs) if k not in _FSSPEC_OPTIONS
-            }
-            handler = self.handler_class(*args, **options)
-            args = ()
-        super().__init__(*args, **kwargs)
+    # Whether the class is a developer's, made from its storage options.
+    _concrete: ClassVar[bool] = False
+
+    def __init__(self, handler: StorageHandler, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+
+        if not self._concrete:
+            # A handler serving another filesystem's paths, as a wrapper does,
+            # gives its own protocol's handling, and its root.
+            if (strip := getattr(handler, "strip_protocol", None)) is not None:
+                self._strip_protocol = strip  # type: ignore[method-assign]
+            if (unstrip := getattr(handler, "unstrip_protocol", None)) is not None:
+                self.unstrip_protocol = unstrip  # type: ignore[method-assign]
+            self.root_marker = handler.root
 
         self._storage_profile_loaded = False
         self.handler = handler
@@ -207,21 +252,16 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         """Refuse a developer's class naming anything but its protocol and handler.
 
         A family's class, e.g. `TreeFileSystem`, implements fsspec's API on
-        its handler: a class below it names ``protocol``, ``handler_class``,
-        ``root_marker`` and ``cachable``, and nothing else. What the storage
-        does is the handler's. The family's own methods changing the storage
-        drop the listings kept, by `_drops_listings`.
+        the handler it is given: a class below it names ``protocol``,
+        ``handler_class``, ``root_marker`` and ``cachable``, and nothing else.
+        What the storage does is the handler's. Such a class makes its handler
+        from its storage options, by `_make_concrete`. The family's own methods
+        changing the storage drop the listings kept, by `_drops_listings`.
         """
         super().__init_subclass__(**kwargs)
         if cls._family is not None:
-            own = {
-                n for n in vars(cls) if not (n.startswith("__") and n.endswith("__"))
-            }
-            if extra := own - _NAMED:
-                raise TypeError(
-                    f"{cls.__name__} may name only {', '.join(sorted(_NAMED))}: "
-                    f"{', '.join(sorted(extra))} belongs to its handler"
-                )
+            _check_named(cls)
+            _make_concrete(cls, cls._family)
             return
         for name in _CHANGING | {"_open", "open_async"}:
             method = cls.__dict__.get(name)
@@ -246,38 +286,11 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         wrapped = getattr(self.handler, "wrapped", None)
         return wrapped if wrapped is not None else self
 
-    @classmethod
-    def of(cls, handler: StorageHandler, **kwargs: Any) -> Self:
-        """A filesystem on a handler made elsewhere, e.g. a wrapper's, not cached.
-
-        A handler serving another filesystem's paths, as a wrapper does, gives
-        its ``strip_protocol`` and ``unstrip_protocol``, which the filesystem
-        then uses, with its ``root``.
-
-        Parameters
-        ----------
-        handler : StorageHandler
-            The storage's handler.
-        **kwargs
-            Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
-        """
-        fs = cls(handler=handler, skip_instance_cache=True, **kwargs)
-        if (strip := getattr(handler, "strip_protocol", None)) is not None:
-            fs._strip_protocol = strip  # type: ignore[method-assign]
-        if (unstrip := getattr(handler, "unstrip_protocol", None)) is not None:
-            fs.unstrip_protocol = unstrip  # type: ignore[method-assign]
-        fs.root_marker = handler.root
-        return fs
-
-    def _required_handler(self) -> StorageHandler:
-        """The handler: every filesystem has one."""
-        return self.handler
-
     # Files, by the handler: the same file for open_async and the sync open.
 
     async def _handler_file(self, path: str, mode: str, **kwargs: Any) -> Any:
         """The handler's file at a caller's path, verified: a reader for "rb", else a writer."""
-        handler = self._required_handler()
+        handler = self.handler
         plain = self._strip_protocol(path)
         if mode == "rb":
             return await handler.open_reader(handler.entry(plain), **kwargs)
@@ -379,8 +392,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         threads, and calls this one. It may be called more than once: each
         releases what is held then.
         """
-        if self.handler is not None:
-            self.handler.release()
+        self.handler.release()
 
     # fsspec's sync methods it leaves to each filesystem: the handler's, where it has them.
 
@@ -524,14 +536,14 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
     @_drops_listings
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        """Copy a file, as fsspec's ``_cp_file`` does: by ``_cp_file_entry``, with its ``_info``.
+        """Copy a file, as fsspec's ``_cp_file`` does: by ``_cp_file_entry``, with its path alone.
 
-        The strategies call ``_cp_file_entry`` with the entry their listing found.
-        fsspec's own methods, and other callers, know only the path: its entry
-        is asked first. A subclass whose copy needs nothing of the entry may
-        override this too, to save that request.
+        The strategies pass on the entry their listing found. fsspec's own
+        methods, and other callers, know only the path: the handler takes an
+        entry whose keys are unknown, asking the storage only where it needs
+        them.
         """
-        entry = await self._entry_of(path1)
+        entry = self.handler.entry(self._strip_protocol(path1))
         await self._cp_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
 
     @_drops_listings
@@ -540,19 +552,8 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         As `_cp_file`, for a move.
         """
-        entry = await self._entry_of(path1)
+        entry = self.handler.entry(self._strip_protocol(path1))
         await self._mv_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
-
-    async def _entry_of(self, path: str) -> dict[str, Any]:
-        """A caller's file's entry, for a copy or move: its path alone with a handler, else its ``_info``.
-
-        A handler takes an entry whose keys are unknown, asking the storage
-        itself only where it needs them.
-        """
-        if self.handler is not None:
-            return self.handler.entry(self._strip_protocol(path))
-        else:
-            return await self._info(path)
 
     async def _cat_file(
         self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any
@@ -570,7 +571,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         it, under a permit of ``io_limit``.
         """
         if (own := getattr(self.handler, "cat_file", None)) is not None:
-            entry = self._required_handler().entry(self._strip_protocol(path))
+            entry = self.handler.entry(self._strip_protocol(path))
             async with self.io_limit:
                 return await own(entry, start=start, end=end, **kwargs)  # type: ignore[no-any-return]
         f = await self.open_async(path, "rb", **kwargs)
@@ -593,7 +594,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     ) -> None:
         """Write a file whole, through a file of ``open_async``, or the handler's own ``pipe_file``: see `_cat_file`."""
         if (own := getattr(self.handler, "pipe_file", None)) is not None:
-            target = self._required_handler().verified(self._strip_protocol(path))
+            target = self.handler.verified(self._strip_protocol(path))
             async with self.io_limit:
                 await own(target, value, mode=mode, **kwargs)
             return
@@ -612,7 +613,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
             return  # A directory, which fsspec's get makes itself.
         if (own := getattr(self.handler, "get_file", None)) is not None:
-            entry = self._required_handler().entry(self._strip_protocol(rpath))
+            entry = self.handler.entry(self._strip_protocol(rpath))
             async with self.io_limit:
                 await own(entry, lpath, callback=callback, **kwargs)
             return
@@ -642,7 +643,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
             return  # A directory: a storage needs none for the files put in it.
         if (own := getattr(self.handler, "put_file", None)) is not None:
-            target = self._required_handler().verified(self._strip_protocol(rpath))
+            target = self.handler.verified(self._strip_protocol(rpath))
             async with self.io_limit:
                 await own(lpath, target, mode=mode, callback=callback, **kwargs)
             return

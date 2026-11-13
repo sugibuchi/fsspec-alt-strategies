@@ -146,7 +146,7 @@ class _Flat(FlatFileSystem):
 
 def _on(handler: FlatHandler) -> Any:
     """A FlatFileSystem on a handler, async."""
-    return FlatFileSystem.of(handler, asynchronous=True)
+    return FlatFileSystem(handler, asynchronous=True)
 
 
 _FILES = [

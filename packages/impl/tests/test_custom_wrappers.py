@@ -31,17 +31,17 @@ _LIMITS: dict[str, Any] = {
 
 def _s3fs(fs: Any, **options: Any) -> Any:
     """A `FlatFileSystem` on an `S3fsHandler` of `fs`."""
-    return FlatFileSystem.of(S3fsHandler(fs, **options), asynchronous=True)
+    return FlatFileSystem(S3fsHandler(fs, **options), asynchronous=True)
 
 
 def _gcsfs(fs: Any, **options: Any) -> Any:
     """A `FlatFileSystem` on a `GcsfsHandler` of `fs`."""
-    return FlatFileSystem.of(GcsfsHandler(fs, **options), asynchronous=True)
+    return FlatFileSystem(GcsfsHandler(fs, **options), asynchronous=True)
 
 
 def _adlfs(fs: Any, **options: Any) -> Any:
     """A `TreeFileSystem` on an `AdlfsHandler` of `fs`."""
-    return TreeFileSystem.of(AdlfsHandler(fs, **options), asynchronous=True)
+    return TreeFileSystem(AdlfsHandler(fs, **options), asynchronous=True)
 
 
 class _Store(AsyncFileSystem):

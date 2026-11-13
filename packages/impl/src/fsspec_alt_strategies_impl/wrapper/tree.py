@@ -74,7 +74,7 @@ class FsspecTreeHandler(_FsspecHandler, TreeHandler):
     Examples
     --------
     >>> local = fsspec.filesystem("file")
-    >>> tree = TreeFileSystem.of(
+    >>> tree = TreeFileSystem(
     ...     FsspecTreeHandler(
     ...         local,
     ...         operation_concurrency=8,

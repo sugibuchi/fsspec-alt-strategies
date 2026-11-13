@@ -38,6 +38,8 @@ from .walk import _flat_walk
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 
+    from .handler import FlatHandler
+
 
 __all__ = ["FlatFileSystem"]
 
@@ -65,9 +67,11 @@ class FlatFileSystem(_BaseFileSystem):
 
     Parameters
     ----------
-    *args, **storage_options
-        Passed to the class's ``handler_class``, but fsspec's own options,
-        e.g. ``asynchronous=True``, passed to `fsspec.asyn.AsyncFileSystem`.
+    handler : FlatHandler
+        The storage's handler. A class below it takes the handler class's
+        storage options instead, as `TreeFileSystem`'s does.
+    **kwargs
+        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
     Raises
     ------
@@ -87,14 +91,17 @@ class FlatFileSystem(_BaseFileSystem):
     ...     protocol = "my"
     ...     handler_class = MyHandler
     >>> fs = MyFileSystem(bucket="mine", operation_concurrency=32, io_concurrency=8)
+    >>> s3 = FlatFileSystem(S3fsHandler(s3fs.S3FileSystem(), ...))
     """
 
     rm_batch_size: int
     """The most keys the handler's ``rm_files`` deletes in one request, e.g. 1000 on S3."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        size = self.handler.rm_batch_size  # type: ignore[attr-defined]
+    handler: FlatHandler
+
+    def __init__(self, handler: FlatHandler, **kwargs: Any) -> None:
+        super().__init__(handler, **kwargs)
+        size = handler.rm_batch_size
         if not isinstance(size, int) or size < 1:
             raise ValueError(f"rm_batch_size must be set, to at least 1: {size}")
         self.rm_batch_size = size
@@ -111,7 +118,7 @@ class FlatFileSystem(_BaseFileSystem):
         below ``path`` whose name below it starts with ``prefix``, in name
         order.
         """
-        handler = self._required_handler()
+        handler = self.handler
         entry = handler.entry(self._strip_protocol(path))
         if recursive:
             return handler.ils_recursive(entry, prefix=prefix, **kwargs)  # type: ignore[attr-defined, no-any-return]
@@ -120,18 +127,18 @@ class FlatFileSystem(_BaseFileSystem):
 
     async def _rm_files(self, paths: list[str]) -> Mapping[str, Exception] | None:
         """Delete several files in one request, by the handler's ``rm_files``."""
-        handler = self._required_handler()
+        handler = self.handler
         entries = [handler.entry(self._strip_protocol(p)) for p in paths]
         return await handler.rm_files(entries)  # type: ignore[attr-defined, no-any-return]
 
     async def _rmdir(self, path: str) -> None:
         """Delete an empty directory: on an object store, a bucket."""
-        handler = self._required_handler()
+        handler = self.handler
         await handler.rmdir(handler.entry(self._strip_protocol(path)))
 
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
         """Create a directory and its parents: on an object store, a bucket, if missing."""
-        handler = self._required_handler()
+        handler = self.handler
         await handler.makedirs(handler.verified(self._strip_protocol(path)), exist_ok)
 
     async def _mkdir(
@@ -142,26 +149,26 @@ class FlatFileSystem(_BaseFileSystem):
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Describe a path, raising FileNotFoundError if there is none."""
-        handler = self._required_handler()
+        handler = self.handler
         return await handler.info(handler.entry(self._strip_protocol(path)), **kwargs)
 
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         """Delete a file, as fsspec's ``_rm`` does when not recursive."""
-        handler = self._required_handler()
+        handler = self.handler
         await handler.rm_file(handler.entry(self._strip_protocol(path)))
 
     async def _cp_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
         """Copy a key within the storage, by its entry, to ``path2``."""
-        handler = self._required_handler()
+        handler = self.handler
         await handler.cp_file(entry, handler.verified(self._strip_protocol(path2)))
 
     async def _mv_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
         """Move a key within the storage, by its entry, to ``path2``."""
-        handler = self._required_handler()
+        handler = self.handler
         await handler.mv_file(entry, handler.verified(self._strip_protocol(path2)))
 
     # fsspec's recursive methods, answered by the flat strategies.

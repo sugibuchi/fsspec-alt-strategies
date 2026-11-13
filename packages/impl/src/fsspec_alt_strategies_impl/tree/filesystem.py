@@ -61,23 +61,26 @@ class TreeFileSystem(_BaseFileSystem):
     fsspec's applies it to the root only, as its walk recurses without it.
 
     What the storage does is the handler's: its primitives, its profile, its
-    limits and its files. A storage's class names its protocol and its handler
-    class, and nothing else. A filesystem of it makes its handler from its
-    storage options, fsspec's own aside. ``of(handler)`` makes one on a handler
-    made elsewhere, e.g. one wrapping another filesystem.
+    limits and its files. It takes a handler, e.g. one wrapping another
+    filesystem, and is never cached. A storage's class below it takes no
+    handler: it names its protocol and its handler class, and nothing else,
+    and makes its handler from its storage options, fsspec's own aside. So
+    fsspec makes it from a URL or a registry, and caches it.
 
     Parameters
     ----------
-    *args, **storage_options
-        Passed to the class's ``handler_class``, but fsspec's own options,
-        e.g. ``asynchronous=True``, passed to `fsspec.asyn.AsyncFileSystem`.
+    handler : TreeHandler
+        The storage's handler. A class below it takes the handler class's
+        storage options instead.
+    **kwargs
+        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
     Raises
     ------
     TypeError
-        If the class names no ``handler_class``, and no handler is given. If
-        a class below it names anything but ``protocol``, ``handler_class``,
-        ``root_marker`` and ``cachable``.
+        If a class below it names no ``handler_class``, or anything but
+        ``protocol``, ``handler_class``, ``root_marker`` and ``cachable``, or
+        is given a handler.
 
     See Also
     --------
@@ -90,7 +93,7 @@ class TreeFileSystem(_BaseFileSystem):
     ...     protocol = "my"
     ...     handler_class = MyHandler
     >>> fs = MyFileSystem(account="mine", operation_concurrency=32, io_concurrency=8)
-    >>> local = TreeFileSystem.of(FsspecTreeHandler(fsspec.filesystem("file"), ...))
+    >>> local = TreeFileSystem(FsspecTreeHandler(fsspec.filesystem("file"), ...))
     """
 
     # The storage's primitives: the handler's, each on a caller's path, verified by it.
@@ -105,7 +108,7 @@ class TreeFileSystem(_BaseFileSystem):
         order: by the handler's recursive listing, or else a directory per
         request.
         """
-        handler = self._required_handler()
+        handler = self.handler
         entry = handler.entry(self._strip_protocol(path))
         if recursive:
             return _recursive(handler, entry, **kwargs)
@@ -114,53 +117,53 @@ class TreeFileSystem(_BaseFileSystem):
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Describe a path, raising FileNotFoundError if there is none."""
-        handler = self._required_handler()
+        handler = self.handler
         return await handler.info(handler.entry(self._strip_protocol(path)), **kwargs)
 
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         """Delete a file."""
-        handler = self._required_handler()
+        handler = self.handler
         await handler.rm_file(handler.entry(self._strip_protocol(path)))
 
     async def _rmdir(self, path: str) -> None:
         """Delete an empty directory."""
-        handler = self._required_handler()
+        handler = self.handler
         await handler.rmdir(handler.entry(self._strip_protocol(path)))
 
     async def _rm_tree(self, path: str) -> None:
         """Delete a directory with everything in it, in one request, by the handler's ``rm_tree``."""
-        handler = self._required_handler()
+        handler = self.handler
         await handler.rm_tree(handler.entry(self._strip_protocol(path)))  # type: ignore[attr-defined]
 
     async def _cp_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
         """Copy a file within the storage, by its entry, to ``path2``."""
-        handler = self._required_handler()
+        handler = self.handler
         await handler.cp_file(entry, handler.verified(self._strip_protocol(path2)))
 
     async def _mv_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
         """Move a file within the storage, by its entry, to ``path2``."""
-        handler = self._required_handler()
+        handler = self.handler
         await handler.mv_file(entry, handler.verified(self._strip_protocol(path2)))
 
     async def _mv_tree(self, path1: str, path2: str) -> None:
         """Move a directory with everything in it, in one request, by the handler's ``mv_tree``."""
-        handler = self._required_handler()
+        handler = self.handler
         entry = handler.entry(self._strip_protocol(path1))
         await handler.mv_tree(entry, handler.verified(self._strip_protocol(path2)))  # type: ignore[attr-defined]
 
     async def _cp_tree(self, path1: str, path2: str) -> None:
         """Copy a directory with everything in it, in one request, by the handler's ``cp_tree``."""
-        handler = self._required_handler()
+        handler = self.handler
         entry = handler.entry(self._strip_protocol(path1))
         await handler.cp_tree(entry, handler.verified(self._strip_protocol(path2)))  # type: ignore[attr-defined]
 
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
         """Create a directory and its parents, raising FileExistsError unless ``exist_ok``."""
-        handler = self._required_handler()
+        handler = self.handler
         await handler.makedirs(handler.verified(self._strip_protocol(path)), exist_ok)
 
     async def _mkdir(

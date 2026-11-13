@@ -173,4 +173,4 @@ def monitored(
     loop: dict[str, Any] = {}
     if getattr(fs, "async_impl", False) and not fs.asynchronous:
         loop["loop"] = fs.loop
-    return family.of(handler, asynchronous=getattr(fs, "asynchronous", False), **loop)
+    return family(handler, asynchronous=getattr(fs, "asynchronous", False), **loop)

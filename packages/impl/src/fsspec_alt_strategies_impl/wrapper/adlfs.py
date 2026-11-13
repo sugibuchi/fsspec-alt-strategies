@@ -48,7 +48,7 @@ class AdlfsHandler(FsspecTreeHandler):
 
     Examples
     --------
-    >>> tree = TreeFileSystem.of(
+    >>> tree = TreeFileSystem(
     ...     AdlfsHandler(
     ...         adlfs.AzureBlobFileSystem(account_name="myaccount"),
     ...         operation_concurrency=32,

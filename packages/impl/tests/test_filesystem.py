@@ -43,7 +43,7 @@ _LIMITS: dict[str, Any] = {
 
 def _tree(fs: Any, handler: type = FsspecTreeHandler, **options: Any) -> Any:
     """A `TreeFileSystem` on a handler of `fs`, async."""
-    return TreeFileSystem.of(handler(fs, **{**_LIMITS, **options}), asynchronous=True)
+    return TreeFileSystem(handler(fs, **{**_LIMITS, **options}), asynchronous=True)
 
 
 class _Transfers(SimulatedFileSystem):
@@ -209,9 +209,7 @@ async def test_a_file_copied_or_moved_into_a_missing_dir(
     if family == "tree":
         fs: Any = _tree(sim)
     else:
-        fs = FlatFileSystem.of(
-            _Flat(sim, rm_batch_size=10, **_LIMITS), asynchronous=True
-        )
+        fs = FlatFileSystem(_Flat(sim, rm_batch_size=10, **_LIMITS), asynchronous=True)
 
     await getattr(fs, method)(path, "new/", recursive=recursive)
     assert sim._file_data["new/1.txt"].data == b"1"
@@ -349,12 +347,12 @@ async def test_strategies_load_the_profile_once(
     handler: Any
     if family == "tree":
         handler = _NotingTree(inner, storage_profile=StorageProfile(), **limits)
-        fs: Any = TreeFileSystem.of(handler, asynchronous=True)
+        fs: Any = TreeFileSystem(handler, asynchronous=True)
     else:
         handler = _NotingFlat(
             inner, rm_batch_size=10, storage_profile=StorageProfile(), **limits
         )
-        fs = FlatFileSystem.of(handler, asynchronous=True)
+        fs = FlatFileSystem(handler, asynchronous=True)
     await call(fs)
     assert handler.loaded == loads
 

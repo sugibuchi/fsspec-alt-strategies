@@ -25,7 +25,7 @@ import os
 from abc import abstractmethod
 from contextlib import aclosing
 from glob import has_magic
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, TypeVar
 
 from fsspec.asyn import AsyncFileSystem, sync
 from fsspec.callbacks import DEFAULT_CALLBACK
@@ -34,11 +34,11 @@ from fsspec.spec import AbstractFileSystem
 from fsspec_alt_strategies.monitor import Call, Monitored, routing
 
 from .common.filesystem import (
-    _FSSPEC_OPTIONS,
-    _NAMED,
     _AbstractFileSystemMeta,
     _BaseFileSystem,
+    _check_named,
     _copy_errors,
+    _make_concrete,
     _raise,
     _range_bounds,
     _strip_only_protocol,
@@ -135,7 +135,7 @@ class RoutingHandler(_PathHandler):
     ...             {"name": v, "type": "directory", "size": 0}
     ...             for v in await self.client.list_volumes()
     ...         ]
-    >>> fs = RoutingFileSystem.of(Lake(transfer_concurrency=8))
+    >>> fs = RoutingFileSystem(Lake(transfer_concurrency=8))
     """
 
     def __init__(self, *, transfer_concurrency: int | asyncio.Semaphore) -> None:
@@ -328,22 +328,25 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
     ``Call.via`` naming the routers they came through. A copy across storages
     is a call of the router itself.
 
-    A class below it names its ``protocol``, its ``handler_class``, made from
-    the storage options, and its ``root_marker`` and ``cachable``, and
-    nothing else: the rest is the handler's. `of` makes one on a handler made
-    elsewhere.
+    It takes a routing handler, and is never cached. A class below it takes
+    no handler: it names its ``protocol``, and its ``handler_class``, which
+    its storage options make, so that fsspec makes it from a URL or a
+    registry. It may name its ``root_marker`` and ``cachable``, and nothing
+    else: the rest is the handler's.
 
     Parameters
     ----------
-    *args, **kwargs
-        The handler's storage options, e.g. an account name, by which
-        ``handler_class`` makes it, and fsspec's own, e.g.
-        ``asynchronous=True``.
+    handler : RoutingHandler
+        Where each path goes. A class below it takes the handler's storage
+        options instead, e.g. an account name.
+    **kwargs
+        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
     Raises
     ------
     TypeError
-        If the class has no ``handler_class``, and no handler is given.
+        If a class below it names no ``handler_class``, or anything else than
+        it may name, or is given a handler.
 
     See Also
     --------
@@ -356,31 +359,23 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
     ...     protocol = "lake"
     ...     handler_class = Lake
     >>> fs = LakeFileSystem(transfer_concurrency=8)
+    >>> fs = RoutingFileSystem(Lake(transfer_concurrency=8), asynchronous=True)
     """
 
     handler_class: ClassVar[type[RoutingHandler] | None] = None
-    """The class of the routing handler a filesystem of this class makes, from its storage options."""
+    """The class of the routing handler a developer's class makes, from its storage options."""
 
     handler: RoutingHandler
     """The routing handler, which says where each path goes."""
 
-    def __init__(
-        self, *args: Any, handler: RoutingHandler | None = None, **kwargs: Any
-    ) -> None:
-        if handler is None:
-            if self.handler_class is None:
-                raise TypeError(
-                    f"{type(self).__name__} needs a routing handler: a class names "
-                    "its handler_class, or of(handler) makes one on a handler"
-                )
-            # fsspec's own options are the filesystem's: the rest, the handler's.
-            options = {
-                k: kwargs.pop(k) for k in list(kwargs) if k not in _FSSPEC_OPTIONS
-            }
-            handler = self.handler_class(*args, **options)
-            args = ()
-        super().__init__(*args, **kwargs)
+    # Whether the class is a developer's, made from its storage options.
+    _concrete: ClassVar[bool] = False
 
+    def __init__(self, handler: RoutingHandler, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+
+        if not self._concrete:
+            self.root_marker = handler.root
         self.handler = handler
         self.transfer_concurrency = handler.transfer_concurrency
         self.transfer_limit = handler.transfer_limit
@@ -390,30 +385,12 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Refuse a developer's class naming anything but its protocol and handler.
 
-        Where each path goes, and what a storage does, are the handlers'.
+        Where each path goes, and what a storage does, are the handlers'. Such
+        a class makes its handler from its storage options.
         """
         super().__init_subclass__(**kwargs)
-        own = {n for n in vars(cls) if not (n.startswith("__") and n.endswith("__"))}
-        if extra := own - _NAMED:
-            raise TypeError(
-                f"{cls.__name__} may name only {', '.join(sorted(_NAMED))}: "
-                f"{', '.join(sorted(extra))} belongs to its handler"
-            )
-
-    @classmethod
-    def of(cls, handler: RoutingHandler, **kwargs: Any) -> Self:
-        """A filesystem on a routing handler made elsewhere, not cached.
-
-        Parameters
-        ----------
-        handler : RoutingHandler
-            Where each path goes.
-        **kwargs
-            Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
-        """
-        fs = cls(handler=handler, skip_instance_cache=True, **kwargs)
-        fs.root_marker = handler.root
-        return fs
+        _check_named(cls)
+        _make_concrete(cls, RoutingFileSystem)
 
     def close(self) -> None:
         """Release the handlers the routing handler made, and forget their filesystems.
@@ -486,7 +463,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
                 f"{handler!r} is of no family: a TreeHandler or a FlatHandler is needed"
             )
 
-        fs = family.of(handler, asynchronous=self.asynchronous, loop=self.loop)
+        fs = family(handler, asynchronous=self.asynchronous, loop=self.loop)
         storage = self._storages[id(handler)] = _Storage(handler, fs, through)
         return storage
 

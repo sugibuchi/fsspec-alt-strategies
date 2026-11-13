@@ -29,7 +29,7 @@ def _flat(fs: Any, **options: Any) -> FlatFileSystem:
     """A `FlatFileSystem` on a handler of `fs`, on its loop, as `monitored` makes one."""
     asynchronous = options.pop("asynchronous", getattr(fs, "asynchronous", False))
     loop = {"loop": fs.loop} if fs.async_impl and not asynchronous else {}
-    return FlatFileSystem.of(
+    return FlatFileSystem(
         FsspecFlatHandler(fs, **options), asynchronous=asynchronous, **loop
     )
 
