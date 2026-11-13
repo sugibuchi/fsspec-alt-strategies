@@ -128,11 +128,51 @@ class StorageHandler(ABC):
         """Release what `open` made: here, nothing. A later `open` opens it again."""
         self._opened = False
 
-    # Paths and entries.
+    # Paths and entries: the strategies build paths only by these.
+
+    root: str = ""
+    """The path of the storage's root, e.g. "" for an object store or "/" for a local disk."""
 
     def entry(self, path: str) -> Entry:
         """The entry of a path alone, for a primitive taking an item the caller knows only by its path."""
         return {"name": StoragePath(path)}
+
+    def join(self, directory: str, name: str) -> StoragePath:
+        """The path of ``name`` in ``directory``, raising ValueError for a name that is no single name.
+
+        A name is refused if empty, ".", "..", or holding a "/". So a path built
+        by joining names never leaves the directory it was built from, whatever
+        names another storage listed.
+        """
+        if not name or name in (".", "..") or "/" in name:
+            raise ValueError(f"Not a name in a directory: {name!r}")
+        if not directory:
+            return StoragePath(name)
+        if directory.endswith("/"):
+            return StoragePath(directory + name)
+        else:
+            return StoragePath(f"{directory}/{name}")
+
+    def join_all(self, directory: str, relative: str) -> StoragePath:
+        """The path of ``relative``, names joined by "/", in ``directory``: each name checked by `join`.
+
+        One leading "/", the separator after the directory's own path, and a
+        trailing one are ignored. An empty ``relative`` is the directory itself.
+        """
+        path = StoragePath(directory)
+        rest = relative.removeprefix("/").rstrip("/")
+        for name in rest.split("/") if rest else ():
+            path = self.join(path, name)
+        return path
+
+    def parent(self, path: str) -> StoragePath:
+        """The directory a path is in: the root for one at the root."""
+        head = path.rstrip("/").rpartition("/")[0]
+        return StoragePath(head or (self.root if path.startswith(self.root) else ""))
+
+    def name(self, path: str) -> str:
+        """The last name of a path."""
+        return path.rstrip("/").rpartition("/")[2]
 
     # The primitives of single paths, which every handler has.
 
@@ -221,6 +261,7 @@ class _FileSystemHandler(StorageHandler):
         )
         self.fs = fs
         self.profile = getattr(fs, "storage_profile", UNKNOWN)
+        self.root = getattr(fs, "root_marker", "")
 
     def __repr__(self) -> str:
         return f"<handler of {self.fs!r}>"

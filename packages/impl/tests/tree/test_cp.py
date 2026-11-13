@@ -653,3 +653,17 @@ async def test_cp_entry_is_given_the_listings_entries(
     )
     # One info only, where path2 goes: none per file.
     assert hierarchical_fs.stats.calls["info"] == 1
+
+
+async def test_a_name_the_destination_refuses_is_its_own_error(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    """A key holding ".." never leaves the destination: its copy fails, and the others go."""
+    hierarchical_fs.add_file("data/ok.txt", b"1")
+    hierarchical_fs.add_file("data/../../escaped.txt", b"2")
+    copied, errors = await _collect_with_errors(_cp(hierarchical_fs, "data", "copied"))
+    assert copied == [("data/ok.txt", "copied/ok.txt")]
+    assert [type(e) for e in errors] == [ValueError]
+    assert not any(
+        "escaped" in p and not p.startswith("data/") for p in hierarchical_fs._file_data
+    )

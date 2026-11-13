@@ -637,7 +637,7 @@ class _CopyJobs(_Jobs):
 
         for source in sorted(roots.paths):
             name = source.rpartition("/")[2]
-            target = f"{destination}/{name}" if destination else name
+            target = self.dst.join(destination, name)
             if (other := placed.get(target)) is not None:
                 error = FileExistsError(target)
                 error.add_note(
@@ -692,21 +692,41 @@ class _CopyJobs(_Jobs):
             return destination
 
         name = root.rsplit("/", 1)[-1]
-        return f"{destination}/{name}" if destination else name
+        return self.dst.join(destination, name)
 
     def target(self, path: str) -> str:
-        """Where a path goes."""
+        """Where a path goes, each name below its root checked by the destination's ``join``.
+
+        A name the destination refuses, e.g. "..", raises ValueError: a path
+        listed on the source never leaves the destination. A flat storage's
+        directory marker, a key ending with "/", keeps its "/".
+        """
         if self.places:
             # The root it is under, found from the path up.
             root = path
             while root not in self.places and "/" in root:
                 root = root.rpartition("/")[0]
-            return self.places[root] + path[len(root) :]
-
-        if self.prefix:
-            return self.base + path[len(self.prefix) :]
+            target = self.dst.join_all(self.places[root], path[len(root) :])
+        elif self.prefix:
+            target = self.dst.join_all(self.base, path[len(self.prefix) :])
         else:
-            return f"{self.base}/{path}" if self.base else path
+            target = self.dst.join_all(self.base, path)
+
+        if path.endswith("/") and not target.endswith("/"):
+            return f"{target}/"
+        else:
+            return target
+
+    def refuse_name(self, path: str, error: ValueError) -> ValueError:
+        """A path whose name the destination refuses, as its ``target`` raised: counted, noted, to yield.
+
+        It is the path's own error. The operation goes on with the others.
+        """
+        self.errors += 1
+        error.add_note(
+            f"{self.doing} {path!r} refused: the destination takes no such name."
+        )
+        return error
 
     async def copy_file(
         self, cp_entry: _Transfer, entry: dict[str, Any], destination: str

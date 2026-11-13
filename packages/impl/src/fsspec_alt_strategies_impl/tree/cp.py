@@ -205,6 +205,9 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         self.after_mkdir: dict[str, list[_Job]] = {}
 
         self.goes_whole = False  # Until the subclass's setup reads the profile.
+        self.refused_dirs: set[str] = (
+            set()
+        )  # Those whose names the destination refused.
         self.roots_whole: int | None = None
 
     async def prepare(self) -> _Roots | None:
@@ -270,30 +273,44 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         path = entry["name"]
         target = self.target(path)
         job = _Job("copy", entry, target)
-        self.queue(target.rpartition("/")[0], "", [job])
+        self.queue(self.dst.parent(target), "", [job])
 
     def add(self, listing: _Listing) -> list[Any] | None:
-        copies = []
+        try:
+            directory = self.target(listing.directory)
+        except ValueError as e:
+            # A name the destination refuses, e.g. "..": nothing in it goes. A
+            # directory below one refused is no error of its own.
+            above = self.handler.parent(listing.directory) in self.refused_dirs
+            self.refused_dirs.add(listing.directory)
+            if listing.first and not above:
+                return [self.refuse_name(listing.directory, e)]
+            return None
+
+        copies, refused = [], []
         for entry in listing.entries:
             if entry["type"] != "directory":
                 name = entry["name"].rstrip("/")
                 self.files_found += 1
+                try:
+                    target = self.target(name)
+                except ValueError as e:
+                    refused.append(self.refuse_name(name, e))
+                    continue
                 # The entry goes with its copy, so that cp_entry need not ask it.
-                copies.append(_Job("copy", {**entry, "name": name}, self.target(name)))
+                copies.append(_Job("copy", {**entry, "name": name}, target))
 
         if listing.first and listing.last and not listing.entries:
             # An empty directory is made, whatever the storage. With maxdepth,
             # fsspec's copy leaves out directories, and copies files only.
             if self.maxdepth is not None:
                 return None
-            self.queue(
-                self.target(listing.directory), listing.directory, [], always=True
-            )
+            self.queue(directory, listing.directory, [], always=True)
         elif copies or (listing.first and self.parents_first):
             # Parents first, each directory is made once its parent is. Else, a
             # directory holding only directories needs no mkdir: theirs create it.
-            self.queue(self.target(listing.directory), listing.directory, copies)
-        return None
+            self.queue(directory, listing.directory, copies)
+        return refused or None
 
     @property
     def parents_first(self) -> bool:
