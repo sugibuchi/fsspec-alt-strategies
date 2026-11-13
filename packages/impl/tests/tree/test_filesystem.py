@@ -140,8 +140,23 @@ class _TreeHandler(TreeHandler):
 class _Tree(TreeFileSystem):
     """A TreeFileSystem on a simulated storage, made from it as from storage options."""
 
+    protocol = _TreeHandler.protocol
+    _strip_protocol = _TreeHandler.strip_protocol
     cachable = False
-    handler_class = _TreeHandler
+
+    def __init__(
+        self,
+        inner: SimulatedFileSystem,
+        operation_concurrency: Any = 4,
+        io_concurrency: Any = 2,
+        **kwargs: Any,
+    ) -> None:
+        handler = _TreeHandler(
+            inner,
+            operation_concurrency=operation_concurrency,
+            io_concurrency=io_concurrency,
+        )
+        super().__init__(handler, **kwargs)
 
 
 def _on(handler: TreeHandler) -> Any:

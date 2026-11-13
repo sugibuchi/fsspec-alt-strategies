@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 
-from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.handler import StorageHandler
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
@@ -194,88 +193,38 @@ async def test_a_filesystem_on_a_handler_verifies_a_callers_paths() -> None:
         await fs._copy("data/y", "data/c:d")
 
 
-def test_a_handler_class_takes_the_storage_options() -> None:
-    made: list[dict[str, Any]] = []
-
-    class Options(TreeView):
-        protocol = "mine"
-
-        def __init__(self, inner: SimulatedFileSystem, **options: Any) -> None:
-            made.append(options)
-            super().__init__(inner)
-
-    class Mine(TreeFileSystem):
-        handler_class = Options
-
-    inner = _storage()
-    fs = Mine(inner, region="here", asynchronous=True, skip_instance_cache=True)
-    assert isinstance(fs.handler, Options)
-    # fsspec's own options are the filesystem's: the handler gets the others.
-    assert made == [{"region": "here"}]
-
-
 def test_a_filesystem_needs_a_handler() -> None:
     with pytest.raises(TypeError, match="handler"):
         TreeFileSystem()  # type: ignore[call-arg]
 
 
-def test_a_storages_class_makes_its_handler_and_is_cached() -> None:
-    class Cached(TreeView):
-        protocol = "mine-cached"
-
-    class Mine(TreeFileSystem):
-        handler_class = Cached
-
+def test_a_filesystem_on_a_handler_is_never_cached() -> None:
+    # fsspec would key it by the handler's repr, which two handlers may share.
     inner = _storage()
-    with pytest.raises(TypeError, match="makes its handler from its storage options"):
-        Mine(handler=TreeView(inner))
-    # Made from its storage options, it is cached as fsspec caches any.
-    assert Mine(inner, asynchronous=True) is Mine(inner, asynchronous=True)
-    # On a handler, the family's class is never cached.
-    handler = TreeView(inner)
-    assert TreeFileSystem(handler) is not TreeFileSystem(handler)
-    with pytest.raises(TypeError, match="names no handler_class"):
-
-        class Unnamed(TreeFileSystem):
-            cachable = False
+    assert TreeFileSystem(TreeView(inner)) is not TreeFileSystem(TreeView(inner))
 
 
-def test_a_storages_class_names_its_handler_only() -> None:
-    with pytest.raises(TypeError, match="_info belongs to its handler"):
-
-        class Overriding(TreeFileSystem):
-            handler_class = TreeView
-
-            async def _info(self, path: str, **kwargs: Any) -> Any: ...
-
-    with pytest.raises(TypeError, match="storage_profile belongs to its handler"):
-
-        class Declaring(TreeFileSystem):
-            handler_class = TreeView
-            storage_profile = StorageProfile()
+class _Bucket(TreeView):
+    protocol = ("bkt", "bucket")
+    root = ""
 
 
-def test_a_filesystems_paths_are_its_handlers() -> None:
-    class Bucket(TreeView):
-        protocol = ("bkt", "bucket")
-        root = ""
+class _BucketFileSystem(TreeFileSystem):
+    """A storage's class: its paths named as its handler class's, by convention."""
 
-    class BucketFileSystem(TreeFileSystem):
-        cachable = False
-        handler_class = Bucket
+    protocol = _Bucket.protocol
+    root_marker = _Bucket.root
+    _strip_protocol = _Bucket.strip_protocol
 
-    # A class takes its paths from its handler class, before it is made.
-    assert BucketFileSystem.protocol == ("bkt", "bucket")
-    assert BucketFileSystem._strip_protocol("bucket://a/b/") == "a/b"
-    assert BucketFileSystem._strip_protocol(["bkt://a", "bkt::b"]) == ["a", "b"]
-    assert BucketFileSystem.root_marker == ""
+    def __init__(self, inner: SimulatedFileSystem, **kwargs: Any) -> None:
+        super().__init__(_Bucket(inner), **kwargs)
 
-    fs = BucketFileSystem(_storage(), asynchronous=True)
+
+def test_a_storages_class_names_its_handlers_paths() -> None:
+    assert _BucketFileSystem._strip_protocol("bucket://a/b/") == "a/b"
+    assert _BucketFileSystem._strip_protocol(["bkt://a", "bkt::b"]) == ["a", "b"]
+    fs = _BucketFileSystem(_storage(), asynchronous=True)
+    assert fs._strip_protocol("bkt://a") == "a"
+    # A URL is the handler's.
     assert fs.unstrip_protocol("a/b") == "bkt://a/b"
     assert fs.unstrip_protocol("bucket://a/b") == "bucket://a/b"
-
-    # A filesystem on a handler serves the handler's paths too.
-    on_handler = TreeFileSystem(Bucket(_storage()))
-    assert on_handler.protocol == ("bkt", "bucket")
-    assert on_handler._strip_protocol("bkt://x") == "x"
-    assert on_handler.unstrip_protocol("x") == "bkt://x"

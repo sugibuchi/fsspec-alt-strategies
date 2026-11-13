@@ -79,11 +79,12 @@ class State:
     current: str | None = None
 
 
-class Monitored(ABC):  # noqa: B024, a marker: it declares no method.
+class Monitored:
     """A filesystem whose fsspec methods tell the monitors of their operations.
 
     A marker: the filesystem classes of the strategies, and their wrappers,
-    inherit it. A filesystem without it is wrapped to be monitored.
+    inherit it. A filesystem without it is wrapped to be monitored. It is a
+    plain class, so that a filesystem class keeps fsspec's metaclass alone.
     """
 
 

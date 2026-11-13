@@ -25,7 +25,7 @@ import os
 from abc import abstractmethod
 from contextlib import aclosing
 from glob import has_magic
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
 
 from fsspec.asyn import AsyncFileSystem, sync
 from fsspec.callbacks import DEFAULT_CALLBACK
@@ -34,15 +34,11 @@ from fsspec.spec import AbstractFileSystem
 from fsspec_alt_strategies.monitor import Call, Monitored, routing
 
 from .common.filesystem import (
-    _AbstractFileSystemMeta,
     _BaseFileSystem,
-    _check_named,
     _copy_errors,
-    _make_concrete,
     _raise,
     _range_bounds,
     _strip_only_protocol,
-    _take_paths,
 )
 from .common.handler import StorageHandler, _limit, _PathHandler
 from .common.operation import _collect_with_monitors
@@ -276,7 +272,7 @@ class _Storage(NamedTuple):
     through: _Through
 
 
-class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemMeta):
+class RoutingFileSystem(AsyncFileSystem, Monitored):
     """An async filesystem passing each call to the filesystem of the path's storage.
 
     It suits a namespace spanning several storages, each with a handler of
@@ -331,26 +327,18 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
     ``Call.via`` naming the routers they came through. A copy across storages
     is a call of the router itself.
 
-    It takes a routing handler, and is never cached. Its paths are the
-    handler's: its ``protocol``, its ``root`` and its ``strip_protocol``. A
-    class below it takes no handler: it names its ``handler_class``, which its
-    storage options make, so that fsspec makes it from a URL or a registry,
-    and takes its paths from that class. It may name ``cachable``, and
-    nothing else: the rest is the handler's.
+    It takes a routing handler. By convention, a class below it takes the
+    handler's storage options, not a handler: its ``__init__`` makes its
+    handler from them, so that fsspec makes it from a URL or a registry. It
+    names its ``protocol``, ``root_marker`` and ``_strip_protocol`` as its
+    handler class's ``protocol``, ``root`` and ``strip_protocol``.
 
     Parameters
     ----------
     handler : RoutingHandler
-        Where each path goes. A class below it takes the handler's storage
-        options instead, e.g. an account name.
+        Where each path goes.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
-
-    Raises
-    ------
-    TypeError
-        If a class below it names no ``handler_class``, or anything else than
-        it may name, or is given a handler.
 
     See Also
     --------
@@ -360,25 +348,29 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
     Examples
     --------
     >>> class LakeFileSystem(RoutingFileSystem):
-    ...     handler_class = Lake  # Its protocol is "lake".
+    ...     protocol = Lake.protocol
+    ...     root_marker = Lake.root
+    ...     _strip_protocol = Lake.strip_protocol
+    ...
+    ...     def __init__(self, *, transfer_concurrency, **kwargs):
+    ...         super().__init__(Lake(transfer_concurrency=transfer_concurrency), **kwargs)
     >>> fs = LakeFileSystem(transfer_concurrency=8)
     >>> fs = RoutingFileSystem(Lake(transfer_concurrency=8), asynchronous=True)
     """
 
-    handler_class: ClassVar[type[RoutingHandler] | None] = None
-    """The class of the routing handler a developer's class makes, from its storage options."""
+    cachable = False
+    """Not cached by fsspec, which would key it by its handler's repr: a class below it sets True."""
 
     handler: RoutingHandler
     """The routing handler, which says where each path goes."""
 
-    # Whether the class is a developer's, made from its storage options.
-    _concrete: ClassVar[bool] = False
-
     def __init__(self, handler: RoutingHandler, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
+        # The handler's paths.
+        self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]
+        self.root_marker = handler.root
         self.handler = handler
-        _take_paths(self, handler)
         self.transfer_concurrency = handler.transfer_concurrency
         self.transfer_limit = handler.transfer_limit
         # The storages routed to, by their handler's id, each kept with it.
@@ -387,16 +379,6 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
     def unstrip_protocol(self, name: str) -> str:
         """A path of the router as a URL: its handler's."""
         return self.handler.unstrip_protocol(name)
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Refuse a developer's class naming anything but its handler class.
-
-        Where each path goes, and what a storage does, are the handlers'. Such
-        a class makes its handler from its storage options.
-        """
-        super().__init_subclass__(**kwargs)
-        _check_named(cls)
-        _make_concrete(cls, RoutingFileSystem)
 
     def close(self) -> None:
         """Release the handlers the routing handler made, and forget their filesystems.

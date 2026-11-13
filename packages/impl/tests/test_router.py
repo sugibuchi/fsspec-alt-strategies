@@ -185,8 +185,14 @@ class _Lake(RoutingHandler):
 
 
 class _Router(RoutingFileSystem):
-    cachable = False
-    handler_class = _Lake
+    """A router of a lake, made from its lake's class, as from storage options."""
+
+    protocol = _Lake.protocol
+    root_marker = _Lake.root
+    _strip_protocol = _Lake.strip_protocol
+
+    def __init__(self, lake: type[_Lake] = _Lake, **kwargs: Any) -> None:
+        super().__init__(lake(), **kwargs)
 
 
 _FILES = ["data/a/1.txt", "data/a/2.txt", "data/b/3.txt"]
@@ -200,9 +206,7 @@ def _router(
     Its handler's storages are reached as ``router.tree``, ``router.flat`` and
     ``router.plain`` too, for the tests.
     """
-    # A class per lake, which it makes from its storage options: none here.
-    routed = type(f"_{lake.__name__}Router", (_Router,), {"handler_class": lake})
-    router = routed(asynchronous=asynchronous)
+    router = _Router(lake, asynchronous=asynchronous)
     for name in ("tree", "flat", "plain"):
         sim = getattr(router.handler, name)
         setattr(router, name, sim)
@@ -743,7 +747,7 @@ async def test_the_handlers_async_close_closes_the_storages_made(
 
 
 def test_pickling_keeps_the_arguments() -> None:
-    # Made from its storage options by its handler_class, as fsspec makes one.
+    # Made again from its arguments, as fsspec pickles any filesystem.
     router = _Router(asynchronous=True)
     _backend(router, "tree")
     copy = pickle.loads(pickle.dumps(router))
@@ -761,25 +765,6 @@ def test_transfer_concurrency_is_checked() -> None:
 def test_a_router_needs_a_handler() -> None:
     with pytest.raises(TypeError, match="handler"):
         RoutingFileSystem()  # type: ignore[call-arg]
-
-
-def test_a_routers_class_makes_its_handler() -> None:
-    with pytest.raises(TypeError, match="makes its handler from its storage options"):
-        _Router(handler=_Lake())
-    with pytest.raises(TypeError, match="names no handler_class"):
-
-        class Unnamed(RoutingFileSystem):
-            cachable = False
-
-
-def test_a_routers_class_names_its_protocol_and_handler_only() -> None:
-    with pytest.raises(TypeError, match="belongs to its handler"):
-
-        class Overriding(RoutingFileSystem):
-            handler_class = _Lake
-
-            async def _info(self, path: str, **kwargs: Any) -> Any:
-                return {}
 
 
 # Every public method of fsspec is either passed on, or inherited on purpose.

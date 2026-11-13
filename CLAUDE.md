@@ -79,7 +79,7 @@ code: read it before adding a strategy.
   storage, and when it wins or loses.
 - fsspec's `dircache` is for fsspec's own methods and callers only. `_BaseFileSystem._ls` keeps a listing once it has
   listed it whole. The strategies list with `_ils`, which never reads or fills it, and `_info` never reads it. Every
-  method changing the storage is in `common.filesystem._CHANGING`, which drops the listings kept: add a new one there.
+  method changing the storage calls `self._drop_listings()` in a `finally`: a new one does too.
 - Async first: write the async version, and a sync one only when asked.
 - Never swallow `CancelledError`.
 

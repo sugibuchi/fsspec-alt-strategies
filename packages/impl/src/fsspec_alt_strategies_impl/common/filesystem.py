@@ -20,15 +20,12 @@ This module depends on `operation` and `handler`, and `fsspec_async` and
 
 from __future__ import annotations
 
-import functools
-import inspect
 import io
 import math
 import os
-from abc import ABCMeta
 from collections.abc import Iterable
 from glob import has_magic
-from typing import TYPE_CHECKING, Any, ClassVar, Self
+from typing import TYPE_CHECKING, Any, Self
 
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks, sync
 from fsspec.callbacks import DEFAULT_CALLBACK
@@ -50,159 +47,8 @@ if TYPE_CHECKING:
 
 _MiB = 1024 * 1024
 
-_NAMED = frozenset({"handler_class", "cachable"})
-"""What a developer's class below a family's names: all else is its handler's, its protocol too."""
 
-_FSSPEC_OPTIONS = frozenset(
-    {
-        "asynchronous",
-        "loop",
-        "batch_size",
-        "use_listings_cache",
-        "listings_expiry_time",
-        "max_paths",
-        "skip_instance_cache",
-    }
-)
-"""The storage options fsspec's filesystem takes: a handler takes the others."""
-
-
-_CHANGING = frozenset(
-    {
-        "_rm_file",
-        "_rm_files",
-        "_rmdir",
-        "_rm_tree",
-        "_rm",
-        "_makedirs",
-        "_mkdir",
-        "_pipe_file",
-        "_put_file",
-        "_cp_file",
-        "_cp_file_entry",
-        "_cp_tree",
-        "_copy",
-        "_mv_file",
-        "_mv_file_entry",
-        "_mv_tree",
-        "_mv",
-    }
-)
-"""The methods changing the storage: each drops the listings kept in ``dircache``.
-
-``_open`` and ``open_async`` do too, when they open a file to write.
-"""
-
-
-def _drops_listings(method: Callable[..., Any]) -> Callable[..., Any]:
-    """``method``, dropping the filesystem's listings kept once it ends, failed or not.
-
-    A method opening a file drops them as it opens one to write: the file
-    knows no filesystem, so its closing cannot.
-    """
-    opens = method.__name__ in ("_open", "open_async")
-
-    def writes(args: tuple[Any, ...], kwargs: dict[str, Any]) -> bool:
-        mode = kwargs.get("mode", args[1] if len(args) > 1 else "rb")
-        return not opens or any(c in mode for c in "wax+")
-
-    if inspect.iscoroutinefunction(method):
-
-        @functools.wraps(method)
-        async def changing(self: Any, *args: Any, **kwargs: Any) -> Any:
-            try:
-                return await method(self, *args, **kwargs)
-            finally:
-                if writes(args, kwargs):
-                    self.dircache.clear()
-
-        return changing
-
-    @functools.wraps(method)
-    def changing_sync(self: Any, *args: Any, **kwargs: Any) -> Any:
-        try:
-            return method(self, *args, **kwargs)
-        finally:
-            if writes(args, kwargs):
-                self.dircache.clear()
-
-    return changing_sync
-
-
-class _AbstractFileSystemMeta(type(AsyncFileSystem), ABCMeta):  # type: ignore[misc]
-    """fsspec's metaclass, which caches instances, with ABCMeta's abstract methods.
-
-    A filesystem class has fsspec's metaclass already. ABCMeta must join it, so
-    that a subclass missing an abstract method fails at once, when made.
-
-    A family's class, made on a handler, is never cached: fsspec would key the
-    instance by the handler, and keep it alive. A developer's class, made from
-    its storage options, is cached as fsspec caches any filesystem.
-    """
-
-    def __call__(cls, *args: Any, **kwargs: Any) -> Any:
-        if not getattr(cls, "_concrete", False):
-            kwargs.setdefault("skip_instance_cache", True)
-        return super().__call__(*args, **kwargs)
-
-
-def _check_named(cls: type) -> None:
-    """Refuse a developer's class naming anything but `_NAMED`: the rest is its handler's."""
-    own = {n for n in vars(cls) if not (n.startswith("__") and n.endswith("__"))}
-    if extra := own - _NAMED:
-        raise TypeError(
-            f"{cls.__name__} may name only {', '.join(sorted(_NAMED))}: "
-            f"{', '.join(sorted(extra))} belongs to its handler"
-        )
-
-
-def _make_concrete(cls: Any, family: Any) -> None:
-    """Make a developer's class below ``family`` build its handler from its storage options.
-
-    The family's class takes a handler. A class below it names its
-    ``handler_class`` instead, which its storage options make, so that fsspec
-    makes it from a URL or a registry, and pickles it by those options. It
-    takes no handler: one made elsewhere goes to the family's class.
-    """
-    handler_class = cls.handler_class
-    if handler_class is None:
-        raise TypeError(
-            f"{cls.__name__} names no handler_class: a class below "
-            f"{family.__name__} makes its handler from its storage options"
-        )
-
-    # Its paths are its handler's, by convention: fsspec reads them of the
-    # class, e.g. to strip a URL before the filesystem is made.
-    cls.protocol = handler_class.protocol
-    cls.root_marker = handler_class.root
-    cls._strip_protocol = staticmethod(handler_class.strip_protocol)
-
-    def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
-        if "handler" in kwargs:
-            raise TypeError(
-                f"{type(self).__name__} makes its handler from its storage options:"
-                f" a handler made elsewhere goes to {family.__name__}(handler)"
-            )
-        # fsspec's own options are the filesystem's: the rest, the handler's.
-        own = {k: kwargs.pop(k) for k in list(kwargs) if k in _FSSPEC_OPTIONS}
-        family.__init__(self, type(self).handler_class(*args, **kwargs), **own)
-
-    cls.__init__ = __init__
-    cls._concrete = True
-
-
-def _take_paths(fs: Any, handler: Any) -> None:
-    """Give a filesystem its handler's paths: its protocol, its root and its stripping.
-
-    A filesystem on a handler serves the handler's paths, whatever its class,
-    e.g. a wrapper's, which are the wrapped filesystem's.
-    """
-    fs.protocol = handler.protocol
-    fs.root_marker = handler.root
-    fs._strip_protocol = handler.strip_protocol
-
-
-class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemMeta):
+class _BaseFileSystem(AsyncFileSystem, Monitored):
     """An async filesystem with two concurrency limits, moving data through files.
 
     ``operation_limit`` bounds the requests of the strategies, such as
@@ -220,23 +66,19 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     transfer_size: int = 8 * _MiB
     """The bytes read or written at a time by ``_get_file`` and ``_put_file``."""
 
-    handler_class: ClassVar[type[StorageHandler] | None] = None
-    """The class of the handler a developer's class makes, from its storage options."""
+    cachable = False
+    """Not cached by fsspec, which would key it by its handler's repr: a storage's class sets True."""
 
     handler: StorageHandler
     """The storage's handler, whose primitives the filesystem calls."""
 
-    # The family's class, set once made: a class below it is a developer's.
-    _family: ClassVar[type | None] = None
-
-    # Whether the class is a developer's, made from its storage options.
-    _concrete: ClassVar[bool] = False
-
     def __init__(self, handler: StorageHandler, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
+        # The handler's paths, e.g. a wrapped filesystem's URLs and root.
+        self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]
+        self.root_marker = handler.root
         self.handler = handler
-        _take_paths(self, handler)
         self.operation_concurrency = handler.operation_concurrency
         self.io_concurrency = handler.io_concurrency
         self.operation_limit = handler.operation_limit
@@ -245,26 +87,6 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     def unstrip_protocol(self, name: str) -> str:
         """A path of the storage as a URL: the handler's."""
         return self.handler.unstrip_protocol(name)
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Refuse a developer's class naming anything but its handler class.
-
-        A family's class, e.g. `TreeFileSystem`, implements fsspec's API on
-        the handler it is given: a class below it names ``handler_class``, and
-        may name ``cachable``, but nothing else. What the storage does is the
-        handler's, its paths and protocol too. Such a class makes its handler
-        from its storage options, by `_make_concrete`. The family's own methods
-        changing the storage drop the listings kept, by `_drops_listings`.
-        """
-        super().__init_subclass__(**kwargs)
-        if cls._family is not None:
-            _check_named(cls)
-            _make_concrete(cls, cls._family)
-            return
-        for name in _CHANGING | {"_open", "open_async"}:
-            method = cls.__dict__.get(name)
-            if callable(method) and not hasattr(method, "__wrapped__"):
-                setattr(cls, name, _drops_listings(method))
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
@@ -283,20 +105,21 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
             return await handler.open_writer(handler.verified(plain), mode, **kwargs)
         raise ValueError(f"mode must be 'rb', 'wb' or 'xb': {mode!r}")
 
-    @_drops_listings
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         """Open a file whose methods are awaited, as fsspec's ``open_async`` does, by the handler.
 
         A handler whose files are another filesystem's, as a wrapper's are,
-        opens its own, by its ``open_async_file``.
+        opens its own, by its ``open_async_file``. A file opened to write drops
+        the listings kept, as it opens: the file knows no filesystem.
         """
         if kwargs.pop("compression", None):
             raise ValueError("Compression is not supported by open_async")
+        if mode != "rb":
+            self._drop_listings()
         if (own := getattr(self.handler, "open_async_file", None)) is not None:
             return await own(self._strip_protocol(path), mode, **kwargs)
         return AsyncFileAdapter(await self._handler_file(path, mode, **kwargs))
 
-    @_drops_listings
     def _open(
         self,
         path: str,
@@ -310,8 +133,11 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         Within a transaction, a file written is committed with it: no reader
         sees it before. A handler whose files are another filesystem's opens
-        its own, by its ``open_sync_file``.
+        its own, by its ``open_sync_file``. A file opened to write drops the
+        listings kept, as `open_async` does.
         """
+        if mode != "rb":
+            self._drop_listings()
         if (own := getattr(self.handler, "open_sync_file", None)) is not None:
             return own(
                 self._strip_protocol(path),
@@ -342,7 +168,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         Only ``_ls`` uses the listings kept. The strategies list with ``_ils``,
         which neither reads nor fills them, so a listing kept never changes
         what they do. ``_info`` asks the storage, never them. Any change made
-        through the filesystem drops them all: see `_CHANGING`. A change made
+        through the filesystem drops them all, by `_drop_listings`. A change made
         by another client is not seen until then, or until ``refresh=True`` or
         ``invalidate_cache()``.
         """
@@ -353,6 +179,10 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
             if not kwargs:
                 self.dircache[key] = entries
         return list(entries) if detail else [e["name"] for e in entries]
+
+    def _drop_listings(self) -> None:
+        """Drop all the listings kept: each method changing the storage calls it once it ends, failed or not."""
+        self.dircache.clear()
 
     def invalidate_cache(self, path: str | None = None) -> None:
         """Drop the listings kept of ``path``, of what is below it, and of its parents: all, without one."""
@@ -428,7 +258,6 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     _cp_strategy: Callable[..., Any]
     _mv_strategy: Callable[..., Any]
 
-    @_drops_listings
     async def _copy(
         self,
         path1: str | list[str],
@@ -444,33 +273,35 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         A single file goes by the family's copy too, recursive or not, which
         needs not ask it again, as fsspec's does.
         """
-        entry = None
-        if isinstance(path2, str) and not recursive:
-            entry = await self._single_file(path1)
-        if not isinstance(path2, str) or (not recursive and entry is None):
-            await super()._copy(
-                path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
+        try:
+            entry = None
+            if isinstance(path2, str) and not recursive:
+                entry = await self._single_file(path1)
+            if not isinstance(path2, str) or (not recursive and entry is None):
+                await super()._copy(
+                    path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
+                )
+                return
+            if entry is not None:
+                # As fsspec's copy: a path given, not recursive, raises if missing.
+                on_error = on_error or "raise"
+
+            _, errors = await _collect_with_monitors(
+                self._cp_strategy(
+                    self.handler,
+                    self.handler,
+                    _strip_only_protocol(self, path1),
+                    _strip_only_protocol(self, path2),
+                    maxdepth=maxdepth,
+                    root_entry=entry,
+                ),
+                Call(self._unwrapped(), "copy", path1, path2),
+                kwargs.get("callback"),
             )
-            return
-        if entry is not None:
-            # As fsspec's copy: a path given, not recursive, raises if missing.
-            on_error = on_error or "raise"
+            _raise(_copy_errors(errors, on_error), "Copying")
+        finally:
+            self._drop_listings()
 
-        _, errors = await _collect_with_monitors(
-            self._cp_strategy(
-                self.handler,
-                self.handler,
-                _strip_only_protocol(self, path1),
-                _strip_only_protocol(self, path2),
-                maxdepth=maxdepth,
-                root_entry=entry,
-            ),
-            Call(self._unwrapped(), "copy", path1, path2),
-            kwargs.get("callback"),
-        )
-        _raise(_copy_errors(errors, on_error), "Copying")
-
-    @_drops_listings
     async def _mv(
         self,
         path1: str | list[str],
@@ -484,31 +315,36 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         A single file goes by the family's move too, recursive or not, so that
         it moves by ``_mv_file_entry``, the storage's rename where it has one.
         """
-        if path1 == path2:
-            return
-
-        entry = None
-        if not recursive:
-            entry = await self._single_file(path1)
-            if entry is None:
-                # fsspec's own: a copy, then the deletion of its sources.
-                await self._copy(path1, path2, recursive, "raise", maxdepth, **kwargs)
-                await self._rm(path1, recursive=recursive)
+        try:
+            if path1 == path2:
                 return
 
-        _, errors = await _collect_with_monitors(
-            self._mv_strategy(
-                self.handler,
-                self.handler,
-                _strip_only_protocol(self, path1),
-                _strip_only_protocol(self, path2),
-                maxdepth=maxdepth,
-                root_entry=entry,
-            ),
-            Call(self._unwrapped(), "mv", path1, path2),
-            kwargs.get("callback"),
-        )
-        _raise(errors, "Moving")
+            entry = None
+            if not recursive:
+                entry = await self._single_file(path1)
+                if entry is None:
+                    # fsspec's own: a copy, then the deletion of its sources.
+                    await self._copy(
+                        path1, path2, recursive, "raise", maxdepth, **kwargs
+                    )
+                    await self._rm(path1, recursive=recursive)
+                    return
+
+            _, errors = await _collect_with_monitors(
+                self._mv_strategy(
+                    self.handler,
+                    self.handler,
+                    _strip_only_protocol(self, path1),
+                    _strip_only_protocol(self, path2),
+                    maxdepth=maxdepth,
+                    root_entry=entry,
+                ),
+                Call(self._unwrapped(), "mv", path1, path2),
+                kwargs.get("callback"),
+            )
+            _raise(errors, "Moving")
+        finally:
+            self._drop_listings()
 
     # fsspec makes sync methods only from the async ones it knows: _mv and _rmdir are
     # not. Each awaits the instance's own, so that a subclass's override is the one run.
@@ -519,7 +355,6 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     def rmdir(self, path: str) -> None:
         return sync(self.loop, self._rmdir, path)
 
-    @_drops_listings
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         """Copy a file, as fsspec's ``_cp_file`` does: by ``_cp_file_entry``, with its path alone.
 
@@ -528,17 +363,22 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         entry whose keys are unknown, asking the storage only where it needs
         them.
         """
-        entry = self.handler.entry(self._strip_protocol(path1))
-        await self._cp_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
+        try:
+            entry = self.handler.entry(self._strip_protocol(path1))
+            await self._cp_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
+        finally:
+            self._drop_listings()
 
-    @_drops_listings
     async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         """Move a file, as fsspec's ``_mv_file`` does: by ``_mv_file_entry``, with its ``_info``.
 
         As `_cp_file`, for a move.
         """
-        entry = self.handler.entry(self._strip_protocol(path1))
-        await self._mv_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
+        try:
+            entry = self.handler.entry(self._strip_protocol(path1))
+            await self._mv_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
+        finally:
+            self._drop_listings()
 
     async def _cat_file(
         self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any
@@ -573,19 +413,23 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
             else:
                 return await f.read()
 
-    @_drops_listings
     async def _pipe_file(
         self, path: str, value: bytes, mode: str = "overwrite", **kwargs: Any
     ) -> None:
         """Write a file whole, through a file of ``open_async``, or the handler's own ``pipe_file``: see `_cat_file`."""
-        if (own := getattr(self.handler, "pipe_file", None)) is not None:
-            target = self.handler.verified(self._strip_protocol(path))
-            async with self.io_limit:
-                await own(target, value, mode=mode, **kwargs)
-            return
-        f = await self.open_async(path, "xb" if mode == "create" else "wb", **kwargs)
-        async with f:
-            await f.write(value)
+        try:
+            if (own := getattr(self.handler, "pipe_file", None)) is not None:
+                target = self.handler.verified(self._strip_protocol(path))
+                async with self.io_limit:
+                    await own(target, value, mode=mode, **kwargs)
+                return
+            f = await self.open_async(
+                path, "xb" if mode == "create" else "wb", **kwargs
+            )
+            async with f:
+                await f.write(value)
+        finally:
+            self._drop_listings()
 
     async def _get_file(
         self,
@@ -615,7 +459,6 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
                     local.write(chunk)
                     callback.relative_update(len(chunk))
 
-    @_drops_listings
     async def _put_file(
         self,
         lpath: str,
@@ -625,21 +468,26 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         **kwargs: Any,
     ) -> None:
         """Copy a local file to the storage, through a file of ``open_async``, or the handler's own ``put_file``: see `_cat_file`."""
-        if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
-            return  # A directory: a storage needs none for the files put in it.
-        if (own := getattr(self.handler, "put_file", None)) is not None:
-            target = self.handler.verified(self._strip_protocol(rpath))
-            async with self.io_limit:
-                await own(lpath, target, mode=mode, callback=callback, **kwargs)
-            return
+        try:
+            if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
+                return  # A directory: a storage needs none for the files put in it.
+            if (own := getattr(self.handler, "put_file", None)) is not None:
+                target = self.handler.verified(self._strip_protocol(rpath))
+                async with self.io_limit:
+                    await own(lpath, target, mode=mode, callback=callback, **kwargs)
+                return
 
-        f = await self.open_async(rpath, "xb" if mode == "create" else "wb", **kwargs)
-        async with f:
-            with open(lpath, "rb") as local:  # noqa: ASYNC230
-                callback.set_size(os.fstat(local.fileno()).st_size)
-                while chunk := local.read(self.transfer_size):
-                    await f.write(chunk)
-                    callback.relative_update(len(chunk))
+            f = await self.open_async(
+                rpath, "xb" if mode == "create" else "wb", **kwargs
+            )
+            async with f:
+                with open(lpath, "rb") as local:  # noqa: ASYNC230
+                    callback.set_size(os.fstat(local.fileno()).st_size)
+                    while chunk := local.read(self.transfer_size):
+                        await f.write(chunk)
+                        callback.relative_update(len(chunk))
+        finally:
+            self._drop_listings()
 
     # fsspec's methods on many paths call the method on one path for each, up to
     # batch_size at a time: here by default, io_concurrency. So they bound a

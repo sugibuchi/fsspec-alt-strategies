@@ -140,8 +140,23 @@ class _FlatHandler(FlatHandler):
 class _Flat(FlatFileSystem):
     """A FlatFileSystem on a simulated object store, made from it as from storage options."""
 
+    protocol = _FlatHandler.protocol
+    _strip_protocol = _FlatHandler.strip_protocol
     cachable = False
-    handler_class = _FlatHandler
+
+    def __init__(
+        self,
+        inner: SimulatedFileSystem,
+        operation_concurrency: Any = 4,
+        io_concurrency: Any = 2,
+        **kwargs: Any,
+    ) -> None:
+        handler = _FlatHandler(
+            inner,
+            operation_concurrency=operation_concurrency,
+            io_concurrency=io_concurrency,
+        )
+        super().__init__(handler, **kwargs)
 
 
 def _on(handler: FlatHandler) -> Any:

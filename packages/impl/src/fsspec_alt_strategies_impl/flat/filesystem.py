@@ -59,24 +59,21 @@ class FlatFileSystem(_BaseFileSystem):
     ExceptionGroup.
 
     What the storage does is the handler's: its primitives, its profile, its
-    limits, its batch of deletions, its files and its paths. A storage's
-    class names its handler class, and nothing else but ``cachable``, as
-    `TreeFileSystem`'s does. With the profile's ``renames_files=True``, a recursive ``mv``, or one
+    limits, its batch of deletions and its files. A storage's class below it
+    makes its handler from its storage options, and names its paths, as one
+    below `TreeFileSystem` does. With the profile's ``renames_files=True``, a recursive ``mv``, or one
     of a single file, moves each key by the handler's rename. Otherwise it
     copies each key, and deletes them in batches.
 
     Parameters
     ----------
     handler : FlatHandler
-        The storage's handler. A class below it takes the handler class's
-        storage options instead, as `TreeFileSystem`'s does.
+        The storage's handler.
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
     Raises
     ------
-    TypeError
-        As `TreeFileSystem` raises.
     ValueError
         If the handler's ``rm_batch_size`` is less than 1.
 
@@ -88,8 +85,12 @@ class FlatFileSystem(_BaseFileSystem):
     Examples
     --------
     >>> class MyFileSystem(FlatFileSystem):
-    ...     handler_class = MyHandler  # Its protocol is "my".
-    >>> fs = MyFileSystem(bucket="mine", operation_concurrency=32, io_concurrency=8)
+    ...     protocol = MyHandler.protocol
+    ...     _strip_protocol = MyHandler.strip_protocol
+    ...
+    ...     def __init__(self, bucket, **kwargs):
+    ...         super().__init__(MyHandler(bucket), **kwargs)
+    >>> fs = MyFileSystem("mine")
     >>> s3 = FlatFileSystem(S3fsHandler(s3fs.S3FileSystem(), ...))
     """
 
@@ -126,25 +127,39 @@ class FlatFileSystem(_BaseFileSystem):
 
     async def _rm_files(self, paths: list[str]) -> Mapping[str, Exception] | None:
         """Delete several files in one request, by the handler's ``rm_files``."""
-        handler = self.handler
-        entries = [handler.entry(self._strip_protocol(p)) for p in paths]
-        return await handler.rm_files(entries)  # type: ignore[attr-defined, no-any-return]
+        try:
+            handler = self.handler
+            entries = [handler.entry(self._strip_protocol(p)) for p in paths]
+            return await handler.rm_files(entries)  # type: ignore[attr-defined, no-any-return]
+        finally:
+            self._drop_listings()
 
     async def _rmdir(self, path: str) -> None:
         """Delete an empty directory: on an object store, a bucket."""
-        handler = self.handler
-        await handler.rmdir(handler.entry(self._strip_protocol(path)))
+        try:
+            handler = self.handler
+            await handler.rmdir(handler.entry(self._strip_protocol(path)))
+        finally:
+            self._drop_listings()
 
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
         """Create a directory and its parents: on an object store, a bucket, if missing."""
-        handler = self.handler
-        await handler.makedirs(handler.verified(self._strip_protocol(path)), exist_ok)
+        try:
+            handler = self.handler
+            await handler.makedirs(
+                handler.verified(self._strip_protocol(path)), exist_ok
+            )
+        finally:
+            self._drop_listings()
 
     async def _mkdir(
         self, path: str, create_parents: bool = True, **kwargs: Any
     ) -> None:
         """Create a directory, as fsspec's ``_mkdir`` does: by ``_makedirs``."""
-        await self._makedirs(path, exist_ok=False)
+        try:
+            await self._makedirs(path, exist_ok=False)
+        finally:
+            self._drop_listings()
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Describe a path, raising FileNotFoundError if there is none."""
@@ -153,22 +168,31 @@ class FlatFileSystem(_BaseFileSystem):
 
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         """Delete a file, as fsspec's ``_rm`` does when not recursive."""
-        handler = self.handler
-        await handler.rm_file(handler.entry(self._strip_protocol(path)))
+        try:
+            handler = self.handler
+            await handler.rm_file(handler.entry(self._strip_protocol(path)))
+        finally:
+            self._drop_listings()
 
     async def _cp_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
         """Copy a key within the storage, by its entry, to ``path2``."""
-        handler = self.handler
-        await handler.cp_file(entry, handler.verified(self._strip_protocol(path2)))
+        try:
+            handler = self.handler
+            await handler.cp_file(entry, handler.verified(self._strip_protocol(path2)))
+        finally:
+            self._drop_listings()
 
     async def _mv_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
         """Move a key within the storage, by its entry, to ``path2``."""
-        handler = self.handler
-        await handler.mv_file(entry, handler.verified(self._strip_protocol(path2)))
+        try:
+            handler = self.handler
+            await handler.mv_file(entry, handler.verified(self._strip_protocol(path2)))
+        finally:
+            self._drop_listings()
 
     # fsspec's recursive methods, answered by the flat strategies.
 
@@ -257,20 +281,22 @@ class FlatFileSystem(_BaseFileSystem):
         maxdepth: int | None = None,
         **kwargs: Any,
     ) -> None:
-        if not recursive:
-            await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
-            return
+        try:
+            if not recursive:
+                await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
+                return
 
-        _, errors = await _collect_with_monitors(
-            _flat_rm(self.handler, _strip_only_protocol(self, path), maxdepth=maxdepth),
-            Call(self._unwrapped(), "rm", path),
-            kwargs.get("callback"),
-        )
-        _raise(errors, "Deleting")
+            _, errors = await _collect_with_monitors(
+                _flat_rm(
+                    self.handler, _strip_only_protocol(self, path), maxdepth=maxdepth
+                ),
+                Call(self._unwrapped(), "rm", path),
+                kwargs.get("callback"),
+            )
+            _raise(errors, "Deleting")
+        finally:
+            self._drop_listings()
 
     # The copy and move that _BaseFileSystem's _copy and _mv start, as fsspec's methods.
     _cp_strategy = staticmethod(_flat_cp)
     _mv_strategy = staticmethod(_flat_mv)
-
-
-FlatFileSystem._family = FlatFileSystem
