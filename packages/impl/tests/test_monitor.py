@@ -60,7 +60,7 @@ def test_a_filesystem_is_wrapped_as_its_entry_says() -> None:
     assert isinstance(flat.handler, FsspecFlatHandler)
     assert flat.handler.fs is fs
     assert (flat.handler.operation_concurrency, flat.handler.io_concurrency) == (3, 2)
-    assert (flat.rm_batch_size, flat.handler.profile) == (100, profile)
+    assert (flat.handler.rm_batch_size, flat.handler.profile) == (100, profile)
 
 
 def test_a_subclass_takes_the_entry_of_its_class() -> None:

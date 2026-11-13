@@ -198,7 +198,6 @@ def test_a_filesystem_needs_a_handler() -> None:
         TreeFileSystem()  # type: ignore[call-arg]
 
 
-
 class _Bucket(TreeView):
     protocol = ("bkt", "bucket")
     root = ""

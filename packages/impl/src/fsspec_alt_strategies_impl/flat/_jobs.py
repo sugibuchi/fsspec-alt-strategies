@@ -34,9 +34,9 @@ if TYPE_CHECKING:
 
 
 def _check_batch_size(batch_size: int) -> None:
-    """Refuse a filesystem's ``rm_batch_size`` below 1, as no batch could be sent."""
+    """Refuse a handler's ``rm_batch_size`` below 1, as no batch could be sent."""
     if batch_size < 1:
-        raise ValueError(f"batch_size must be at least 1: {batch_size}")
+        raise ValueError(f"rm_batch_size must be at least 1: {batch_size}")
 
 
 def _batch_size(handler: StorageHandler) -> int:

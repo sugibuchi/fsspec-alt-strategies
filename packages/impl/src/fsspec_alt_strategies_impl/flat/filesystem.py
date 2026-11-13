@@ -72,10 +72,6 @@ class FlatFileSystem(_BaseFileSystem):
     **kwargs
         Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
 
-    Raises
-    ------
-    ValueError
-        If the handler's ``rm_batch_size`` is less than 1.
 
     See Also
     --------
@@ -94,17 +90,7 @@ class FlatFileSystem(_BaseFileSystem):
     >>> s3 = FlatFileSystemWrapper(S3fsHandler(s3fs.S3FileSystem(), ...))
     """
 
-    rm_batch_size: int
-    """The most keys the handler's ``rm_files`` deletes in one request, e.g. 1000 on S3."""
-
     handler: FlatHandler
-
-    def __init__(self, handler: FlatHandler, **kwargs: Any) -> None:
-        super().__init__(handler, **kwargs)
-        size = handler.rm_batch_size
-        if not isinstance(size, int) or size < 1:
-            raise ValueError(f"rm_batch_size must be set, to at least 1: {size}")
-        self.rm_batch_size = size
 
     # The storage's primitives: the handler's, each on a caller's path, verified by it.
 

@@ -50,7 +50,7 @@ def _flat_rm(
     level. The keys deeper are listed all the same, as a prefix lists every
     key under it, but kept.
 
-    The keys are grouped in batches of the filesystem's ``rm_batch_size``, each
+    The keys are grouped in batches of the handler's ``rm_batch_size``, each
     deleted by one ``_rm_files``, while the listing goes on. The last batch,
     smaller, goes once the listing ends. It yields each key once its batch is
     deleted, the error of each key its batch could not delete, noting the key,

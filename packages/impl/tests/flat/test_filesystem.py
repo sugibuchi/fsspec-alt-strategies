@@ -282,12 +282,13 @@ async def test_data_goes_through_the_files(
     assert inner._file_data["new.txt"].data == b"hello"
 
 
-def test_rm_batch_size_must_be_set(inner: SimulatedFileSystem) -> None:
+async def test_rm_batch_size_must_be_set(inner: SimulatedFileSystem) -> None:
     class Unset(_FlatHandler):
         rm_batch_size = 0
 
+    # The handler's, which the strategy deleting in batches checks.
     with pytest.raises(ValueError, match="rm_batch_size"):
-        _on(Unset(inner))
+        await _on(Unset(inner))._rm("data", recursive=True)
 
 
 async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
