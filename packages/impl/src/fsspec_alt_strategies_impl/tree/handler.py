@@ -10,7 +10,7 @@ This module depends on `handler` of `common`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..common.handler import StorageHandler
 
@@ -41,8 +41,10 @@ class TreeHandler(StorageHandler):
     FileNotFoundError.
     """
 
-    recursive_order: ClassVar[Literal["depth first", "name"] | None] = None
+    recursive_order: Literal["depth first", "name"] | None = None
     """The order of ``ils_recursive``'s entries, or None where the handler has none.
+
+    A class declares it, or an instance where a server's setting decides it.
 
     - "depth first": a directory's entry, then all below it, before any other
       entry. Its entries among themselves may come in any order.

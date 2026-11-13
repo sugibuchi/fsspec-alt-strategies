@@ -22,7 +22,7 @@ directory per request.
 
 It is a package of its own, apart from the strategies: copying them into
 another package leaves it out. It depends on fsspec, on the interface for
-`StorageProfile`, and on the strategies for the recursive listing of `TreeView`.
+`StorageProfile`, and on the strategies for the handler classes its views are.
 """
 
 from __future__ import annotations
@@ -38,10 +38,13 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
-from fsspec_alt_strategies_impl.tree.listing import _tree_ils
+from fsspec_alt_strategies_impl.flat.handler import FlatHandler
+from fsspec_alt_strategies_impl.tree.handler import TreeHandler
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+
+    from fsspec_alt_strategies_impl.common.handler import StoragePath
 
 __all__ = ["CallStats", "FlatView", "SimulatedFileSystem", "TreeView", "dir_ils"]
 
@@ -681,25 +684,27 @@ def _by_name(
     return by_entry
 
 
-class TreeView:
-    """A filesystem as the tree strategies take it, its primitives replaceable.
+class TreeView(TreeHandler):
+    """A simulated storage as a tree handler, its primitives replaceable.
 
-    The tree strategies take a filesystem, and call its ``_ils``, ``_info``,
-    ``_rm_file``, ``_rmdir``, ``_cp_file_entry``, ``_mv_file_entry``,
-    ``_makedirs``, ``_rm_tree``, ``_mv_tree`` and ``_cp_tree``. A `SimulatedFileSystem` has no ``_ils``: this
-    view lists a directory with `dir_ils`, or with ``ils`` if given. Each other
-    primitive is the filesystem's own, unless given, so that a test may replace
-    one, e.g. with one that fails. A ``cp_file`` or ``mv_file`` given takes
-    paths, the entry's name. ``rm_tree``, ``mv_tree`` and ``cp_tree`` are None
-    unless given, as a `SimulatedFileSystem` has none.
+    The tree strategies take a handler, and call its ``ils``, ``info``,
+    ``rm_file``, ``rmdir``, ``cp_file``, ``mv_file``, ``makedirs``,
+    ``rm_tree``, ``mv_tree`` and ``cp_tree``. Each calls the filesystem's own
+    method with the entry's name, unless a test gives one, e.g. one that
+    fails. A `SimulatedFileSystem` has no listing of one directory: this view
+    lists one with `dir_ils`, or with ``ils`` if given. A ``cp_file`` or
+    ``mv_file`` given takes paths, the entry's name. ``rm_tree``, ``mv_tree``
+    and ``cp_tree`` raise NotImplementedError unless given, as a
+    `SimulatedFileSystem` has none.
 
-    Its ``_ils`` with ``recursive=True`` lists a directory per request, as a
-    `TreeFileSystem` without a recursive listing of its own does. With
-    ``recursive_listing``, it lists by the filesystem's own recursive listing
-    instead, a page per request.
+    It has no recursive listing of its own, so the strategies list a tree a
+    directory per request. With ``recursive_listing``, it lists by the
+    filesystem's own recursive listing instead, a page per request, in name
+    order.
 
-    ``operation_limit`` and ``storage_profile`` are a filesystem's: 32
-    requests at a time, and a storage unknown.
+    It verifies no path: the simulated storage takes any. Its
+    ``operation_limit`` is 32 requests at a time unless given, and its profile
+    unknown.
     """
 
     def __init__(
@@ -720,8 +725,9 @@ class TreeView:
         storage_profile: StorageProfile | None = None,
         operation_limit: asyncio.Semaphore | None = None,
     ) -> None:
+        super().__init__(operation_concurrency=operation_limit or 32, io_concurrency=8)
         self.fs = fs
-        self.recursive_listing = recursive_listing
+        self.recursive_order = "name" if recursive_listing else None
         self._dir_ils = dir_ils(fs) if ils is None else ils
         self._info = fs._info if info is None else info
         self._rm_file = fs._rm_file if rm_file is None else rm_file
@@ -736,38 +742,72 @@ class TreeView:
             fs._mv_file_entry if mv_file is None else _by_name(mv_file)
         )
         self._makedirs = fs._makedirs if makedirs is None else makedirs
-        self.storage_profile = storage_profile or UNKNOWN
-        self.operation_limit = operation_limit or asyncio.Semaphore(32)
+        self.profile = storage_profile or UNKNOWN
 
-    def _ils(
-        self, path: str, recursive: bool = False, **kwargs: Any
+    def verify_path(self, path: str) -> None:
+        """Nothing: the simulated storage takes any path."""
+
+    def ils(
+        self, entry: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
-        if not recursive:
-            return self._dir_ils(path, **kwargs)
-        if self.recursive_listing:
-            return self.fs._ils_recursive(path)
+        return self._dir_ils(entry["name"], **kwargs)  # type: ignore[no-any-return]
+
+    def ils_recursive(
+        self, entry: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        return self.fs._ils_recursive(entry["name"])  # type: ignore[no-any-return]
+
+    async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return await self._info(entry["name"], **kwargs)  # type: ignore[no-any-return]
+
+    async def rm_file(self, entry: dict[str, Any]) -> None:
+        await self._rm_file(entry["name"])
+
+    async def rmdir(self, entry: dict[str, Any]) -> None:
+        await self._rmdir(entry["name"])
+
+    async def makedirs(self, path: StoragePath, exist_ok: bool = False) -> None:
+        await self._makedirs(path, exist_ok=exist_ok)
+
+    async def cp_file(self, entry: dict[str, Any], path2: StoragePath) -> None:
+        await self._cp_file_entry(entry, path2)
+
+    async def mv_file(self, entry: dict[str, Any], path2: StoragePath) -> None:
+        await self._mv_file_entry(entry, path2)
+
+    async def rm_tree(self, entry: dict[str, Any]) -> None:
+        if self._rm_tree is None:
+            await super().rm_tree(entry)
         else:
-            return _tree_ils(self, path, recursive=False, **kwargs)
+            await self._rm_tree(entry["name"])
 
-    async def _get_storage_profile(self) -> StorageProfile:
-        return self.storage_profile
+    async def mv_tree(self, entry: dict[str, Any], path2: StoragePath) -> None:
+        if self._mv_tree is None:
+            await super().mv_tree(entry, path2)
+        else:
+            await self._mv_tree(entry["name"], path2)
+
+    async def cp_tree(self, entry: dict[str, Any], path2: StoragePath) -> None:
+        if self._cp_tree is None:
+            await super().cp_tree(entry, path2)
+        else:
+            await self._cp_tree(entry["name"], path2)
 
 
-class FlatView:
-    """A filesystem as the flat strategies take it, its primitives replaceable.
+class FlatView(FlatHandler):
+    """A simulated storage as a flat handler, its primitives replaceable.
 
-    The flat strategies take a filesystem, and call its recursive ``_ils``,
-    ``_info``, ``_rm_files``, ``_cp_file_entry``, ``_mv_file_entry``,
-    ``_makedirs`` and ``_rm_file``. Each is the filesystem's own, unless given, so that a test
-    may replace one, e.g. with one that fails. ``list_prefix``, a listing of
-    every key starting with a raw prefix, e.g. "data/2024-", answers a
-    recursive ``_ils``: the filesystem's own unless given. A ``cp_file`` or
-    ``mv_file`` given takes paths, the entry's name. ``fs`` may be None when
-    all that a test calls is given.
+    The flat strategies take a handler, and call its ``ils_recursive``,
+    ``info``, ``rm_files``, ``cp_file``, ``mv_file``, ``makedirs`` and
+    ``rm_file``. Each calls the filesystem's own method with the entries'
+    names, unless a test gives one, e.g. one that fails. ``list_prefix``, a
+    listing of every key starting with a raw prefix, e.g. "data/2024-",
+    answers ``ils_recursive``: the filesystem's own unless given. A
+    ``cp_file`` or ``mv_file`` given takes paths, the entry's name. ``fs`` may
+    be None when all that a test calls is given.
 
-    ``operation_limit``, ``storage_profile`` and ``rm_batch_size`` are a
-    filesystem's: 32 requests at a time, a storage unknown, and 1000 keys
-    deleted in one request.
+    It verifies no path. Its ``operation_limit`` is 32 requests at a time
+    unless given, its profile unknown, and its ``rm_batch_size`` 1000.
     """
 
     def __init__(
@@ -785,6 +825,8 @@ class FlatView:
         operation_limit: asyncio.Semaphore | None = None,
         rm_batch_size: int = 1000,
     ) -> None:
+        super().__init__(operation_concurrency=operation_limit or 32, io_concurrency=8)
+
         def own(name: str, given: Any) -> Any:
             return getattr(fs, name, None) if given is None else given
 
@@ -800,17 +842,42 @@ class FlatView:
         )
         self._makedirs = own("_makedirs", makedirs)
         self._rm_file = own("_rm_file", rm_file)
-        self.storage_profile = storage_profile or UNKNOWN
-        self.operation_limit = operation_limit or asyncio.Semaphore(32)
+        self.profile = storage_profile or UNKNOWN
         self.rm_batch_size = rm_batch_size
 
-    def _ils(
-        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            return self._list_prefix(f"{path}/{prefix}" if path else prefix)
-        else:
-            return dir_ils(self.fs)(path, **kwargs)
+    def verify_path(self, path: str) -> None:
+        """Nothing: the simulated storage takes any path."""
 
-    async def _get_storage_profile(self) -> StorageProfile:
-        return self.storage_profile
+    def ils(
+        self, entry: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        return dir_ils(self.fs)(entry["name"], **kwargs)
+
+    def ils_recursive(
+        self, entry: dict[str, Any], *, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        path = entry["name"]
+        return self._list_prefix(f"{path}/{prefix}" if path else prefix)  # type: ignore[no-any-return]
+
+    async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return await self._info(entry["name"], **kwargs)  # type: ignore[no-any-return]
+
+    async def rm_file(self, entry: dict[str, Any]) -> None:
+        await self._rm_file(entry["name"])
+
+    async def rmdir(self, entry: dict[str, Any]) -> None:
+        await self.fs._rmdir(entry["name"])
+
+    async def makedirs(self, path: StoragePath, exist_ok: bool = False) -> None:
+        await self._makedirs(path, exist_ok=exist_ok)
+
+    async def cp_file(self, entry: dict[str, Any], path2: StoragePath) -> None:
+        await self._cp_file_entry(entry, path2)
+
+    async def mv_file(self, entry: dict[str, Any], path2: StoragePath) -> None:
+        await self._mv_file_entry(entry, path2)
+
+    async def rm_files(
+        self, entries: list[dict[str, Any]]
+    ) -> Mapping[str, Exception] | None:
+        return await self._rm_files([e["name"] for e in entries])  # type: ignore[no-any-return]
