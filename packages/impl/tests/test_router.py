@@ -755,7 +755,7 @@ def test_pickling_keeps_the_arguments() -> None:
     assert type(copy) is _Router
     assert type(copy.handler) is _Lake
     assert copy._storages == {}
-    assert copy.transfer_concurrency == router.transfer_concurrency
+    assert copy.handler.transfer_concurrency == router.handler.transfer_concurrency
 
 
 def test_transfer_concurrency_is_checked() -> None:

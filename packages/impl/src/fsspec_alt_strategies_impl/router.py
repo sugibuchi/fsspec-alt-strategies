@@ -318,10 +318,9 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     ``open_async`` knows no transaction: its files are the storage's own,
     written as they close. Neither does a copy between two storages.
 
-    The router has no profile: each storage has its own, which its handler
-    gives. Its only limit is ``transfer_limit``, the files copied
-    across storages at once, its handler's. The storages keep their own
-    limits.
+    The router has no profile and no limit of its own: each storage's are
+    its handler's, and the files copied across storages at once are bounded
+    by the routing handler's ``transfer_limit``.
 
     A `Monitor` sees the calls of the storages' filesystems, their
     ``Call.via`` naming the routers they came through. A copy across storages
@@ -365,8 +364,6 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         super().__init__(**kwargs)
 
         self.handler = handler
-        self.transfer_concurrency = handler.transfer_concurrency
-        self.transfer_limit = handler.transfer_limit
         # The storages routed to, by their handler's id, each kept with it.
         self._storages: dict[int, _Storage] = {}
 
@@ -1250,7 +1247,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
 
         async def request(entry: dict[str, Any], path2: str) -> None:
             with routing(self):
-                async with self.transfer_limit:
+                async with self.handler.transfer_limit:
                     await hook(src, entry, dst, dst.verified(path2))
 
         return request
