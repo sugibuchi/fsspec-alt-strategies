@@ -1,16 +1,1 @@
-# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
-# SPDX-License-Identifier: Apache-2.0
-"""Existing filesystems, wrapped so that their recursive methods are the strategies.
-
-- `tree`: `AsyncTreeWrapper` and `SyncTreeWrapper`, as a `TreeFileSystem`;
-- `flat`: `AsyncFlatWrapper` and `SyncFlatWrapper`, as a `FlatFileSystem`;
-- `s3fs`, `gcsfs` and `adlfs`: the wrappers of those filesystems, using
-  their own listings and copies where the generic ones would cost more.
-
-A wrapper is light, and fsspec does not cache it as it caches filesystems:
-make one on demand, e.g. to watch a call with a monitor, and drop it after. The developer
-chooses the wrapper, or declares it in the known implementations: none is
-detected.
-
-Each class is imported from its module. This package imports none of them.
-"""
+# SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI# SPDX-License-Identifier: Apache-2.0"""Existing filesystems, wrapped by handlers, so that their recursive methods are the strategies.- `tree`: `FsspecTreeHandler`, for a `TreeFileSystem`;- `flat`: `FsspecFlatHandler`, for a `FlatFileSystem`;- `s3fs`, `gcsfs` and `adlfs`: the handlers of those filesystems, using  their own listings and copies where the generic ones would cost more.Each handler calls the wrapped filesystem's async methods where its``async_impl`` says it has them, else its sync ones, each in a thread. Afilesystem is made on a handler by ``TreeFileSystem.of`` or``FlatFileSystem.of``: it is light, and fsspec does not cache it as it cachesfilesystems. Make one on demand, e.g. to watch a call with a monitor, and dropit after. The developer chooses the handler, or declares it in the knownimplementations: none is detected.Each class is imported from its module. This package imports none of them."""

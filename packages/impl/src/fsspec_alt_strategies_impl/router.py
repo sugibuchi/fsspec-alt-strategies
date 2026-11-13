@@ -113,7 +113,7 @@ class AsyncRoutingFileSystem(
     and the source directories left empty.
 
     Inner filesystems are async, on the router's loop: a sync one raises
-    TypeError, and is to be wrapped, e.g. in a `SyncTreeWrapper`. A subclass
+    TypeError, and is to be wrapped, e.g. by `TreeFileSystem.of(FsspecTreeHandler(fs, ...))`. A subclass
     makes them when first needed, with `_backend`, so that ``close()`` closes
     them, and `backends_loop` tells the loop they run on. Pickling keeps the
     constructor's arguments, as fsspec's own does, so a copy makes its inner
@@ -351,7 +351,7 @@ class AsyncRoutingFileSystem(
         if not getattr(fs, "async_impl", False):
             raise TypeError(
                 f"{fs!r} is not async: a router passes its calls on to async "
-                "filesystems only. Wrap it, e.g. in a SyncTreeWrapper."
+                "filesystems only. Wrap it, e.g. as TreeFileSystem.of(FsspecTreeHandler(fs))"
             )
 
         if plain.endswith("/") and inner and not inner.endswith("/"):

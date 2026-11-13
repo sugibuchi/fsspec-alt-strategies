@@ -1,6 +1,6 @@
-"""Tests of the wrappers of s3fs, gcsfs and adlfs, on fakes answering as each does.
+"""Tests of the handlers of s3fs, gcsfs and adlfs, on fakes answering as each does.
 
-The fakes keep only what each wrapper calls, with the arguments it passes:
+The fakes keep only what each handler calls, with the arguments it passes:
 the copied package never imports s3fs, gcsfs or adlfs, nor do its tests.
 """
 
@@ -13,9 +13,11 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.wrapper.adlfs import AdlfsWrapper
-from fsspec_alt_strategies_impl.wrapper.gcsfs import GcsfsWrapper
-from fsspec_alt_strategies_impl.wrapper.s3fs import S3fsWrapper
+from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
+from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+from fsspec_alt_strategies_impl.wrapper.adlfs import AdlfsHandler
+from fsspec_alt_strategies_impl.wrapper.gcsfs import GcsfsHandler
+from fsspec_alt_strategies_impl.wrapper.s3fs import S3fsHandler
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -25,6 +27,21 @@ _LIMITS: dict[str, Any] = {
     "io_concurrency": 2,
     "storage_profile": StorageProfile(),
 }
+
+
+def _s3fs(fs: Any, **options: Any) -> Any:
+    """A `FlatFileSystem` on an `S3fsHandler` of `fs`."""
+    return FlatFileSystem.of(S3fsHandler(fs, **options), asynchronous=True)
+
+
+def _gcsfs(fs: Any, **options: Any) -> Any:
+    """A `FlatFileSystem` on a `GcsfsHandler` of `fs`."""
+    return FlatFileSystem.of(GcsfsHandler(fs, **options), asynchronous=True)
+
+
+def _adlfs(fs: Any, **options: Any) -> Any:
+    """A `TreeFileSystem` on an `AdlfsHandler` of `fs`."""
+    return TreeFileSystem.of(AdlfsHandler(fs, **options), asynchronous=True)
 
 
 class _Store(AsyncFileSystem):
@@ -82,14 +99,14 @@ class _Gcs(_Store):
         return {k: {"name": k, "type": "file", "size": self.keys[k]} for k in names}
 
 
-def _s3(keys: dict[str, int]) -> tuple[_S3, S3fsWrapper]:
+def _s3(keys: dict[str, int]) -> tuple[_S3, Any]:
     fs = _S3(keys)
-    return fs, S3fsWrapper(fs, rm_batch_size=1000, **_LIMITS)
+    return fs, _s3fs(fs, rm_batch_size=1000, **_LIMITS)
 
 
-def _gcs(keys: dict[str, int]) -> tuple[_Gcs, GcsfsWrapper]:
+def _gcs(keys: dict[str, int]) -> tuple[_Gcs, Any]:
     fs = _Gcs(keys)
-    return fs, GcsfsWrapper(fs, rm_batch_size=100, **_LIMITS)
+    return fs, _gcsfs(fs, rm_batch_size=100, **_LIMITS)
 
 
 _KEYS = {
@@ -189,7 +206,7 @@ class _GcsBatches(_Gcs):
 
 async def test_gcsfs_deletes_up_to_100_per_batch_by_its_own_rm_files() -> None:
     fs = _GcsBatches({f"bkt/k{i}": 1 for i in range(150)} | {"bkt/kept": 1})
-    flat = GcsfsWrapper(fs, rm_batch_size=1000, **_LIMITS)
+    flat = _gcsfs(fs, rm_batch_size=1000, **_LIMITS)
     paths = [f"bkt/k{i}" for i in range(150)] + ["bkt/missing"]
     assert await flat._rm_files(paths) == {}
     assert fs.calls == [("batch", 100), ("batch", 51)]
@@ -198,7 +215,7 @@ async def test_gcsfs_deletes_up_to_100_per_batch_by_its_own_rm_files() -> None:
 
 async def test_gcsfs_returns_the_keys_it_refused() -> None:
     fs = _GcsBatches({"bkt/a": 1, "bkt/b": 1}, refused={"bkt/b"})
-    flat = GcsfsWrapper(fs, rm_batch_size=100, **_LIMITS)
+    flat = _gcsfs(fs, rm_batch_size=100, **_LIMITS)
     refused = await flat._rm_files(["bkt/a", "bkt/b", "bkt/missing"])
     assert list(refused) == ["bkt/b"]
     assert "retention" in str(refused["bkt/b"])
@@ -207,7 +224,7 @@ async def test_gcsfs_returns_the_keys_it_refused() -> None:
 async def test_gcsfs_off_google_deletes_as_fsspec() -> None:
     fs = _GcsBatches({"bkt/a": 1})
     fs.on_google = False  # E.g. an emulator, where gcsfs sends no batch.
-    flat = GcsfsWrapper(fs, rm_batch_size=100, **_LIMITS)
+    flat = _gcsfs(fs, rm_batch_size=100, **_LIMITS)
     await flat._rm_files(["bkt/a"])
     assert fs.calls == [("_rm", 1)]
 
@@ -290,9 +307,9 @@ _TREE: dict[str, int | None] = {
 }
 
 
-def _adl(keys: dict[str, int | None]) -> tuple[_Adl, AdlfsWrapper]:
+def _adl(keys: dict[str, int | None]) -> tuple[_Adl, Any]:
     fs = _Adl(keys)
-    return fs, AdlfsWrapper(fs, **_LIMITS)
+    return fs, _adlfs(fs, **_LIMITS)
 
 
 async def test_adlfs_lists_a_tree_in_one_listing_of_pages() -> None:
@@ -340,13 +357,13 @@ async def test_adlfs_deletes_a_directory_by_its_blob_and_a_container_by_adlfs() 
         async def _rmdir(self, path: str) -> None:
             calls.append(("_rmdir", path))
 
-    tree = AdlfsWrapper(Adl(_TREE), **_LIMITS)
+    tree = _adlfs(Adl(_TREE), **_LIMITS)
     await tree._rmdir("c/data/sub")
     await tree._rmdir("c")
     assert calls == [("_rm_file", "c/data/sub"), ("_rmdir", "c")]
 
 
-# Without the private methods each wrapper calls: as the generic wrapper.
+# Without the private methods each handler calls: as the generic handler.
 
 
 async def test_s3fs_without_its_private_methods_lists_and_copies_as_fsspec() -> None:
@@ -362,7 +379,7 @@ async def test_s3fs_without_its_private_methods_lists_and_copies_as_fsspec() -> 
             self.calls.append(("_cp_file", path1, path2))
 
     fs = Bare(_KEYS)
-    flat = S3fsWrapper(fs, rm_batch_size=1000, **_LIMITS)
+    flat = _s3fs(fs, rm_batch_size=1000, **_LIMITS)
     names = [e["name"] async for e in flat._ils("bkt/data", True, prefix="2024-")]
     assert names == ["bkt/data/2024-01.csv", "bkt/data/2024-02/a.csv"]
     await flat._cp_file_entry({"name": "bkt/a", "type": "file", "size": 1}, "bkt/b")
@@ -380,7 +397,7 @@ async def test_gcsfs_whose_find_takes_no_prefix_lists_as_fsspec() -> None:
             }
 
     fs = Bare(_KEYS)
-    flat = GcsfsWrapper(fs, rm_batch_size=100, **_LIMITS)
+    flat = _gcsfs(fs, rm_batch_size=100, **_LIMITS)
     names = [e["name"] async for e in flat._ils("bkt/data", True, prefix="2024-")]
     assert names == ["bkt/data/2024-01.csv", "bkt/data/2024-02/a.csv"]
     assert fs.calls == [("_find", "bkt/data")]
@@ -403,7 +420,7 @@ async def test_adlfs_without_its_client_lists_a_directory_at_a_time() -> None:
             return [await self._info(n) for n in sorted(names)]
 
     fs = Bare(_TREE)
-    tree = AdlfsWrapper(fs, **_LIMITS)
+    tree = _adlfs(fs, **_LIMITS)
     names = sorted([e["name"] async for e in tree._ils("c/data", True)])
     assert names == [
         "c/data/a.csv",

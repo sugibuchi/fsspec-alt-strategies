@@ -5,13 +5,13 @@
 `known_implementations` maps a filesystem's class, by its full name, to how a
 copy of the strategies wraps it:
 
-- its `StorageProfile`, whose ``fs_type`` picks a tree or a flat wrapper;
-- its concurrency limits, and a flat wrapper's batch of deletions;
-- optionally, its wrapper class, where the generic one of its family is not
+- its `StorageProfile`, whose ``fs_type`` picks a tree or a flat handler;
+- its concurrency limits, and a flat handler's batch of deletions;
+- optionally, its handler class, where the generic one of its family is not
   the best.
 
-Without a wrapper class, the family's generic wrapper is used, async if the
-filesystem is an ``AsyncFileSystem``. The strategies' ``monitored`` reads the
+Without a handler class, the family's generic handler is used, calling the
+filesystem's async methods where its ``async_impl`` says it has them. The strategies' ``monitored`` reads the
 table, or a table of the caller's own.
 
 It is declared, never detected: an entry says what the developer knows of the
@@ -35,27 +35,27 @@ class KnownImplementation(TypedDict):
     """How a filesystem class is wrapped, as an entry of `known_implementations`."""
 
     storage_profile: StorageProfile
-    """What the storage does: its ``fs_type`` is the family of the wrapper.
+    """What the storage does: its ``fs_type`` is the family of the handler.
 
     A family left unknown is a tree, the way right on any storage.
     """
 
     operation_concurrency: int
-    """The wrapper's requests of the strategies at a time."""
+    """The handler's requests of the strategies at a time."""
 
     io_concurrency: int
-    """The wrapper's reads and writes of data at a time."""
+    """The handler's reads and writes of data at a time."""
 
     rm_batch_size: NotRequired[int]
-    """A flat wrapper's batch of deletions, e.g. 1000 on S3."""
+    """A flat handler's batch of deletions, e.g. 1000 on S3."""
 
-    wrapper: NotRequired[str]
-    """The wrapper class, of the family the profile's ``fs_type`` says.
+    handler: NotRequired[str]
+    """The handler class wrapping it, of the family the profile's ``fs_type`` says.
 
-    A bare class name, e.g. "S3fsWrapper", is one of the wrappers that every
-    copy of the strategies has. A full name, e.g. "mypkg.wrappers.MyWrapper",
+    A bare class name, e.g. "S3fsHandler", is one of the handlers that every
+    copy of the strategies has. A full name, e.g. "mypkg.handlers.MyHandler",
     is a class of the caller's own, imported when wrapping. Without it, the
-    generic wrapper of the family is used.
+    generic handler of the family is used.
     """
 
 
@@ -96,13 +96,13 @@ known_implementations: dict[str, KnownImplementation] = {
         "io_concurrency": 8,
         "rm_batch_size": 1000,
         # Streams its listing by prefix, and copies by the listed size.
-        "wrapper": "S3fsWrapper",
+        "handler": "S3fsHandler",
     },
     "gcsfs.core.GCSFileSystem": {
         # For buckets without a hierarchical namespace. One with it has folders of
         # their own, which the flat strategies leave after a recursive rm or mv:
         # wrap it as a tree. Both kinds served are a router, a filesystem per
-        # bucket. The wrapper moves by _mv_file, which is fsspec's copy, then a
+        # bucket. The handler moves by _mv_file, which is fsspec's copy, then a
         # delete.
         "storage_profile": StorageProfile(
             fs_type="flat",
@@ -120,7 +120,7 @@ known_implementations: dict[str, KnownImplementation] = {
         # As GCS's batch requests take at most 100 calls.
         "rm_batch_size": 100,
         # Lists by prefix, and deletes 100 objects per batch request.
-        "wrapper": "GcsfsWrapper",
+        "handler": "GcsfsHandler",
     },
     "adlfs.spec.AzureBlobFileSystem": {
         # Its ls lists one directory per request, with walk_blobs and a delimiter,
@@ -142,7 +142,7 @@ known_implementations: dict[str, KnownImplementation] = {
         "operation_concurrency": 32,
         "io_concurrency": 8,
         # Lists a tree by one listing without a delimiter.
-        "wrapper": "AdlfsWrapper",
+        "handler": "AdlfsHandler",
     },
     "fsspec.implementations.memory.MemoryFileSystem": {
         # Its directories are made by mkdir, or implied by the files in them: a

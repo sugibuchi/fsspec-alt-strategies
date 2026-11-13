@@ -686,13 +686,13 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         **kwargs: Any,
     ) -> None:
         """Copy a file to a local path, through a file of ``open_async``, or the handler's own ``get_file``: see `_cat_file`."""
+        if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
+            return  # A directory, which fsspec's get makes itself.
         if (own := getattr(self.handler, "get_file", None)) is not None:
             entry = self._required_handler().entry(self._strip_protocol(rpath))
             async with self.io_limit:
                 await own(entry, lpath, callback=callback, **kwargs)
             return
-        if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
-            return  # A directory, which fsspec's get makes itself.
 
         f = await self.open_async(rpath, "rb", **kwargs)
         async with f:
@@ -716,13 +716,13 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         **kwargs: Any,
     ) -> None:
         """Copy a local file to the storage, through a file of ``open_async``, or the handler's own ``put_file``: see `_cat_file`."""
+        if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
+            return  # A directory: a storage needs none for the files put in it.
         if (own := getattr(self.handler, "put_file", None)) is not None:
             target = self._required_handler().verified(self._strip_protocol(rpath))
             async with self.io_limit:
                 await own(lpath, target, mode=mode, callback=callback, **kwargs)
             return
-        if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
-            return  # A directory: a storage needs none for the files put in it.
 
         f = await self.open_async(rpath, "xb" if mode == "create" else "wb", **kwargs)
         async with f:

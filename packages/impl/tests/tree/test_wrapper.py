@@ -1,4 +1,4 @@
-"""Tests of the tree wrappers: existing filesystems, as a `TreeFileSystem`."""
+"""Tests of the tree handlers: existing filesystems, as a `TreeFileSystem` on a `FsspecTreeHandler`."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from fsspec.implementations.local import LocalFileSystem
 
 from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.wrapper.tree import AsyncTreeWrapper, SyncTreeWrapper
+from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -28,6 +29,15 @@ _DELETES: dict[str, Any] = {
     "storage_profile": StorageProfile(deletes_directories=True),
 }
 _FILES = ["data/2023/01/a.txt", "data/2023/02/b.txt", "data/2024/c.txt", "data/d.txt"]
+
+
+def _tree(fs: Any, **options: Any) -> TreeFileSystem:
+    """A `TreeFileSystem` on a handler of `fs`, on its loop, as `monitored` makes one."""
+    asynchronous = options.pop("asynchronous", getattr(fs, "asynchronous", False))
+    loop = {"loop": fs.loop} if fs.async_impl and not asynchronous else {}
+    return TreeFileSystem.of(
+        FsspecTreeHandler(fs, **options), asynchronous=asynchronous, **loop
+    )
 
 
 class _Calls(Monitor):
@@ -49,7 +59,7 @@ def _simulated(**kwargs: Any) -> SimulatedFileSystem:
 
 async def test_an_async_filesystem_answers_as_fsspec() -> None:
     inner = _simulated(asynchronous=True)
-    tree = AsyncTreeWrapper(inner, **_LIMITS)
+    tree = _tree(inner, **_LIMITS)
     assert await tree._find("data") == await AsyncFileSystem._find(inner, "data")
     assert await tree._du("data") == await AsyncFileSystem._du(inner, "data")
     assert await tree._cat_file("data/d.txt") == b"data/d.txt"
@@ -65,7 +75,7 @@ async def test_an_async_filesystem_answers_as_fsspec() -> None:
 
 async def test_a_monitor_is_told_of_the_filesystem_under_all_wrappers() -> None:
     inner = _simulated(asynchronous=True)
-    tree = AsyncTreeWrapper(AsyncTreeWrapper(inner, **_LIMITS), **_LIMITS)
+    tree = _tree(_tree(inner, **_LIMITS), **_LIMITS)
     calls = _Calls()
     with monitoring(calls):
         await tree._find("data")
@@ -74,7 +84,7 @@ async def test_a_monitor_is_told_of_the_filesystem_under_all_wrappers() -> None:
 
 def test_an_async_filesystem_on_its_own_loop() -> None:
     inner = _simulated()  # Sync, its coroutines on fsspec's loop.
-    tree = AsyncTreeWrapper(inner, **_LIMITS)
+    tree = _tree(inner, **_LIMITS)
     assert tree.loop is inner.loop
     assert tree.find("data") == inner.find("data")
     tree.mv("data", "moved", recursive=True)
@@ -92,7 +102,7 @@ async def test_an_async_filesystem_deletes_a_dir_by_its_rm_tree() -> None:
     inner = _RecursiveDelete(hierarchical=True, asynchronous=True)
     for path in _FILES:
         inner.add_file(path, path.encode())
-    tree = AsyncTreeWrapper(inner, **_DELETES)
+    tree = _tree(inner, **_DELETES)
     inner.reset_stats()
     await tree._rm("data", recursive=True)
     # One deletion: no listing.
@@ -110,7 +120,7 @@ async def test_a_filesystem_without_rm_tree_deletes_by_its_recursive_rm(
         called.append((path, recursive))
 
     monkeypatch.setattr(inner, "_rm", own_rm)
-    await AsyncTreeWrapper(inner, **_DELETES)._rm_tree("data")
+    await _tree(inner, **_DELETES)._rm_tree("data")
     assert called == [("data", True)]
 
 
@@ -119,7 +129,7 @@ async def test_a_sync_filesystem_deletes_by_its_recursive_rm(tmp_path: Path) -> 
     root = local._strip_protocol(str(tmp_path))
     local.makedirs(f"{root}/data/a")
     local.pipe_file(f"{root}/data/a/x.txt", b"x")
-    tree = SyncTreeWrapper(local, asynchronous=True, **_DELETES)
+    tree = _tree(local, asynchronous=True, **_DELETES)
     await tree._rm(f"{root}/data", recursive=True)
     assert not local.exists(f"{root}/data")
 
@@ -135,7 +145,7 @@ async def test_an_async_filesystem_moves_a_dir_by_its_mv_tree() -> None:
     inner = _Renaming(hierarchical=True, asynchronous=True)
     for path in _FILES:
         inner.add_file(path, path.encode())
-    tree = AsyncTreeWrapper(
+    tree = _tree(
         inner,
         **{**_LIMITS, "storage_profile": StorageProfile(renames_directories=True)},
     )
@@ -157,7 +167,7 @@ async def test_an_async_filesystem_copies_a_dir_by_its_cp_tree() -> None:
     inner = _Copying(hierarchical=True, asynchronous=True)
     for path in _FILES:
         inner.add_file(path, path.encode())
-    tree = AsyncTreeWrapper(
+    tree = _tree(
         inner,
         **{**_LIMITS, "storage_profile": StorageProfile(copies_directories=True)},
     )
@@ -174,14 +184,14 @@ async def test_rm_tree_is_unused_unless_declared() -> None:
     for path in _FILES:
         inner.add_file(path, path.encode())
     inner.reset_stats()
-    await AsyncTreeWrapper(inner, **_LIMITS)._rm("data", recursive=True)
+    await _tree(inner, **_LIMITS)._rm("data", recursive=True)
     assert inner.stats.calls["delete"] > 1  # Walked, file by file.
     assert not inner._file_data
 
 
-def test_wrappers_are_made_anew() -> None:
+def test_filesystems_on_handlers_are_made_anew() -> None:
     inner = _simulated()
-    assert AsyncTreeWrapper(inner, **_LIMITS) is not AsyncTreeWrapper(inner, **_LIMITS)
+    assert _tree(inner, **_LIMITS) is not _tree(inner, **_LIMITS)
 
 
 def _local(tmp_path: Path) -> tuple[LocalFileSystem, str]:
@@ -195,7 +205,7 @@ def _local(tmp_path: Path) -> tuple[LocalFileSystem, str]:
 
 def test_a_sync_filesystem_answers_as_fsspec(tmp_path: Path) -> None:
     local, root = _local(tmp_path)
-    tree = SyncTreeWrapper(local, **_LIMITS)
+    tree = _tree(local, **_LIMITS)
     assert tree.find(f"{root}/data") == local.find(f"{root}/data")
     assert tree.du(f"{root}/data") == local.du(f"{root}/data")
     assert tree.cat_file(f"{root}/data/d.txt") == b"data/d.txt"
@@ -208,7 +218,7 @@ def test_a_sync_filesystem_answers_as_fsspec(tmp_path: Path) -> None:
 
 async def test_a_sync_filesystem_moves_a_dir_whole(tmp_path: Path) -> None:
     local, root = _local(tmp_path)
-    tree = SyncTreeWrapper(
+    tree = _tree(
         local,
         asynchronous=True,
         **{**_LIMITS, "storage_profile": StorageProfile(renames_directories=True)},
@@ -222,7 +232,7 @@ async def test_a_sync_filesystem_moves_a_dir_whole(tmp_path: Path) -> None:
 
 async def test_a_sync_filesystem_copies_a_dir_whole(tmp_path: Path) -> None:
     local, root = _local(tmp_path)
-    tree = SyncTreeWrapper(
+    tree = _tree(
         local,
         asynchronous=True,
         **{**_LIMITS, "storage_profile": StorageProfile(copies_directories=True)},

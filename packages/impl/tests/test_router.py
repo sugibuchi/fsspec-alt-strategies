@@ -15,9 +15,11 @@ from fsspec.spec import AbstractFileSystem
 
 from fsspec_alt_strategies.monitor import Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
 from fsspec_alt_strategies_impl.router import AsyncRoutingFileSystem
-from fsspec_alt_strategies_impl.wrapper.flat import AsyncFlatWrapper
-from fsspec_alt_strategies_impl.wrapper.tree import AsyncTreeWrapper
+from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
+from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -86,18 +88,18 @@ class _File(io.BytesIO):
 
 
 class _Files:
-    """The file objects of the simulated storage a wrapper wraps."""
+    """The file objects of the simulated storage a handler wraps, and its releases counted."""
 
     fs: SimulatedFileSystem
     closed = 0
 
-    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+    async def open_async_file(self, path: str, mode: str, **kwargs: Any) -> Any:
         return _Reader(self.fs, path) if "r" in mode else _Writer(self.fs, path)
 
-    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+    def open_sync_file(self, path: str, mode: str, **kwargs: Any) -> Any:
         return _File(self.fs, path, kwargs.get("autocommit", True))
 
-    def close(self) -> None:
+    def release(self) -> None:
         _Files.closed += 1
 
 
@@ -108,21 +110,27 @@ class _Plain(SimulatedFileSystem):
         return _Reader(self, path) if "r" in mode else _Writer(self, path)
 
 
-class _Tree(_Files, AsyncTreeWrapper):
+class _TreeHandler(_Files, FsspecTreeHandler):
     pass
 
 
-class _Flat(_Files, AsyncFlatWrapper):
-    def _ils(
-        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+class _FlatHandler(_Files, FsspecFlatHandler):
+    def ils_recursive(  # type: ignore[override]
+        self, entry: dict[str, Any], *, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            return self.fs._list_prefix(f"{path}/{prefix}" if path else prefix)
-        else:
-            return super()._ils(path, prefix=prefix, **kwargs)
+        path = entry["name"]
+        return self.fs._list_prefix(f"{path}/{prefix}" if path else prefix)
 
 
-_OPTIONS = {"operation_concurrency": 4, "io_concurrency": 2, "asynchronous": True}
+_OPTIONS = {"operation_concurrency": 4, "io_concurrency": 2}
+
+
+def _tree(fs: SimulatedFileSystem, **options: Any) -> TreeFileSystem:
+    return TreeFileSystem.of(_TreeHandler(fs, **options, **_OPTIONS), asynchronous=True)
+
+
+def _flat(fs: SimulatedFileSystem, **options: Any) -> FlatFileSystem:
+    return FlatFileSystem.of(_FlatHandler(fs, **options, **_OPTIONS), asynchronous=True)
 
 
 class _Router(AsyncRoutingFileSystem):
@@ -139,14 +147,11 @@ class _Router(AsyncRoutingFileSystem):
         self.flat = SimulatedFileSystem(asynchronous=True)
         self.plain = _Plain(asynchronous=True)
         self.makers = {
-            "tree": lambda: _Tree(
-                self.tree, storage_profile=StorageProfile(), **_OPTIONS
-            ),
-            "flat": lambda: _Flat(
+            "tree": lambda: _tree(self.tree, storage_profile=StorageProfile()),
+            "flat": lambda: _flat(
                 self.flat,
                 rm_batch_size=10,
                 storage_profile=StorageProfile(implicit_directories=True),
-                **_OPTIONS,
             ),
             # A plain async fsspec filesystem, without strategies.
             "plain": lambda: self.plain,
@@ -317,7 +322,7 @@ async def test_changes_above_the_storages_are_refused(router: _Router) -> None:
 
 async def test_a_sync_filesystem_is_refused(router: _Router) -> None:
     router.makers["memory"] = MemoryFileSystem
-    with pytest.raises(TypeError, match="SyncTreeWrapper"):
+    with pytest.raises(TypeError, match="FsspecTreeHandler"):
         await router._info("lake/memory/x")
 
 
@@ -532,8 +537,8 @@ class _ServerCopying(_Router):
             return
         self.server_copies.append((src_path, dest_path))
         self.sizes[src_path] = src_entry["size"]
-        data = src_fs.fs._file_data[src_path].data  # type: ignore[attr-defined]
-        dest_fs.fs.add_file(dest_path, data)  # type: ignore[attr-defined]
+        data = src_fs.handler.fs._file_data[src_path].data  # type: ignore[attr-defined]
+        dest_fs.handler.fs.add_file(dest_path, data)  # type: ignore[attr-defined]
 
 
 async def test_copy_across_storages_tries_the_server_first() -> None:
@@ -784,17 +789,18 @@ async def test_cat_ranges_gives_each_storage_its_ranges(router: _Router) -> None
 async def test_transfers_across_storages_load_each_sides_profile_with_its_path(
     router: _Router, move: bool
 ) -> None:
-    # The source's, for its family, and the destination's, which its jobs read.
+    # The source's, for its family, and the destination's, which its jobs read:
+    # each loaded by its handler as it opens.
     loaded: list[str] = []
     for name in ("tree", "flat"):
-        fs = router.backend(name)
-        original = fs._get_storage_profile
+        fs = router.backend(name).handler
+        original = fs.load_profile
 
         async def note(name: str = name, original: Any = original) -> Any:
             loaded.append(name)
             return await original()
 
-        fs._get_storage_profile = note
+        fs.load_profile = note
     method = router._mv if move else router._copy
     await method("lake/tree/data", "lake/flat/moved", recursive=True)
     assert loaded[:2] == ["tree", "flat"]

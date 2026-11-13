@@ -11,7 +11,8 @@ from fsspec.implementations.memory import MemoryFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.sync_client import SyncClientSupport
-from fsspec_alt_strategies_impl.wrapper.tree import SyncTreeWrapper
+from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
 
 
 class _Client(SyncClientSupport):
@@ -68,20 +69,20 @@ async def test_collecting_it_shuts_the_threads_down() -> None:
     assert pool._shutdown
 
 
-async def test_a_sync_wrapper_calls_in_its_threads() -> None:
+async def test_a_sync_filesystems_handler_calls_in_its_threads() -> None:
     memory = MemoryFileSystem()
     memory.pipe_file("/test_sync_client/a.txt", b"a")
-    tree = SyncTreeWrapper(
+    handler = FsspecTreeHandler(
         memory,
         operation_concurrency=3,
         io_concurrency=2,
         storage_profile=StorageProfile(),
-        asynchronous=True,
     )
+    tree = TreeFileSystem.of(handler, asynchronous=True)
     try:
         assert await tree._cat_file("/test_sync_client/a.txt") == b"a"
         # Its requests and its data calls, each with threads enough.
-        assert tree._thread_pool()._max_workers == 5
+        assert handler._thread_pool()._max_workers == 5
     finally:
         tree.close()
         memory.rm("/test_sync_client", recursive=True)
@@ -89,13 +90,14 @@ async def test_a_sync_wrapper_calls_in_its_threads() -> None:
 
 def test_with_closes_its_threads() -> None:
     memory = MemoryFileSystem()
-    with SyncTreeWrapper(
+    handler = FsspecTreeHandler(
         memory,
         operation_concurrency=1,
         io_concurrency=1,
         storage_profile=StorageProfile(),
-    ) as tree:
+    )
+    with TreeFileSystem.of(handler) as tree:
         assert tree.ls("/") is not None
-        pool = tree._thread_pool()
+        pool = handler._thread_pool()
     assert pool._shutdown
-    assert tree._executor is None
+    assert handler._executor is None
