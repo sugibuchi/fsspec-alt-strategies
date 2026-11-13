@@ -41,6 +41,8 @@ class TreeHandler(StorageHandler):
     FileNotFoundError.
     """
 
+    family = "tree"
+
     recursive_order: Literal["depth first", "name"] | None = None
     """The order of ``ils_recursive``'s entries, or None where the handler has none.
 

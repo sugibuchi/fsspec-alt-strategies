@@ -9,7 +9,7 @@ from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.router import AsyncRoutingFileSystem
+from fsspec_alt_strategies_impl.router import RoutingFileSystem
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
 from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
@@ -40,7 +40,7 @@ _PASSED_ON = {
 @pytest.mark.parametrize("handler", [FsspecTreeHandler, FsspecFlatHandler])
 def test_every_primitive_is_passed_on(handler: type) -> None:
     assert not handler.__abstractmethods__
-    assert set(vars(AsyncRoutingFileSystem)) >= _ROUTED
+    assert set(vars(RoutingFileSystem)) >= _ROUTED
     assert {n for c in handler.__mro__ for n in vars(c)} >= _PASSED_ON
 
 

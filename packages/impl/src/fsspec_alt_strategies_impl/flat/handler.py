@@ -30,6 +30,8 @@ class FlatHandler(StorageHandler):
     ``rm_files``, which deletes keys in batches of ``rm_batch_size``.
     """
 
+    family = "flat"
+
     rm_batch_size: int = 1000
     """The most keys `rm_files` takes at once, e.g. 1000 as S3's DeleteObjects takes."""
 

@@ -49,8 +49,8 @@ code: read it before adding a strategy.
   copy or move takes `src_fs` and `dst_fs`, the same within one storage. It reads the primitives, `operation_limit`
   and `storage_profile` from them.
 - The only function a strategy takes is a copy's or a move's `cp_entry` or `mv_entry`, a `common.jobs._Transfer`,
-  taking the source's entry. The router passes its copy of a file between two storages so. Between two storages it is
-  required.
+  taking the source's entry. Between two storages it defaults to `common.transfer._across`, which streams the data
+  and leaves no part of a file. The router passes its routing handler's `cp_across` or `mv_across` so.
 - A copy or move hands each file's entry, as its listing found it, to `_cp_file_entry` or `_mv_file_entry`. Never drop
   it for the path alone: a storage may need its size.
 - A strategy calls only a storage's primitives, such as `_ils`, `_info` and `_rm_file`, never a high-level method such
@@ -86,7 +86,8 @@ code: read it before adding a strategy.
 
 - A family, such as `tree/` or `flat/`, never imports another. What two share goes in `common/`, a module per
   concern. What builds on both sits at the package's root: `wrapper/` and `router.py`. The router imports a
-  family only when copying or moving from a storage of it, as its profile's `fs_type` says.
+  family's filesystem only when routing to a storage of it, and its strategies only when copying or moving from one,
+  as the storage handler's `family` says.
 - A wrapper of one library, such as `wrapper/s3fs.py`, never imports it: it calls the wrapped filesystem's methods.
   Write one only where the library saves requests or data beyond fsspec's API.
 - A family's modules export nothing public but its filesystem class, in `filesystem.py`.

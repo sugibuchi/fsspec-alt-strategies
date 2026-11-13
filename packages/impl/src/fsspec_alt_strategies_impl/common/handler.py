@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, NewType, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NewType, TypeAlias
 
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 
@@ -45,93 +45,13 @@ listed before a change.
 """
 
 
-class StorageHandler(ABC):
-    """A storage's primitives, profile, limits and clients, for the strategies.
+class _PathHandler(ABC):
+    """A handler's paths: what it verifies, and how it builds paths, with or without primitives.
 
-    It is made without a request. `open` loads its profile, and makes its
-    clients, on the running loop: the strategies read ``profile`` once it is
-    open. `close` releases what `open` made.
-
-    Two limits bound its requests, each an `asyncio.Semaphore`:
-
-    - ``operation_limit``, the strategies' requests, such as listings,
-      deletions and copies;
-    - ``io_limit``, the reads and writes of data.
-
-    The callers hold the permits, never the primitives: the strategies hold
-    one of ``operation_limit`` around each primitive they call.
-
-    Parameters
-    ----------
-    operation_concurrency : int or asyncio.Semaphore
-        The requests of the strategies at a time. A semaphore is used as it
-        is, shared with what else holds it.
-    io_concurrency : int or asyncio.Semaphore
-        The reads and writes of data at a time. A semaphore is used as it is.
-
-    Raises
-    ------
-    ValueError
-        If a concurrency is less than 1.
+    The base of `StorageHandler`, and of a router's handler, which routes its
+    paths to storages but has no primitives of its own. The strategies build
+    paths only by these methods, so each path they build is verified.
     """
-
-    profile: StorageProfile = UNKNOWN
-    """What the storage does, for the strategies: unknown, right on any storage, by default.
-
-    A subclass sets what it knows. One overriding `load_profile` has it
-    replaced by what that loads, as `open` does.
-    """
-
-    def __init__(
-        self,
-        *,
-        operation_concurrency: int | asyncio.Semaphore,
-        io_concurrency: int | asyncio.Semaphore,
-    ) -> None:
-        self.operation_concurrency = operation_concurrency
-        self.io_concurrency = io_concurrency
-        self.operation_limit = _limit(operation_concurrency, "operation_concurrency")
-        self.io_limit = _limit(io_concurrency, "io_concurrency")
-        self._opened = False
-        self._open_lock = asyncio.Lock()
-
-    # Its lifecycle.
-
-    async def open(self) -> None:
-        """Load the profile, and make the clients, once: a call after the first does nothing.
-
-        A first call opens it while the others wait, then find it open. One
-        that raises leaves it closed: the next call tries again. So a profile
-        that cannot be told yet is not kept.
-        """
-        if self._opened:
-            return
-        async with self._open_lock:
-            if not self._opened:
-                self.profile = await self.load_profile()
-                self._opened = True
-
-    async def load_profile(self) -> StorageProfile:
-        """Find the profile, by a request where the storage tells it: here, ``profile`` as declared.
-
-        It takes no path: the profile is one for the whole storage. A storage
-        whose behaviour differs by path is several handlers under a router.
-        """
-        return self.profile
-
-    async def close(self) -> None:
-        """Release what `open` made, and what `release` releases. A later `open` opens it again."""
-        self.release()
-        self._opened = False
-
-    def release(self) -> None:  # noqa: B027
-        """Release at once what needs no request to release, e.g. threads: here, nothing.
-
-        A filesystem's sync ``close()`` calls it. A subclass holding threads
-        shuts them down here.
-        """
-
-    # Paths and entries: the strategies build paths only by these.
 
     root: str = ""
     """The path of the storage's root, e.g. "" for an object store or "/" for a local disk."""
@@ -215,6 +135,99 @@ class StorageHandler(ABC):
     def name(self, path: str) -> str:
         """The last name of a path."""
         return path.rstrip("/").rpartition("/")[2]
+
+
+class StorageHandler(_PathHandler):
+    """A storage's primitives, profile, limits and clients, for the strategies.
+
+    It is made without a request. `open` loads its profile, and makes its
+    clients, on the running loop: the strategies read ``profile`` once it is
+    open. `close` releases what `open` made.
+
+    Two limits bound its requests, each an `asyncio.Semaphore`:
+
+    - ``operation_limit``, the strategies' requests, such as listings,
+      deletions and copies;
+    - ``io_limit``, the reads and writes of data.
+
+    The callers hold the permits, never the primitives: the strategies hold
+    one of ``operation_limit`` around each primitive they call.
+
+    Parameters
+    ----------
+    operation_concurrency : int or asyncio.Semaphore
+        The requests of the strategies at a time. A semaphore is used as it
+        is, shared with what else holds it.
+    io_concurrency : int or asyncio.Semaphore
+        The reads and writes of data at a time. A semaphore is used as it is.
+
+    Raises
+    ------
+    ValueError
+        If a concurrency is less than 1.
+    """
+
+    family: ClassVar[Literal["tree", "flat"] | None] = None
+    """The family of strategies taking it, which its class declares: `TreeHandler`'s or `FlatHandler`'s.
+
+    A router makes the filesystem of a storage it routes to by it.
+    """
+
+    profile: StorageProfile = UNKNOWN
+    """What the storage does, for the strategies: unknown, right on any storage, by default.
+
+    A subclass sets what it knows. One overriding `load_profile` has it
+    replaced by what that loads, as `open` does.
+    """
+
+    def __init__(
+        self,
+        *,
+        operation_concurrency: int | asyncio.Semaphore,
+        io_concurrency: int | asyncio.Semaphore,
+    ) -> None:
+        self.operation_concurrency = operation_concurrency
+        self.io_concurrency = io_concurrency
+        self.operation_limit = _limit(operation_concurrency, "operation_concurrency")
+        self.io_limit = _limit(io_concurrency, "io_concurrency")
+        self._opened = False
+        self._open_lock = asyncio.Lock()
+
+    # Its lifecycle.
+
+    async def open(self) -> None:
+        """Load the profile, and make the clients, once: a call after the first does nothing.
+
+        A first call opens it while the others wait, then find it open. One
+        that raises leaves it closed: the next call tries again. So a profile
+        that cannot be told yet is not kept.
+        """
+        if self._opened:
+            return
+        async with self._open_lock:
+            if not self._opened:
+                self.profile = await self.load_profile()
+                self._opened = True
+
+    async def load_profile(self) -> StorageProfile:
+        """Find the profile, by a request where the storage tells it: here, ``profile`` as declared.
+
+        It takes no path: the profile is one for the whole storage. A storage
+        whose behaviour differs by path is several handlers under a router.
+        """
+        return self.profile
+
+    async def close(self) -> None:
+        """Release what `open` made, and what `release` releases. A later `open` opens it again."""
+        self.release()
+        self._opened = False
+
+    def release(self) -> None:
+        """Release at once what needs no request to release, e.g. threads: here, nothing.
+
+        A filesystem's sync ``close()`` calls it. A subclass holding threads
+        shuts them down here.
+        """
 
     # The primitives of single paths, which every handler has.
 
