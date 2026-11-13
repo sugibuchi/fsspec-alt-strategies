@@ -130,36 +130,52 @@ class StorageHandler(ABC):
     root: str = ""
     """The path of the storage's root, e.g. "" for an object store or "/" for a local disk."""
 
+    @abstractmethod
+    def verify_path(self, path: str) -> None:
+        """Raise ValueError if ``path`` is no path of this storage.
+
+        The path has no protocol. A handler refuses what its storage would, or
+        what it does not serve, e.g. a path of another storage account than its
+        own, a bucket name the storage refuses, or a name too long. It sends no
+        request: it checks the path alone.
+
+        The filesystem verifies each path a caller gives before it calls a
+        strategy or a primitive. The paths `join` and `join_all` build are
+        verified by them. So a strategy and a primitive take only verified
+        paths.
+        """
+
     def entry(self, path: str) -> Entry:
-        """The entry of a path alone, for a primitive taking an item the caller knows only by its path."""
+        """The entry of a verified path alone, for a primitive taking an item the caller knows only by its path."""
         return {"name": StoragePath(path)}
 
     def join(self, directory: str, name: str) -> StoragePath:
-        """The path of ``name`` in ``directory``, raising ValueError for a name that is no single name.
+        """The path of ``name`` in ``directory``, verified, raising ValueError for one refused.
 
         A name is refused if empty, ".", "..", or holding a "/". So a path built
         by joining names never leaves the directory it was built from, whatever
-        names another storage listed.
+        names another storage listed. The path built is then verified by
+        `verify_path`, e.g. for a name the storage refuses.
         """
-        if not name or name in (".", "..") or "/" in name:
-            raise ValueError(f"Not a name in a directory: {name!r}")
-        if not directory:
-            return StoragePath(name)
-        if directory.endswith("/"):
-            return StoragePath(directory + name)
-        else:
-            return StoragePath(f"{directory}/{name}")
+        path = _joined(directory, name)
+        self.verify_path(path)
+        return path
 
     def join_all(self, directory: str, relative: str) -> StoragePath:
-        """The path of ``relative``, names joined by "/", in ``directory``: each name checked by `join`.
+        """The path of ``relative``, names joined by "/", in ``directory``, verified as `join` verifies one.
 
-        One leading "/", the separator after the directory's own path, and a
-        trailing one are ignored. An empty ``relative`` is the directory itself.
+        Each name is checked as `join` checks one, and the path built is
+        verified once. One leading "/", the separator after the directory's own
+        path, and a trailing one are ignored. An empty ``relative`` is the
+        directory itself.
         """
         path = StoragePath(directory)
         rest = relative.removeprefix("/").rstrip("/")
-        for name in rest.split("/") if rest else ():
-            path = self.join(path, name)
+        if not rest:
+            return path
+        for name in rest.split("/"):
+            path = _joined(path, name)
+        self.verify_path(path)
         return path
 
     def parent(self, path: str) -> StoragePath:
@@ -261,6 +277,9 @@ class _FileSystemHandler(StorageHandler):
         get = getattr(self.fs, "_get_storage_profile", None)
         return await get() if get is not None else UNKNOWN
 
+    def verify_path(self, path: str) -> None:
+        """Nothing: an fsspec filesystem checks its paths in its own methods."""
+
     def ils(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
         return self.fs._ils(entry["name"], **kwargs)  # type: ignore[no-any-return]
 
@@ -317,6 +336,18 @@ def _handler_of(fs: Any) -> StorageHandler:
         handler = _FileSystemHandler(fs)
         fs.__dict__["_alt_strategies_handler"] = handler
     return handler  # type: ignore[no-any-return]
+
+
+def _joined(directory: str, name: str) -> StoragePath:
+    """The path of a single name in a directory, raising ValueError for a name that is no single name."""
+    if not name or name in (".", "..") or "/" in name:
+        raise ValueError(f"Not a name in a directory: {name!r}")
+    if not directory:
+        return StoragePath(name)
+    if directory.endswith("/"):
+        return StoragePath(directory + name)
+    else:
+        return StoragePath(f"{directory}/{name}")
 
 
 async def _profile(fs: Any) -> StorageProfile:
