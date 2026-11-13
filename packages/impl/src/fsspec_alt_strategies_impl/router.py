@@ -9,8 +9,8 @@ across two storages runs the source's family's strategy, as its profile's
 ``fs_type`` says, each file by ``_cross_fs_cp_entry`` or ``_cross_fs_mv_entry``,
 which stream the data through the two storages' files unless overridden.
 
-This module depends on `filesystem`, `handler`, `operation` and `paths` of
-`common`. It imports `cp` and `mv` of a family only to copy or move from a
+This module depends on `filesystem`, `handler`, `operation`, `paths` and
+`transfer` of `common`. It imports `cp` and `mv` of a family only to copy or move from a
 storage of it, so a copy may leave out the other family. It imports
 `wrapper.tree` only to copy or move to a plain fsspec filesystem.
 """
@@ -41,6 +41,7 @@ from .common.filesystem import (
 )
 from .common.operation import _collect_with_monitors
 from .common.paths import _trim
+from .common.transfer import _cross_cp_file
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -58,8 +59,6 @@ if TYPE_CHECKING:
     from .common.operation import Operation
 
 __all__ = ["AsyncRoutingFileSystem"]
-
-_MiB = 1024 * 1024
 
 _Group = tuple[AsyncFileSystem, list[str], list[str]]
 """An inner filesystem, the inner paths given to it, and the router's paths of them."""
@@ -261,25 +260,18 @@ class AsyncRoutingFileSystem(
         ``"name"`` the source path. Its size, e.g., may choose how the data
         goes. It may be stale, as for `TreeFileSystem._cp_file_entry`.
 
-        Here, the data is streamed through the router, by both storages'
-        ``open_async``. A block, the source's ``transfer_size``, is read, then
-        written, before the next is read: a copy holds one block in memory,
-        however large the file. A copy failing midway leaves what the
-        destination's file leaves on an exception, e.g. an adaptive file aborts
-        its upload.
+        Here, the data is streamed through the router, by the two storages'
+        handlers, as `transfer._across` streams it: a block at a time, leaving
+        no part of a file at the destination, and checking the size written.
 
         A subclass overrides it with the cloud's server-side copy, e.g. a copy
         from a URL, and falls back on this one where that cannot be done, e.g.
         between two clouds. It runs holding a permit of ``transfer_limit``.
         """
-        block_size = getattr(src_fs, "transfer_size", None) or 8 * _MiB
-
-        reader = await src_fs.open_async(src_entry["name"], "rb")
-        async with reader:
-            writer = await dest_fs.open_async(dest_path, "wb")
-            async with writer:
-                while block := await reader.read(block_size):
-                    await writer.write(block)
+        dst = self._handler(dest_fs)
+        await _cross_cp_file(
+            self._handler(src_fs), src_entry, dst, dst.verified(dest_path)
+        )
 
     async def _cross_fs_mv_entry(
         self,

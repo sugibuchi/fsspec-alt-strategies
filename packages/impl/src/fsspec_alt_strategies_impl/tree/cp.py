@@ -88,8 +88,8 @@ def _tree_cp(
     The destination is described by ``dst_fs`` and its ``storage_profile``,
     unknown if it has none. Within one storage, ``dst_fs`` is ``src_fs``, and
     ``same_storage`` is True: a path copied onto itself, or under itself, is
-    refused. Between two, ``cp_entry`` copies from one to the other, e.g. the
-    router's ``_cross_fs_cp_entry``, and every byte may go through the caller. A
+    refused. Between two, ``cp_entry`` copies from one to the other, by default
+    `transfer._across`, its data through the caller. A
     path may then go to the same path, or under it. The copies run
     concurrently, so the destination's paths are created in another order than
     the source's. A storage listing in creation order shows it.
@@ -159,15 +159,14 @@ def _tree_cp(
     ``src_fs`` is the filesystem copied from, and ``dst_fs`` the one copied
     to, ``src_fs`` again within one storage. ``path1`` is a directory, a file,
     a glob pattern, or a list of them, as the source's ``_ils`` takes paths.
-    ``cp_entry(entry, destination)`` copies a file: the source's
-    ``_cp_file_entry`` by default, within one storage. ``same_storage`` is
+    ``cp_entry(entry, destination)`` copies a file: by default, the source's
+    ``cp_file`` within one storage, and `transfer._across` between two. ``same_storage`` is
     whether ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 copies
     only the files in ``path1``.
 
     The operation yields ``(source, destination)`` for each file copied, or an
     error, and its state is a `CpState`. The call raises ValueError if
-    ``maxdepth`` is less than 1, or ``cp_entry`` is missing between two
-    storages. `_tree_mv` does the same, deleting the source as it goes.
+    ``maxdepth`` is less than 1. `_tree_mv` does the same, deleting the source as it goes.
     """
     _check_maxdepth(maxdepth)
     cp_entry, same_storage = _transfer_of(

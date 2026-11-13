@@ -75,7 +75,7 @@ def _tree_mv(
     The destination is described by ``dst_fs`` and its ``storage_profile``,
     unknown if it has none. Within one storage, ``dst_fs`` is ``src_fs``, and
     ``same_storage`` is True. Between two, ``mv_entry`` copies a file to the
-    other storage, then deletes it: e.g. the router's ``_cross_fs_mv_entry``. A
+    other storage, then deletes it: by default `transfer._across`. A
     path may then go to the same path, or under it, and nothing is moved whole.
 
     Unlike fsspec's ``mv``, it keeps going past a failure, and reports each. A
@@ -150,8 +150,9 @@ def _tree_mv(
     ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
     glob pattern, or a list of them, as the source's ``_ils`` takes paths.
     ``mv_entry(entry, destination)`` moves a file by its source entry, as its
-    listing gave it: the source's ``_mv_file_entry`` by default, within one
-    storage. A storage renaming a file in one request implements it so.
+    listing gave it: by default, the source's ``mv_file`` within one storage,
+    and `transfer._across` between two. A storage renaming a file in one
+    request implements ``mv_file`` so.
     ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given.
     ``maxdepth`` of 1 moves only the files in ``path1``. ``root_entry`` is as
     `_tree_cp` takes it: a single file moved so costs the ``dst_info`` of
@@ -160,8 +161,7 @@ def _tree_mv(
 
     The operation yields ``(source, destination)`` for each file and directory
     moved, or an error, and its state is an `MvState`. The call raises
-    ValueError if ``maxdepth`` is less than 1, or ``mv_entry`` is missing
-    between two storages. `_tree_cp` does the same, keeping the source.
+    ValueError if ``maxdepth`` is less than 1. `_tree_cp` does the same, keeping the source.
     """
     _check_maxdepth(maxdepth)
     mv_entry, same_storage = _transfer_of(

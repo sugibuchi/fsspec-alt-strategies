@@ -276,12 +276,22 @@ async def test_a_list_yields_a_name_taken_when_the_rest_is_in_place(
     assert flat_fs._file_data["a/x"].data == b"a"
 
 
-def test_a_copy_between_two_storages_needs_cp_entry(
+async def test_a_copy_between_two_storages_streams_each_key_by_default(
     flat_fs: SimulatedFileSystem,
 ) -> None:
+    flat_fs.add_file("data/a/x", b"xx")
+    flat_fs.add_file("data/y", b"y")
     other = SimulatedFileSystem(asynchronous=True)
-    with pytest.raises(ValueError, match="cp_entry"):
-        _flat_cp(FlatView(flat_fs), FlatView(other), "data", "copied")
+    op = _flat_cp(FlatView(flat_fs), FlatView(other), "data", "copied")
+    copied, errors = await _collect_with_errors(op)
+    assert (sorted(copied), errors) == (
+        [("data/a/x", "copied/a/x"), ("data/y", "copied/y")],
+        [],
+    )
+    assert {p: f.data for p, f in other._file_data.items()} == {
+        "copied/a/x": b"xx",
+        "copied/y": b"y",
+    }
 
 
 async def test_cp_entry_is_given_the_listings_entries(

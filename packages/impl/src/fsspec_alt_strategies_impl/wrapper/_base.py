@@ -185,6 +185,17 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
     def open_sync_file(self, path: str, mode: str, **kwargs: Any) -> Any:
         return self.fs._open(path, mode=mode, **kwargs)
 
+    # The strategies' files, e.g. a copy's between two storages: the wrapped
+    # one's own, awaited. They close as the wrapped one's do: one left by an
+    # exception may keep what was written, so the profile declares no
+    # atomic_writes unless the library's writer aborts.
+
+    async def open_reader(self, entry: Entry, **kwargs: Any) -> Any:
+        return await self.open_async_file(entry["name"], "rb", **kwargs)
+
+    async def open_writer(self, path: StoragePath, mode: str, **kwargs: Any) -> Any:
+        return await self.open_async_file(path, mode, **kwargs)
+
     # The sync methods fsspec leaves to each filesystem, the wrapped one's.
 
     def created(self, path: str) -> Any:

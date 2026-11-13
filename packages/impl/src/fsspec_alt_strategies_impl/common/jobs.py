@@ -16,7 +16,7 @@ family finds what to copy, `_CopyJobs` where it goes. The two define no
 method in common, and their constructors take keywords and pass the rest on,
 so either order works.
 
-This module depends on `handler`, `operation` and `paths`.
+This module depends on `handler`, `operation`, `paths` and `transfer`.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from fsspec_alt_strategies.states import CpState
 from .handler import StoragePath
 from .operation import Operation, _collect_with_errors
 from .paths import _trim
+from .transfer import _across
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -51,9 +52,9 @@ if TYPE_CHECKING:
     _Transfer: TypeAlias = Callable[[dict[str, Any], str], Awaitable[None]]
     """How one file goes from its source entry to a destination path.
 
-    It is the source's ``_cp_file_entry`` or ``_mv_file_entry`` within one
-    storage, or a router's copy or move of a file between two. The entry is the
-    source's, as its listing or ``_info`` gave it, its ``"name"`` the source
+    It is the source's ``cp_file`` or ``mv_file`` within one storage, and
+    `transfer._across`, or its caller's own, between two. The entry is the
+    source's, as its listing or ``info`` gave it, its ``"name"`` the source
     path.
     """
 
@@ -70,18 +71,19 @@ def _transfer_of(
     """How a copy or move sends each file, and whether it stays in one storage.
 
     ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given. Within
-    one storage, a file goes by the source's own ``_cp_file_entry`` or
-    ``_mv_file_entry``, as ``name``, "cp_entry" or "mv_entry", says, unless
-    ``transfer`` is given. Between two, ``transfer`` is required: the source's
-    own would write to the source.
+    one storage, a file goes by the source's own ``cp_file`` or ``mv_file``,
+    as ``name``, "cp_entry" or "mv_entry", says, unless
+    ``transfer`` is given. Between two, it goes by `transfer._across`, its
+    data through the caller, unless ``transfer`` is given.
     """
     src, dst = src_fs, dst_fs
     if same_storage is None:
         same_storage = src is dst
     if transfer is None:
-        if not same_storage:
-            raise ValueError(f"{name} is required between two storages")
-        transfer = getattr(src, f"{name.removesuffix('_entry')}_file")
+        if same_storage:
+            transfer = getattr(src, f"{name.removesuffix('_entry')}_file")
+        else:
+            transfer = _across(src, dst, move=name == "mv_entry")
     return transfer, same_storage
 
 

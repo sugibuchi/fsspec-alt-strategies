@@ -22,7 +22,8 @@ directory per request.
 
 It is a package of its own, apart from the strategies: copying them into
 another package leaves it out. It depends on fsspec, on the interface for
-`StorageProfile`, and on the strategies for the handler classes its views are.
+`StorageProfile`, and on the strategies for the handler classes its views are,
+and the files they open.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import math
+import sys
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -38,6 +40,10 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
 
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
+from fsspec_alt_strategies_impl.files.adaptive import (
+    AdaptiveReadableFile,
+    AdaptiveWritableFile,
+)
 from fsspec_alt_strategies_impl.flat.handler import FlatHandler
 from fsspec_alt_strategies_impl.tree.handler import TreeHandler
 
@@ -684,7 +690,65 @@ def _by_name(
     return by_entry
 
 
-class TreeView(TreeHandler):
+class _Reader(AdaptiveReadableFile):
+    """A file of a `SimulatedFileSystem`, read by byte ranges, a request each."""
+
+    def __init__(self, fs: Any, path: str, size: int, **kwargs: Any) -> None:
+        super().__init__(path, asyncio.get_running_loop(), size, **kwargs)
+        self.fs = fs
+
+    async def _fetch_range(self, start: int, end: int) -> bytes:
+        return await self.fs._cat_file(self.path, start=start, end=end)  # type: ignore[no-any-return]
+
+
+class _Writer(AdaptiveWritableFile):
+    """A file of a `SimulatedFileSystem`, written whole as it closes, by one request.
+
+    So a write is seen only once complete, and one left by an exception writes
+    nothing, as on object stores: the storage's ``atomic_writes``.
+    """
+
+    min_multipart_size = sys.maxsize
+
+    def __init__(self, fs: Any, path: str, **kwargs: Any) -> None:
+        super().__init__(path, asyncio.get_running_loop(), **kwargs)
+        self.fs = fs
+
+    async def _upload_all(self, data: bytes) -> None:
+        await self.fs._pipe_file(self.path, data)
+
+    async def _start_multipart_upload(self) -> None:
+        raise NotImplementedError  # Never: files go whole.
+
+    async def _upload_part(
+        self, data: bytes, start: int, end: int, index: int, last: bool
+    ) -> Any:
+        raise NotImplementedError
+
+    async def _complete_multipart_upload(self, parts: list[Any]) -> None:
+        raise NotImplementedError
+
+    async def _abort_multipart_upload(self) -> None:
+        raise NotImplementedError
+
+
+class _Files:
+    """A view's files: those of its `SimulatedFileSystem`, under its ``io_limit``."""
+
+    fs: Any
+    io_limit: asyncio.Semaphore
+
+    async def open_reader(self, entry: dict[str, Any], **kwargs: Any) -> Any:
+        size = (await self.fs._info(entry["name"]))["size"]
+        return _Reader(self.fs, entry["name"], size, concurrency_limit=self.io_limit)
+
+    async def open_writer(self, path: StoragePath, mode: str, **kwargs: Any) -> Any:
+        if mode == "xb" and await self.fs._exists(path):
+            raise FileExistsError(path)
+        return _Writer(self.fs, path, mode=mode, concurrency_limit=self.io_limit)
+
+
+class TreeView(_Files, TreeHandler):
     """A simulated storage as a tree handler, its primitives replaceable.
 
     The tree strategies take a handler, and call its ``ils``, ``info``,
@@ -704,7 +768,7 @@ class TreeView(TreeHandler):
 
     It verifies no path: the simulated storage takes any. Its
     ``operation_limit`` is 32 requests at a time unless given, and its profile
-    unknown.
+    unknown. Its files are read by ranges, and written whole as they close.
     """
 
     def __init__(
@@ -794,7 +858,7 @@ class TreeView(TreeHandler):
             await self._cp_tree(entry["name"], path2)
 
 
-class FlatView(FlatHandler):
+class FlatView(_Files, FlatHandler):
     """A simulated storage as a flat handler, its primitives replaceable.
 
     The flat strategies take a handler, and call its ``ils_recursive``,
@@ -807,7 +871,8 @@ class FlatView(FlatHandler):
     be None when all that a test calls is given.
 
     It verifies no path. Its ``operation_limit`` is 32 requests at a time
-    unless given, its profile unknown, and its ``rm_batch_size`` 1000.
+    unless given, its profile unknown, and its ``rm_batch_size`` 1000. Its
+    files are those of `TreeView`.
     """
 
     def __init__(

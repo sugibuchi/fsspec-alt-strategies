@@ -99,7 +99,14 @@ class StorageProfile:
         one moved so is renamed. Unknown by default, taken as True, as
         fsspec compares paths: no request tells a path from itself in
         another case.
-
+    atomic_writes : bool, optional
+        Whether a file written is seen only once complete, and a write failed
+        leaves the file that was there, as an upload to S3, Google Cloud
+        Storage or Azure does. It tells of the handler's ``open_writer`` file
+        left by an exception. A copy from another storage then writes in
+        place. Unknown by default, taken as False: it writes to a temporary
+        name beside the destination, then moves it there, so that no reader
+        sees part of a file.
     Raises
     ------
     ValueError
@@ -123,6 +130,7 @@ class StorageProfile:
     deletes_directories: bool | None = None
     copies_directories: bool | None = None
     case_sensitive: bool | None = None
+    atomic_writes: bool | None = None
 
     def __post_init__(self) -> None:
         if self.fs_type not in (None, "tree", "flat"):

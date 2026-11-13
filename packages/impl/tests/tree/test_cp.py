@@ -630,12 +630,22 @@ async def test_a_list_yields_a_name_taken_when_the_rest_is_in_place(
     assert any_fs._file_data["a/x"].data == b"a"
 
 
-def test_a_copy_between_two_storages_needs_cp_entry(
+async def test_a_copy_between_two_storages_streams_each_file_by_default(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
+    hierarchical_fs.add_file("data/a/x", b"xx")
+    hierarchical_fs.add_file("data/y", b"y")
     other = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    with pytest.raises(ValueError, match="cp_entry"):
-        _tree_cp(TreeView(hierarchical_fs), TreeView(other), "data", "copied")
+    op = _tree_cp(TreeView(hierarchical_fs), TreeView(other), "data", "copied")
+    copied, errors = await _collect_with_errors(op)
+    assert (sorted(copied), errors) == (
+        [("data/a/x", "copied/a/x"), ("data/y", "copied/y")],
+        [],
+    )
+    assert {p: f.data for p, f in other._file_data.items()} == {
+        "copied/a/x": b"xx",
+        "copied/y": b"y",
+    }
 
 
 async def test_cp_entry_is_given_the_listings_entries(

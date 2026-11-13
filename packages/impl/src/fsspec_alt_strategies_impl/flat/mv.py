@@ -103,15 +103,15 @@ def _flat_mv(
     ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
     glob pattern, or a list of them, as the source's ``_ils`` takes paths.
     ``path2`` places them as `_flat_cp` does. ``cp_entry(entry, destination)``
-    copies a file by its source entry when the move copies: the source's
-    ``_cp_file_entry`` by default, within one storage. ``same_storage`` is
+    copies a file by its source entry when the move copies: by default, the
+    source's ``cp_file`` within one storage, and `transfer._across` between
+    two. ``same_storage`` is
     whether ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 moves
     only the keys right in ``path1``. ``root_entry`` is as `_flat_cp` takes it.
 
     The operation yields ``(source, destination)`` for each key moved, or an
     error, and its state is an `MvState`. The call raises ValueError if the
-    source's ``rm_batch_size`` or ``maxdepth`` is less than 1, or ``cp_entry``
-    is missing between two storages.
+    source's ``rm_batch_size`` or ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
     if same_storage is None:
