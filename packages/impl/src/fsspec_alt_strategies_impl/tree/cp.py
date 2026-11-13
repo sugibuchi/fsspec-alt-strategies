@@ -281,7 +281,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         except ValueError as e:
             # A name the destination refuses, e.g. "..": nothing in it goes. A
             # directory below one refused is no error of its own.
-            above = self.handler.parent(listing.directory) in self.refused_dirs
+            above = self.below_refused(listing.directory)
             self.refused_dirs.add(listing.directory)
             if listing.first and not above:
                 return [self.refuse_name(listing.directory, e)]
@@ -311,6 +311,17 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             # directory holding only directories needs no mkdir: theirs create it.
             self.queue(directory, listing.directory, copies)
         return refused or None
+
+    def below_refused(self, directory: str) -> bool:
+        """Whether a source directory is in one whose name the destination refused.
+
+        Its parent may be no path the source verifies, e.g. "data/..": it is
+        then in no directory refused.
+        """
+        try:
+            return self.handler.parent(directory) in self.refused_dirs
+        except ValueError:
+            return False
 
     @property
     def parents_first(self) -> bool:

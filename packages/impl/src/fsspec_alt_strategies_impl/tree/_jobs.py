@@ -70,9 +70,8 @@ class _TreeJobs(_Jobs):
 
     def source(self, roots: _Roots) -> AsyncGenerator[_Listing] | None:
         """The listings of the root directories, if any, walked at once."""
-        directories = [
-            d["name"] for d in roots.directories if not self.unlisted(d["name"])
-        ]
+        # Their entries, e.g. as a glob found them, so that each is listed by it.
+        directories = [d for d in roots.directories if not self.unlisted(d["name"])]
         if not directories:
             return None
         else:

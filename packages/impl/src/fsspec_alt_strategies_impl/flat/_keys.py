@@ -26,16 +26,22 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
-def _listing(fs: Any, prefix: str) -> AsyncIterator[dict[str, Any]]:
+def _listing(
+    fs: Any, prefix: str, root: dict[str, Any] | None = None
+) -> AsyncIterator[dict[str, Any]]:
     """Every key starting with ``prefix``, raw text, in name order.
 
     It is the recursive ``_ils`` of the prefix's directory, narrowed to the rest
     of its name: "data/2024-" lists "data" with the prefix "2024-", and "data/"
     all of "data".
+
+    The prefix's directory is listed by ``root``, its entry, where given, e.g.
+    as a glob found it, else by its path.
     """
     path, _, name = prefix.rpartition("/")
     handler = _handler_of(fs)
-    return handler.ils_recursive(handler.entry(path), prefix=name)  # type: ignore[attr-defined, no-any-return]
+    entry = root if root is not None and root["name"] == path else handler.entry(path)
+    return handler.ils_recursive(entry, prefix=name)  # type: ignore[attr-defined, no-any-return]
 
 
 def _dir(name: str) -> dict[str, Any]:

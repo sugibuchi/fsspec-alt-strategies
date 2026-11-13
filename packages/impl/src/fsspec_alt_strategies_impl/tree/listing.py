@@ -43,7 +43,7 @@ _HELD = 32 * _BATCH
 
 
 async def _tree_ils(
-    fs: Any, path: str, **ils_kwargs: Any
+    fs: Any, path: str, *, entry: Entry | None = None, **ils_kwargs: Any
 ) -> AsyncGenerator[dict[str, Any]]:
     """List all below a directory depth first, by one ``_ils`` per directory.
 
@@ -69,7 +69,8 @@ async def _tree_ils(
     failure. A missing ``path`` raises FileNotFoundError, when the iteration
     starts, as its own ``_ils`` raises it.
 
-    ``ils_kwargs`` go to each ``_ils``.
+    ``path`` is listed by ``entry``, its entry, where given, e.g. as its parent's
+    listing gave it, else by its path. ``ils_kwargs`` go to each ``ils``.
     """
     # A filesystem implementing its _ils by this one gives itself, as before handlers.
     ils_kwargs.pop("recursive", None)
@@ -77,7 +78,7 @@ async def _tree_ils(
     root = _trim(path)
     ahead = _Ahead(handler, ils_kwargs)
     # The directories being yielded, the root first: each is yielding one of the next.
-    stack = [ahead.take(root)]
+    stack = [ahead.take(root, entry)]
 
     try:
         while stack:
@@ -118,7 +119,7 @@ def _recursive(
     if getattr(handler, "recursive_order", None) is not None:
         return handler.ils_recursive(entry, **ils_kwargs)  # type: ignore[attr-defined, no-any-return]
     else:
-        return _tree_ils(handler, entry["name"], **ils_kwargs)  # type: ignore[return-value]
+        return _tree_ils(handler, entry["name"], entry=entry, **ils_kwargs)  # type: ignore[return-value]
 
 
 class _Ahead:
@@ -159,11 +160,11 @@ class _Ahead:
         if self.held == _HELD - 1:
             self.start()
 
-    def take(self, directory: str) -> _DirListing:
+    def take(self, directory: str, entry: Entry | None = None) -> _DirListing:
         """The listing of the directory to yield next, listed ahead or not."""
         listing = self.found.pop(directory, None)
         if listing is None:
-            return _DirListing(self, directory)
+            return _DirListing(self, directory, entry)
         else:
             return listing
 

@@ -27,6 +27,7 @@ from .glob import _flat_glob
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
+    from ..common.handler import Entry
     from ..common.jobs import _Roots
     from ..common.operation import Operation
 
@@ -62,9 +63,20 @@ class _FlatJobs(_Jobs):
         # The keys each batch deleted could not delete, by the batch's keys.
         self._refused: dict[tuple[str, ...], dict[str, Exception]] = {}
 
+        # The entries of the keys waiting in a batch, as the listing gave them:
+        # a key is deleted by its entry, never by its name verified again.
+        self.batched: dict[str, Entry] = {}
+
+    def batch_entry(self, entry: dict[str, Any]) -> str:
+        """Keep a key's entry until its batch is deleted, and return its name."""
+        name: str = entry["name"]
+        self.batched[name] = entry  # type: ignore[assignment]
+        return name
+
     async def delete(self, paths: tuple[str, ...]) -> None:
-        """Delete a batch of keys by ``_rm_files``, keeping those it refused for `refused`."""
-        refused = await self.handler.rm_files([self.handler.entry(p) for p in paths])
+        """Delete a batch of keys by ``rm_files``, by their entries, keeping those it refused for `refused`."""
+        entries = [self.batched.pop(p, None) or {"name": p} for p in paths]
+        refused = await self.handler.rm_files(entries)  # type: ignore[attr-defined, arg-type]
         if refused:
             self._refused[paths] = {k: e for k, e in refused.items() if k in paths}
 
@@ -94,7 +106,7 @@ class _FlatJobs(_Jobs):
         if not roots.directories:
             return None
         else:
-            return self._keys([d["name"] for d in roots.directories])
+            return self._keys(roots.directories)
 
     def fed(self, item: dict[str, Any]) -> list[Any]:
         self.current = item["name"]
@@ -105,14 +117,17 @@ class _FlatJobs(_Jobs):
             return [self.refuse_name(item["name"], e)]  # type: ignore[attr-defined]
         return []
 
-    async def _keys(self, directories: Sequence[str]) -> AsyncGenerator[dict[str, Any]]:
-        """The keys under each directory, as its recursive ``_ils`` lists them.
+    async def _keys(
+        self, roots: Sequence[dict[str, Any]]
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """The keys under each root directory, as its recursive ``ils`` lists them, by its entry.
 
         A directory with nothing under it is asked for with ``_info``: a file is
         yielded as a key, and a missing one raises FileNotFoundError, ending the
         operation, as a missing root does.
         """
-        for directory in directories:
+        for root in roots:
+            directory = root["name"]
             depth = self.maxdepth
             if depth is not None and directory in self.matched:
                 depth -= 1
@@ -121,7 +136,7 @@ class _FlatJobs(_Jobs):
 
             under = False
             prefix = f"{directory}/" if directory else ""
-            entries = _listing(self.handler, prefix)
+            entries = _listing(self.handler, prefix, root)
             try:
                 async for entry in entries:
                     under = True
@@ -136,6 +151,6 @@ class _FlatJobs(_Jobs):
                 continue
 
             async with self.concurrency_limit:
-                entry = await self.handler.info(self.handler.entry(directory))
+                entry = await self.handler.info(root)  # type: ignore[arg-type]
             if entry["type"] != "directory":
                 yield entry

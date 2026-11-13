@@ -137,16 +137,23 @@ class StorageHandler(ABC):
         The path has no protocol. A handler refuses what its storage would, or
         what it does not serve, e.g. a path of another storage account than its
         own, a bucket name the storage refuses, or a name too long. It sends no
-        request: it checks the path alone.
+        request: it checks the path alone. The handler's ``root`` is a path it
+        accepts, as the parent of the paths at the root.
 
         The filesystem verifies each path a caller gives before it calls a
-        strategy or a primitive. The paths `join` and `join_all` build are
-        verified by them. So a strategy and a primitive take only verified
-        paths.
+        strategy or a primitive. The paths `join`, `join_all` and `parent`
+        build, and those `entry` wraps, are verified by them. So a strategy and
+        a primitive take only verified paths, or entries a listing gave.
         """
 
     def entry(self, path: str) -> Entry:
-        """The entry of a verified path alone, for a primitive taking an item the caller knows only by its path."""
+        """The entry of a path alone, verified: for a primitive taking an item its caller knows only by its path.
+
+        It raises ValueError for a path `verify_path` refuses. A name a listing
+        gave is never wrapped so: the strategies pass on the entry the listing
+        gave, as the storage holds what it lists, whatever its name.
+        """
+        self.verify_path(path)
         return {"name": StoragePath(path)}
 
     def join(self, directory: str, name: str) -> StoragePath:
@@ -179,9 +186,20 @@ class StorageHandler(ABC):
         return path
 
     def parent(self, path: str) -> StoragePath:
-        """The directory a path is in: the root for one at the root."""
-        head = path.rstrip("/").rpartition("/")[0]
-        return StoragePath(head or (self.root if path.startswith(self.root) else ""))
+        """The directory a path is in, verified: the root for one at the root.
+
+        The root is in no directory: it raises ValueError, as does a parent
+        `verify_path` refuses, e.g. one too short for the storage's paths.
+        """
+        trimmed = path.rstrip("/") or path
+        if trimmed == self.root:
+            raise ValueError(f"The root has no parent: {path!r}")
+        head = trimmed.rpartition("/")[0]
+        parent = StoragePath(
+            head or (self.root if trimmed.startswith(self.root) else "")
+        )
+        self.verify_path(parent)
+        return parent
 
     def name(self, path: str) -> str:
         """The last name of a path."""

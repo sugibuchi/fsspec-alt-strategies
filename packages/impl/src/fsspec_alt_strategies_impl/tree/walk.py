@@ -44,7 +44,7 @@ from .listing import _recursive
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Collection, Iterable
 
-    from ..common.handler import StorageHandler
+    from ..common.handler import Entry, StorageHandler
 
 __all__: list[str] = []
 
@@ -303,7 +303,9 @@ async def _chunks(
     _check_maxdepth(maxdepth)
     handler = _handler_of(fs)
 
-    roots = {_trim(p) for p in ([path] if isinstance(path, str) else path)}
+    # Each directory to list by the entry its listing gave, e.g. with the
+    # storage's id, else by its path: a root given as a path, verified.
+    roots, listed = _roots(path)
     trees = _Trees(maxdepth, descend, whole)
     # The directories to list, each with its depth.
     directories: _Queue[tuple[str, int]] = _Queue(handler.operation_limit)
@@ -321,12 +323,19 @@ async def _chunks(
         await directories.start(
             lambda item: (
                 _produce_tree(
-                    handler, ils_kwargs or {}, *item, parts, chunk_size, stopped
+                    handler,
+                    ils_kwargs or {},
+                    listed.pop(item[0], None),
+                    *item,
+                    parts,
+                    chunk_size,
+                    stopped,
                 )
                 if item[0] in trees.roots
                 else _produce(
                     handler,
                     ils_kwargs or {},
+                    listed.pop(item[0], None),
                     *item,
                     item[0] in roots,
                     parts,
@@ -359,6 +368,7 @@ async def _chunks(
                 subdirs = _new_subdirs(part, descend, found)
                 trees.add(s for s, _ in subdirs)
                 directories.waiting.extend(subdirs)
+                listed.update(_entries_of(part, {s for s, _ in subdirs}))
 
             if part.last:
                 found.pop(part.directory, None)
@@ -369,6 +379,31 @@ async def _chunks(
             yield part
     finally:
         await directories.close()
+
+
+def _roots(
+    path: str | Entry | Collection[str | Entry],
+) -> tuple[set[str], dict[str, Entry]]:
+    """The roots of a walk, by path, and the entries of those given as entries, e.g. a glob's matches."""
+    roots: set[str] = set()
+    listed: dict[str, Entry] = {}
+    for root in [path] if isinstance(path, (str, dict)) else path:
+        if isinstance(root, dict):
+            name = _trim(root["name"])
+            listed[name] = {**root, "name": name}  # type: ignore[typeddict-item]
+        else:
+            name = _trim(root)
+        roots.add(name)
+    return roots, listed
+
+
+def _entries_of(part: _Listing, subdirs: set[str]) -> dict[str, Entry]:
+    """The entries of the subdirectories a part found, by path, each to be listed by it."""
+    found: dict[str, Entry] = {}
+    for entry in part.entries:
+        if (name := entry["name"].rstrip("/")) in subdirs:
+            found[name] = {**entry, "name": name}  # type: ignore[typeddict-item]
+    return found
 
 
 async def _next_part(
@@ -393,6 +428,7 @@ async def _next_part(
 async def _produce(
     handler: StorageHandler,
     ils_kwargs: dict[str, Any],
+    listed: Entry | None,
     directory: str,
     depth: int,
     root: bool,
@@ -400,11 +436,15 @@ async def _produce(
     chunk_size: int,
     stopped: Callable[[], bool],
 ) -> None:
-    """List a directory, putting its parts in ``parts`` as they come, its error last."""
+    """List a directory, putting its parts in ``parts`` as they come, its error last.
+
+    It lists by ``listed``, the entry its parent's listing gave, else by its
+    path, verified: a path refused is the listing's error.
+    """
     first = True
     chunk: list[dict[str, Any]] = []
     try:
-        entries = handler.ils(handler.entry(directory), **ils_kwargs)
+        entries = handler.ils(listed or handler.entry(directory), **ils_kwargs)
         try:
             async for entry in entries:
                 if entry["name"].rstrip("/") == directory:
@@ -436,6 +476,7 @@ async def _produce(
 async def _produce_tree(
     handler: StorageHandler,
     ils_kwargs: dict[str, Any],
+    listed: Entry | None,
     root: str,
     root_depth: int,
     parts: asyncio.Queue[_Listing],
@@ -453,7 +494,7 @@ async def _produce_tree(
     """
     tree = _Split(root, root_depth, chunk_size)
     try:
-        entries = _recursive(handler, handler.entry(root), **ils_kwargs)
+        entries = _recursive(handler, listed or handler.entry(root), **ils_kwargs)
         try:
             async for entry in entries:
                 for part in tree.add(entry):

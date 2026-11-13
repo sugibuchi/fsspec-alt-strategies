@@ -120,7 +120,7 @@ class _Deletion(_FlatJobs):
 
     def add(self, entry: dict[str, Any]) -> None:
         self.files_found += 1
-        self.batch.append(entry["name"])
+        self.batch.append(self.batch_entry(entry))
         if len(self.batch) >= self.batch_size:
             self.send()
 

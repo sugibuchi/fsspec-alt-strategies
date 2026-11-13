@@ -234,7 +234,7 @@ class _Move(_Copy):
                 return  # Directories stay, as fsspec's copy leaves them out.
             # A directory's marker: deleted, its directory made as _flat_cp makes it.
             self.copied[name] = None
-            self.delete_later(name)
+            self.delete_later(entry)
             super().add(entry)
             return
 
@@ -266,7 +266,7 @@ class _Move(_Copy):
             return super().done(job)
         if job.kind == "copy":
             self.copying -= 1
-            self.delete_later(job.path)
+            self.delete_later(job.source)
             return []
 
         refused = self.refused(
@@ -298,9 +298,9 @@ class _Move(_Copy):
         )
         return [error]
 
-    def delete_later(self, source: str) -> None:
+    def delete_later(self, source: dict[str, Any]) -> None:
         """Add a key to the batch to delete, and send the batch if it is ready."""
-        self.batch.append(source)
+        self.batch.append(self.batch_entry(source))
         self.send_if_ready()
 
     def send_if_ready(self) -> None:
