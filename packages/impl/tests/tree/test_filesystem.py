@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from fsspec.asyn import AsyncFileSystem, sync
+from fsspec.asyn import AsyncFileSystem
 from fsspec.callbacks import Callback
 
 from fsspec_alt_strategies.monitor import (
@@ -20,10 +20,9 @@ from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
 )
-from fsspec_alt_strategies_impl.files.fsspec_async import AsyncFileAdapter
 from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
-from fsspec_alt_strategies_impl.tree.listing import _tree_ils
+from fsspec_alt_strategies_impl.tree.handler import TreeHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -81,78 +80,73 @@ async def _open_file(
     return _Writer(inner, path, **kwargs)
 
 
-class _Tree(TreeFileSystem):
-    """A TreeFileSystem whose primitives are a simulated storage's."""
+class _TreeHandler(TreeHandler):
+    """A simulated storage's primitives, as a tree handler: no recursive listing of its own."""
 
-    protocol = "treetest"
-    cachable = False
-    storage_profile = StorageProfile()
+    profile = StorageProfile()
 
-    def __init__(self, inner: SimulatedFileSystem, **kwargs: Any) -> None:
-        options = {
-            "operation_concurrency": 4,
-            "io_concurrency": 2,
-        }
-        super().__init__(**{**options, **kwargs})
+    def __init__(
+        self,
+        inner: SimulatedFileSystem,
+        *,
+        operation_concurrency: Any = 4,
+        io_concurrency: Any = 2,
+    ) -> None:
+        super().__init__(
+            operation_concurrency=operation_concurrency, io_concurrency=io_concurrency
+        )
         self.inner = inner
         # The extra keyword arguments each listing was given, e.g. refresh=True.
         self.ls_kwargs: list[dict[str, Any]] = []
 
-    def _ils(
-        self, path: str, recursive: bool = False, **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            # A storage with no recursive listing of its own.
-            return _tree_ils(self, path, recursive=False, **kwargs)
-        else:
-            return self._list_directory(path, **kwargs)
+    def verify_path(self, path: str) -> None:
+        """Nothing: the simulated storage takes any path."""
 
-    async def _list_directory(
-        self, path: str, **kwargs: Any
+    async def ils(  # type: ignore[override]
+        self, entry: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
         self.ls_kwargs.append(kwargs)
-        for entry in await self.inner._ls(path, detail=True):
-            yield entry
+        for listed in await self.inner._ls(entry["name"], detail=True):
+            yield listed
 
-    async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
-        return await self.inner._info(path)
+    async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return await self.inner._info(entry["name"])  # type: ignore[no-any-return]
 
-    async def _rm_file(self, path: str, **kwargs: Any) -> None:
-        await self.inner._rm_file(path)
+    async def rm_file(self, entry: dict[str, Any]) -> None:
+        await self.inner._rm_file(entry["name"])
 
-    async def _rmdir(self, path: str) -> None:
-        await self.inner._rmdir(path)
+    async def rmdir(self, entry: dict[str, Any]) -> None:
+        await self.inner._rmdir(entry["name"])
 
-    async def _cp_file_entry(
-        self, entry: dict[str, Any], path2: str, **kwargs: Any
-    ) -> None:
+    async def cp_file(self, entry: dict[str, Any], path2: Any) -> None:
         await self.inner._cp_file(entry["name"], path2)
 
-    async def _mv_file_entry(
-        self, entry: dict[str, Any], path2: str, **kwargs: Any
-    ) -> None:
+    async def mv_file(self, entry: dict[str, Any], path2: Any) -> None:
         await self.inner._mv_file(entry["name"], path2)
 
-    async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
+    async def makedirs(self, path: Any, exist_ok: bool = False) -> None:
         await self.inner._makedirs(path, exist_ok=exist_ok)
 
-    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        # The same file, for the sync API, on the filesystem's loop.
-        path = self._strip_protocol(path)
-        return sync(
-            self.loop,
-            _open_file,
-            self.inner,
-            path,
-            mode,
-            loop=self.loop,
-            concurrency_limit=self.io_limit,
+    async def open_reader(self, entry: dict[str, Any], **kwargs: Any) -> Any:
+        return await _open_file(
+            self.inner, entry["name"], "rb", concurrency_limit=self.io_limit
         )
 
-    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        path = self._strip_protocol(path)
-        file = await _open_file(self.inner, path, mode, concurrency_limit=self.io_limit)
-        return AsyncFileAdapter(file)
+    async def open_writer(self, path: Any, mode: str, **kwargs: Any) -> Any:
+        return await _open_file(self.inner, path, mode, concurrency_limit=self.io_limit)
+
+
+class _Tree(TreeFileSystem):
+    """A TreeFileSystem on a simulated storage, made from it as from storage options."""
+
+    protocol = "treetest"
+    cachable = False
+    handler_class = _TreeHandler
+
+
+def _on(handler: TreeHandler) -> Any:
+    """A TreeFileSystem on a handler, async."""
+    return TreeFileSystem.of(handler, asynchronous=True)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
@@ -239,8 +233,8 @@ async def test_extra_keyword_arguments_go_to_every_listing(
 ) -> None:
     # As fsspec's recursive methods pass them on to _ls, e.g. to skip a cache.
     await method(fs, "data", refresh=True)
-    assert fs.ls_kwargs
-    assert all(kwargs == {"refresh": True} for kwargs in fs.ls_kwargs)
+    assert fs.handler.ls_kwargs
+    assert all(kwargs == {"refresh": True} for kwargs in fs.handler.ls_kwargs)
 
 
 class _Forbidding(SimulatedFileSystem):
@@ -298,13 +292,13 @@ async def test_recursive_rm_copy_and_mv(fs: _Tree, inner: SimulatedFileSystem) -
 
 
 async def test_a_rename_moves_a_dir_whole(inner: SimulatedFileSystem) -> None:
-    class Renaming(_Tree):
-        storage_profile = StorageProfile(renames_directories=True)
+    class Renaming(_TreeHandler):
+        profile = StorageProfile(renames_directories=True)
 
-        async def _mv_tree(self, path1: str, path2: str) -> None:
-            await self.inner._rename(path1, path2)
+        async def mv_tree(self, entry: dict[str, Any], path2: Any) -> None:
+            await self.inner._rename(entry["name"], path2)
 
-    renaming = Renaming(inner, asynchronous=True)
+    renaming = _on(Renaming(inner))
     inner.reset_stats()
     await renaming._mv("data", "moved", recursive=True)
     # The target's info, found free, then the rename of the root.
@@ -317,13 +311,11 @@ async def test_a_rename_moves_a_dir_whole(inner: SimulatedFileSystem) -> None:
 async def test_a_file_moves_by_mv_file_when_not_recursive(
     inner: SimulatedFileSystem, path2: str
 ) -> None:
-    class Renaming(_Tree):
-        async def _mv_file_entry(
-            self, entry: dict[str, Any], path2: str, **kwargs: Any
-        ) -> None:
+    class Renaming(_TreeHandler):
+        async def mv_file(self, entry: dict[str, Any], path2: Any) -> None:
             await self.inner._rename(entry["name"], path2)
 
-    renaming = Renaming(inner, asynchronous=True)
+    renaming = _on(Renaming(inner))
     inner.reset_stats()
     await renaming._mv("data/README.md", path2)
     # One rename, no copy or deletion: fsspec's own would copy, then delete.
@@ -349,17 +341,15 @@ async def test_a_file_moves_by_mv_file_when_not_recursive(
 async def test_a_single_file_moves_asking_each_path_once(
     inner: SimulatedFileSystem, path2: str, target: str, calls: dict[str, int]
 ) -> None:
-    class Renaming(_Tree):
-        storage_profile = StorageProfile(
+    class Renaming(_TreeHandler):
+        profile = StorageProfile(
             renames_files=True, renames_directories=True, parents_required=True
         )
 
-        async def _mv_file_entry(
-            self, entry: dict[str, Any], path2: str, **kwargs: Any
-        ) -> None:
+        async def mv_file(self, entry: dict[str, Any], path2: Any) -> None:
             await self.inner._rename(entry["name"], path2)
 
-    renaming = Renaming(inner, asynchronous=True)
+    renaming = _on(Renaming(inner))
     inner.reset_stats()
     await renaming._mv("data/README.md", path2)
     # The source's info, which tells a file and goes on as its entry, and the
@@ -405,13 +395,13 @@ async def test_a_single_file_copied_onto_itself_is_left(
 async def test_rm_uses_a_recursive_delete_of_the_storage(
     inner: SimulatedFileSystem,
 ) -> None:
-    class Deleting(_Tree):
-        storage_profile = StorageProfile(deletes_directories=True)
+    class Deleting(_TreeHandler):
+        profile = StorageProfile(deletes_directories=True)
 
-        async def _rm_tree(self, path: str) -> None:
-            await self.inner._rm(path, recursive=True)
+        async def rm_tree(self, entry: dict[str, Any]) -> None:
+            await self.inner._rm(entry["name"], recursive=True)
 
-    fs = Deleting(inner, asynchronous=True)
+    fs = _on(Deleting(inner))
     callback = Callback()
     monitor = _Recording()
     inner.reset_stats()
@@ -429,9 +419,9 @@ async def test_a_profile_found_by_a_request_is_loaded_once(
 ) -> None:
     loads: list[bool] = []
 
-    class Found(_Tree):
+    class Found(_TreeHandler):
         # E.g. whether an account has a hierarchical namespace.
-        async def _load_storage_profile(self) -> StorageProfile:
+        async def load_profile(self) -> StorageProfile:
             refused = not loads
             loads.append(refused)
             await asyncio.sleep(0)
@@ -439,10 +429,10 @@ async def test_a_profile_found_by_a_request_is_loaded_once(
                 raise ConnectionError("refused")  # Asked again by the next call.
             return StorageProfile(deletes_directories=True)
 
-        async def _rm_tree(self, path: str) -> None:
-            await self.inner._rm(path, recursive=True)
+        async def rm_tree(self, entry: dict[str, Any]) -> None:
+            await self.inner._rm(entry["name"], recursive=True)
 
-    fs = Found(inner, asynchronous=True)
+    fs = _on(Found(inner))
     with pytest.raises(ConnectionError):
         await fs._get_storage_profile()
 
@@ -460,13 +450,13 @@ async def test_storage_profile_is_the_profile_loaded(
 ) -> None:
     found = StorageProfile(renames_files=True)
 
-    class Found(_Tree):
-        storage_profile = StorageProfile()  # Nothing known until loaded.
+    class Found(_TreeHandler):
+        profile = StorageProfile()  # Nothing known until loaded.
 
-        async def _load_storage_profile(self) -> StorageProfile:
+        async def load_profile(self) -> StorageProfile:
             return found
 
-    fs = Found(inner, asynchronous=True)
+    fs = _on(Found(inner))
     # As set until loaded: then the profile found.
     assert fs.storage_profile == StorageProfile()
     assert await fs._get_storage_profile() is found
@@ -493,12 +483,12 @@ async def test_mkdir_makes_a_directory(fs: _Tree, inner: SimulatedFileSystem) ->
 
 
 async def test_failures_are_raised(fs: _Tree, inner: SimulatedFileSystem) -> None:
-    async def refused(path: str, **kwargs: Any) -> None:
-        if path == "data/README.md":
-            raise PermissionError(path)
-        await inner._rm_file(path)
+    async def refused(entry: dict[str, Any]) -> None:
+        if entry["name"] == "data/README.md":
+            raise PermissionError(entry["name"])
+        await inner._rm_file(entry["name"])
 
-    fs._rm_file = refused  # type: ignore[method-assign]
+    fs.handler.rm_file = refused  # type: ignore[method-assign]
     with pytest.raises(PermissionError):
         await fs._rm("data", recursive=True)
     assert await inner._exists("data/README.md")
@@ -671,12 +661,12 @@ async def test_fsspec_callback_counts_the_bytes_of_a_file(
     assert (callback.size, callback.value) == (6, 6)
 
 
-def test_a_subclass_missing_a_primitive_is_refused() -> None:
-    class Incomplete(_Tree):
-        _rmdir = TreeFileSystem._rmdir  # Still abstract, as if not written.
+def test_a_handler_missing_a_primitive_is_refused() -> None:
+    class Incomplete(_TreeHandler):
+        rmdir = TreeHandler.rmdir  # Still abstract, as if not written.
 
-    with pytest.raises(TypeError, match="_rmdir"):
-        Incomplete(SimulatedFileSystem(), asynchronous=True)
+    with pytest.raises(TypeError, match="rmdir"):
+        Incomplete(SimulatedFileSystem())
 
 
 def test_storage_profile_is_unknown_unless_set() -> None:
@@ -789,13 +779,13 @@ def test_the_sync_rmdir_deletes() -> None:
     assert not inner.exists("empty")
 
 
-async def test_cp_file_asks_info_then_copies_the_entry(
+async def test_cp_file_hands_the_handler_the_path_alone(
     fs: _Tree, inner: SimulatedFileSystem
 ) -> None:
     inner.reset_stats()
     await fs._cp_file("data/README.md", "copied.md")
-    # The default _cp_file asks the source's entry once, then hands it on.
-    assert inner.stats.calls == {"info": 1, "copy": 1}
+    # The handler is given the source's path as its entry, and asks no info.
+    assert inner.stats.calls == {"copy": 1}
     assert inner._file_data["copied.md"].data == b"readme"
 
 
@@ -805,18 +795,18 @@ async def test_cp_file_asks_info_then_copies_the_entry(
 async def test_ls_keeps_the_listing(fs: _Tree) -> None:
     first = await fs._ls("data")
     assert await fs._ls("treetest://data/", detail=False) == [e["name"] for e in first]
-    assert len(fs.ls_kwargs) == 1
+    assert len(fs.handler.ls_kwargs) == 1
     # refresh=True lists again, and keeps the new listing.
     assert await fs._ls("data", refresh=True) == first
-    assert len(fs.ls_kwargs) == 2
-    assert fs.ls_kwargs[-1] == {}
+    assert len(fs.handler.ls_kwargs) == 2
+    assert fs.handler.ls_kwargs[-1] == {}
 
 
 async def test_ls_keeps_none_when_told(inner: SimulatedFileSystem) -> None:
     fs = _Tree(inner, asynchronous=True, use_listings_cache=False)
     await fs._ls("data")
     await fs._ls("data")
-    assert len(fs.ls_kwargs) == 2
+    assert len(fs.handler.ls_kwargs) == 2
 
 
 async def test_strategies_and_info_never_use_the_listings_kept(

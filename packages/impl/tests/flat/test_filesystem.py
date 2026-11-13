@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from fsspec.asyn import AsyncFileSystem, sync
+from fsspec.asyn import AsyncFileSystem
 from fsspec.callbacks import Callback
 
 from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
@@ -15,8 +15,8 @@ from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
 )
-from fsspec_alt_strategies_impl.files.fsspec_async import AsyncFileAdapter
 from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
+from fsspec_alt_strategies_impl.flat.handler import FlatHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -73,76 +73,80 @@ async def _open_file(
     return _Writer(inner, path, **kwargs)
 
 
+class _FlatHandler(FlatHandler):
+    """A simulated object store's primitives, as a flat handler."""
+
+    profile = StorageProfile()
+    rm_batch_size = 2
+
+    def __init__(
+        self,
+        inner: SimulatedFileSystem,
+        *,
+        operation_concurrency: Any = 4,
+        io_concurrency: Any = 2,
+    ) -> None:
+        super().__init__(
+            operation_concurrency=operation_concurrency, io_concurrency=io_concurrency
+        )
+        self.inner = inner
+
+    def verify_path(self, path: str) -> None:
+        """Nothing: the simulated storage takes any path."""
+
+    def ils_recursive(  # type: ignore[override]
+        self, entry: dict[str, Any], *, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        path = entry["name"]
+        return self.inner._list_prefix(f"{path}/{prefix}" if path else prefix)  # type: ignore[no-any-return]
+
+    async def ils(  # type: ignore[override]
+        self, entry: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        for listed in await self.inner._ls(entry["name"], detail=True):
+            yield listed
+
+    async def rm_files(self, entries: list[dict[str, Any]]) -> None:
+        await self.inner._rm_files([e["name"] for e in entries])
+
+    async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return await self.inner._info(entry["name"])  # type: ignore[no-any-return]
+
+    async def rm_file(self, entry: dict[str, Any]) -> None:
+        await self.inner._rm_file(entry["name"])
+
+    async def rmdir(self, entry: dict[str, Any]) -> None:
+        await self.inner._rmdir(entry["name"])
+
+    async def makedirs(self, path: Any, exist_ok: bool = False) -> None:
+        await self.inner._makedirs(path, exist_ok=exist_ok)
+
+    async def cp_file(self, entry: dict[str, Any], path2: Any) -> None:
+        await self.inner._cp_file(entry["name"], path2)
+
+    async def mv_file(self, entry: dict[str, Any], path2: Any) -> None:
+        await self.inner._mv_file(entry["name"], path2)
+
+    async def open_reader(self, entry: dict[str, Any], **kwargs: Any) -> Any:
+        return await _open_file(
+            self.inner, entry["name"], "rb", concurrency_limit=self.io_limit
+        )
+
+    async def open_writer(self, path: Any, mode: str, **kwargs: Any) -> Any:
+        return await _open_file(self.inner, path, mode, concurrency_limit=self.io_limit)
+
+
 class _Flat(FlatFileSystem):
-    """A FlatFileSystem whose primitives are a simulated object store's."""
+    """A FlatFileSystem on a simulated object store, made from it as from storage options."""
 
     protocol = "flattest"
     cachable = False
-    storage_profile = StorageProfile()
-    rm_batch_size = 2
+    handler_class = _FlatHandler
 
-    def __init__(self, inner: SimulatedFileSystem, **kwargs: Any) -> None:
-        options = {
-            "operation_concurrency": 4,
-            "io_concurrency": 2,
-        }
-        super().__init__(**{**options, **kwargs})
-        self.inner = inner
 
-    def _ils(
-        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            return self.inner._list_prefix(f"{path}/{prefix}" if path else prefix)
-        else:
-            return self._ls_directory(path)
-
-    async def _ls_directory(self, path: str) -> AsyncIterator[dict[str, Any]]:
-        for entry in await self.inner._ls(path, detail=True):
-            yield entry
-
-    async def _rm_files(self, paths: list[str]) -> None:
-        await self.inner._rm_files(paths)
-
-    async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
-        return await self.inner._info(path)
-
-    async def _rm_file(self, path: str, **kwargs: Any) -> None:
-        await self.inner._rm_file(path)
-
-    async def _rmdir(self, path: str) -> None:
-        await self.inner._rmdir(path)
-
-    async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
-        await self.inner._makedirs(path, exist_ok=exist_ok)
-
-    async def _cp_file_entry(
-        self, entry: dict[str, Any], path2: str, **kwargs: Any
-    ) -> None:
-        await self.inner._cp_file(entry["name"], path2)
-
-    async def _mv_file_entry(
-        self, entry: dict[str, Any], path2: str, **kwargs: Any
-    ) -> None:
-        await self.inner._mv_file(entry["name"], path2)
-
-    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        # The same file, for the sync API, on the filesystem's loop.
-        path = self._strip_protocol(path)
-        return sync(
-            self.loop,
-            _open_file,
-            self.inner,
-            path,
-            mode,
-            loop=self.loop,
-            concurrency_limit=self.io_limit,
-        )
-
-    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        path = self._strip_protocol(path)
-        file = await _open_file(self.inner, path, mode, concurrency_limit=self.io_limit)
-        return AsyncFileAdapter(file)
+def _on(handler: FlatHandler) -> Any:
+    """A FlatFileSystem on a handler, async."""
+    return FlatFileSystem.of(handler, asynchronous=True)
 
 
 _FILES = [
@@ -239,17 +243,15 @@ async def test_a_file_moves_as_the_profile_says_when_not_recursive(
 ) -> None:
     renamed: list[tuple[str, str]] = []
 
-    class Renaming(_Flat):
-        storage_profile = StorageProfile(renames_files=renames_files)
+    class Renaming(_FlatHandler):
+        profile = StorageProfile(renames_files=renames_files)
 
-        async def _mv_file_entry(
-            self, entry: dict[str, Any], path2: str, **kwargs: Any
-        ) -> None:
+        async def mv_file(self, entry: dict[str, Any], path2: Any) -> None:
             renamed.append((entry["name"], path2))
             await self.inner._cp_file(entry["name"], path2)
             await self.inner._rm_file(entry["name"])
 
-    fs = Renaming(inner, asynchronous=True)
+    fs = _on(Renaming(inner))
     inner.reset_stats()
     await fs._mv("data/README.md", "moved.md")
     assert renamed == ([("data/README.md", "moved.md")] if renames_files else [])
@@ -266,11 +268,11 @@ async def test_data_goes_through_the_files(
 
 
 def test_rm_batch_size_must_be_set(inner: SimulatedFileSystem) -> None:
-    class Unset(_Flat):
+    class Unset(_FlatHandler):
         rm_batch_size = 0
 
     with pytest.raises(ValueError, match="rm_batch_size"):
-        Unset(inner)
+        _on(Unset(inner))
 
 
 async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
@@ -296,15 +298,15 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
     assert monitor.items == 7 + len(_FILES)
 
 
-@pytest.mark.parametrize("primitive", ["_rm_files", "_rmdir", "_makedirs"])
-def test_a_subclass_missing_a_primitive_is_refused(primitive: str) -> None:
+@pytest.mark.parametrize("primitive", ["rm_files", "rmdir", "makedirs"])
+def test_a_handler_missing_a_primitive_is_refused(primitive: str) -> None:
     # Still abstract, as if not written: fsspec's _rmdir and _makedirs would do nothing.
     incomplete = type(
-        "Incomplete", (_Flat,), {primitive: getattr(FlatFileSystem, primitive)}
+        "Incomplete", (_FlatHandler,), {primitive: getattr(FlatHandler, primitive)}
     )
 
     with pytest.raises(TypeError, match=primitive):
-        incomplete(SimulatedFileSystem(), asynchronous=True)
+        incomplete(SimulatedFileSystem())
 
 
 def test_buckets_are_made_and_deleted_by_the_subclass() -> None:
@@ -365,13 +367,13 @@ async def test_copy_and_mv_with_maxdepth(fs: _Flat, inner: SimulatedFileSystem) 
     assert "data/2023/top.txt" in inner._file_data
 
 
-async def test_cp_file_asks_info_then_copies_the_entry(
+async def test_cp_file_hands_the_handler_the_path_alone(
     fs: _Flat, inner: SimulatedFileSystem
 ) -> None:
     inner.reset_stats()
     await fs._cp_file("data/README.md", "copied.md")
-    # The default _cp_file asks the source's entry once, then hands it on.
-    assert inner.stats.calls == {"info": 1, "copy": 1}
+    # The handler is given the source's path as its entry, and asks no info.
+    assert inner.stats.calls == {"copy": 1}
     assert inner._file_data["copied.md"].data == b"x" * 10
 
 
@@ -379,10 +381,10 @@ async def test_cp_file_asks_info_then_copies_the_entry(
 async def test_a_single_file_moves_asking_each_path_once(
     inner: SimulatedFileSystem, path2: str
 ) -> None:
-    class Renaming(_Flat):
-        storage_profile = StorageProfile(renames_files=True)
+    class Renaming(_FlatHandler):
+        profile = StorageProfile(renames_files=True)
 
-    renaming = Renaming(inner, asynchronous=True)
+    renaming = _on(Renaming(inner))
     inner.reset_stats()
     await renaming._mv("data/README.md", path2)
     # The source's info goes on as its entry: the key is not listed. The

@@ -351,6 +351,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
             return await handler.open_writer(handler.verified(plain), mode, **kwargs)
         raise ValueError(f"mode must be 'rb', 'wb' or 'xb': {mode!r}")
 
+    @_drops_listings
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         """Open a file whose methods are awaited, as fsspec's ``open_async`` does, by the handler.
 
