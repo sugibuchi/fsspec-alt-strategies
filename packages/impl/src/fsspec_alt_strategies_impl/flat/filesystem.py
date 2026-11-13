@@ -38,8 +38,6 @@ from .walk import _flat_walk
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 
-    from .handler import FlatHandler
-
 
 __all__ = ["FlatFileSystem"]
 
@@ -89,8 +87,6 @@ class FlatFileSystem(_BaseFileSystem):
     >>> fs = MyFileSystem("mine")
     >>> s3 = FlatFileSystemWrapper(S3fsHandler(s3fs.S3FileSystem(), ...))
     """
-
-    handler: FlatHandler
 
     # The storage's primitives: the handler's, each on a caller's path, verified by it.
 
