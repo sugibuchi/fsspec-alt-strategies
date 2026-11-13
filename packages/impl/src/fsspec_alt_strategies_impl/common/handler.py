@@ -120,8 +120,16 @@ class StorageHandler(ABC):
         return self.profile
 
     async def close(self) -> None:
-        """Release what `open` made: here, nothing. A later `open` opens it again."""
+        """Release what `open` made, and what `release` releases. A later `open` opens it again."""
+        self.release()
         self._opened = False
+
+    def release(self) -> None:  # noqa: B027
+        """Release at once what needs no request to release, e.g. threads: here, nothing.
+
+        A filesystem's sync ``close()`` calls it. A subclass holding threads
+        shuts them down here.
+        """
 
     # Paths and entries: the strategies build paths only by these.
 

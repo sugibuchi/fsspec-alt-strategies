@@ -352,9 +352,15 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         raise ValueError(f"mode must be 'rb', 'wb' or 'xb': {mode!r}")
 
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        """Open a file whose methods are awaited, as fsspec's ``open_async`` does, by the handler."""
+        """Open a file whose methods are awaited, as fsspec's ``open_async`` does, by the handler.
+
+        A handler whose files are another filesystem's, as a wrapper's are,
+        opens its own, by its ``open_async_file``.
+        """
         if kwargs.pop("compression", None):
             raise ValueError("Compression is not supported by open_async")
+        if (own := getattr(self.handler, "open_async_file", None)) is not None:
+            return await own(self._strip_protocol(path), mode, **kwargs)
         return AsyncFileAdapter(await self._handler_file(path, mode, **kwargs))
 
     @_drops_listings
@@ -370,8 +376,18 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         """Open a file for the sync ``open``, by the handler, on the filesystem's loop.
 
         Within a transaction, a file written is committed with it: no reader
-        sees it before.
+        sees it before. A handler whose files are another filesystem's opens
+        its own, by its ``open_sync_file``.
         """
+        if (own := getattr(self.handler, "open_sync_file", None)) is not None:
+            return own(
+                self._strip_protocol(path),
+                mode,
+                block_size=block_size,
+                autocommit=autocommit,
+                cache_options=cache_options,
+                **kwargs,
+            )
         file = sync(self.loop, self._handler_file, path, mode, **kwargs)
         if autocommit or mode == "rb":
             return file
@@ -428,9 +444,11 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
                 if key == path or below or above or not key:
                     self.dircache.pop(key, None)
         super().invalidate_cache(path)
+        if (own := getattr(self.handler, "invalidate_cache", None)) is not None:
+            own(path)  # A wrapped filesystem's own listings kept.
 
     def close(self) -> None:
-        """Release what the filesystem holds: here, nothing.
+        """Release what the filesystem holds: its handler's, released at once.
 
         fsspec never calls it. A router closes its inner filesystems with it,
         and ``with`` closes the filesystem it opened. A subclass, or a mixin
@@ -438,6 +456,27 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         threads, and calls this one. It may be called more than once: each
         releases what is held then.
         """
+        if self.handler is not None:
+            self.handler.release()
+
+    # fsspec's sync methods it leaves to each filesystem: the handler's, where it has them.
+
+    def created(self, path: str) -> Any:
+        return self._handler_method("created")(self._strip_protocol(path))
+
+    def modified(self, path: str) -> Any:
+        return self._handler_method("modified")(self._strip_protocol(path))
+
+    def sign(self, path: str, expiration: int = 100, **kwargs: Any) -> str:
+        sign = self._handler_method("sign")
+        return sign(self._strip_protocol(path), expiration=expiration, **kwargs)  # type: ignore[no-any-return]
+
+    def _handler_method(self, name: str) -> Callable[..., Any]:
+        """The handler's method of that name, else NotImplementedError, as fsspec's own raises."""
+        method = getattr(self.handler, name, None)
+        if method is None:
+            raise NotImplementedError(f"{type(self).__name__} has no {name}")
+        return method  # type: ignore[no-any-return]
 
     def __enter__(self) -> Self:
         return self
@@ -569,7 +608,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         is asked first. A subclass whose copy needs nothing of the entry may
         override this too, to save that request.
         """
-        entry = await self._info(path1)
+        entry = await self._entry_of(path1)
         await self._cp_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
 
     @_drops_listings
@@ -578,8 +617,19 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         As `_cp_file`, for a move.
         """
-        entry = await self._info(path1)
+        entry = await self._entry_of(path1)
         await self._mv_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
+
+    async def _entry_of(self, path: str) -> dict[str, Any]:
+        """A caller's file's entry, for a copy or move: its path alone with a handler, else its ``_info``.
+
+        A handler takes an entry whose keys are unknown, asking the storage
+        itself only where it needs them.
+        """
+        if self.handler is not None:
+            return self.handler.entry(self._strip_protocol(path))
+        else:
+            return await self._info(path)
 
     async def _cat_file(
         self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any
@@ -592,7 +642,14 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         holds none while it calls the filesystem's files, which take their own:
         held around them, it would wait for itself. fsspec's methods on many
         paths call it at most ``io_concurrency`` at a time, whatever it does.
+
+        A handler with a ``cat_file`` of its own, e.g. one download, reads by
+        it, under a permit of ``io_limit``.
         """
+        if (own := getattr(self.handler, "cat_file", None)) is not None:
+            entry = self._required_handler().entry(self._strip_protocol(path))
+            async with self.io_limit:
+                return await own(entry, start=start, end=end, **kwargs)  # type: ignore[no-any-return]
         f = await self.open_async(path, "rb", **kwargs)
         async with f:
             position = 0
@@ -611,7 +668,12 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     async def _pipe_file(
         self, path: str, value: bytes, mode: str = "overwrite", **kwargs: Any
     ) -> None:
-        """Write a file whole, through a file of ``open_async``: see `_cat_file` for ``io_limit``."""
+        """Write a file whole, through a file of ``open_async``, or the handler's own ``pipe_file``: see `_cat_file`."""
+        if (own := getattr(self.handler, "pipe_file", None)) is not None:
+            target = self._required_handler().verified(self._strip_protocol(path))
+            async with self.io_limit:
+                await own(target, value, mode=mode, **kwargs)
+            return
         f = await self.open_async(path, "xb" if mode == "create" else "wb", **kwargs)
         async with f:
             await f.write(value)
@@ -623,7 +685,12 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
-        """Copy a file to a local path, through a file of ``open_async``: see `_cat_file` for ``io_limit``."""
+        """Copy a file to a local path, through a file of ``open_async``, or the handler's own ``get_file``: see `_cat_file`."""
+        if (own := getattr(self.handler, "get_file", None)) is not None:
+            entry = self._required_handler().entry(self._strip_protocol(rpath))
+            async with self.io_limit:
+                await own(entry, lpath, callback=callback, **kwargs)
+            return
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
             return  # A directory, which fsspec's get makes itself.
 
@@ -648,7 +715,12 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
-        """Copy a local file to the storage, through a file of ``open_async``: see `_cat_file` for ``io_limit``."""
+        """Copy a local file to the storage, through a file of ``open_async``, or the handler's own ``put_file``: see `_cat_file`."""
+        if (own := getattr(self.handler, "put_file", None)) is not None:
+            target = self._required_handler().verified(self._strip_protocol(rpath))
+            async with self.io_limit:
+                await own(lpath, target, mode=mode, callback=callback, **kwargs)
+            return
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
             return  # A directory: a storage needs none for the files put in it.
 
