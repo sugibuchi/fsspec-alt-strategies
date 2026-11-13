@@ -357,6 +357,7 @@ async def test_strategies_load_the_profile_once(
     assert handler.loaded == loads
 
 
-async def test_the_profile_set_is_returned() -> None:
+async def test_the_profile_set_is_the_handlers() -> None:
     fs = _tree(SimulatedFileSystem(asynchronous=True))
-    assert await fs._get_storage_profile() == StorageProfile(fs_type="tree")
+    await fs.handler.open()
+    assert fs.handler.profile == StorageProfile(fs_type="tree")

@@ -85,7 +85,7 @@ def _tree_cp(
     without ``maxdepth``: fsspec places them by the common prefix of the files
     found, which moves them when all are in one subdirectory.
 
-    The destination is described by ``dst_fs`` and its ``storage_profile``,
+    The destination is described by ``dst_fs`` and its ``profile``,
     unknown if it has none. Within one storage, ``dst_fs`` is ``src_fs``, and
     ``same_storage`` is True: a path copied onto itself, or under itself, is
     refused. Between two, ``cp_entry`` copies from one to the other, by default

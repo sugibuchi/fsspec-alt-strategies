@@ -57,7 +57,7 @@ def test_a_filesystem_is_wrapped_as_its_entry_says() -> None:
     assert isinstance(flat.handler, FsspecFlatHandler)
     assert flat.handler.fs is fs
     assert (flat.operation_concurrency, flat.io_concurrency) == (3, 2)
-    assert (flat.rm_batch_size, flat.storage_profile) == (100, profile)
+    assert (flat.rm_batch_size, flat.handler.profile) == (100, profile)
 
 
 def test_a_subclass_takes_the_entry_of_its_class() -> None:
@@ -201,4 +201,4 @@ def test_an_unknown_filesystem_is_wrapped_if_asked(asynchronous: bool) -> None:
     assert isinstance(tree, TreeFileSystem)
     assert tree.handler.asynchronous is asynchronous  # type: ignore[attr-defined]
     assert (tree.operation_concurrency, tree.io_concurrency) == (1, 1)
-    assert tree.storage_profile == StorageProfile(fs_type="tree")
+    assert tree.handler.profile == StorageProfile(fs_type="tree")

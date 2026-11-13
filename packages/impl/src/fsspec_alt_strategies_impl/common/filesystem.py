@@ -34,7 +34,6 @@ from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks, sync
 from fsspec.callbacks import DEFAULT_CALLBACK
 
 from fsspec_alt_strategies.monitor import Call, Monitored
-from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 
 from ..files.fsspec_async import AsyncFileAdapter
 from ..files.fsspec_transaction import AdaptiveWritableTransaction, TransactionFile
@@ -195,23 +194,10 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     the concurrency, so that several filesystems share it, or else a new one,
     of the number given.
 
-    ``storage_profile`` tells the strategies what the storage does. It is one
-    for the whole filesystem, and always set: one whose storage is unknown says
-    so, with ``UNKNOWN``. Where a request finds it, e.g. whether an
-    account has a hierarchical namespace, a subclass sets what it knows and
-    overrides ``_load_storage_profile()`` too. The strategies and the
-    subclass's primitives get it with ``await self._get_storage_profile()``,
-    which loads it once, sets it as ``storage_profile``, and returns it.
-    Neither takes a path, so that the profile cannot differ by path. A storage
-    whose behaviour does, e.g. per bucket, is several filesystems under a
-    router: one per bucket, and the router for the whole namespace.
-
-    Each family's class declares the abstract methods its subclasses implement,
-    so that a reader finds them all in one place.
+    What the storage does, its profile, is the handler's alone: the
+    strategies read it from the handler, which loads it as it opens. The
+    filesystem exposes none.
     """
-
-    storage_profile: StorageProfile = UNKNOWN
-    """What the storage does: its handler's, as loaded once the handler is open."""
 
     transfer_size: int = 8 * _MiB
     """The bytes read or written at a time by ``_get_file`` and ``_put_file``."""
@@ -240,9 +226,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
                 self.unstrip_protocol = unstrip  # type: ignore[method-assign]
             self.root_marker = handler.root
 
-        self._storage_profile_loaded = False
         self.handler = handler
-        self.storage_profile = handler.profile
         self.operation_concurrency = handler.operation_concurrency
         self.io_concurrency = handler.io_concurrency
         self.operation_limit = handler.operation_limit
@@ -267,19 +251,6 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
             method = cls.__dict__.get(name)
             if callable(method) and not hasattr(method, "__wrapped__"):
                 setattr(cls, name, _drops_listings(method))
-
-    async def _get_storage_profile(self) -> StorageProfile:
-        """``storage_profile``, loaded first by the handler as it opens.
-
-        Once loaded, ``storage_profile`` is returned as it is. A first call
-        opens the handler while the others wait, then find it open. An open
-        that raises is tried again by the next call.
-        """
-        if not self._storage_profile_loaded:
-            await self.handler.open()
-            self.storage_profile = self.handler.profile
-            self._storage_profile_loaded = True
-        return self.storage_profile
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""

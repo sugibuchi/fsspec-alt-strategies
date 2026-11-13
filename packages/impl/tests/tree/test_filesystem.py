@@ -434,18 +434,18 @@ async def test_a_profile_found_by_a_request_is_loaded_once(
 
     fs = _on(Found(inner))
     with pytest.raises(ConnectionError):
-        await fs._get_storage_profile()
+        await fs.handler.open()
 
     # The strategy loads it: deleted whole, as declared.
     inner.reset_stats()
     await fs._rm("data", recursive=True)
     assert inner.stats.calls == {"delete": 1}
     # Kept: concurrent calls load nothing more.
-    await asyncio.gather(*(fs._get_storage_profile() for _ in range(3)))
+    await asyncio.gather(*(fs.handler.open() for _ in range(3)))
     assert loads == [True, False]
 
 
-async def test_storage_profile_is_the_profile_loaded(
+async def test_the_handlers_profile_is_the_profile_loaded(
     inner: SimulatedFileSystem,
 ) -> None:
     found = StorageProfile(renames_files=True)
@@ -456,15 +456,17 @@ async def test_storage_profile_is_the_profile_loaded(
         async def load_profile(self) -> StorageProfile:
             return found
 
-    fs = _on(Found(inner))
+    handler = Found(inner)
     # As set until loaded: then the profile found.
-    assert fs.storage_profile == StorageProfile()
-    assert await fs._get_storage_profile() is found
-    assert fs.storage_profile is found
+    assert handler.profile == StorageProfile()
+    await handler.open()
+    assert handler.profile is found
 
     # A profile set loads as itself.
-    declared = _Tree(inner, asynchronous=True)
-    assert await declared._get_storage_profile() is declared.storage_profile
+    declared = _Tree(inner, asynchronous=True).handler
+    profile = declared.profile
+    await declared.open()
+    assert declared.profile is profile
 
 
 async def test_mkdir_makes_a_directory(fs: _Tree, inner: SimulatedFileSystem) -> None:
@@ -669,10 +671,11 @@ def test_a_handler_missing_a_primitive_is_refused() -> None:
         Incomplete(SimulatedFileSystem())
 
 
-def test_storage_profile_is_unknown_unless_set() -> None:
-    # The base's own: what a subclass setting none has.
-    assert TreeFileSystem.storage_profile == StorageProfile()
-    assert FlatFileSystem.storage_profile == StorageProfile()
+@pytest.mark.parametrize("family", [TreeFileSystem, FlatFileSystem])
+def test_a_filesystem_exposes_no_profile(family: type) -> None:
+    # The profile is the handler's alone, which the strategies read.
+    for name in ("storage_profile", "_get_storage_profile", "_load_storage_profile"):
+        assert not hasattr(family, name)
 
 
 def _copied(fs: SimulatedFileSystem) -> dict[str, bytes]:

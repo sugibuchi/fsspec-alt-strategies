@@ -182,7 +182,6 @@ async def test_a_filesystem_on_a_handler_calls_its_primitives() -> None:
     assert await inner._cat_file("copied/a/x") == b"1"
     await fs._rm("data", recursive=True)
     assert not await inner._exists("data")
-    assert await fs._get_storage_profile() is fs.handler.profile
 
 
 async def test_a_filesystem_on_a_handler_verifies_a_callers_paths() -> None:

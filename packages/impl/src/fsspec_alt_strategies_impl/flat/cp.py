@@ -54,7 +54,7 @@ def _flat_cp(
     The keys are listed as `_flat_find` lists them, and each is copied by one
     ``cp_entry`` as soon as the listing gives it.
 
-    The destination is described by ``dst_fs`` and its ``storage_profile``,
+    The destination is described by ``dst_fs`` and its ``profile``,
     unknown if it has none, and may be flat or a tree. Within one storage,
     ``dst_fs`` is ``src_fs``, and ``same_storage`` is True: a path copied onto
     itself, or under itself, is refused. Between two, ``cp_entry`` copies from

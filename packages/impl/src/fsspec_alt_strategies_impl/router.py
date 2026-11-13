@@ -319,8 +319,8 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
     ``open_async`` knows no transaction: its files are the storage's own,
     written as they close. Neither does a copy between two storages.
 
-    The router has no ``storage_profile``: each storage has its own, which
-    its handler gives. Its only limit is ``transfer_limit``, the files copied
+    The router has no profile: each storage has its own, which its handler
+    gives. Its only limit is ``transfer_limit``, the files copied
     across storages at once, its handler's. The storages keep their own
     limits.
 

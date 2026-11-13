@@ -72,7 +72,7 @@ def _tree_mv(
     go first. A directory is created at the destination before files are moved
     into it, and for each empty directory.
 
-    The destination is described by ``dst_fs`` and its ``storage_profile``,
+    The destination is described by ``dst_fs`` and its ``profile``,
     unknown if it has none. Within one storage, ``dst_fs`` is ``src_fs``, and
     ``same_storage`` is True. Between two, ``mv_entry`` copies a file to the
     other storage, then deletes it: by default `transfer._across`. A
