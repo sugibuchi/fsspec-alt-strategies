@@ -14,7 +14,7 @@ next ones ahead, as their entries arrive, so that their listings overlap. The
 filesystem's ``operation_limit`` bounds how many run at once, and `_HELD` how
 much they read ahead.
 
-This module depends on `paths` of `common`.
+This module depends on `handler` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -24,10 +24,13 @@ import heapq
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
+from ..common.handler import _handler_of
 from ..common.paths import _trim
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
+
+    from ..common.handler import Entry, StorageHandler
 
 __all__: list[str] = []
 
@@ -68,8 +71,11 @@ async def _tree_ils(
 
     ``ils_kwargs`` go to each ``_ils``.
     """
+    # A filesystem implementing its _ils by this one gives itself, as before handlers.
+    ils_kwargs.pop("recursive", None)
+    handler = _handler_of(fs)
     root = _trim(path)
-    ahead = _Ahead(fs, ils_kwargs)
+    ahead = _Ahead(handler, ils_kwargs)
     # The directories being yielded, the root first: each is yielding one of the next.
     stack = [ahead.take(root)]
 
@@ -101,11 +107,25 @@ async def _tree_ils(
         await ahead.close(stack)
 
 
+def _recursive(
+    handler: StorageHandler, entry: Entry, **ils_kwargs: Any
+) -> AsyncIterator[Entry]:
+    """All below a directory: by the handler's recursive listing, or else by `_tree_ils`.
+
+    A handler declaring no ``recursive_order`` has no recursive listing of its
+    own: the tree is listed a directory per request, several at a time.
+    """
+    if getattr(handler, "recursive_order", None) is not None:
+        return handler.ils_recursive(entry, **ils_kwargs)  # type: ignore[attr-defined, no-any-return]
+    else:
+        return _tree_ils(handler, entry["name"], **ils_kwargs)  # type: ignore[return-value]
+
+
 class _Ahead:
     """The directories found but not yielded yet, some of them listed ahead."""
 
-    def __init__(self, fs: Any, ils_kwargs: dict[str, Any]) -> None:
-        self.fs = fs
+    def __init__(self, handler: StorageHandler, ils_kwargs: dict[str, Any]) -> None:
+        self.handler = handler
         self.ils_kwargs = ils_kwargs
         self.found: dict[str, _DirListing] = {}
         # The directories found and not listed yet, the nearest first: depth
@@ -114,9 +134,9 @@ class _Ahead:
         self.held = 0  # The entries read and not yielded yet.
         self.closed = False
 
-    def add(self, directory: str) -> None:
-        """Note a subdirectory read in a listing, to list it ahead."""
-        self.found[directory] = _DirListing(self, directory)
+    def add(self, directory: str, entry: Entry) -> None:
+        """Note a subdirectory read in a listing, with its entry, to list it ahead."""
+        self.found[directory] = _DirListing(self, directory, entry)
         heapq.heappush(self.queue, (directory.split("/"), directory))
         self.start()
 
@@ -162,9 +182,13 @@ class _Ahead:
 class _DirListing:
     """A directory's ``_ils``, read a batch at a time, ahead of its turn or in it."""
 
-    def __init__(self, ahead: _Ahead, directory: str) -> None:
+    def __init__(
+        self, ahead: _Ahead, directory: str, entry: Entry | None = None
+    ) -> None:
         self.ahead = ahead
         self.directory = directory
+        # Its parent's listing gave it, e.g. with the storage's id: the root's is its path alone.
+        self.entry = entry if entry is not None else ahead.handler.entry(directory)
         # Each entry read, with the path of a subdirectory it is the first entry of.
         self.entries: deque[tuple[dict[str, Any], str | None]] = deque()
         self.subdirectories: set[str] = set()
@@ -196,7 +220,7 @@ class _DirListing:
 
     async def read_ahead(self) -> None:
         """Read a batch ahead of the directory's turn, under a permit of its own."""
-        async with self.ahead.fs.operation_limit:
+        async with self.ahead.handler.operation_limit:
             self.reading = True
             try:
                 await self.read()
@@ -206,7 +230,7 @@ class _DirListing:
     async def read(self) -> None:
         """Read a batch of entries, noting the subdirectories in it to list ahead."""
         if self.iterator is None:
-            self.iterator = self.ahead.fs._ils(self.directory, **self.ahead.ils_kwargs)
+            self.iterator = self.ahead.handler.ils(self.entry, **self.ahead.ils_kwargs)
 
         try:
             for _ in range(_BATCH):
@@ -231,7 +255,7 @@ class _DirListing:
         ):
             return None
         self.subdirectories.add(name)
-        self.ahead.add(name)
+        self.ahead.add(name, {**entry, "name": name})  # type: ignore[typeddict-item]
         return name
 
     async def close(self) -> None:

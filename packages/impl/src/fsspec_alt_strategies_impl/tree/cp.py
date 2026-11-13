@@ -29,6 +29,7 @@ from ._jobs import _TreeJobs
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
+    from ..common.handler import Entry
     from ..common.jobs import _Roots, _Transfer
     from ..common.operation import Operation
     from .walk import _Listing
@@ -255,7 +256,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             return False
         try:
             async with self.concurrency_limit:
-                await self.dst_fs._info(target)
+                await self.dst.info(self.dst.entry(target))
         except FileNotFoundError:
             return True
         except Exception as e:
@@ -341,9 +342,9 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
-            return self.dst_fs._makedirs(job.destination, exist_ok=True)
+            return self.dst.makedirs(job.destination, exist_ok=True)
         if job.kind == "whole":
-            return self.transfer_whole(job.path, job.destination)
+            return self.transfer_whole(job.source, job.destination)
         else:
             return self.transfer_file(job.source, job.destination)
 
@@ -352,7 +353,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         """Copy or move a file, by its entry. An error raised notes its paths, as it is yielded."""
 
     @abstractmethod
-    def transfer_whole(self, path: str, destination: str) -> Awaitable[None]:
+    def transfer_whole(self, entry: Entry, destination: str) -> Awaitable[None]:
         """Copy or move a root with all in it, by the storage's one request."""
 
     def done(self, job: _Job) -> list[Any]:
@@ -411,5 +412,5 @@ class _Copy(_CopyOrMove):
     async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
         await self.copy_file(self.cp_entry, entry, destination)
 
-    def transfer_whole(self, path: str, destination: str) -> Awaitable[None]:
-        return self.fs._cp_tree(path, destination)  # type: ignore[no-any-return]
+    def transfer_whole(self, entry: Entry, destination: str) -> Awaitable[None]:
+        return self.handler.cp_tree(entry, destination)  # type: ignore[attr-defined, no-any-return]

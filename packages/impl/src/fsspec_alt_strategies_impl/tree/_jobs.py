@@ -62,7 +62,7 @@ class _TreeJobs(_Jobs):
         """
 
     def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
-        return _tree_glob(self.fs, pattern, maxdepth=self.maxdepth)
+        return _tree_glob(self.handler, pattern, maxdepth=self.maxdepth)
 
     def unlisted(self, directory: str) -> bool:
         """Whether a root directory is at the depth limit already: a match, at 1."""
@@ -77,7 +77,7 @@ class _TreeJobs(_Jobs):
             return None
         else:
             return _chunks(
-                self.fs,
+                self.handler,
                 directories,
                 maxdepth=self.maxdepth,
                 matched=self.matched,

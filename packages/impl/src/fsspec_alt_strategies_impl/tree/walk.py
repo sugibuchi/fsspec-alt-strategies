@@ -23,7 +23,7 @@ The tree strategies, and the engines under them, take the filesystem they
 work on, and call its primitives, such as ``_ils``, under its
 ``operation_limit``.
 
-This module depends on `jobs`, `operation` and `paths` of `common`.
+This module depends on `listing`, and `handler`, `jobs`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -35,12 +35,16 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from fsspec_alt_strategies.states import WalkState
 
+from ..common.handler import _handler_of
 from ..common.jobs import _Queue
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
+from .listing import _recursive
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Collection, Iterable
+
+    from ..common.handler import StorageHandler
 
 __all__: list[str] = []
 
@@ -297,11 +301,12 @@ async def _chunks(
     is.
     """
     _check_maxdepth(maxdepth)
+    handler = _handler_of(fs)
 
     roots = {_trim(p) for p in ([path] if isinstance(path, str) else path)}
     trees = _Trees(maxdepth, descend, whole)
     # The directories to list, each with its depth.
-    directories: _Queue[tuple[str, int]] = _Queue(fs.operation_limit)
+    directories: _Queue[tuple[str, int]] = _Queue(handler.operation_limit)
     # The parts listed, a few at a time: a listing waits while they are full.
     parts: asyncio.Queue[_Listing] = asyncio.Queue(maxsize=16)
     # The subdirectories found so far in each directory being listed, each listed once.
@@ -315,10 +320,12 @@ async def _chunks(
             directories.waiting.clear()
         await directories.start(
             lambda item: (
-                _produce_tree(fs, ils_kwargs or {}, *item, parts, chunk_size, stopped)
+                _produce_tree(
+                    handler, ils_kwargs or {}, *item, parts, chunk_size, stopped
+                )
                 if item[0] in trees.roots
                 else _produce(
-                    fs,
+                    handler,
                     ils_kwargs or {},
                     *item,
                     item[0] in roots,
@@ -384,7 +391,7 @@ async def _next_part(
 
 
 async def _produce(
-    fs: Any,
+    handler: StorageHandler,
     ils_kwargs: dict[str, Any],
     directory: str,
     depth: int,
@@ -397,7 +404,7 @@ async def _produce(
     first = True
     chunk: list[dict[str, Any]] = []
     try:
-        entries = fs._ils(directory, **ils_kwargs)
+        entries = handler.ils(handler.entry(directory), **ils_kwargs)
         try:
             async for entry in entries:
                 if entry["name"].rstrip("/") == directory:
@@ -427,7 +434,7 @@ async def _produce(
 
 
 async def _produce_tree(
-    fs: Any,
+    handler: StorageHandler,
     ils_kwargs: dict[str, Any],
     root: str,
     root_depth: int,
@@ -446,7 +453,7 @@ async def _produce_tree(
     """
     tree = _Split(root, root_depth, chunk_size)
     try:
-        entries = fs._ils(root, recursive=True, **ils_kwargs)
+        entries = _recursive(handler, handler.entry(root), **ils_kwargs)
         try:
             async for entry in entries:
                 for part in tree.add(entry):

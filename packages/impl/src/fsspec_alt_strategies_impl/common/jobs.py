@@ -16,7 +16,7 @@ family finds what to copy, `_CopyJobs` where it goes. The two define no
 method in common, and their constructors take keywords and pass the rest on,
 so either order works.
 
-This module depends on `operation` and `paths`.
+This module depends on `handler`, `operation` and `paths`.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from fsspec.utils import common_prefix
 from fsspec_alt_strategies.profile import UNKNOWN
 from fsspec_alt_strategies.states import CpState
 
+from .handler import _handler_of
 from .operation import Operation, _collect_with_errors
 from .paths import _trim
 
@@ -44,6 +45,8 @@ if TYPE_CHECKING:
         Sequence,
     )
     from typing import Self, TypeAlias
+
+    from .handler import StorageHandler
 
     _Transfer: TypeAlias = Callable[[dict[str, Any], str], Awaitable[None]]
     """How one file goes from its source entry to a destination path.
@@ -72,12 +75,13 @@ def _transfer_of(
     ``transfer`` is given. Between two, ``transfer`` is required: the source's
     own would write to the source.
     """
+    src, dst = _handler_of(src_fs), _handler_of(dst_fs)
     if same_storage is None:
-        same_storage = src_fs is dst_fs
+        same_storage = src is dst
     if transfer is None:
         if not same_storage:
             raise ValueError(f"{name} is required between two storages")
-        transfer = getattr(src_fs, f"_{name.removesuffix('_entry')}_file_entry")
+        transfer = getattr(src, f"{name.removesuffix('_entry')}_file")
     return transfer, same_storage
 
 
@@ -229,7 +233,7 @@ class _Jobs(ABC):
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        self.fs = fs
+        self.handler: StorageHandler = _handler_of(fs)
         self.maxdepth = maxdepth
 
         # The directory roots a pattern matched: fsspec walks them one level less
@@ -237,7 +241,7 @@ class _Jobs(ABC):
         self.matched: set[str] = set()
 
         # The source's requests, the jobs, and a pattern's glob share it.
-        self.concurrency_limit: asyncio.Semaphore = fs.operation_limit
+        self.concurrency_limit: asyncio.Semaphore = self.handler.operation_limit
         self.jobs: _Queue[_Job] = _Queue(self.concurrency_limit)
 
         # The queue's own, which the subclasses queue their jobs in.
@@ -512,7 +516,7 @@ class _CopyJobs(_Jobs):
         # The profile is the destination's, as what a copy saves depends on
         # where it writes. Within one storage, it is the source's too. Unknown
         # until setup awaits it.
-        self.dst_fs = dst_fs
+        self.dst: StorageHandler = _handler_of(dst_fs)
         self.profile = UNKNOWN
         self.implicit_directories = False
         self.parents_required = True
@@ -538,9 +542,9 @@ class _CopyJobs(_Jobs):
 
     async def setup(self) -> None:
         # Any async filesystem may be a router's destination: fsspec gives it
-        # no profile, so its storage is unknown.
-        get = getattr(self.dst_fs, "_get_storage_profile", None)
-        self.profile = await get() if get is not None else UNKNOWN
+        # no profile, so its handler's is unknown.
+        await self.dst.open()
+        self.profile = self.dst.profile
         # Unknown, directories are made first. Implicit directories need none.
         # Within one storage, a file goes by the storage's own copy or move,
         # whose parents the profile tells apart from a write's.
@@ -675,7 +679,7 @@ class _CopyJobs(_Jobs):
             into = True
         else:
             try:
-                entry = await self.dst_fs._info(destination)
+                entry = await self.dst.info(self.dst.entry(destination))
             except FileNotFoundError:
                 self.missing.add(destination)
                 into = False
@@ -719,11 +723,11 @@ class _CopyJobs(_Jobs):
             try:
                 await cp_entry(entry, destination)
             except FileExistsError:
-                found = await self.dst_fs._info(destination)
+                found = await self.dst.info(self.dst.entry(destination))
                 if found["type"] == "directory":
                     raise
 
-                await self.dst_fs._rm_file(destination)
+                await self.dst.rm_file({**found, "name": destination})  # type: ignore[typeddict-item]
                 await cp_entry(entry, destination)
         except Exception as e:
             e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")

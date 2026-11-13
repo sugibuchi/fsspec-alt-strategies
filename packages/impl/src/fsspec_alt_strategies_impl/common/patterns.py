@@ -11,7 +11,7 @@ A ``**`` matches any number of segments, so only those before the first ``**``
 can rule a directory out. Without a ``**``, a directory as deep as the pattern
 is ruled out too, as nothing below it can match.
 
-This module depends on `jobs` and `paths`.
+This module depends on `handler`, `jobs` and `paths`.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from fsspec.utils import glob_translate
 
 from fsspec_alt_strategies.states import GlobState
 
+from .handler import _handler_of
 from .jobs import _Queue
 from .paths import _trim
 
@@ -46,13 +47,14 @@ async def _infos(
     as the answers arrive. Once the operation is cancelled, no new ``_info``
     starts, but those running are yielded.
     """
-    requests: _Queue[str] = _Queue(fs.operation_limit)
+    handler = _handler_of(fs)
+    requests: _Queue[str] = _Queue(handler.operation_limit)
     requests.waiting.extend(dict.fromkeys(paths))
 
     async def start() -> None:
         if op.cancelling():
             requests.waiting.clear()
-        await requests.start(fs._info)
+        await requests.start(lambda path: handler.info(handler.entry(path)))
 
     try:
         await start()

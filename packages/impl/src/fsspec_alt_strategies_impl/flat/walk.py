@@ -8,7 +8,7 @@ all the keys under a prefix at once. `_flat_walk` makes that one listing, and
 derives the directories from the keys. As the keys come in order, those in a
 directory come together: the directory is done once the listing has passed them.
 
-This module depends on `_keys`, and `operation` and `paths` of `common`.
+This module depends on `_keys`, and `handler`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import WalkState
 
+from ..common.handler import _handler_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
 from ._keys import _close, _dir, _dirs, _listing
@@ -156,8 +157,9 @@ async def _dirs_done(
 
     if not under and root:
         # Nothing under it: a file, or missing, as _tree_walk raises for them.
-        async with fs.operation_limit:
-            entry = await fs._info(root)
+        handler = _handler_of(fs)
+        async with handler.operation_limit:
+            entry = await handler.info(handler.entry(root))
         if entry["type"] != "directory":
             raise NotADirectoryError(root)
 

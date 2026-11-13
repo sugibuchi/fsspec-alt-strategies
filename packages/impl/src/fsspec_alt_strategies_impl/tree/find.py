@@ -7,7 +7,7 @@ fsspec's walks a tree one directory at a time, unless the filesystem lists
 whole trees. `_tree_find` lists the tree as `_tree_walk` does: by one recursive
 ``_ils``, or a directory per request, several at a time.
 
-This module depends on `walk`, and `operation` and `paths` of `common`.
+This module depends on `walk`, and `handler`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -17,12 +17,15 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import FindState
 
+from ..common.handler import _handler_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from .walk import _chunks, _Listing
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
+
+    from ..common.handler import StorageHandler
 
 __all__: list[str] = []
 
@@ -136,9 +139,10 @@ async def _find_listings(
     So the strategies filter and count it as any entry, but count no directory
     listed for it.
     """
+    handler = _handler_of(fs)
     root = _trim(path)
     listings = _chunks(
-        fs,
+        handler,
         root,
         maxdepth=maxdepth,
         descend=descend,
@@ -155,31 +159,31 @@ async def _find_listings(
         except (FileNotFoundError, NotADirectoryError) as e:
             # Only the root's own listing raises them: any later one is yielded.
             if file_root and isinstance(e, NotADirectoryError):
-                async with fs.operation_limit:
-                    entry = await fs._info(root)
+                async with handler.operation_limit:
+                    entry = await handler.info(handler.entry(root))
                 yield _Listing(root, 0, [entry])
             return
 
         yield root_listing
         if root_listing.last:
-            async for listing in _root_entry(fs, root, dir_root, stopping):
+            async for listing in _root_entry(handler, root, dir_root, stopping):
                 yield listing
 
         async for listing in listings:
             yield listing
             if listing.directory == root and listing.last:
-                async for entry in _root_entry(fs, root, dir_root, stopping):
+                async for entry in _root_entry(handler, root, dir_root, stopping):
                     yield entry
 
 
 async def _root_entry(
-    fs: Any,
+    handler: StorageHandler,
     root: str,
     dir_root: bool,
     stopping: Callable[[], object] | None,
 ) -> AsyncGenerator[_Listing]:
     """The root directory's own ``info`` entry, as a listing of depth 0, if asked."""
     if dir_root and not (stopping and stopping()):
-        async with fs.operation_limit:
-            entry = await fs._info(root)
+        async with handler.operation_limit:
+            entry = await handler.info(handler.entry(root))
         yield _Listing(root, 0, [entry])

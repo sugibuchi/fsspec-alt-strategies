@@ -64,7 +64,7 @@ class _FlatJobs(_Jobs):
 
     async def delete(self, paths: tuple[str, ...]) -> None:
         """Delete a batch of keys by ``_rm_files``, keeping those it refused for `refused`."""
-        refused = await self.fs._rm_files(list(paths))
+        refused = await self.handler.rm_files([self.handler.entry(p) for p in paths])
         if refused:
             self._refused[paths] = {k: e for k, e in refused.items() if k in paths}
 
@@ -80,7 +80,7 @@ class _FlatJobs(_Jobs):
         return refused
 
     def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
-        return _flat_glob(self.fs, pattern, maxdepth=self.maxdepth)
+        return _flat_glob(self.handler, pattern, maxdepth=self.maxdepth)
 
     @abstractmethod
     def add(self, entry: dict[str, Any]) -> None:
@@ -117,7 +117,7 @@ class _FlatJobs(_Jobs):
 
             under = False
             prefix = f"{directory}/" if directory else ""
-            entries = _listing(self.fs, prefix)
+            entries = _listing(self.handler, prefix)
             try:
                 async for entry in entries:
                     under = True
@@ -132,6 +132,6 @@ class _FlatJobs(_Jobs):
                 continue
 
             async with self.concurrency_limit:
-                entry = await self.fs._info(directory)
+                entry = await self.handler.info(self.handler.entry(directory))
             if entry["type"] != "directory":
                 yield entry

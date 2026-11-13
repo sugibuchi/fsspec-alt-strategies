@@ -8,7 +8,7 @@ prefix first. `_flat_mv` moves each key as soon as the listing gives it: by
 one ``_mv_file_entry``, or by a copy, deleting the copied keys in batches while
 the listing goes on.
 
-This module depends on `_jobs`, `cp`, and `jobs`, `operation` and `paths` of
+This module depends on `_jobs`, `cp`, and `handler`, `jobs`, `operation` and `paths` of
 `common`.
 """
 
@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
+from ..common.handler import _handler_of, _profile
 from ..common.jobs import _Job, _transfer_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
@@ -125,15 +126,13 @@ def _flat_mv(
         "root_entry": root_entry,
     }
 
-    _check_batch_size(src_fs.rm_batch_size)
+    _check_batch_size(_handler_of(src_fs).rm_batch_size)
     cp_entry, _ = _transfer_of(src_fs, dst_fs, cp_entry, same_storage, "cp_entry")
 
     async def run(op: Operation[Any, MvState]) -> AsyncGenerator[Any]:
         # A rename wins only where the storage is known to rename: the profile,
         # awaited, chooses the jobs.
-        renames = (
-            same_storage and (await dst_fs._get_storage_profile()).renames_files is True
-        )
+        renames = same_storage and (await _profile(dst_fs)).renames_files is True
         jobs: _CopyOrMove = (
             _Rename(op=op, **options)
             if renames
@@ -165,7 +164,7 @@ class _Rename(_CopyOrMove):
 
     async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
         try:
-            await self.fs._mv_file_entry(entry, destination)
+            await self.handler.mv_file(entry, destination)
         except Exception as e:
             # Yielded among paths, the error must tell its paths itself.
             e.add_note(f"{self.doing} {entry['name']!r} to {destination!r} failed.")
@@ -205,7 +204,7 @@ class _Move(_Copy):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        self.batch_size: int = self.fs.rm_batch_size
+        self.batch_size: int = self.handler.rm_batch_size
 
         # The keys to delete. Each key moving, from its listing to its
         # deletion, has where it is copied, None for a marker: listed again,

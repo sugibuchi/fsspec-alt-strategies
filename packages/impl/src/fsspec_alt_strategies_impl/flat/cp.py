@@ -197,7 +197,7 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
-            return self.dst_fs._makedirs(job.destination, exist_ok=True)
+            return self.dst.makedirs(job.destination, exist_ok=True)
         else:
             return self.transfer_file(job.source, job.destination)
 

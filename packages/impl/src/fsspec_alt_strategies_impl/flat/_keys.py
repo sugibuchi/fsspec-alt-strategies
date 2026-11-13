@@ -13,12 +13,14 @@ The listing holds no permit of the filesystem's ``operation_limit``: its pages
 come one after another, and the strategy never sees them. Only the other
 requests, such as an ``info``, hold one.
 
-This module depends on nothing else in the package.
+This module depends on `handler` of `common`.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+
+from ..common.handler import _handler_of
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -32,7 +34,8 @@ def _listing(fs: Any, prefix: str) -> AsyncIterator[dict[str, Any]]:
     all of "data".
     """
     path, _, name = prefix.rpartition("/")
-    return fs._ils(path, recursive=True, prefix=name)
+    handler = _handler_of(fs)
+    return handler.ils_recursive(handler.entry(path), prefix=name)  # type: ignore[attr-defined, no-any-return]
 
 
 def _dir(name: str) -> dict[str, Any]:

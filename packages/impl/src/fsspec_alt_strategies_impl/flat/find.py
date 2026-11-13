@@ -6,7 +6,7 @@
 same paths. fsspec's, and the object stores' own, gather every page of the
 listing before answering. `_flat_find` yields each path as its page arrives.
 
-This module depends on `_keys`, and `operation` and `paths` of `common`.
+This module depends on `_keys`, and `handler`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import FindState
 
+from ..common.handler import _handler_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ._keys import _close, _dir, _dirs, _listing, _new
@@ -139,9 +140,10 @@ async def _find_entries(
     if not root or (under and not withdirs):
         return
 
+    handler = _handler_of(fs)
     try:
-        async with fs.operation_limit:
-            entry = await fs._info(root)
+        async with handler.operation_limit:
+            entry = await handler.info(handler.entry(root))
     except FileNotFoundError:
         return
 

@@ -27,6 +27,7 @@ from .cp import _CopyOrMove
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
+    from ..common.handler import Entry
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
     from .walk import _Listing
@@ -251,12 +252,12 @@ class _Move(_CopyOrMove):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "rmdir":
-            return self.fs._rmdir(job.path)
+            return self.handler.rmdir(job.source)
         else:
             return super().run(job)
 
-    def transfer_whole(self, path: str, destination: str) -> Awaitable[None]:
-        return self.fs._mv_tree(path, destination)  # type: ignore[no-any-return]
+    def transfer_whole(self, entry: Entry, destination: str) -> Awaitable[None]:
+        return self.handler.mv_tree(entry, destination)  # type: ignore[attr-defined, no-any-return]
 
     async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
         try:

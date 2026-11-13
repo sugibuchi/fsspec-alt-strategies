@@ -126,7 +126,8 @@ class _Deletion(_TreeJobs):
         self.directories_deleted = 0
 
     async def setup(self) -> None:
-        profile = await self.fs._get_storage_profile()
+        await self.handler.open()
+        profile = self.handler.profile
         # A directory deleted whole would take what is deeper than maxdepth.
         self.deletes_directories = (
             self.maxdepth is None and profile.deletes_directories is True
@@ -184,11 +185,11 @@ class _Deletion(_TreeJobs):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "tree":
-            return self.fs._rm_tree(job.path)
+            return self.handler.rm_tree(job.source)  # type: ignore[attr-defined, no-any-return]
         if job.kind == "directory":
-            return self.fs._rmdir(job.path)
+            return self.handler.rmdir(job.source)
         else:
-            return self.fs._rm_file(job.path)
+            return self.handler.rm_file(job.source)
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind in ("directory", "tree"):
