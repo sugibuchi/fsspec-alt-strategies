@@ -6,7 +6,7 @@
 `TreeFileSystem` on it answers its recursive methods by the tree strategies.
 It lists a tree a directory per request, by the wrapped one's ``ls``.
 
-This module depends on `_base`, and `handler` of `tree`.
+This module depends on `_base`, and `filesystem` and `handler` of `tree`.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from ..tree.filesystem import TreeFileSystem
 from ..tree.handler import TreeHandler
 from ._base import _FsspecHandler
 
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
 
     from ..common.handler import Entry, StoragePath
 
-__all__ = ["FsspecTreeHandler"]
+__all__ = ["FsspecTreeHandler", "TreeFileSystemWrapper"]
 
 
 class FsspecTreeHandler(_FsspecHandler, TreeHandler):
@@ -74,7 +75,7 @@ class FsspecTreeHandler(_FsspecHandler, TreeHandler):
     Examples
     --------
     >>> local = fsspec.filesystem("file")
-    >>> tree = TreeFileSystem(
+    >>> tree = TreeFileSystemWrapper(
     ...     FsspecTreeHandler(
     ...         local,
     ...         operation_concurrency=8,
@@ -130,3 +131,35 @@ class FsspecTreeHandler(_FsspecHandler, TreeHandler):
             await cp_tree(path, path2)
         else:
             await self.fs._copy(path, path2, recursive=True)
+
+
+class TreeFileSystemWrapper(TreeFileSystem):
+    """A `TreeFileSystem` on a handler wrapping another filesystem, serving that one's paths.
+
+    As it is made, it takes the handler's `protocol`, `root` and
+    `strip_protocol`, the wrapped filesystem's: it takes the URLs that one
+    takes, and gives its own. A `TreeFileSystem` takes none of its handler's
+    paths: a storage's class names its own.
+
+    Parameters
+    ----------
+    handler : FsspecTreeHandler
+        The handler of the filesystem wrapped.
+    **kwargs
+        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. `asynchronous=True`.
+
+    Examples
+    --------
+    >>> fs = TreeFileSystemWrapper(FsspecTreeHandler(fsspec.filesystem("file"), ...))
+    """
+
+    cachable = False
+    """Not cached: fsspec would key it by its handler's repr, which two wrappers of one filesystem share."""
+
+    def __init__(self, handler: FsspecTreeHandler, **kwargs: Any) -> None:
+        super().__init__(handler, **kwargs)
+
+        # The wrapped filesystem's paths, which its handler holds.
+        self.protocol = handler.protocol
+        self.root_marker = handler.root
+        self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]

@@ -198,11 +198,6 @@ def test_a_filesystem_needs_a_handler() -> None:
         TreeFileSystem()  # type: ignore[call-arg]
 
 
-def test_a_filesystem_on_a_handler_is_never_cached() -> None:
-    # fsspec would key it by the handler's repr, which two handlers may share.
-    inner = _storage()
-    assert TreeFileSystem(TreeView(inner)) is not TreeFileSystem(TreeView(inner))
-
 
 class _Bucket(TreeView):
     protocol = ("bkt", "bucket")

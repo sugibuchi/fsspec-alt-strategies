@@ -9,12 +9,16 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
-from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
+from fsspec_alt_strategies_impl.wrapper.flat import (
+    FlatFileSystemWrapper,
+    FsspecFlatHandler,
+)
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
 
 _OPTIONS: dict[str, Any] = {
     "rm_batch_size": 2,
@@ -29,7 +33,7 @@ def _flat(fs: Any, **options: Any) -> FlatFileSystem:
     """A `FlatFileSystem` on a handler of `fs`, on its loop, as `monitored` makes one."""
     asynchronous = options.pop("asynchronous", getattr(fs, "asynchronous", False))
     loop = {"loop": fs.loop} if fs.async_impl and not asynchronous else {}
-    return FlatFileSystem(
+    return FlatFileSystemWrapper(
         FsspecFlatHandler(fs, **options), asynchronous=asynchronous, **loop
     )
 

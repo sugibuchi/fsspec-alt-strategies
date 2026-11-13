@@ -91,7 +91,7 @@ class FlatFileSystem(_BaseFileSystem):
     ...     def __init__(self, bucket, **kwargs):
     ...         super().__init__(MyHandler(bucket), **kwargs)
     >>> fs = MyFileSystem("mine")
-    >>> s3 = FlatFileSystem(S3fsHandler(s3fs.S3FileSystem(), ...))
+    >>> s3 = FlatFileSystemWrapper(S3fsHandler(s3fs.S3FileSystem(), ...))
     """
 
     rm_batch_size: int

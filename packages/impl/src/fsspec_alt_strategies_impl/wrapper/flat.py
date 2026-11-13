@@ -18,7 +18,7 @@ costs twice:
 A subclass overriding ``ils_recursive`` with the storage's own listing by
 prefix, e.g. from its SDK, streams it page by page, and lists only the prefix.
 
-This module depends on `_base`, and `handler` of `flat`.
+This module depends on `_base`, and `filesystem` and `handler` of `flat`.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ import contextlib
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from ..flat.filesystem import FlatFileSystem
 from ..flat.handler import FlatHandler
 from ._base import _FsspecHandler
 
@@ -38,7 +39,7 @@ if TYPE_CHECKING:
 
     from ..common.handler import Entry
 
-__all__ = ["FsspecFlatHandler"]
+__all__ = ["FlatFileSystemWrapper", "FsspecFlatHandler"]
 
 
 class FsspecFlatHandler(_FsspecHandler, FlatHandler):
@@ -84,7 +85,7 @@ class FsspecFlatHandler(_FsspecHandler, FlatHandler):
 
     Examples
     --------
-    >>> flat = FlatFileSystem(
+    >>> flat = FlatFileSystemWrapper(
     ...     FsspecFlatHandler(
     ...         s3,
     ...         rm_batch_size=1000,
@@ -151,3 +152,35 @@ def _starting(
     return sorted(
         (e for e in listing if e["name"].startswith(start)), key=lambda e: e["name"]
     )
+
+
+class FlatFileSystemWrapper(FlatFileSystem):
+    """A `FlatFileSystem` on a handler wrapping another filesystem, serving that one's paths.
+
+    As it is made, it takes the handler's `protocol`, `root` and
+    `strip_protocol`, the wrapped filesystem's: it takes the URLs that one
+    takes, and gives its own. A `FlatFileSystem` takes none of its handler's
+    paths: a storage's class names its own.
+
+    Parameters
+    ----------
+    handler : FsspecFlatHandler
+        The handler of the filesystem wrapped.
+    **kwargs
+        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. `asynchronous=True`.
+
+    Examples
+    --------
+    >>> fs = FlatFileSystemWrapper(FsspecFlatHandler(s3fs.S3FileSystem(), ...))
+    """
+
+    cachable = False
+    """Not cached: fsspec would key it by its handler's repr, which two wrappers of one filesystem share."""
+
+    def __init__(self, handler: FsspecFlatHandler, **kwargs: Any) -> None:
+        super().__init__(handler, **kwargs)
+
+        # The wrapped filesystem's paths, which its handler holds.
+        self.protocol = handler.protocol
+        self.root_marker = handler.root
+        self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]

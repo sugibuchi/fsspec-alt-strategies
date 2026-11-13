@@ -9,14 +9,18 @@ from fsspec.implementations.local import LocalFileSystem
 
 from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
-from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
+from fsspec_alt_strategies_impl.wrapper.tree import (
+    FsspecTreeHandler,
+    TreeFileSystemWrapper,
+)
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     import pytest
+
+    from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 
 _LIMITS: dict[str, Any] = {
     "operation_concurrency": 4,
@@ -35,7 +39,7 @@ def _tree(fs: Any, **options: Any) -> TreeFileSystem:
     """A `TreeFileSystem` on a handler of `fs`, on its loop, as `monitored` makes one."""
     asynchronous = options.pop("asynchronous", getattr(fs, "asynchronous", False))
     loop = {"loop": fs.loop} if fs.async_impl and not asynchronous else {}
-    return TreeFileSystem(
+    return TreeFileSystemWrapper(
         FsspecTreeHandler(fs, **options), asynchronous=asynchronous, **loop
     )
 

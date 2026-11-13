@@ -358,19 +358,12 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     >>> fs = RoutingFileSystem(Lake(transfer_concurrency=8), asynchronous=True)
     """
 
-    cachable = False
-    """Not cached by fsspec, which would key it by its handler's repr: a class below it sets True."""
-
     handler: RoutingHandler
     """The routing handler, which says where each path goes."""
 
     def __init__(self, handler: RoutingHandler, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        # The handler's paths.
-        self.protocol = handler.protocol
-        self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]
-        self.root_marker = handler.root
         self.handler = handler
         self.transfer_concurrency = handler.transfer_concurrency
         self.transfer_limit = handler.transfer_limit
@@ -452,7 +445,14 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
                 f"{handler!r} is of no family: a TreeHandler or a FlatHandler is needed"
             )
 
-        fs = family(handler, asynchronous=self.asynchronous, loop=self.loop)
+        # Never cached: the router keeps it, and fsspec would key it by the
+        # handler's repr.
+        fs = family(
+            handler,
+            asynchronous=self.asynchronous,
+            loop=self.loop,
+            skip_instance_cache=True,
+        )
         storage = self._storages[id(handler)] = _Storage(handler, fs, through)
         return storage
 

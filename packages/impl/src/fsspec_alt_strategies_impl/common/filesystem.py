@@ -49,25 +49,16 @@ _MiB = 1024 * 1024
 
 
 class _BaseFileSystem(AsyncFileSystem, Monitored):
-    """An async filesystem with two concurrency limits, moving data through files.
+    """An async filesystem on a handler, moving data through its files.
 
-    ``operation_limit`` bounds the requests of the strategies, such as
-    listings, deletions and copies. ``io_limit`` bounds the reads and writes of
-    data: ``open_async`` gives it to the files it opens, as their
-    ``concurrency_limit``. Each is an `asyncio.Semaphore`: the one given as
-    the concurrency, so that several filesystems share it, or else a new one,
-    of the number given.
-
-    What the storage does, its profile, is the handler's alone: the
-    strategies read it from the handler, which loads it as it opens. The
-    filesystem exposes none.
+    What the storage does is the handler's alone: its profile, which the
+    strategies read from it, and its limits, ``operation_limit`` and
+    ``io_limit``, which the filesystem holds around the handler's data calls.
+    The filesystem exposes neither.
     """
 
     transfer_size: int = 8 * _MiB
     """The bytes read or written at a time by ``_get_file`` and ``_put_file``."""
-
-    cachable = False
-    """Not cached by fsspec, which would key it by its handler's repr: a storage's class sets True."""
 
     handler: StorageHandler
     """The storage's handler, whose primitives the filesystem calls."""
@@ -75,15 +66,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
     def __init__(self, handler: StorageHandler, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        # The handler's paths, e.g. a wrapped filesystem's URLs and root.
-        self.protocol = handler.protocol
-        self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]
-        self.root_marker = handler.root
         self.handler = handler
-        self.operation_concurrency = handler.operation_concurrency
-        self.io_concurrency = handler.io_concurrency
-        self.operation_limit = handler.operation_limit
-        self.io_limit = handler.io_limit
 
     def unstrip_protocol(self, name: str) -> str:
         """A path of the storage as a URL: the handler's."""
@@ -398,7 +381,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         """
         if (own := getattr(self.handler, "cat_file", None)) is not None:
             entry = self.handler.entry(self._strip_protocol(path))
-            async with self.io_limit:
+            async with self.handler.io_limit:
                 return await own(entry, start=start, end=end, **kwargs)  # type: ignore[no-any-return]
         f = await self.open_async(path, "rb", **kwargs)
         async with f:
@@ -421,7 +404,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         try:
             if (own := getattr(self.handler, "pipe_file", None)) is not None:
                 target = self.handler.verified(self._strip_protocol(path))
-                async with self.io_limit:
+                async with self.handler.io_limit:
                     await own(target, value, mode=mode, **kwargs)
                 return
             f = await self.open_async(
@@ -444,7 +427,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
             return  # A directory, which fsspec's get makes itself.
         if (own := getattr(self.handler, "get_file", None)) is not None:
             entry = self.handler.entry(self._strip_protocol(rpath))
-            async with self.io_limit:
+            async with self.handler.io_limit:
                 await own(entry, lpath, callback=callback, **kwargs)
             return
 
@@ -474,7 +457,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
                 return  # A directory: a storage needs none for the files put in it.
             if (own := getattr(self.handler, "put_file", None)) is not None:
                 target = self.handler.verified(self._strip_protocol(rpath))
-                async with self.io_limit:
+                async with self.handler.io_limit:
                     await own(lpath, target, mode=mode, callback=callback, **kwargs)
                 return
 
@@ -506,8 +489,8 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
             return batch_size
         if self.batch_size is not None:
             return self.batch_size  # type: ignore[no-any-return]
-        if isinstance(self.io_concurrency, int):
-            return self.io_concurrency
+        if isinstance(self.handler.io_concurrency, int):
+            return self.handler.io_concurrency
         else:
             return None
 

@@ -190,6 +190,7 @@ class _Router(RoutingFileSystem):
     protocol = _Lake.protocol
     root_marker = _Lake.root
     _strip_protocol = _Lake.strip_protocol
+    cachable = False  # Each test has a lake of its own.
 
     def __init__(self, lake: type[_Lake] = _Lake, **kwargs: Any) -> None:
         super().__init__(lake(), **kwargs)

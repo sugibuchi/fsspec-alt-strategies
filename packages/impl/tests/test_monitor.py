@@ -18,7 +18,10 @@ from fsspec_alt_strategies_impl.wrapper.adlfs import AdlfsHandler
 from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
 from fsspec_alt_strategies_impl.wrapper.gcsfs import GcsfsHandler
 from fsspec_alt_strategies_impl.wrapper.s3fs import S3fsHandler
-from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
+from fsspec_alt_strategies_impl.wrapper.tree import (
+    FsspecTreeHandler,
+    TreeFileSystemWrapper,
+)
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -28,7 +31,7 @@ _SIMULATED = "fsspec_alt_strategies_impl_testing.SimulatedFileSystem"
 
 
 def test_a_monitored_filesystem_is_returned_as_it_is() -> None:
-    tree = TreeFileSystem(
+    tree = TreeFileSystemWrapper(
         FsspecTreeHandler(
             SimulatedFileSystem(),
             operation_concurrency=1,
@@ -56,7 +59,7 @@ def test_a_filesystem_is_wrapped_as_its_entry_says() -> None:
     assert isinstance(flat, FlatFileSystem)
     assert isinstance(flat.handler, FsspecFlatHandler)
     assert flat.handler.fs is fs
-    assert (flat.operation_concurrency, flat.io_concurrency) == (3, 2)
+    assert (flat.handler.operation_concurrency, flat.handler.io_concurrency) == (3, 2)
     assert (flat.rm_batch_size, flat.handler.profile) == (100, profile)
 
 
@@ -200,5 +203,5 @@ def test_an_unknown_filesystem_is_wrapped_if_asked(asynchronous: bool) -> None:
     tree = monitored(fs, {}, wrap_unknown_fs=True)
     assert isinstance(tree, TreeFileSystem)
     assert tree.handler.asynchronous is asynchronous  # type: ignore[attr-defined]
-    assert (tree.operation_concurrency, tree.io_concurrency) == (1, 1)
+    assert (tree.handler.operation_concurrency, tree.handler.io_concurrency) == (1, 1)
     assert tree.handler.profile == StorageProfile(fs_type="tree")

@@ -5,11 +5,11 @@
 `monitored` returns a filesystem that tells the monitors of a `monitoring`
 block of its operations. One inheriting the interface's `Monitored`, such as a
 `TreeFileSystem`, already does. Any other is wrapped by a handler, as its entry
-in the known implementations says, and a `TreeFileSystem` or `FlatFileSystem`
-made on it: none is chosen for a filesystem not there.
+in the known implementations says, and a `TreeFileSystemWrapper` or
+`FlatFileSystemWrapper` made on it: none is chosen for a filesystem not there.
 
 This module depends on `adlfs`, `flat`, `gcsfs`, `s3fs` and `tree` of
-`wrapper`, and `filesystem` and `handler` of `tree` and of `flat`.
+`wrapper`, and `handler` of `tree` and of `flat`.
 """
 
 from __future__ import annotations
@@ -21,15 +21,13 @@ from fsspec_alt_strategies.monitor import Monitored
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.wrapper import known_implementations
 
-from .flat.filesystem import FlatFileSystem
 from .flat.handler import FlatHandler
-from .tree.filesystem import TreeFileSystem
 from .tree.handler import TreeHandler
 from .wrapper.adlfs import AdlfsHandler
-from .wrapper.flat import FsspecFlatHandler
+from .wrapper.flat import FlatFileSystemWrapper, FsspecFlatHandler
 from .wrapper.gcsfs import GcsfsHandler
 from .wrapper.s3fs import S3fsHandler
-from .wrapper.tree import FsspecTreeHandler
+from .wrapper.tree import FsspecTreeHandler, TreeFileSystemWrapper
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -89,9 +87,10 @@ def monitored(
 
     A filesystem inheriting `Monitored` is returned as it is. Any other is
     wrapped, as the entry of its class says, or of the nearest class it
-    inherits: by a handler, and a filesystem made on it. Its profile's
-    ``fs_type`` picks a `TreeFileSystem` or a `FlatFileSystem`, a tree if
-    unknown, and the entry gives its limits. The handler is the family's
+    inherits: by a handler, and a filesystem made on it, serving the wrapped
+    one's paths. Its profile's ``fs_type`` picks a `TreeFileSystemWrapper` or
+    a `FlatFileSystemWrapper`, a tree if unknown, and the entry gives its
+    limits. The handler is the family's
     generic one, which calls the filesystem's async methods where its
     ``async_impl`` says it has them, else its sync ones in threads. The
     filesystem returned is new, and may be dropped once used.
@@ -122,7 +121,8 @@ def monitored(
     Returns
     -------
     AbstractFileSystem
-        ``fs``, or a `TreeFileSystem` or `FlatFileSystem` on a handler of it.
+        ``fs``, or a `TreeFileSystemWrapper` or `FlatFileSystemWrapper` on a
+        handler of it.
 
     Raises
     ------
@@ -169,7 +169,7 @@ def monitored(
     handler = handler_class(fs, **options)
 
     # The filesystem runs on the wrapped one's loop, sync or not as it is.
-    family = TreeFileSystem if fs_type == "tree" else FlatFileSystem
+    family = TreeFileSystemWrapper if fs_type == "tree" else FlatFileSystemWrapper
     loop: dict[str, Any] = {}
     if getattr(fs, "async_impl", False) and not fs.asynchronous:
         loop["loop"] = fs.loop

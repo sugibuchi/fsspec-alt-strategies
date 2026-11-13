@@ -544,7 +544,7 @@ async def test_filesystems_share_a_semaphore_given() -> None:
     limit = asyncio.Semaphore(3)
     fs1 = _Tree(inner, operation_concurrency=limit, asynchronous=True)
     fs2 = _Tree(inner, operation_concurrency=limit, asynchronous=True)
-    assert fs1.operation_limit is fs2.operation_limit is limit
+    assert fs1.handler.operation_limit is fs2.handler.operation_limit is limit
     await asyncio.gather(fs1._find("a"), fs2._find("b"))
     # Both together keep to the one limit.
     assert inner.stats.max_concurrency == 3

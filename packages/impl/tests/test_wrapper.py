@@ -10,13 +10,17 @@ from fsspec.implementations.local import LocalFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.router import RoutingFileSystem
-from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
-from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
+from fsspec_alt_strategies_impl.wrapper.tree import (
+    FsspecTreeHandler,
+    TreeFileSystemWrapper,
+)
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 
 _LIMITS: dict[str, Any] = {
     "operation_concurrency": 4,
@@ -47,7 +51,7 @@ def test_every_primitive_is_passed_on(handler: type) -> None:
 def _tree(fs: Any, **options: Any) -> TreeFileSystem:
     """A ``TreeFileSystem`` on a handler of ``fs``."""
     asynchronous = options.pop("asynchronous", getattr(fs, "asynchronous", False))
-    return TreeFileSystem(
+    return TreeFileSystemWrapper(
         FsspecTreeHandler(fs, **_LIMITS, **options), asynchronous=asynchronous
     )
 

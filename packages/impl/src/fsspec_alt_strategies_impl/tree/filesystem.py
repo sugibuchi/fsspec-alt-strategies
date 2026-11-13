@@ -91,7 +91,7 @@ class TreeFileSystem(_BaseFileSystem):
     ...     def __init__(self, account, **kwargs):
     ...         super().__init__(MyHandler(account), **kwargs)
     >>> fs = MyFileSystem("mine")
-    >>> local = TreeFileSystem(FsspecTreeHandler(fsspec.filesystem("file"), ...))
+    >>> local = TreeFileSystemWrapper(FsspecTreeHandler(fsspec.filesystem("file"), ...))
     """
 
     # The storage's primitives: the handler's, each on a caller's path, verified by it.

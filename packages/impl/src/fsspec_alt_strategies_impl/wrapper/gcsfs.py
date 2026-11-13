@@ -57,7 +57,7 @@ class GcsfsHandler(FsspecFlatHandler):
 
     Examples
     --------
-    >>> flat = FlatFileSystem(
+    >>> flat = FlatFileSystemWrapper(
     ...     GcsfsHandler(
     ...         gcsfs.GCSFileSystem(),
     ...         rm_batch_size=100,

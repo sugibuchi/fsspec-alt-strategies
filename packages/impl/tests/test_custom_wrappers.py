@@ -13,11 +13,11 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
-from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_impl.wrapper.adlfs import AdlfsHandler
+from fsspec_alt_strategies_impl.wrapper.flat import FlatFileSystemWrapper
 from fsspec_alt_strategies_impl.wrapper.gcsfs import GcsfsHandler
 from fsspec_alt_strategies_impl.wrapper.s3fs import S3fsHandler
+from fsspec_alt_strategies_impl.wrapper.tree import TreeFileSystemWrapper
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -31,17 +31,17 @@ _LIMITS: dict[str, Any] = {
 
 def _s3fs(fs: Any, **options: Any) -> Any:
     """A `FlatFileSystem` on an `S3fsHandler` of `fs`."""
-    return FlatFileSystem(S3fsHandler(fs, **options), asynchronous=True)
+    return FlatFileSystemWrapper(S3fsHandler(fs, **options), asynchronous=True)
 
 
 def _gcsfs(fs: Any, **options: Any) -> Any:
     """A `FlatFileSystem` on a `GcsfsHandler` of `fs`."""
-    return FlatFileSystem(GcsfsHandler(fs, **options), asynchronous=True)
+    return FlatFileSystemWrapper(GcsfsHandler(fs, **options), asynchronous=True)
 
 
 def _adlfs(fs: Any, **options: Any) -> Any:
     """A `TreeFileSystem` on an `AdlfsHandler` of `fs`."""
-    return TreeFileSystem(AdlfsHandler(fs, **options), asynchronous=True)
+    return TreeFileSystemWrapper(AdlfsHandler(fs, **options), asynchronous=True)
 
 
 class _Store(AsyncFileSystem):
