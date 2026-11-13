@@ -119,6 +119,8 @@ fsspec lets a filesystem keep its listings in `dircache`, for its own methods an
 - Opening a file to write drops them too, as the file is opened: the file knows no filesystem, so its closing cannot.
   A listing taken while it is written may then miss it once it is closed.
 - `invalidate_cache(path)` drops the listings of `path`, of what is below it, and of its parents.
+- A wrapper keeps none: its `_ls` and `_ils` are the wrapped filesystem's, which manages its own cache, and is
+  trusted to keep it right. A wrapper's `invalidate_cache` passes on to it.
 
 Each family declares the primitives its subclasses implement, and overrides fsspec's recursive methods:
 
