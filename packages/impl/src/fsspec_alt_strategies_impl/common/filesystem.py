@@ -76,6 +76,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         super().__init__(**kwargs)
 
         # The handler's paths, e.g. a wrapped filesystem's URLs and root.
+        self.protocol = handler.protocol
         self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]
         self.root_marker = handler.root
         self.handler = handler

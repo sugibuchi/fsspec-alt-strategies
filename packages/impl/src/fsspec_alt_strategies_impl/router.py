@@ -368,6 +368,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         super().__init__(**kwargs)
 
         # The handler's paths.
+        self.protocol = handler.protocol
         self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]
         self.root_marker = handler.root
         self.handler = handler
