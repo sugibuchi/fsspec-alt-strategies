@@ -159,7 +159,7 @@ request at a time, with nothing known of the storage.
 
 A filesystem whose profile is found at runtime, e.g. per account, needs a wrapper of its own. It subclasses a wrapper,
 overriding `_load_storage_profile(path)` and the primitives the storage does better itself. Examples are `_mv_tree`
-renaming a directory, or `_rm_tree` deleting one whole. The strategies then use them where the profile says so,
+renaming a directory, `_cp_tree` copying one, or `_rm_tree` deleting one whole. The strategies then use them where the profile says so,
 streamed and monitored. Use such a wrapper directly, or name it in an entry's `wrapper`.
 
 An entry's optional `wrapper` names a wrapper class of its family, in place of the generic one:

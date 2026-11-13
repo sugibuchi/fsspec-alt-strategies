@@ -7,13 +7,20 @@ whole tree first, then copies each path. `_tree_cp` copies each directory's file
 as soon as the directory is listed. The destination may be another storage:
 within one, it is the same filesystem given twice.
 
+Where the filesystem's ``_cp_tree`` copies a directory in one request, the
+profile says so. `_tree_cp` then copies each root whole with it where it can,
+and walks only what it cannot copy so.
+
 This module depends on `_jobs`, and `jobs` and `paths` of `common`.
 """
 
 from __future__ import annotations
 
+import asyncio
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
+
+from fsspec_alt_strategies.states import CpState
 
 from ..common.jobs import _CopyJobs, _Job, _transfer_of
 from ..common.paths import _check_maxdepth
@@ -22,9 +29,7 @@ from ._jobs import _TreeJobs
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
-    from fsspec_alt_strategies.states import CpState
-
-    from ..common.jobs import _Transfer
+    from ..common.jobs import _Roots, _Transfer
     from ..common.operation import Operation
     from .walk import _Listing
 
@@ -97,6 +102,19 @@ def _tree_cp(
     whole tree is listed. Between two storages, it wins over fsspec's way too,
     a ``get`` to local files then a ``put``: the data needs no local disk.
 
+    Within one storage, with the profile's ``copies_directories=True``,
+    ``cp_tree`` copies a directory with all in it, in one request. Each
+    directory root is then copied whole by one ``cp_tree``, where it can be,
+    as `_tree_mv` moves one by ``mv_tree``: only to a destination that does
+    not exist, and never with ``maxdepth``. That wins by far on storages
+    copying a folder at once, such as Dropbox. A root whose copy fails yields
+    the error, with its cause. A root copied whole is yielded once, as
+    ``(root, target)``: what is in it is neither listed nor yielded.
+
+    With the profile's ``case_sensitive=False``, within one storage, paths
+    are compared folded. A path onto itself in another case is left as it
+    is, as one in the same case is, and one into itself is refused.
+
     Once cancelled, it starts no new listing or copy, and yields the outcomes
     of the copies already sent. Closed, it waits for those copies without
     yielding them. Iterating it raises FileNotFoundError if ``path1`` does not
@@ -113,7 +131,10 @@ def _tree_cp(
     and a ``cp_entry`` more per file it refused. The ``dst_info`` checks it is
     a file, as ``dst_rm_file`` is given only paths known to be files. Each
     request holds a permit of the source's ``operation_limit`` while it runs,
-    a ``cp_entry`` between two storages too.
+    a ``cp_entry`` between two storages too. With ``copies_directories``, each
+    directory root first costs a ``dst_info`` of its target, unless ``path2``
+    was found missing or existing already. One copied whole then costs a
+    ``dst_makedirs`` of its parent, and its ``cp_tree``: nothing more.
 
     The destination's profile's ``parents_required=False``, or
     ``implicit_directories=True``, saves the ``dst_makedirs`` of each directory
@@ -129,8 +150,8 @@ def _tree_cp(
     ``root_entry``, the entry of ``path1`` as the caller found it, saves the
     listing of a single file: it is copied as the entry says.
 
-    The primitives are called above by what they do: ``_ils`` is the source's
-    ``_ils``, and ``dst_info``, ``dst_makedirs`` and ``dst_rm_file`` the
+    The primitives are called above by what they do: ``_ils`` and ``cp_tree``
+    are the source's ``_ils`` and ``_cp_tree``, and ``dst_info``, ``dst_makedirs`` and ``dst_rm_file`` the
     destination's ``_info``, ``_makedirs`` and ``_rm_file``.
 
     ``src_fs`` is the filesystem copied from, and ``dst_fs`` the one copied
@@ -168,6 +189,10 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
     The tree walked is the source's, ``fs``. A file's job waits for its
     destination directory, when the storage needs it. A subclass says how a file
     goes, in `transfer_file`.
+
+    Where the storage copies or moves a directory in one request, as the
+    subclass reads it from the profile into ``goes_whole``, each directory
+    root goes whole where it can, by `transfer_whole`. The rest is walked.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -176,6 +201,67 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         # The copies waiting for their destination directory, by that directory.
         # A directory listed in several parts is made once, as `made` notes it.
         self.after_mkdir: dict[str, list[_Job]] = {}
+
+        self.goes_whole = False  # Until the subclass's setup reads the profile.
+        self.roots_whole: int | None = None
+
+    async def prepare(self) -> _Roots | None:
+        """Place the roots, and queue each directory that can go whole: the rest are walked.
+
+        A root can go whole to a target found missing. One whose target
+        exists merges into it, so it is walked. One whose target could not be
+        asked yields that error, with its cause, and stays where it is.
+        """
+        roots = await super().prepare()
+        if roots is None or not self.goes_whole:
+            return roots
+
+        if isinstance(self.path1, str) and self.path1.endswith("/"):
+            return roots  # Its contents go onto path2, among what is there.
+
+        sources = list(roots.directories)
+        whole = await asyncio.gather(*(self.whole(s) for s in sources))
+        walked = []
+        for root, outcome in zip(sources, whole, strict=True):
+            if isinstance(outcome, Exception):
+                self.found.append(outcome)
+                continue
+            if not outcome:
+                walked.append(root)
+                continue
+
+            # A job each, as a file's, after its parent is made: the storage's
+            # request is not to make it.
+            target = self.target(root["name"])
+            parent = target.rpartition("/")[0]
+            job = _Job("whole", root, target)
+            self.queue(parent, "", [job], always=not self.implicit_directories)
+
+        self.roots_whole = 0
+        return roots._replace(directories=walked)
+
+    async def whole(self, root: dict[str, Any]) -> bool | Exception:
+        """Whether a root can go whole, as its target is missing.
+
+        An error asking is returned, noted: the root's, as its walk would only
+        meet it again on each file.
+        """
+        source = root["name"]
+        target = self.target(source)
+        if target in self.missing:
+            return True
+        if target in self.existing:
+            return False
+        try:
+            async with self.concurrency_limit:
+                await self.dst_fs._info(target)
+        except FileNotFoundError:
+            return True
+        except Exception as e:
+            e.add_note(f"{self.doing} {source!r} to {target!r} failed.")
+            return e
+        else:
+            return False
 
     def file_root(self, entry: dict[str, Any]) -> None:
         self.files_found += 1
@@ -255,6 +341,8 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
             return self.dst_fs._makedirs(job.destination, exist_ok=True)
+        if job.kind == "whole":
+            return self.transfer_whole(job.path, job.destination)
         else:
             return self.transfer_file(job.source, job.destination)
 
@@ -262,15 +350,27 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
     async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
         """Copy or move a file, by its entry. An error raised notes its paths, as it is yielded."""
 
+    @abstractmethod
+    def transfer_whole(self, path: str, destination: str) -> Awaitable[None]:
+        """Copy or move a root with all in it, by the storage's one request."""
+
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":
             self.made.add(job.destination)
             self.waiting.extend(self.after_mkdir.pop(job.destination))
             return []
+        if job.kind == "whole":
+            self.roots_whole = (self.roots_whole or 0) + 1
+            return [(job.path, job.destination)]
         self.files_done += 1
         return [(job.path, job.destination)]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
+        if job.kind == "whole":
+            # Declared to go whole, the root failed so: its cause, not one
+            # failure per file.
+            error.add_note(f"{self.doing} {job.path!r} to {job.destination!r} failed.")
+            return [error]
         # A file's error is noted where it happened, in transfer_file.
         if job.kind == "mkdir":
             # Its copies, and those of the directory's later parts, are not sent:
@@ -286,5 +386,29 @@ class _Copy(_CopyOrMove):
         super().__init__(**kwargs)
         self.cp_entry = cp_entry
 
+    async def setup(self) -> None:
+        await super().setup()
+
+        # Only within one storage does the profile tell how the source copies. A
+        # directory copied whole would take what is deeper than maxdepth along.
+        self.goes_whole = (
+            self.same_storage
+            and bool(self.profile.copies_directories)
+            and self.maxdepth is None
+        )
+        self.roots_whole = 0 if self.goes_whole else None
+
+    def state(self) -> CpState:
+        return CpState(
+            errors=self.errors,
+            current=self.current,
+            files_found=self.files_found,
+            files_copied=self.files_done,
+            roots_copied=self.roots_whole,
+        )
+
     async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
         await self.copy_file(self.cp_entry, entry, destination)
+
+    def transfer_whole(self, path: str, destination: str) -> Awaitable[None]:
+        return self.fs._cp_tree(path, destination)  # type: ignore[no-any-return]

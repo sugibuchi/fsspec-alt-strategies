@@ -16,19 +16,18 @@ This module depends on `cp`, and `jobs` and `paths` of `common`.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
-from ..common.jobs import _Job, _transfer_of
+from ..common.jobs import _Job, _Roots, _transfer_of
 from ..common.paths import _check_maxdepth
 from .cp import _CopyOrMove
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
-    from ..common.jobs import _Roots, _Transfer
+    from ..common.jobs import _Transfer
     from ..common.operation import Operation
     from .walk import _Listing
 
@@ -101,6 +100,14 @@ def _tree_mv(
     fails yields the error, with its cause, and stays where it is. A root
     moved whole is yielded once, as ``(root, target)``: what is in it is
     neither listed nor yielded.
+
+    With the profile's ``case_sensitive=False``, within one storage, paths
+    are compared folded. A single path moved onto itself in another case,
+    e.g. "Dir" to "DIR", is renamed by one ``mv_tree``, as a root going to a
+    missing destination: the destination found would be the root itself. It
+    needs ``renames_directories=True``, for a file too: else, iterating raises
+    ValueError, as no file by file move renames a directory. One into itself
+    is refused, as in the same case.
 
     With ``maxdepth``, it moves the files `_tree_cp` copies with it, and
     nothing is moved whole. A source directory is deleted once emptied, so those
@@ -180,9 +187,7 @@ class _Move(_CopyOrMove):
         super().__init__(**kwargs)
 
         self.mv_entry = mv_entry
-        self.renames_directories = False  # Until setup reads the profile.
         self.directories_moved = 0
-        self.roots_renamed: int | None = None
 
     async def setup(self) -> None:
         await super().setup()
@@ -190,7 +195,7 @@ class _Move(_CopyOrMove):
         # The profile is the destination's: only within one storage does it
         # tell how the source renames, or deletes its directories. A
         # directory moved whole would take what is deeper than maxdepth along.
-        self.renames_directories = (
+        self.goes_whole = (
             self.same_storage
             and bool(self.profile.renames_directories)
             and self.maxdepth is None
@@ -204,7 +209,7 @@ class _Move(_CopyOrMove):
             and not self.implicit_directories
             and self.profile.renames_files is not False
         )
-        self.roots_renamed = 0 if self.renames_directories else None
+        self.roots_whole = 0 if self.goes_whole else None
 
     def state(self) -> MvState:
         return MvState(
@@ -213,66 +218,26 @@ class _Move(_CopyOrMove):
             files_found=self.files_found,
             files_moved=self.files_done,
             directories_moved=self.directories_moved,
-            roots_renamed=self.roots_renamed,
+            roots_renamed=self.roots_whole,
         )
 
-    async def prepare(self) -> _Roots | None:
-        """Place the roots, and queue the move of each directory that can go whole: the rest are walked.
+    def onto_itself(self, root: str, destination: str) -> _Roots | None:
+        """A single path moved onto itself in another case: renamed by one ``mv_tree``.
 
-        A root can move whole to a target found missing. One whose target
-        exists merges into it, so it is walked. One whose target could not be
-        asked yields that error, with its cause, and stays where it is.
+        On a storage whose names are not case-sensitive, the destination is
+        the root itself. Found existing, it would take the root into itself:
+        it is taken as missing instead, so that the root is renamed whole.
         """
-        roots = await super().prepare()
-        if roots is None or not self.renames_directories:
-            return roots
+        if not self.goes_whole or root == destination:
+            return super().onto_itself(root, destination)
+        if self.path1.endswith("/") or self.path2.endswith("/"):  # type: ignore[union-attr]
+            return super().onto_itself(root, destination)
 
-        if isinstance(self.path1, str) and self.path1.endswith("/"):
-            return roots  # Its contents go onto path2, among what is there.
-
-        sources = list(roots.directories)
-        whole = await asyncio.gather(*(self.whole(s) for s in sources))
-        walked = []
-        for root, outcome in zip(sources, whole, strict=True):
-            if isinstance(outcome, Exception):
-                self.found.append(outcome)
-                continue
-            if not outcome:
-                walked.append(root)
-                continue
-
-            # A job each, as a file's move, after its parent is made: a rename
-            # makes none, and mv_tree is not to make it.
-            target = self.target(root["name"])
-            parent = target.rpartition("/")[0]
-            job = _Job("rename", root, target)
-            self.queue(parent, "", [job], always=not self.implicit_directories)
-
-        self.roots_renamed = 0
-        return roots._replace(directories=walked)
-
-    async def whole(self, root: dict[str, Any]) -> bool | Exception:
-        """Whether a root can move whole, as its target is missing.
-
-        An error asking is returned, noted: the root's, as its walk would only
-        meet it again on each file.
-        """
-        source = root["name"]
-        target = self.target(source)
-        if target in self.missing:
-            return True
-        if target in self.existing:
-            return False
-        try:
-            async with self.concurrency_limit:
-                await self.dst_fs._info(target)
-        except FileNotFoundError:
-            return True
-        except Exception as e:
-            e.add_note(f"{self.doing} {source!r} to {target!r} failed.")
-            return e
-        else:
-            return False
+        self.prefix, self.base = root, destination
+        self.missing.add(destination)
+        self.made.add(root.rpartition("/")[0])
+        # A directory root, as mv_tree takes a file too.
+        return _Roots([self.root_entry or {"name": root}])
 
     def add(self, listing: _Listing) -> list[Any] | None:
         self.track(listing)
@@ -289,10 +254,11 @@ class _Move(_CopyOrMove):
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "rmdir":
             return self.fs._rmdir(job.path)
-        if job.kind == "rename":
-            return self.fs._mv_tree(job.path, job.destination)
         else:
             return super().run(job)
+
+    def transfer_whole(self, path: str, destination: str) -> Awaitable[None]:
+        return self.fs._mv_tree(path, destination)  # type: ignore[no-any-return]
 
     async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
         try:
@@ -310,9 +276,8 @@ class _Move(_CopyOrMove):
                 outcome += self.remove(job.path)
             return outcome
 
-        if job.kind == "rename":
-            self.roots_renamed = (self.roots_renamed or 0) + 1
-            return [(job.path, job.destination)]
+        if job.kind == "whole":
+            return super().done(job)
 
         if job.kind == "rmdir":
             self.directories_moved += 1
@@ -338,11 +303,6 @@ class _Move(_CopyOrMove):
         return []
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
-        if job.kind == "rename":
-            # Declared to rename directories, the storage failed this one: its
-            # cause, not one failure per file.
-            error.add_note(f"{self.doing} {job.path!r} to {job.destination!r} failed.")
-            return [error]
         if job.kind != "rmdir":
             return super().failed(job, error)
 

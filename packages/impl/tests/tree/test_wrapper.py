@@ -146,6 +146,29 @@ async def test_an_async_filesystem_moves_a_dir_by_its_mv_tree() -> None:
     assert sorted(inner._file_data) == sorted("moved" + p[4:] for p in _FILES)
 
 
+class _Copying(SimulatedFileSystem):
+    """A storage copying a directory whole, in one request."""
+
+    async def _cp_tree(self, path1: str, path2: str) -> None:
+        await self._copy_tree(path1, path2)
+
+
+async def test_an_async_filesystem_copies_a_dir_by_its_cp_tree() -> None:
+    inner = _Copying(hierarchical=True, asynchronous=True)
+    for path in _FILES:
+        inner.add_file(path, path.encode())
+    tree = AsyncTreeWrapper(
+        inner,
+        **{**_LIMITS, "storage_profile": StorageProfile(copies_directories=True)},
+    )
+    inner.reset_stats()
+    await tree._copy("data", "copied", recursive=True)
+    # The target found free, then one copy: no listing.
+    assert inner.stats.calls == {"info": 1, "copy": 1}
+    assert inner._file_data["copied/d.txt"].data == b"data/d.txt"
+    assert "data/d.txt" in inner._file_data
+
+
 async def test_rm_tree_is_unused_unless_declared() -> None:
     inner = _RecursiveDelete(hierarchical=True, asynchronous=True)
     for path in _FILES:
@@ -195,3 +218,15 @@ async def test_a_sync_filesystem_moves_a_dir_whole(tmp_path: Path) -> None:
     assert local.cat_file(f"{root}/moved/2023/01/a.txt") == b"data/2023/01/a.txt"
     async with await tree.open_async(f"{root}/moved/d.txt") as f:
         assert await f.read() == b"data/d.txt"
+
+
+async def test_a_sync_filesystem_copies_a_dir_whole(tmp_path: Path) -> None:
+    local, root = _local(tmp_path)
+    tree = SyncTreeWrapper(
+        local,
+        asynchronous=True,
+        **{**_LIMITS, "storage_profile": StorageProfile(copies_directories=True)},
+    )
+    await tree._copy(f"{root}/data", f"{root}/copied", recursive=True)
+    assert local.cat_file(f"{root}/copied/2023/01/a.txt") == b"data/2023/01/a.txt"
+    assert local.exists(f"{root}/data/d.txt")

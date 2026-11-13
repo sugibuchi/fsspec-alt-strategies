@@ -130,10 +130,14 @@ class CpState(State):
         The files found so far. It grows as the walk or the listing goes on.
     files_copied : int
         The files copied so far.
+    roots_copied : int or None
+        The directories copied whole, each by one ``_cp_tree``, what is in them
+        neither found nor counted. None unless the storage copies directories so.
     """
 
     files_found: int = 0
     files_copied: int = 0
+    roots_copied: int | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

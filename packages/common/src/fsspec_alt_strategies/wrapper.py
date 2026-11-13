@@ -63,7 +63,8 @@ known_implementations: dict[str, KnownImplementation] = {
     "fsspec.implementations.local.LocalFileSystem": {
         # Its mv is a rename, of a directory too, and its recursive rm one call,
         # shutil.rmtree. A file's directory must exist, as auto_mkdir is off by
-        # default.
+        # default. Whether names are case-sensitive depends on the disk, e.g. not
+        # on Windows or macOS by default: unknown.
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=True,
@@ -71,6 +72,8 @@ known_implementations: dict[str, KnownImplementation] = {
             renames_files=True,
             renames_directories=True,
             deletes_directories=True,
+            copies_directories=False,
+            case_sensitive=None,
         ),
         "operation_concurrency": 8,
         "io_concurrency": 4,
@@ -84,6 +87,8 @@ known_implementations: dict[str, KnownImplementation] = {
             renames_files=False,
             renames_directories=False,
             deletes_directories=False,
+            copies_directories=False,
+            case_sensitive=True,
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
@@ -103,6 +108,8 @@ known_implementations: dict[str, KnownImplementation] = {
             renames_files=False,
             renames_directories=False,
             deletes_directories=False,
+            copies_directories=False,
+            case_sensitive=True,
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
@@ -124,6 +131,8 @@ known_implementations: dict[str, KnownImplementation] = {
             renames_files=False,
             renames_directories=False,
             deletes_directories=False,
+            copies_directories=False,
+            case_sensitive=True,
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
@@ -140,13 +149,16 @@ known_implementations: dict[str, KnownImplementation] = {
             renames_files=False,
             renames_directories=False,
             deletes_directories=False,
+            copies_directories=False,
+            case_sensitive=True,
         ),
         "operation_concurrency": 4,
         "io_concurrency": 4,
     },
     "fsspec.implementations.sftp.SFTPFileSystem": {
         # Its mv is a rename, of a directory too. A file's directory must exist. Its
-        # recursive rm walks the directory over the connection.
+        # recursive rm walks the directory over the connection. Whether names are
+        # case-sensitive depends on the server's disk: unknown.
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=True,
@@ -154,6 +166,8 @@ known_implementations: dict[str, KnownImplementation] = {
             renames_files=True,
             renames_directories=True,
             deletes_directories=False,
+            copies_directories=False,
+            case_sensitive=None,
         ),
         # One SSH channel, which paramiko does not share between threads.
         "operation_concurrency": 1,
@@ -169,6 +183,8 @@ known_implementations: dict[str, KnownImplementation] = {
             renames_files=True,
             renames_directories=True,
             deletes_directories=True,
+            copies_directories=False,
+            case_sensitive=True,
         ),
         "operation_concurrency": 8,
         "io_concurrency": 4,

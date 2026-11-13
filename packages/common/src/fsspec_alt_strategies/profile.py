@@ -77,6 +77,20 @@ class StorageProfile:
         file too. Unknown by default, taken as False: a directory is walked, and
         what is in it deleted one by one. Declared True, a failed ``_rm_tree``
         is the directory's failure, never walked.
+    copies_directories : bool, optional
+        Whether the filesystem's ``_cp_tree`` copies a directory with all in
+        it, in one request, as a storage's copy of a folder does. It copies a
+        file too. Unknown by default, taken as False: a directory is walked,
+        and its files copied one by one. True holds between any two paths of
+        the filesystem, as ``renames_directories`` does.
+    case_sensitive : bool, optional
+        Whether two paths differing only in case are two paths. False, as on
+        SMB shares, Dropbox, or a local disk on Windows or macOS, a copy or
+        move within the storage compares paths folded by ``str.lower``. A
+        path copied onto itself in another case is then left as it is, and
+        one moved so is renamed. Unknown by default, taken as True, as
+        fsspec compares paths: no request tells a path from itself in
+        another case.
 
     Raises
     ------
@@ -97,6 +111,8 @@ class StorageProfile:
     renames_files: bool | None = None
     renames_directories: bool | None = None
     deletes_directories: bool | None = None
+    copies_directories: bool | None = None
+    case_sensitive: bool | None = None
 
     def __post_init__(self) -> None:
         if self.fs_type not in (None, "tree", "flat"):

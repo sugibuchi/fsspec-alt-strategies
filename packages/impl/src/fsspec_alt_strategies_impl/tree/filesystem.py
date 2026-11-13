@@ -75,13 +75,15 @@ class TreeFileSystem(_BaseFileSystem):
 
     The data methods, ``_cat_file``, ``_pipe_file``, ``_get_file`` and
     ``_put_file``, read and write through ``open_async``'s files. A subclass
-    may implement two requests on a directory whole, used where the profile
+    may implement three requests on a directory whole, used where the profile
     declares them:
 
     - ``_rm_tree``, a storage's recursive delete, which a recursive ``rm``
       uses where ``deletes_directories=True``;
     - ``_mv_tree``, a storage's rename of a directory, which a recursive
-      ``mv`` uses where ``renames_directories=True``.
+      ``mv`` uses where ``renames_directories=True``;
+    - ``_cp_tree``, a storage's copy of a directory, which a recursive
+      ``copy`` uses where ``copies_directories=True``.
 
     Two limits bound its requests, each an `asyncio.Semaphore`:
 
@@ -289,6 +291,19 @@ class TreeFileSystem(_BaseFileSystem):
         ``path1`` raises FileNotFoundError.
         """
         raise NotImplementedError(f"{type(self).__name__} moves no directory whole")
+
+    async def _cp_tree(self, path1: str, path2: str) -> None:
+        """Copy a directory with everything in it to ``path2``, in one request.
+
+        Optional: a subclass whose storage copies a directory implements it,
+        and its profile's ``copies_directories=True`` says so. A recursive
+        ``copy`` then copies each root by it where it can, with no walk. It
+        is called only then, with ``path2`` missing and its parent existing,
+        having made it. It takes a file too, which it copies as
+        ``_cp_file_entry`` does, as a root may be either. A missing ``path1``
+        raises FileNotFoundError.
+        """
+        raise NotImplementedError(f"{type(self).__name__} copies no directory whole")
 
     @abstractmethod
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:

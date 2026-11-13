@@ -40,7 +40,9 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
       `TreeFileSystem`, or else its recursive ``_rm``, where
       ``deletes_directories=True``;
     - ``_mv_tree``, the wrapped one's ``_mv_tree``, or else its
-      ``_mv_file``, where ``renames_directories=True``.
+      ``_mv_file``, where ``renames_directories=True``;
+    - ``_cp_tree``, the wrapped one's ``_cp_tree``, or else its recursive
+      ``_copy``, where ``copies_directories=True``.
 
     The wrapper runs on the same loop, sync or not as the wrapped one is.
 
@@ -117,6 +119,14 @@ class AsyncTreeWrapper(_AsyncFileSystemWrapper, TreeFileSystem):
         else:
             await self.fs._mv_file(path1, path2)
 
+    async def _cp_tree(self, path1: str, path2: str) -> None:
+        # The wrapped one's own copy of a directory, as copies_directories declares.
+        cp_tree = getattr(self.fs, "_cp_tree", None)
+        if cp_tree is not None:
+            await cp_tree(path1, path2)
+        else:
+            await self.fs._copy(path1, path2, recursive=True)
+
 
 class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
     """A sync filesystem, as a `TreeFileSystem`: its recursive methods the tree strategies.
@@ -124,9 +134,10 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
     Its primitives, such as ``_ils``, ``_rm_file`` and ``_mv_file``, call the
     wrapped filesystem's, each in a thread, so that several run at once. Its
     ``_mv_file`` and ``_mv_tree`` are the wrapped one's ``mv``, e.g. a local
-    rename, and its ``_rm_tree`` its recursive ``rm``. They move or delete a
-    directory whole where the profile's ``renames_directories=True`` or
-    ``deletes_directories=True`` says it is one request. Its data methods call
+    rename, its ``_rm_tree`` its recursive ``rm``, and its ``_cp_tree`` its
+    recursive ``copy``. They move, delete or copy a directory whole where the
+    profile's ``renames_directories=True``, ``deletes_directories=True`` or
+    ``copies_directories=True`` says it is one request. Its data methods call
     the wrapped one's too, and its files are the wrapped one's, awaited through
     a `SyncFileAdapter`.
 
@@ -196,3 +207,7 @@ class SyncTreeWrapper(_SyncFileSystemWrapper, TreeFileSystem):
     async def _mv_tree(self, path1: str, path2: str) -> None:
         # The wrapped one's own move, e.g. a local rename, as renames_directories declares.
         await self._run_in_thread(self.fs.mv, path1, path2)
+
+    async def _cp_tree(self, path1: str, path2: str) -> None:
+        # The wrapped one's own copy, as copies_directories declares.
+        await self._run_in_thread(self.fs.copy, path1, path2, recursive=True)

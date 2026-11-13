@@ -66,7 +66,7 @@ The library aims at large cloud storages, such as data lakes holding millions of
   answers a directory at a time.
 - **Hierarchical namespaces, used.** Where a storage lists by directory, the tree strategies scan directories
   recursively, several at once, e.g. to prune a tree by a pattern. A storage's own operations on a whole tree plug in
-  as optional primitives, such as `_rm_tree` and `_mv_tree`.
+  as optional primitives, such as `_rm_tree`, `_mv_tree` and `_cp_tree`.
 - **One implementation, many storages.** A storage's behaviour is declared in its `StorageProfile`, never detected, and
   the strategies pick their way from it. fsspec's implementations override its methods instead, each for its own
   storage.
@@ -104,7 +104,7 @@ Each family declares the primitives its subclasses implement, and overrides fssp
 
 | Class            | Its own primitives                           | Overrides                                               |
 |------------------|----------------------------------------------|---------------------------------------------------------|
-| `TreeFileSystem` | `_ils`, and optional `_rm_tree`, `_mv_tree`  | `_walk`, `_find`, `_du`, `_glob`, `_rm`, `_copy`, `_mv` |
+| `TreeFileSystem` | `_ils`, and optional `_rm_tree`, `_mv_tree`, `_cp_tree` | `_walk`, `_find`, `_du`, `_glob`, `_rm`, `_copy`, `_mv` |
 | `FlatFileSystem` | `_ils`, `_rm_files`, `rm_batch_size`         | The same                                                |
 
 Each family also makes the sync methods fsspec does not, `mv` and `rmdir`. Both declare abstract `_info`, `_rm_file`,
@@ -131,7 +131,8 @@ A developer chooses, per method:
 - fsspec's own algorithm instead, by putting it back, e.g. `_rm = AsyncFileSystem._rm`;
 - a storage's own operation, by overriding the method;
 - a storage's recursive delete, by implementing `_rm_tree`, which `deletes_directories=True` declares;
-- a storage's rename of a directory, by implementing `_mv_tree`, which `renames_directories=True` declares.
+- a storage's rename of a directory, by implementing `_mv_tree`, which `renames_directories=True` declares;
+- a storage's copy of a directory, by implementing `_cp_tree`, which `copies_directories=True` declares.
 
 `monitored(fs)` picks the wrapper of a filesystem from `known_implementations`, a table the developer may replace. An
 entry's `wrapper` names a class by a string, as the interface never imports the strategies. A bare name is one of the
@@ -284,6 +285,8 @@ profile only saves requests:
 | `renames_files`        | True: the data copied by `_flat_mv`                                |
 | `renames_directories`  | True: every request in a directory moved whole by one `_mv_tree`   |
 | `deletes_directories`  | True: every request in a directory deleted whole by one `_rm_tree` |
+| `copies_directories`   | True: every request in a directory copied whole by one `_cp_tree`  |
+| `case_sensitive`       | False: a path moved onto itself in another case, by one `_mv_tree` |
 
 - A filesystem has one profile, which never changes. It is `storage_profile`, `UNKNOWN` unless a subclass sets what
   it knows. Or it is what `_load_storage_profile(path)` finds with a request, asking the storage at that path, e.g. the
@@ -293,8 +296,12 @@ profile only saves requests:
   profile loaded is set as `storage_profile`. If all fail, it raises.
 - Paths of one filesystem whose storages differ go to a router, each storage with a filesystem of its own.
 - A deletion reads the profile of the filesystem it deletes from.
-- A copy or move reads the destination's. `renames_files` and `renames_directories` count only within one storage.
+- A copy or move reads the destination's. `renames_files`, `renames_directories`, `copies_directories` and
+  `case_sensitive` count only within one storage.
 - A field left None is unknown, and the strategy takes the way right on any storage.
+- `case_sensitive` is the exception: no way is right on both kinds of names. Unknown, paths are compared as fsspec
+  compares them, as strings. On a storage whose names are not case-sensitive, a path copied or moved onto itself in
+  another case then goes into itself, as with fsspec's own.
 - A wrong field gives wrong results, as the library never checks it against the storage.
 - A field is added only when a strategy saves requests or data with it.
 

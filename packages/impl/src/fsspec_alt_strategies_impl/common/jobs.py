@@ -481,7 +481,8 @@ class _CopyJobs(_Jobs):
     ``dst_fs`` is the filesystem copied to, described by its profile, unknown
     if it has none. Within one storage, it is the source, and ``same_storage``
     is True: a path copied onto itself, or under itself, is refused. Between two, a path may go to the same path, or under
-    it, as that is another storage's.
+    it, as that is another storage's. The paths are compared folded on a storage
+    whose names are not case-sensitive, as its profile says.
 
     ``root_entry`` is the entry of ``path1``, a single path, if the caller
     found it already, e.g. to tell a file. A file's is then a root known to be
@@ -515,6 +516,7 @@ class _CopyJobs(_Jobs):
         self.profile = UNKNOWN
         self.implicit_directories = False
         self.parents_required = True
+        self.case_insensitive = False
 
         self.prefix = ""
         self.base = ""
@@ -544,6 +546,23 @@ class _CopyJobs(_Jobs):
         self.parents_required = (
             self.profile.parents_required is not False and not self.implicit_directories
         )
+        # Only within one storage are a source and its destination compared.
+        self.case_insensitive = (
+            self.same_storage and self.profile.case_sensitive is False
+        )
+
+    def same(self, path: str, other: str) -> bool:
+        """Whether two paths of the storage are one, folded unless case-sensitive."""
+        if self.case_insensitive:
+            return path.lower() == other.lower()
+        else:
+            return path == other
+
+    def inside(self, path: str, directory: str) -> bool:
+        """Whether a path of the storage is below a directory, folded unless case-sensitive."""
+        if self.case_insensitive:
+            path, directory = path.lower(), directory.lower()
+        return path.startswith(directory + "/")
 
     def state(self) -> Any:
         return CpState(
@@ -572,21 +591,44 @@ class _CopyJobs(_Jobs):
             self.base = destination
         else:
             root = _trim(self.path1)
-            if root == destination and self.same_storage:
-                return None
+            if self.same_storage and self.same(root, destination):
+                return self.onto_itself(root, destination)
             roots = await self._single(root, destination)
             sources = [root]
 
         for source in sources if self.same_storage else ():
             target = self.target(source)
-            if target == source and len(sources) == 1:
+            if self.same(target, source) and len(sources) == 1:
                 return None
-            if not source or target == source or target.startswith(source + "/"):
+            if not source or self.same(target, source) or self.inside(target, source):
                 raise ValueError(
                     f"Cannot {self.verb} {source!r} into itself: {target!r}"
                 )
 
         return roots
+
+    def onto_itself(self, root: str, destination: str) -> _Roots | None:
+        """The root of a single path going onto itself, or None if nothing is to do.
+
+        A path onto itself is left as it is. So is one in another case, on a
+        storage whose names are not case-sensitive, when copied. Moved, it is
+        to be renamed: a move renaming roots whole places it, as a root
+        going to a destination found missing. Here, it raises ValueError.
+        Its contents go onto themselves if ``path1`` ends with "/", and it
+        goes into itself if ``path2`` does: those are left too, as a path
+        onto itself in the same case is.
+        """
+        if (
+            root == destination
+            or self.verb == "copy"
+            or self.path1.endswith("/")  # type: ignore[union-attr]
+            or self.path2.endswith("/")
+        ):
+            return None
+        raise ValueError(
+            f"Cannot {self.verb} {root!r} to {destination!r}, itself in another"
+            " case: the storage renames nothing whole"
+        )
 
     async def _place(self, destination: str) -> _Roots:
         """Place each root of a list into ``destination``, under its name.

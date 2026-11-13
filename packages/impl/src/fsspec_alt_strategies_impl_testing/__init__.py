@@ -502,6 +502,42 @@ class SimulatedFileSystem(AsyncFileSystem):
         for path, file in files.items():
             self._write(path2 + path[len(path1) :], file.data, file.mtime)
 
+    async def _copy_tree(self, path1: str, path2: str) -> None:
+        """Copy a file, or a directory with all in it, in one request.
+
+        It is no fsspec method: it is a storage's own, as Dropbox copies a
+        folder. A test gives it to the tree copy as its ``cp_tree``, with a
+        profile's ``copies_directories=True``. It refuses a ``path2`` that
+        exists, or is inside ``path1``. An object store copies no directory: it
+        raises NotImplementedError.
+        """
+        path1, path2 = self._strip_protocol(path1), self._strip_protocol(path2)
+        if not self.hierarchical:
+            raise NotImplementedError("An object store copies no directory at once.")
+
+        await self._request("copy")
+        if path1 not in self._file_data and path1 not in self._dirs:
+            raise FileNotFoundError(path1)
+        if path2 in self._file_data or path2 in self._dirs:
+            raise FileExistsError(path2)
+        if not path1 or path2 == path1 or path2.startswith(path1 + "/"):
+            raise OSError(errno.EINVAL, "Cannot copy a directory into itself", path2)
+        if self.parents_required and _parent_of(path2) not in self._dirs:
+            raise FileNotFoundError(_parent_of(path2))
+
+        if path1 in self._file_data:
+            file = self._file_data[path1]
+            self._write(path2, file.data, file.mtime)
+            return
+
+        paths = [path1, *self._descendants(path1)]
+        for path in paths:
+            if path in self._dirs:
+                self._make_dirs(path2 + path[len(path1) :])
+            else:
+                file = self._file_data[path]
+                self._write(path2 + path[len(path1) :], file.data, file.mtime)
+
     async def _mkdir(
         self, path: str, create_parents: bool = True, **kwargs: Any
     ) -> None:
@@ -663,12 +699,12 @@ class TreeView:
 
     The tree strategies take a filesystem, and call its ``_ils``, ``_info``,
     ``_rm_file``, ``_rmdir``, ``_cp_file_entry``, ``_mv_file_entry``,
-    ``_makedirs``, ``_rm_tree`` and ``_mv_tree``. A `SimulatedFileSystem` has no ``_ils``: this
+    ``_makedirs``, ``_rm_tree``, ``_mv_tree`` and ``_cp_tree``. A `SimulatedFileSystem` has no ``_ils``: this
     view lists a directory with `dir_ils`, or with ``ils`` if given. Each other
     primitive is the filesystem's own, unless given, so that a test may replace
     one, e.g. with one that fails. A ``cp_file`` or ``mv_file`` given takes
-    paths, the entry's name. ``rm_tree`` and ``mv_tree`` are None unless given,
-    as a `SimulatedFileSystem` has neither.
+    paths, the entry's name. ``rm_tree``, ``mv_tree`` and ``cp_tree`` are None
+    unless given, as a `SimulatedFileSystem` has none.
 
     Its ``_ils`` with ``recursive=True`` lists a directory per request, as a
     `TreeFileSystem` without a recursive listing of its own does. With
@@ -690,6 +726,7 @@ class TreeView:
         rm_dir: Any = None,
         rm_tree: Any = None,
         mv_tree: Any = None,
+        cp_tree: Any = None,
         cp_file: Any = None,
         mv_file: Any = None,
         makedirs: Any = None,
@@ -704,6 +741,7 @@ class TreeView:
         self._rmdir = fs._rmdir if rm_dir is None else rm_dir
         self._rm_tree = rm_tree
         self._mv_tree = mv_tree
+        self._cp_tree = cp_tree
         self._cp_file_entry = (
             fs._cp_file_entry if cp_file is None else _by_name(cp_file)
         )
