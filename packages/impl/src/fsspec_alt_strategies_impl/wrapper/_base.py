@@ -72,6 +72,8 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
         )
         self.fs = fs
         self.profile = storage_profile
+        # The wrapped one's paths: its protocol, its root and its stripping.
+        self.protocol = fs.protocol
         self.root = getattr(fs, "root_marker", "")
         # Its async methods only where they work.
         self.asynchronous = _async_impl(fs)
@@ -113,7 +115,8 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
     def verify_path(self, path: str) -> None:
         """Nothing: the wrapped filesystem checks its paths in its own methods."""
 
-    def strip_protocol(self, path: Any) -> Any:
+    def strip_protocol(self, path: Any) -> Any:  # type: ignore[override]
+        # The wrapped filesystem's, which its class may override: an instance's.
         return self.fs._strip_protocol(path)
 
     def unstrip_protocol(self, name: str) -> str:

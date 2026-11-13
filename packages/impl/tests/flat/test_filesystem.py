@@ -76,6 +76,7 @@ async def _open_file(
 class _FlatHandler(FlatHandler):
     """A simulated object store's primitives, as a flat handler."""
 
+    protocol = "flattest"
     profile = StorageProfile()
     rm_batch_size = 2
 
@@ -139,7 +140,6 @@ class _FlatHandler(FlatHandler):
 class _Flat(FlatFileSystem):
     """A FlatFileSystem on a simulated object store, made from it as from storage options."""
 
-    protocol = "flattest"
     cachable = False
     handler_class = _FlatHandler
 

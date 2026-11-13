@@ -42,6 +42,7 @@ from .common.filesystem import (
     _raise,
     _range_bounds,
     _strip_only_protocol,
+    _take_paths,
 )
 from .common.handler import StorageHandler, _limit, _PathHandler
 from .common.operation import _collect_with_monitors
@@ -117,6 +118,8 @@ class RoutingHandler(_PathHandler):
     Examples
     --------
     >>> class Lake(RoutingHandler):
+    ...     protocol = "lake"
+    ...
     ...     def verify_path(self, path):
     ...         if path.startswith("/"):
     ...             raise ValueError(f"Not a path of the lake: {path!r}")
@@ -328,11 +331,12 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
     ``Call.via`` naming the routers they came through. A copy across storages
     is a call of the router itself.
 
-    It takes a routing handler, and is never cached. A class below it takes
-    no handler: it names its ``protocol``, and its ``handler_class``, which
-    its storage options make, so that fsspec makes it from a URL or a
-    registry. It may name its ``root_marker`` and ``cachable``, and nothing
-    else: the rest is the handler's.
+    It takes a routing handler, and is never cached. Its paths are the
+    handler's: its ``protocol``, its ``root`` and its ``strip_protocol``. A
+    class below it takes no handler: it names its ``handler_class``, which its
+    storage options make, so that fsspec makes it from a URL or a registry,
+    and takes its paths from that class. It may name ``cachable``, and
+    nothing else: the rest is the handler's.
 
     Parameters
     ----------
@@ -356,8 +360,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
     Examples
     --------
     >>> class LakeFileSystem(RoutingFileSystem):
-    ...     protocol = "lake"
-    ...     handler_class = Lake
+    ...     handler_class = Lake  # Its protocol is "lake".
     >>> fs = LakeFileSystem(transfer_concurrency=8)
     >>> fs = RoutingFileSystem(Lake(transfer_concurrency=8), asynchronous=True)
     """
@@ -374,15 +377,19 @@ class RoutingFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSyste
     def __init__(self, handler: RoutingHandler, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        self.root_marker = handler.root
         self.handler = handler
+        _take_paths(self, handler)
         self.transfer_concurrency = handler.transfer_concurrency
         self.transfer_limit = handler.transfer_limit
         # The storages routed to, by their handler's id, each kept with it.
         self._storages: dict[int, _Storage] = {}
 
+    def unstrip_protocol(self, name: str) -> str:
+        """A path of the router as a URL: its handler's."""
+        return self.handler.unstrip_protocol(name)
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Refuse a developer's class naming anything but its protocol and handler.
+        """Refuse a developer's class naming anything but its handler class.
 
         Where each path goes, and what a storage does, are the handlers'. Such
         a class makes its handler from its storage options.

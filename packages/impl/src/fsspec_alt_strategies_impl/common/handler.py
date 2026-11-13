@@ -21,6 +21,8 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NewType, TypeAlias
 
+from fsspec.utils import stringify_path
+
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 
 if TYPE_CHECKING:
@@ -53,8 +55,41 @@ class _PathHandler(ABC):
     paths only by these methods, so each path they build is verified.
     """
 
+    protocol: str | tuple[str, ...] = "abstract"
+    """The storage's protocol, or several, as an fsspec filesystem's: the first is the one a URL is given."""
+
     root: str = ""
     """The path of the storage's root, e.g. "" for an object store or "/" for a local disk."""
+
+    @classmethod
+    def strip_protocol(cls, path: Any) -> Any:
+        """A URL or path as the storage's path, as fsspec's ``_strip_protocol`` gives it.
+
+        Any of ``protocol`` is removed, with "://" or "::", and a trailing "/":
+        an empty path is the ``root``. A list gives a list. It is a class
+        method, so that a filesystem's class strips URLs before it is made, as
+        fsspec does. A handler serving another filesystem's paths, as a
+        wrapper does, overrides it with the other's.
+        """
+        if isinstance(path, list):
+            return [cls.strip_protocol(p) for p in path]
+        path = stringify_path(path)
+        protocols = (cls.protocol,) if isinstance(cls.protocol, str) else cls.protocol
+        for protocol in protocols:
+            if path.startswith(f"{protocol}://"):
+                path = path[len(protocol) + 3 :]
+            elif path.startswith(f"{protocol}::"):
+                path = path[len(protocol) + 2 :]
+        return path.rstrip("/") or cls.root
+
+    def unstrip_protocol(self, name: str) -> str:
+        """A path of the storage as a URL, with the first ``protocol``, as fsspec's ``unstrip_protocol``."""
+        protocols = (
+            (self.protocol,) if isinstance(self.protocol, str) else self.protocol
+        )
+        if any(name.startswith(f"{protocol}://") for protocol in protocols):
+            return name
+        return f"{protocols[0]}://{name}"
 
     @abstractmethod
     def verify_path(self, path: str) -> None:

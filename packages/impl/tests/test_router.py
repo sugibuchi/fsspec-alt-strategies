@@ -128,6 +128,8 @@ class _Lake(RoutingHandler):
     It refuses a path holding ":", and notes each path it checks.
     """
 
+    protocol = "routed"
+
     def __init__(self) -> None:
         super().__init__(transfer_concurrency=2)
         self.tree = SimulatedFileSystem(hierarchical=True, asynchronous=True)
@@ -183,8 +185,6 @@ class _Lake(RoutingHandler):
 
 
 class _Router(RoutingFileSystem):
-    protocol = "routed"
-    root_marker = ""
     cachable = False
     handler_class = _Lake
 
@@ -769,14 +769,13 @@ def test_a_routers_class_makes_its_handler() -> None:
     with pytest.raises(TypeError, match="names no handler_class"):
 
         class Unnamed(RoutingFileSystem):
-            protocol = "unnamed"
+            cachable = False
 
 
 def test_a_routers_class_names_its_protocol_and_handler_only() -> None:
     with pytest.raises(TypeError, match="belongs to its handler"):
 
         class Overriding(RoutingFileSystem):
-            protocol = "overriding"
             handler_class = _Lake
 
             async def _info(self, path: str, **kwargs: Any) -> Any:
@@ -806,7 +805,6 @@ _ROUTERS_OWN = {
     "_ls_from_cache", "_parent", "_process_limits", "_strip_protocol",
     "clear_instance_cache", "current", "end_transaction", "from_dict", "from_json",
     "get_mapper", "start_transaction", "to_dict", "to_json", "transaction_type",
-    "unstrip_protocol",
 }  # fmt: skip
 _INHERITED = _MIRRORED | _BUILT_ON_PRIMITIVES | _ROUTERS_OWN
 

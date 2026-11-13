@@ -61,11 +61,13 @@ class TreeFileSystem(_BaseFileSystem):
     fsspec's applies it to the root only, as its walk recurses without it.
 
     What the storage does is the handler's: its primitives, its profile, its
-    limits and its files. It takes a handler, e.g. one wrapping another
+    limits, its files, and its paths: its ``protocol``, ``root`` and
+    ``strip_protocol``. It takes a handler, e.g. one wrapping another
     filesystem, and is never cached. A storage's class below it takes no
-    handler: it names its protocol and its handler class, and nothing else,
-    and makes its handler from its storage options, fsspec's own aside. So
-    fsspec makes it from a URL or a registry, and caches it.
+    handler: it names its handler class, and nothing else but ``cachable``.
+    It takes its paths from that class, and makes its handler from its
+    storage options, fsspec's own aside. So fsspec makes it from a URL or a
+    registry, and caches it.
 
     Parameters
     ----------
@@ -78,9 +80,8 @@ class TreeFileSystem(_BaseFileSystem):
     Raises
     ------
     TypeError
-        If a class below it names no ``handler_class``, or anything but
-        ``protocol``, ``handler_class``, ``root_marker`` and ``cachable``, or
-        is given a handler.
+        If a class below it names no ``handler_class``, or anything but it
+        and ``cachable``, or is given a handler.
 
     See Also
     --------
@@ -90,8 +91,7 @@ class TreeFileSystem(_BaseFileSystem):
     Examples
     --------
     >>> class MyFileSystem(TreeFileSystem):
-    ...     protocol = "my"
-    ...     handler_class = MyHandler
+    ...     handler_class = MyHandler  # Its protocol is "my".
     >>> fs = MyFileSystem(account="mine", operation_concurrency=32, io_concurrency=8)
     >>> local = TreeFileSystem(FsspecTreeHandler(fsspec.filesystem("file"), ...))
     """

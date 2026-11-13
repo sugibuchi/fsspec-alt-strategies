@@ -59,9 +59,9 @@ class FlatFileSystem(_BaseFileSystem):
     ExceptionGroup.
 
     What the storage does is the handler's: its primitives, its profile, its
-    limits, its batch of deletions and its files. A storage's class names its
-    protocol and its handler class, and nothing else, as `TreeFileSystem`'s
-    does. With the profile's ``renames_files=True``, a recursive ``mv``, or one
+    limits, its batch of deletions, its files and its paths. A storage's
+    class names its handler class, and nothing else but ``cachable``, as
+    `TreeFileSystem`'s does. With the profile's ``renames_files=True``, a recursive ``mv``, or one
     of a single file, moves each key by the handler's rename. Otherwise it
     copies each key, and deletes them in batches.
 
@@ -88,8 +88,7 @@ class FlatFileSystem(_BaseFileSystem):
     Examples
     --------
     >>> class MyFileSystem(FlatFileSystem):
-    ...     protocol = "my"
-    ...     handler_class = MyHandler
+    ...     handler_class = MyHandler  # Its protocol is "my".
     >>> fs = MyFileSystem(bucket="mine", operation_concurrency=32, io_concurrency=8)
     >>> s3 = FlatFileSystem(S3fsHandler(s3fs.S3FileSystem(), ...))
     """

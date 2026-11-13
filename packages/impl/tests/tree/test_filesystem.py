@@ -83,6 +83,7 @@ async def _open_file(
 class _TreeHandler(TreeHandler):
     """A simulated storage's primitives, as a tree handler: no recursive listing of its own."""
 
+    protocol = "treetest"
     profile = StorageProfile()
 
     def __init__(
@@ -139,7 +140,6 @@ class _TreeHandler(TreeHandler):
 class _Tree(TreeFileSystem):
     """A TreeFileSystem on a simulated storage, made from it as from storage options."""
 
-    protocol = "treetest"
     cachable = False
     handler_class = _TreeHandler
 

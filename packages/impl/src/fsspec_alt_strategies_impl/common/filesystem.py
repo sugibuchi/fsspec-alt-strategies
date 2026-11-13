@@ -50,8 +50,8 @@ if TYPE_CHECKING:
 
 _MiB = 1024 * 1024
 
-_NAMED = frozenset({"protocol", "handler_class", "root_marker", "cachable"})
-"""What a developer's class below a family's names: all else is its handler's."""
+_NAMED = frozenset({"handler_class", "cachable"})
+"""What a developer's class below a family's names: all else is its handler's, its protocol too."""
 
 _FSSPEC_OPTIONS = frozenset(
     {
@@ -164,11 +164,18 @@ def _make_concrete(cls: Any, family: Any) -> None:
     makes it from a URL or a registry, and pickles it by those options. It
     takes no handler: one made elsewhere goes to the family's class.
     """
-    if cls.handler_class is None:
+    handler_class = cls.handler_class
+    if handler_class is None:
         raise TypeError(
             f"{cls.__name__} names no handler_class: a class below "
             f"{family.__name__} makes its handler from its storage options"
         )
+
+    # Its paths are its handler's, by convention: fsspec reads them of the
+    # class, e.g. to strip a URL before the filesystem is made.
+    cls.protocol = handler_class.protocol
+    cls.root_marker = handler_class.root
+    cls._strip_protocol = staticmethod(handler_class.strip_protocol)
 
     def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
         if "handler" in kwargs:
@@ -182,6 +189,17 @@ def _make_concrete(cls: Any, family: Any) -> None:
 
     cls.__init__ = __init__
     cls._concrete = True
+
+
+def _take_paths(fs: Any, handler: Any) -> None:
+    """Give a filesystem its handler's paths: its protocol, its root and its stripping.
+
+    A filesystem on a handler serves the handler's paths, whatever its class,
+    e.g. a wrapper's, which are the wrapped filesystem's.
+    """
+    fs.protocol = handler.protocol
+    fs.root_marker = handler.root
+    fs._strip_protocol = handler.strip_protocol
 
 
 class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemMeta):
@@ -217,26 +235,24 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     def __init__(self, handler: StorageHandler, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        # A handler serving another filesystem's paths, as a wrapper does, gives
-        # its own protocol's handling. The root is the handler's.
-        if (strip := getattr(handler, "strip_protocol", None)) is not None:
-            self._strip_protocol = strip  # type: ignore[method-assign]
-        if (unstrip := getattr(handler, "unstrip_protocol", None)) is not None:
-            self.unstrip_protocol = unstrip  # type: ignore[method-assign]
-        self.root_marker = handler.root
         self.handler = handler
+        _take_paths(self, handler)
         self.operation_concurrency = handler.operation_concurrency
         self.io_concurrency = handler.io_concurrency
         self.operation_limit = handler.operation_limit
         self.io_limit = handler.io_limit
 
+    def unstrip_protocol(self, name: str) -> str:
+        """A path of the storage as a URL: the handler's."""
+        return self.handler.unstrip_protocol(name)
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Refuse a developer's class naming anything but its protocol and handler.
+        """Refuse a developer's class naming anything but its handler class.
 
         A family's class, e.g. `TreeFileSystem`, implements fsspec's API on
-        the handler it is given: a class below it names ``protocol``,
-        ``handler_class``, ``root_marker`` and ``cachable``, and nothing else.
-        What the storage does is the handler's. Such a class makes its handler
+        the handler it is given: a class below it names ``handler_class``, and
+        may name ``cachable``, but nothing else. What the storage does is the
+        handler's, its paths and protocol too. Such a class makes its handler
         from its storage options, by `_make_concrete`. The family's own methods
         changing the storage drop the listings kept, by `_drops_listings`.
         """
