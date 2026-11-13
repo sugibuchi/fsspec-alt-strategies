@@ -170,9 +170,7 @@ class StorageHandler(ABC):
         names another storage listed. The path built is then verified by
         `verify_path`, e.g. for a name the storage refuses.
         """
-        path = _joined(directory, name)
-        self.verify_path(path)
-        return path
+        return self.verified(_joined(directory, name))
 
     def join_all(self, directory: StoragePath, relative: str) -> StoragePath:
         """The path of ``relative``, names joined by "/", in ``directory``, verified as `join` verifies one.
@@ -188,8 +186,7 @@ class StorageHandler(ABC):
             return path
         for name in rest.split("/"):
             path = _joined(path, name)
-        self.verify_path(path)
-        return path
+        return self.verified(path)
 
     def parent(self, path: str) -> StoragePath:
         """The directory a path is in, verified: the root for one at the root.
@@ -203,11 +200,9 @@ class StorageHandler(ABC):
         if trimmed == self.root:
             raise ValueError(f"The root has no parent: {path!r}")
         head = trimmed.rpartition("/")[0]
-        parent = StoragePath(
+        return self.verified(
             head or (self.root if trimmed.startswith(self.root) else "")
         )
-        self.verify_path(parent)
-        return parent
 
     def name(self, path: str) -> str:
         """The last name of a path."""
