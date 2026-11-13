@@ -48,7 +48,8 @@ CI runs ruff, zizmor and actionlint, and pytest on every supported Python versio
   storage's `storage_profile` and `operation_limit`.
 - Assert the requests made, e.g. `fs.stats.calls == {"list": 1, "delete": 3}`: they are what a strategy is for.
 - Test a strategy replacing an fsspec method against fsspec's own, e.g. `AsyncFileSystem._glob(fs, ...)`.
-- `parents_required` and `overwrite` make the simulator fail as some storages do, to test profiles.
+- `parents_required`, `copy_parents_required` and `overwrite` make the simulator fail as some storages do, to test
+  profiles.
 - Async tests need no marker. Test directories have no `__init__.py`, and the interface's tests never import the
   strategies.
 
@@ -298,16 +299,17 @@ for fsspec's own methods. The two are one request with or without a delimiter, a
 A `StorageProfile` declares what a storage does that fsspec leaves open. A strategy is right on any storage, and a
 profile only saves requests:
 
-| Field                  | Saves                                                              |
-|------------------------|--------------------------------------------------------------------|
-| `fs_type`              | The router's per-file fallback, by naming the family               |
-| `parents_required`     | False: the `_makedirs` of each destination directory written to    |
-| `implicit_directories` | True: those, and the deletion of each directory                    |
-| `renames_files`        | True: the data copied by `_flat_mv`                                |
-| `renames_directories`  | True: every request in a directory moved whole by one `_mv_tree`   |
-| `deletes_directories`  | True: every request in a directory deleted whole by one `_rm_tree` |
-| `copies_directories`   | True: every request in a directory copied whole by one `_cp_tree`  |
-| `case_sensitive`       | False: a path moved onto itself in another case, by one `_mv_tree` |
+| Field                   | Saves                                                                  |
+|-------------------------|------------------------------------------------------------------------|
+| `fs_type`               | The router's per-file fallback, by naming the family                   |
+| `parents_required`      | False: the `_makedirs` of each destination directory written to        |
+| `copy_parents_required` | False: the `_makedirs` of each directory the storage copies a file to |
+| `implicit_directories`  | True: those, and the deletion of each directory                        |
+| `renames_files`         | True: the data copied by `_flat_mv`                                    |
+| `renames_directories`   | True: every request in a directory moved whole by one `_mv_tree`       |
+| `deletes_directories`   | True: every request in a directory deleted whole by one `_rm_tree`     |
+| `copies_directories`    | True: every request in a directory copied whole by one `_cp_tree`      |
+| `case_sensitive`        | False: a path moved onto itself in another case, by one `_mv_tree`     |
 
 - A filesystem has one profile, which never changes. It is `storage_profile`, `UNKNOWN` unless a subclass sets what
   it knows. Or it is what `_load_storage_profile()` finds with a request.
@@ -318,8 +320,10 @@ profile only saves requests:
   buckets with or without a hierarchical namespace, is several filesystems under a router: one per bucket, and the
   router for the whole namespace.
 - A deletion reads the profile of the filesystem it deletes from.
-- A copy or move reads the destination's. `renames_files`, `renames_directories`, `copies_directories` and
-  `case_sensitive` count only within one storage.
+- A copy or move reads the destination's. `copy_parents_required`, `renames_files`, `renames_directories`,
+  `copies_directories` and `case_sensitive` count only within one storage.
+- Between two storages, a file copied is written: `parents_required` counts. Within one, it goes by the storage's own
+  copy, which may make no parent where a write does, as on Microsoft Graph: `copy_parents_required` counts.
 - A field left None is unknown, and the strategy takes the way right on any storage.
 - `case_sensitive` is the exception: no way is right on both kinds of names. Unknown, paths are compared as fsspec
   compares them, as strings. On a storage whose names are not case-sensitive, a path copied or moved onto itself in

@@ -220,8 +220,8 @@ async def test_a_storage_moving_a_file_in_one_request(
 async def test_profile_saves_the_mkdirs(hierarchical_fs: SimulatedFileSystem) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.add_dir("data/empty")
-    # Its mv_file copies, then deletes: a write, which makes its directory.
-    profile = StorageProfile(parents_required=False, renames_files=False)
+    # Its mv_file copies, then deletes: a copy, which makes its directory.
+    profile = StorageProfile(copy_parents_required=False, renames_files=False)
     await _collect_with_errors(_mv(hierarchical_fs, "data", "moved", profile=profile))
     # Only the empty directory needs one: the copies create the others.
     assert hierarchical_fs.stats.calls["mkdir"] == 1
@@ -459,6 +459,8 @@ async def test_a_dir_moved_into_itself_in_another_case_is_refused(
 def test_implicit_dirs_cannot_require_parents() -> None:
     with pytest.raises(ValueError, match="parents_required"):
         StorageProfile(implicit_directories=True, parents_required=True)
+    with pytest.raises(ValueError, match="copy_parents_required"):
+        StorageProfile(implicit_directories=True, copy_parents_required=True)
 
 
 async def test_a_storage_requiring_parents() -> None:
@@ -470,7 +472,7 @@ async def test_a_storage_requiring_parents() -> None:
     assert errors == []
     assert await fs._exists("new/deep/moved/2023/01/part-0.parquet")
     # Wrongly declared, the profile makes each copy fail, and keeps the source.
-    wrong = StorageProfile(parents_required=False, renames_files=False)
+    wrong = StorageProfile(copy_parents_required=False, renames_files=False)
     _, errors = await _collect_with_errors(
         _mv(fs, "new/deep/moved", "elsewhere", profile=wrong)
     )

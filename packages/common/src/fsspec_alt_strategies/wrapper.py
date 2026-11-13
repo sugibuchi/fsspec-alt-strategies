@@ -68,6 +68,7 @@ known_implementations: dict[str, KnownImplementation] = {
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=True,
+            copy_parents_required=True,
             implicit_directories=False,
             renames_files=True,
             renames_directories=True,
@@ -83,6 +84,7 @@ known_implementations: dict[str, KnownImplementation] = {
         "storage_profile": StorageProfile(
             fs_type="flat",
             parents_required=False,
+            copy_parents_required=False,
             implicit_directories=True,
             renames_files=False,
             renames_directories=False,
@@ -105,6 +107,7 @@ known_implementations: dict[str, KnownImplementation] = {
         "storage_profile": StorageProfile(
             fs_type="flat",
             parents_required=False,
+            copy_parents_required=False,
             implicit_directories=None,
             renames_files=False,
             renames_directories=False,
@@ -128,6 +131,7 @@ known_implementations: dict[str, KnownImplementation] = {
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=False,
+            copy_parents_required=False,
             implicit_directories=None,
             renames_files=False,
             renames_directories=False,
@@ -146,6 +150,7 @@ known_implementations: dict[str, KnownImplementation] = {
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=False,
+            copy_parents_required=False,
             implicit_directories=None,
             renames_files=False,
             renames_directories=False,
@@ -163,6 +168,7 @@ known_implementations: dict[str, KnownImplementation] = {
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=True,
+            copy_parents_required=True,
             implicit_directories=False,
             renames_files=True,
             renames_directories=True,
@@ -180,6 +186,7 @@ known_implementations: dict[str, KnownImplementation] = {
         "storage_profile": StorageProfile(
             fs_type="tree",
             parents_required=False,
+            copy_parents_required=False,
             implicit_directories=False,
             renames_files=True,
             renames_directories=True,

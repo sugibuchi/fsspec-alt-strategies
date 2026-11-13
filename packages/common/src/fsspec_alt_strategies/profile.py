@@ -51,9 +51,17 @@ class StorageProfile:
     parents_required : bool, optional
         Whether writing a file into a missing directory fails, rather than
         creating its parents. Unknown by default, taken as True: directories are
-        created before files are written into them. It tells of writes only:
-        a rename's parent is always created first, as ``_mv_file_entry`` is called
-        only where the destination's parent exists.
+        created before files are written into them. It tells of writes only,
+        such as a router's copy from another storage. A rename's parent is
+        always created first, as ``_mv_file_entry`` is called only where the
+        destination's parent exists.
+    copy_parents_required : bool, optional
+        Whether the filesystem's own copy of a file, ``_cp_file_entry``, into a
+        missing directory fails, rather than creating its parents. A copy
+        within the storage reads it, where a copy from another storage, a
+        write, reads ``parents_required``. They differ where the storage's copy
+        is a request of its own, e.g. Microsoft Graph's, which makes no parent,
+        though its uploads do. Unknown by default, taken as True.
     implicit_directories : bool, optional
         Whether directories exist only through the files under them, with no
         entry of their own, as on object stores without a hierarchical
@@ -96,8 +104,9 @@ class StorageProfile:
     ------
     ValueError
         If ``fs_type`` is neither "tree" nor "flat", or if
-        ``implicit_directories`` and ``parents_required`` are both True, as a
-        file's parents then exist as soon as it does.
+        ``implicit_directories`` is True with ``parents_required`` or
+        ``copy_parents_required`` True, as a file's parents then exist as soon
+        as it does.
 
     Examples
     --------
@@ -107,6 +116,7 @@ class StorageProfile:
 
     fs_type: Literal["tree", "flat"] | None = None
     parents_required: bool | None = None
+    copy_parents_required: bool | None = None
     implicit_directories: bool | None = None
     renames_files: bool | None = None
     renames_directories: bool | None = None
@@ -117,11 +127,12 @@ class StorageProfile:
     def __post_init__(self) -> None:
         if self.fs_type not in (None, "tree", "flat"):
             raise ValueError(f"fs_type must be 'tree' or 'flat': {self.fs_type!r}")
-        if self.implicit_directories and self.parents_required:
-            raise ValueError(
-                "parents_required cannot be True with implicit_directories: a file's"
-                " parents exist as soon as it does"
-            )
+        for name in ("parents_required", "copy_parents_required"):
+            if self.implicit_directories and getattr(self, name):
+                raise ValueError(
+                    f"{name} cannot be True with implicit_directories: a file's"
+                    " parents exist as soon as it does"
+                )
 
 
 UNKNOWN = StorageProfile()

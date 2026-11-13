@@ -111,6 +111,10 @@ class SimulatedFileSystem(AsyncFileSystem):
     parents_required : bool
         Whether writing a file into a missing directory raises FileNotFoundError,
         rather than creating its parents. Only on a hierarchical storage.
+    copy_parents_required : bool, optional
+        Whether a copy within the storage into a missing directory raises
+        FileNotFoundError, rather than creating its parents. As
+        ``parents_required`` if None. Only on a hierarchical storage.
     overwrite : bool
         Whether writing onto an existing file replaces it, rather than raising
         FileExistsError.
@@ -149,6 +153,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         bandwidth: float | None = None,
         page_size: int = 1000,
         parents_required: bool = False,
+        copy_parents_required: bool | None = None,
         overwrite: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -165,6 +170,9 @@ class SimulatedFileSystem(AsyncFileSystem):
         self.bandwidth = bandwidth
         self.page_size = page_size
         self.parents_required = parents_required and hierarchical
+        self.copy_parents_required = (
+            parents_required if copy_parents_required is None else copy_parents_required
+        ) and hierarchical
         self.overwrite = overwrite
 
         self.stats = CallStats()
@@ -371,7 +379,7 @@ class SimulatedFileSystem(AsyncFileSystem):
         # A copy on the server: one request, whatever the file's size.
         await self._request("copy")
         data = self._file(path1).data
-        self._check_writable(path2)
+        self._check_writable(path2, copy=True)
         self._write(path2, data)
 
     async def _cp_file_entry(
@@ -496,7 +504,8 @@ class SimulatedFileSystem(AsyncFileSystem):
             raise FileExistsError(path2)
         if not path1 or path2 == path1 or path2.startswith(path1 + "/"):
             raise OSError(errno.EINVAL, f"Cannot {verb} a directory into itself", path2)
-        if self.parents_required and _parent_of(path2) not in self._dirs:
+        required = self.parents_required if move else self.copy_parents_required
+        if required and _parent_of(path2) not in self._dirs:
             raise FileNotFoundError(_parent_of(path2))
 
         # Parents first, so that each directory is made before what is in it.
@@ -588,9 +597,10 @@ class SimulatedFileSystem(AsyncFileSystem):
                 if self.hierarchical or p in self._file_data
             ]
 
-    def _check_writable(self, path: str) -> None:
-        """Raise as a storage would, if its settings forbid writing ``path``."""
-        if self.parents_required and _parent_of(path) not in self._dirs:
+    def _check_writable(self, path: str, *, copy: bool = False) -> None:
+        """Raise as a storage would, if its settings forbid writing ``path``, or copying to it."""
+        required = self.copy_parents_required if copy else self.parents_required
+        if required and _parent_of(path) not in self._dirs:
             raise FileNotFoundError(_parent_of(path))
         if not self.overwrite and path in self._file_data:
             raise FileExistsError(path)

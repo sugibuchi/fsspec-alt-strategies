@@ -238,9 +238,41 @@ async def test_requests(hierarchical_fs: SimulatedFileSystem) -> None:
     assert await hierarchical_fs._exists("copied/empty")
 
     hierarchical_fs.reset_stats()
-    profile = StorageProfile(parents_required=False)
+    # Within one storage, its own copy's parents are what the profile tells.
+    profile = StorageProfile(copy_parents_required=False)
     await _collect_with_errors(_cp(hierarchical_fs, "data", "again", profile=profile))
     assert hierarchical_fs.stats.calls["mkdir"] == 1  # Only the empty directory.
+
+
+async def test_a_storage_whose_copies_need_parents_where_its_writes_do_not() -> None:
+    """As Microsoft Graph: an upload makes its parents, the storage's own copy does not."""
+    fs = SimulatedFileSystem(
+        hierarchical=True,
+        parents_required=False,
+        copy_parents_required=True,
+        asynchronous=True,
+    )
+    _tree(fs)
+    profile = StorageProfile(parents_required=False, copy_parents_required=True)
+    _, errors = await _collect_with_errors(_cp(fs, "data", "copied", profile=profile))
+    assert errors == []
+    assert await fs._exists("copied/2023/01/part-0.parquet")
+
+    async def write(entry: dict[str, Any], destination: str) -> None:
+        await fs._pipe_file(destination, await fs._cat_file(entry["name"]))
+
+    # A copy from another storage writes, as a router's does: no mkdir.
+    fs.reset_stats()
+    op = _cp(fs, "data", "written", profile=profile, same_storage=False, cp_entry=write)
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert "mkdir" not in fs.stats.calls
+    assert await fs._exists("written/2023/01/part-0.parquet")
+
+    # Declared as its writes, the storage's copies fail.
+    wrong = StorageProfile(parents_required=False, copy_parents_required=False)
+    _, errors = await _collect_with_errors(_cp(fs, "data", "wrong", profile=wrong))
+    assert errors and {type(e) for e in errors} == {FileNotFoundError}
 
 
 async def test_a_storage_requiring_parents() -> None:

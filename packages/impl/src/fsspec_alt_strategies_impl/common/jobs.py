@@ -542,10 +542,15 @@ class _CopyJobs(_Jobs):
         get = getattr(self.dst_fs, "_get_storage_profile", None)
         self.profile = await get() if get is not None else UNKNOWN
         # Unknown, directories are made first. Implicit directories need none.
+        # Within one storage, a file goes by the storage's own copy or move,
+        # whose parents the profile tells apart from a write's.
         self.implicit_directories = bool(self.profile.implicit_directories)
-        self.parents_required = (
-            self.profile.parents_required is not False and not self.implicit_directories
+        declared = (
+            self.profile.copy_parents_required
+            if self.same_storage
+            else self.profile.parents_required
         )
+        self.parents_required = declared is not False and not self.implicit_directories
         # Only within one storage are a source and its destination compared.
         self.case_insensitive = (
             self.same_storage and self.profile.case_sensitive is False

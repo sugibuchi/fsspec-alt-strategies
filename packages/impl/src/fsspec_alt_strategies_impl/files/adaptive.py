@@ -589,6 +589,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
       overrides it to keep parts a multiple of 256 KiB, or any other rule.
     - The last part is the one given ``last``: with the file's size, as its
       ``end``. A storage where it makes the file visible completes nothing.
+      The last part's error is then the completion's, and raised as it is,
+      e.g. FileExistsError in mode "xb". An earlier part's error is raised as
+      the cause of an OSError.
 
     Mode "xb" creates the file only if none is at the path, and
     ``exclusive`` is then True. The subclass checks it with the storage's
@@ -704,6 +707,8 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         self._pos = 0
         self._buffer = bytearray()
         self._multipart = False
+        # The last part's upload, once sent: its error is raised as it is.
+        self._last_part: asyncio.Task[Any] | None = None
 
     @property
     def exclusive(self) -> bool:
@@ -860,7 +865,20 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     # The uploading underneath.
 
     def _raise_failed_upload(self) -> None:
-        if (error := self._requests.error) is not None:
+        if (error := self._requests.error) is None:
+            return
+        last = self._last_part
+        if (
+            last is not None
+            and last.done()
+            and not last.cancelled()
+            and error is last.exception()
+        ):
+            # On a storage where the last part makes the file visible, its
+            # refusal is the completion's, which the caller acts on, e.g.
+            # FileExistsError in mode "xb": not wrapped as a part's failure.
+            raise error
+        else:
             raise OSError(f"Failed to upload a part of {self.path}") from error
 
     async def _upload_buffer(self, closing: bool) -> None:
@@ -922,6 +940,7 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
                     self._raise_failed_upload()
 
                 start = offset + taken
+                last = closing and size == remaining
                 # One copy, through a view: a slice of the bytearray would copy
                 # it once more. The view goes before the buffer is resized.
                 with memoryview(buffer) as view:
@@ -934,8 +953,10 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
                     start,
                     start + size,
                     len(self._requests.queue),
-                    closing and size == remaining,
+                    last,
                 )
+                if last:
+                    self._last_part = self._requests.queue[-1].task
                 taken += size
         finally:
             # Even if cancelled between parts: the parts sent are never sent again.

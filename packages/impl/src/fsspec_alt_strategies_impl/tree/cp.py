@@ -136,7 +136,8 @@ def _tree_cp(
     was found missing or existing already. One copied whole then costs a
     ``dst_makedirs`` of its parent, and its ``cp_tree``: nothing more.
 
-    The destination's profile's ``parents_required=False``, or
+    The destination's profile's ``parents_required=False`` between two
+    storages, ``copy_parents_required=False`` within one, or
     ``implicit_directories=True``, saves the ``dst_makedirs`` of each directory
     with files, as their copies create it. Its ``parents_required=True``
     makes every directory, each once its parent is made, as such a storage

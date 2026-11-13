@@ -937,16 +937,37 @@ async def test_a_failed_start_aborts_and_keeps_its_error(
     assert not await flat_fs._exists("f.bin")
 
 
-async def test_a_part_failing_while_closing_raises_as_earlier(
+async def test_the_last_part_failing_raises_its_error_as_a_completion_does(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     f = _Writer(flat_fs, "f.bin")
     f.fail_part = 3  # The last, sent by closing.
     await f._write(os.urandom(40 * _KiB))
-    with pytest.raises(OSError, match="Failed to upload a part") as raised:
+    with pytest.raises(OSError, match="part failed") as raised:
         await f.aclose()
-    assert str(raised.value.__cause__) == "part failed"
+    assert raised.value.__cause__ is None  # Not wrapped.
     assert f.requests == ["start", "abort"]
+
+
+@pytest.mark.parametrize("sequential", [False, True])
+async def test_an_exclusive_write_refused_by_its_last_part_raises_file_exists(
+    flat_fs: SimulatedFileSystem, sequential: bool
+) -> None:
+    """A storage whose last part makes the file visible checks mode "xb" there, as Graph's upload sessions do."""
+
+    class LastPartChecks(_Writer):
+        async def _upload_part(
+            self, data: bytes, start: int, end: int, index: int, last: bool
+        ) -> Any:
+            if last and self.exclusive:
+                raise FileExistsError(errno.EEXIST, "File exists", self.path)
+            return await super()._upload_part(data, start, end, index, last)
+
+    f = LastPartChecks(flat_fs, "f.bin", mode="xb", sequential=sequential)
+    await f._write(os.urandom(40 * _KiB))
+    with pytest.raises(FileExistsError):
+        await f.aclose()
+    assert f.requests[-1] == "abort"
 
 
 @pytest.mark.parametrize("size", [300, 40 * _KiB])  # One upload, or parts.

@@ -105,7 +105,8 @@ def _flat_cp(
     source's ``operation_limit`` while it runs, a ``cp_entry`` between two
     storages too.
 
-    The destination's profile's ``parents_required=False``, or
+    The destination's profile's ``parents_required=False`` between two
+    storages, ``copy_parents_required=False`` within one, or
     ``implicit_directories=True``, saves the ``dst_makedirs`` of each directory
     with keys, as their copies create it. ``implicit_directories=True`` saves
     those of the markers too. A directory known to exist needs none: the

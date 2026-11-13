@@ -131,9 +131,10 @@ def _tree_mv(
 
     A destination's parent is made before any rename, as ``mv_entry`` and
     ``mv_tree`` are called only where the parent exists. The destination's
-    profile's ``parents_required=False`` saves the ``dst_makedirs`` of each
-    directory with files only where ``mv_entry`` writes, creating the
-    directory: between two storages, or with ``renames_files=False``. Its
+    profile saves the ``dst_makedirs`` of each directory with files only where
+    ``mv_entry`` writes or copies, creating the directory: between two storages,
+    by ``parents_required=False``, or within one with ``renames_files=False``,
+    by ``copy_parents_required=False``. Its
     ``implicit_directories=True`` saves those, and within one storage the
     ``rm_dir`` of each source directory too, as a directory goes with its last
     file. It alone saves the ``dst_makedirs`` before a directory is moved
