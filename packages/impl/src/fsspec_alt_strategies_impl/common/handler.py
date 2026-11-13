@@ -84,9 +84,6 @@ class StorageHandler(ABC):
     replaced by what that loads, as `open` does.
     """
 
-    rm_batch_size: int = 1000
-    """The most paths `rm_files` takes at once, where the handler has it."""
-
     def __init__(
         self,
         *,
@@ -229,17 +226,6 @@ class StorageHandler(ABC):
         ``path2``'s parent exists.
         """
 
-    # The optional primitives of several paths, which the profile declares.
-
-    async def rm_files(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
-        """Delete files, by one request, at most ``rm_batch_size`` of them.
-
-        It returns the paths it could not delete, each with its error, and
-        raises only if the request failed whole. A batch may span the storage's
-        partitions, e.g. buckets.
-        """
-        raise NotImplementedError(f"{type(self).__name__} deletes no files in batches")
-
 
 class _FileSystemHandler(StorageHandler):
     """An fsspec filesystem as a handler, its primitives by path, until the filesystems are made on handlers.
@@ -267,7 +253,8 @@ class _FileSystemHandler(StorageHandler):
         return f"<handler of {self.fs!r}>"
 
     @property
-    def rm_batch_size(self) -> int:  # type: ignore[override]
+    def rm_batch_size(self) -> int:
+        """The flat filesystem's own, for `rm_files`."""
         return self.fs.rm_batch_size  # type: ignore[no-any-return]
 
     async def load_profile(self) -> StorageProfile:
