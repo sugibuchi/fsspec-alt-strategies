@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.handler import (
     StorageHandler,
     _FileSystemHandler,
@@ -222,3 +223,24 @@ def test_a_handler_class_takes_the_storage_options() -> None:
     assert isinstance(fs.handler, Options)
     # fsspec's own options are the filesystem's: the handler gets the others.
     assert made == [{"region": "here"}]
+
+
+def test_a_filesystem_needs_a_handler() -> None:
+    with pytest.raises(TypeError, match="needs a handler"):
+        TreeFileSystem()
+
+
+def test_a_storages_class_names_its_protocol_and_handler_only() -> None:
+    with pytest.raises(TypeError, match="_info belongs to its handler"):
+
+        class Overriding(TreeFileSystem):
+            protocol = "overriding"
+            handler_class = TreeView
+
+            async def _info(self, path: str, **kwargs: Any) -> Any: ...
+
+    with pytest.raises(TypeError, match="storage_profile belongs to its handler"):
+
+        class Declaring(TreeFileSystem):
+            handler_class = TreeView
+            storage_profile = StorageProfile()

@@ -36,7 +36,6 @@ from .rm import _flat_rm
 from .walk import _flat_walk
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 
 
@@ -44,132 +43,63 @@ __all__ = ["FlatFileSystem"]
 
 
 class FlatFileSystem(_BaseFileSystem):
-    """An abstract async filesystem, its recursive methods the flat strategies.
+    """An async filesystem on a flat handler, its recursive methods the flat strategies.
 
     It suits flat storages, such as object stores, which list every key under a
-    prefix in one paginated request. It overrides fsspec's ``_walk``,
-    ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``_mv`` when
-    recursive, with the flat strategies. These list every key under a prefix
-    with a recursive ``_ils``, and act on each key as it arrives. Their answers
-    are fsspec's, and their failures are raised, a single one as it is, several
-    in an ExceptionGroup.
+    prefix in one paginated request. It implements fsspec's API on its
+    handler, a `FlatHandler`: each primitive, e.g. ``_info`` or ``_rm_file``,
+    calls the handler's, on the caller's path as the handler verifies it. It
+    overrides fsspec's ``_walk``, ``_find``, ``_du``, ``_glob``, and ``_rm``,
+    ``_copy`` and ``_mv`` when recursive, with the flat strategies, which take
+    the handler. These list every key under a prefix with its recursive
+    listing, and act on each key as it arrives. Their answers are fsspec's,
+    and their failures are raised, a single one as it is, several in an
+    ExceptionGroup.
 
-    A subclass implements the storage's primitives:
-
-    - ``_ils``, a directory's listing, which ``_ls`` and so fsspec's own
-      methods list with, and with ``recursive=True`` every key below it, which
-      the strategies list with;
-    - ``_rm_files``, a deletion of several files in one request, with
-      ``rm_batch_size``;
-    - ``_info`` and ``_rm_file``;
-    - ``_rmdir`` and ``_makedirs``, for fsspec's own methods only, e.g. making
-      or deleting a bucket: fsspec's defaults do nothing;
-    - ``_cp_file_entry`` and ``_mv_file_entry``, a copy and a move of a key by
-      its entry, as its listing gave it, e.g. with its size. fsspec's
-      ``_cp_file`` and ``_mv_file`` ask the entry, then call them;
-    - ``open_async``, giving its files ``io_limit`` as their concurrency
-      limit, and ``_open``.
-
-    The data methods, ``_cat_file``, ``_pipe_file``, ``_get_file`` and
-    ``_put_file``, read and write through ``open_async``'s files.
-
-    Two limits bound its requests, each an `asyncio.Semaphore`:
-
-    - ``operation_limit``, the strategies' requests, such as deletions and
-      copies, but not their listings, which come one page after another;
-    - ``io_limit``, the reads and writes of data, by its files.
-
-    ``storage_profile``, a `StorageProfile`, tells the strategies what the
-    storage does. With ``renames_files=True``, a recursive ``mv``, or one of a
-    single file, moves each key by ``_mv_file_entry``, the storage's rename.
-    Otherwise it copies each key, and deletes them in batches.
+    What the storage does is the handler's: its primitives, its profile, its
+    limits, its batch of deletions and its files. A storage's class names its
+    protocol and its handler class, and nothing else, as `TreeFileSystem`'s
+    does. With the profile's ``renames_files=True``, a recursive ``mv``, or one
+    of a single file, moves each key by the handler's rename. Otherwise it
+    copies each key, and deletes them in batches.
 
     Parameters
     ----------
-    operation_concurrency : int or asyncio.Semaphore
-        The requests of the strategies at a time.
-        A semaphore is used as it is, shared with what else holds it.
-    io_concurrency : int or asyncio.Semaphore
-        The reads and writes of data at a time.
-        A semaphore is used as it is, shared with what else holds it. Each
-        holds a block or a part, so it bounds their memory too: at most this
-        many times the file class's ``max_block_size`` in flight.
-    **kwargs
-        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
+    *args, **storage_options
+        Passed to the class's ``handler_class``, but fsspec's own options,
+        e.g. ``asynchronous=True``, passed to `fsspec.asyn.AsyncFileSystem`.
 
     Raises
     ------
+    TypeError
+        As `TreeFileSystem` raises.
     ValueError
-        If a concurrency or ``rm_batch_size`` is less than 1, or not set.
+        If the handler's ``rm_batch_size`` is less than 1.
 
     See Also
     --------
     TreeFileSystem : The same, for storages with a hierarchical namespace.
+    FlatHandler : What a storage implements.
 
     Examples
     --------
     >>> class MyFileSystem(FlatFileSystem):
     ...     protocol = "my"
-    ...     storage_profile = UNKNOWN
-    ...     rm_batch_size = 1000  # As S3's DeleteObjects takes.
-    ...
-    ...     async def _ils(self, path, recursive=False, prefix="", **kwargs): ...
-    ...     async def _rm_files(self, paths): ...
-    ...     async def _info(self, path, **kwargs): ...
-    ...     async def _rm_file(self, path, **kwargs): ...
-    ...     async def _rmdir(self, path): ...
-    ...     async def _makedirs(self, path, exist_ok=False): ...
-    ...     async def _cp_file_entry(self, entry, path2, **kwargs): ...
-    ...     async def _mv_file_entry(self, entry, path2, **kwargs): ...
-    ...
-    ...     async def open_async(self, path, mode="rb", **kwargs):
-    ...         file = MyFile(self, path, mode, concurrency_limit=self.io_limit)
-    ...         return AsyncFileAdapter(file)
-    ...
-    ...     def _open(self, path, mode="rb", **kwargs):
-    ...         return MyFile(self, path, mode, concurrency_limit=self.io_limit)
-    >>> fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
+    ...     handler_class = MyHandler
+    >>> fs = MyFileSystem(bucket="mine", operation_concurrency=32, io_concurrency=8)
     """
 
     rm_batch_size: int
-    """The most keys ``_rm_files`` deletes in one request, e.g. 1000 on S3."""
+    """The most keys the handler's ``rm_files`` deletes in one request, e.g. 1000 on S3."""
 
-    def __init__(
-        self,
-        *args: Any,
-        operation_concurrency: int | asyncio.Semaphore | None = None,
-        io_concurrency: int | asyncio.Semaphore | None = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(
-            *args,
-            operation_concurrency=operation_concurrency,
-            io_concurrency=io_concurrency,
-            **kwargs,
-        )
-
-        if self.handler is not None:
-            # The handler's, as its rm_files takes them.
-            self.rm_batch_size = self.handler.rm_batch_size  # type: ignore[attr-defined]
-        size = getattr(self, "rm_batch_size", None)
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        size = self.handler.rm_batch_size  # type: ignore[attr-defined]
         if not isinstance(size, int) or size < 1:
             raise ValueError(f"rm_batch_size must be set, to at least 1: {size}")
+        self.rm_batch_size = size
 
-    _primitives = (
-        "_ils",
-        "_rm_files",
-        "_rmdir",
-        "_makedirs",
-        "_info",
-        "_rm_file",
-        "_cp_file_entry",
-        "_mv_file_entry",
-        "open_async",
-        "_open",
-    )
-
-    # The storage's primitives: the handler's, unless a subclass implements its own.
-    # Each takes a caller's path, verified by the handler.
+    # The storage's primitives: the handler's, each on a caller's path, verified by it.
 
     def _ils(
         self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any

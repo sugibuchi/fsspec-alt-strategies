@@ -20,7 +20,6 @@ This module depends on `operation` and `handler`, and `fsspec_async` and
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import inspect
 import io
@@ -51,6 +50,9 @@ if TYPE_CHECKING:
 
 
 _MiB = 1024 * 1024
+
+_NAMED = frozenset({"protocol", "handler_class", "root_marker", "cachable"})
+"""What a developer's class below a family's names: all else is its handler's."""
 
 _FSSPEC_OPTIONS = frozenset(
     {
@@ -162,11 +164,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     """
 
     storage_profile: StorageProfile = UNKNOWN
-    """What the storage does, for the strategies: unknown, right on any storage, by default.
-
-    A subclass sets what it knows. One overriding ``_load_storage_profile``
-    too has it replaced by the profile `_get_storage_profile` loads.
-    """
+    """What the storage does: its handler's, as loaded once the handler is open."""
 
     transfer_size: int = 8 * _MiB
     """The bytes read or written at a time by ``_get_file`` and ``_put_file``."""
@@ -174,133 +172,73 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     handler_class: ClassVar[type[StorageHandler] | None] = None
     """The class of the handler a filesystem of this class makes, from its storage options."""
 
-    handler: StorageHandler | None = None
-    """The storage's handler, whose primitives the filesystem calls, if it has one."""
+    handler: StorageHandler
+    """The storage's handler, whose primitives the filesystem calls."""
 
-    # The family's class, and the primitives a subclass with no handler implements.
-    _family: ClassVar[type]
-    _primitives: ClassVar[tuple[str, ...]] = ()
+    # The family's class, set once made: a class below it is a developer's.
+    _family: ClassVar[type | None] = None
 
     def __init__(
-        self,
-        *args: Any,
-        operation_concurrency: int | asyncio.Semaphore | None = None,
-        io_concurrency: int | asyncio.Semaphore | None = None,
-        handler: StorageHandler | None = None,
-        **kwargs: Any,
+        self, *args: Any, handler: StorageHandler | None = None, **kwargs: Any
     ) -> None:
-        if handler is None and self.handler_class is not None:
+        if handler is None:
+            if self.handler_class is None:
+                raise TypeError(
+                    f"{type(self).__name__} needs a handler: a class names its "
+                    "handler_class, or of(handler) makes one on a handler"
+                )
             # fsspec's own options are the filesystem's: the rest, the handler's.
             options = {
                 k: kwargs.pop(k) for k in list(kwargs) if k not in _FSSPEC_OPTIONS
             }
-            limits = {
-                k: v
-                for k, v in (
-                    ("operation_concurrency", operation_concurrency),
-                    ("io_concurrency", io_concurrency),
-                )
-                if v is not None
-            }
-            handler = self.handler_class(*args, **limits, **options)
+            handler = self.handler_class(*args, **options)
             args = ()
-        if handler is not None:
-            super().__init__(*args, **kwargs)
-            self._storage_profile_loaded = False
-            self._storage_profile_lock = asyncio.Lock()
-            self.handler = handler
-            self.storage_profile = handler.profile
-            self.operation_concurrency = handler.operation_concurrency
-            self.io_concurrency = handler.io_concurrency
-            self.operation_limit = handler.operation_limit
-            self.io_limit = handler.io_limit
-            return
-        if operation_concurrency is None or io_concurrency is None:
-            raise TypeError("operation_concurrency and io_concurrency are required")
-        # With no handler, a subclass implements every primitive itself.
-        missing = [
-            name
-            for name in self._primitives
-            # Unwrapped, as __init_subclass__ wraps a changing method it defines.
-            if inspect.unwrap(getattr(type(self), name))
-            is inspect.unwrap(getattr(self._family, name))
-        ]
-        if missing:
-            raise TypeError(
-                f"{type(self).__name__} has no handler, and does not implement "
-                + ", ".join(missing)
-            )
-
-        # A semaphore given is shared. A number makes a new one.
-        if isinstance(operation_concurrency, asyncio.Semaphore):
-            operation_limit = operation_concurrency
-        elif operation_concurrency < 1:
-            raise ValueError(
-                f"operation_concurrency must be at least 1: {operation_concurrency}"
-            )
-        else:
-            operation_limit = asyncio.Semaphore(operation_concurrency)
-
-        if isinstance(io_concurrency, asyncio.Semaphore):
-            io_limit = io_concurrency
-        elif io_concurrency < 1:
-            raise ValueError(f"io_concurrency must be at least 1: {io_concurrency}")
-        else:
-            io_limit = asyncio.Semaphore(io_concurrency)
-
         super().__init__(*args, **kwargs)
 
-        # Named apart from a subclass's own members.
         self._storage_profile_loaded = False
-        self._storage_profile_lock = asyncio.Lock()
+        self.handler = handler
+        self.storage_profile = handler.profile
+        self.operation_concurrency = handler.operation_concurrency
+        self.io_concurrency = handler.io_concurrency
+        self.operation_limit = handler.operation_limit
+        self.io_limit = handler.io_limit
 
-        self.operation_concurrency = operation_concurrency
-        self.io_concurrency = io_concurrency
-        self.operation_limit = operation_limit
-        self.io_limit = io_limit
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Refuse a developer's class naming anything but its protocol and handler.
 
-    async def _load_storage_profile(self) -> StorageProfile:
-        """Find the profile by a request: here, ``storage_profile`` as declared.
-
-        A subclass overrides it where a request finds the profile, e.g.
-        whether an account has a hierarchical namespace. It takes no path: the
-        profile is one for the whole filesystem. A storage whose behaviour
-        differs by path, e.g. per bucket, is several filesystems under a
-        router, each loading its own.
-
-        `_get_storage_profile` sets what it returns as ``storage_profile``,
-        then never calls it again. One that cannot tell raises: the next
-        operation needing the profile tries again. Returning ``UNKNOWN``
-        instead sets that for good, which is right on any storage.
+        A family's class, e.g. `TreeFileSystem`, implements fsspec's API on
+        its handler: a class below it names ``protocol``, ``handler_class``,
+        ``root_marker`` and ``cachable``, and nothing else. What the storage
+        does is the handler's. The family's own methods changing the storage
+        drop the listings kept, by `_drops_listings`.
         """
-        return self.storage_profile
+        super().__init_subclass__(**kwargs)
+        if cls._family is not None:
+            own = {
+                n for n in vars(cls) if not (n.startswith("__") and n.endswith("__"))
+            }
+            if extra := own - _NAMED:
+                raise TypeError(
+                    f"{cls.__name__} may name only {', '.join(sorted(_NAMED))}: "
+                    f"{', '.join(sorted(extra))} belongs to its handler"
+                )
+            return
+        for name in _CHANGING | {"_open", "open_async"}:
+            method = cls.__dict__.get(name)
+            if callable(method) and not hasattr(method, "__wrapped__"):
+                setattr(cls, name, _drops_listings(method))
 
     async def _get_storage_profile(self) -> StorageProfile:
-        """``storage_profile``, loaded first by `_load_storage_profile`.
+        """``storage_profile``, loaded first by the handler as it opens.
 
         Once loaded, ``storage_profile`` is returned as it is. A first call
-        loads it while the others wait, then find it loaded. A load that
-        raises is tried again by the next call.
-
-        The strategies await it when they start. The subclass's primitives may
-        await it too, e.g. a ``_rmdir`` depending on whether directories are
-        real.
+        opens the handler while the others wait, then find it open. An open
+        that raises is tried again by the next call.
         """
-        # Once loaded, no call waits for the lock.
-        if self._storage_profile_loaded:
-            return self.storage_profile
-
-        if self.handler is not None:
-            # The handler's, as its opening loads it.
+        if not self._storage_profile_loaded:
             await self.handler.open()
             self.storage_profile = self.handler.profile
             self._storage_profile_loaded = True
-            return self.storage_profile
-
-        async with self._storage_profile_lock:
-            if not self._storage_profile_loaded:
-                self.storage_profile = await self._load_storage_profile()
-                self._storage_profile_loaded = True
         return self.storage_profile
 
     def _unwrapped(self) -> AsyncFileSystem:
@@ -332,11 +270,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         return fs
 
     def _required_handler(self) -> StorageHandler:
-        """The handler, for a primitive a subclass does not implement itself."""
-        if self.handler is None:
-            raise NotImplementedError(
-                f"{type(self).__name__} has no handler, nor this primitive of its own"
-            )
+        """The handler: every filesystem has one."""
         return self.handler
 
     # Files, by the handler: the same file for open_async and the sync open.
@@ -396,18 +330,6 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
             return TransactionFile(AdaptiveWritableTransaction(file))
 
     # fsspec's dircache: listings kept by _ls, for fsspec's own methods and callers.
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Make each method of `_CHANGING` a subclass defines drop the listings kept.
-
-        A subclass implementing a primitive, e.g. ``_rm_file``, need not drop
-        them itself, as fsspec's implementations must.
-        """
-        super().__init_subclass__(**kwargs)
-        for name in _CHANGING | {"_open", "open_async"}:
-            method = cls.__dict__.get(name)
-            if callable(method) and not getattr(method, "__isabstractmethod__", False):
-                setattr(cls, name, _drops_listings(method))
 
     async def _ls(
         self, path: str, detail: bool = True, refresh: bool = False, **kwargs: Any

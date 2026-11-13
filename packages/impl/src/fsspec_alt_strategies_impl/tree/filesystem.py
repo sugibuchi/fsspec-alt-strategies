@@ -36,7 +36,6 @@ from .rm import _tree_rm
 from .walk import _tree_walk
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
 
@@ -44,134 +43,57 @@ __all__ = ["TreeFileSystem"]
 
 
 class TreeFileSystem(_BaseFileSystem):
-    """An abstract async filesystem, its recursive methods the tree strategies.
+    """An async filesystem on a tree handler, its recursive methods the tree strategies.
 
     It suits storages with a hierarchical namespace, such as Azure Data Lake
-    Storage Gen2. It overrides fsspec's ``_walk``, ``_find``, ``_du``,
-    ``_glob``, and ``_rm``, ``_copy`` and ``_mv`` when recursive, with the tree
-    strategies. These list a whole tree by one recursive listing, and a tree
-    they prune a directory per request, several at a time. They act on each
-    part of a listing as it arrives. Their answers are fsspec's, and their
-    failures are raised, a single one as it is, several in an ExceptionGroup.
+    Storage Gen2. It implements fsspec's API on its handler, a `TreeHandler`:
+    each primitive, e.g. ``_info`` or ``_rm_file``, calls the handler's, on the
+    caller's path as the handler verifies it. It overrides fsspec's
+    ``_walk``, ``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and
+    ``_mv`` when recursive, with the tree strategies, which take the handler.
+    These list a whole tree by one recursive listing, and a tree they prune a
+    directory per request, several at a time. They act on each part of a
+    listing as it arrives. Their answers are fsspec's, and their failures are
+    raised, a single one as it is, several in an ExceptionGroup.
 
     A directory that fails to list is yielded empty by ``_walk``, as fsspec's
     ``walk`` yields it. ``on_error`` handles every directory's failure, where
     fsspec's applies it to the root only, as its walk recurses without it.
 
-    A subclass implements the storage's primitives:
-
-    - ``_ils``, a directory's listing, which ``_ls`` and so fsspec's own
-      methods list with, and with ``recursive=True`` all below it, which the
-      strategies list with;
-    - ``_info``, ``_rm_file``, ``_rmdir`` and ``_makedirs``;
-    - ``_cp_file_entry`` and ``_mv_file_entry``, a copy and a move of a file
-      by its entry, as its listing gave it, e.g. with its size. fsspec's
-      ``_cp_file`` and ``_mv_file`` ask the entry, then call them;
-    - ``open_async``, giving its files ``io_limit`` as their concurrency
-      limit, and ``_open``.
-
-    The data methods, ``_cat_file``, ``_pipe_file``, ``_get_file`` and
-    ``_put_file``, read and write through ``open_async``'s files. A subclass
-    may implement three requests on a directory whole, used where the profile
-    declares them:
-
-    - ``_rm_tree``, a storage's recursive delete, which a recursive ``rm``
-      uses where ``deletes_directories=True``;
-    - ``_mv_tree``, a storage's rename of a directory, which a recursive
-      ``mv`` uses where ``renames_directories=True``;
-    - ``_cp_tree``, a storage's copy of a directory, which a recursive
-      ``copy`` uses where ``copies_directories=True``.
-
-    Two limits bound its requests, each an `asyncio.Semaphore`:
-
-    - ``operation_limit``, the strategies' requests, such as listings,
-      deletions and copies;
-    - ``io_limit``, the reads and writes of data, by its files.
-
-    ``storage_profile``, a `StorageProfile`, tells the strategies what the
-    storage does. It is `UNKNOWN` by default, and the strategies then take the
-    way right on any storage. A subclass sets what it knows, or overrides
-    ``_load_storage_profile()`` to find it with a request.
-
-    A recursive ``mv``, or one of a single file, moves each file with
-    ``_mv_file_entry``: the storage's rename, or a copy then a delete where it
-    has none. The strategies call it and ``_mv_tree`` only where the
-    destination's parent exists, having made it, as a rename need not make it.
-    A caller outside the strategies makes it too.
+    What the storage does is the handler's: its primitives, its profile, its
+    limits and its files. A storage's class names its protocol and its handler
+    class, and nothing else. A filesystem of it makes its handler from its
+    storage options, fsspec's own aside. ``of(handler)`` makes one on a handler
+    made elsewhere, e.g. one wrapping another filesystem.
 
     Parameters
     ----------
-    operation_concurrency : int or asyncio.Semaphore
-        The requests of the strategies at a time.
-        A semaphore is used as it is, shared with what else holds it.
-    io_concurrency : int or asyncio.Semaphore
-        The reads and writes of data at a time.
-        A semaphore is used as it is, shared with what else holds it. Each
-        holds a block or a part, so it bounds their memory too: at most this
-        many times the file class's ``max_block_size`` in flight.
-    **kwargs
-        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
+    *args, **storage_options
+        Passed to the class's ``handler_class``, but fsspec's own options,
+        e.g. ``asynchronous=True``, passed to `fsspec.asyn.AsyncFileSystem`.
 
     Raises
     ------
-    ValueError
-        If a concurrency is less than 1.
+    TypeError
+        If the class names no ``handler_class``, and no handler is given. If
+        a class below it names anything but ``protocol``, ``handler_class``,
+        ``root_marker`` and ``cachable``.
 
     See Also
     --------
     FlatFileSystem : The same, for flat storages, such as object stores.
+    TreeHandler : What a storage implements.
 
     Examples
     --------
     >>> class MyFileSystem(TreeFileSystem):
     ...     protocol = "my"
-    ...     storage_profile = UNKNOWN
-    ...
-    ...     async def _ils(self, path, recursive=False, **kwargs): ...
-    ...     async def _info(self, path, **kwargs): ...
-    ...     async def _rm_file(self, path, **kwargs): ...
-    ...     async def _rmdir(self, path): ...
-    ...     async def _cp_file_entry(self, entry, path2, **kwargs): ...
-    ...     async def _mv_file_entry(self, entry, path2, **kwargs): ...
-    ...     async def _makedirs(self, path, exist_ok=False): ...
-    ...
-    ...     async def open_async(self, path, mode="rb", **kwargs):
-    ...         file = MyFile(self, path, mode, concurrency_limit=self.io_limit)
-    ...         return AsyncFileAdapter(file)
-    ...
-    ...     def _open(self, path, mode="rb", **kwargs):
-    ...         return MyFile(self, path, mode, concurrency_limit=self.io_limit)
-    >>> fs = MyFileSystem(operation_concurrency=32, io_concurrency=8)
+    ...     handler_class = MyHandler
+    >>> fs = MyFileSystem(account="mine", operation_concurrency=32, io_concurrency=8)
+    >>> local = TreeFileSystem.of(FsspecTreeHandler(fsspec.filesystem("file"), ...))
     """
 
-    def __init__(
-        self,
-        *args: Any,
-        operation_concurrency: int | asyncio.Semaphore | None = None,
-        io_concurrency: int | asyncio.Semaphore | None = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(
-            *args,
-            operation_concurrency=operation_concurrency,
-            io_concurrency=io_concurrency,
-            **kwargs,
-        )
-
-    _primitives = (
-        "_ils",
-        "_info",
-        "_rm_file",
-        "_rmdir",
-        "_cp_file_entry",
-        "_mv_file_entry",
-        "_makedirs",
-        "open_async",
-        "_open",
-    )
-
-    # The storage's primitives: the handler's, unless a subclass implements its own.
-    # Each takes a caller's path, verified by the handler.
+    # The storage's primitives: the handler's, each on a caller's path, verified by it.
 
     def _ils(
         self, path: str, recursive: bool = False, **kwargs: Any
