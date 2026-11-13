@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import WalkState
 
-from ..common.handler import _handler_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
 from ._keys import _close, _dir, _dirs, _listing
@@ -157,7 +156,7 @@ async def _dirs_done(
 
     if not under and root:
         # Nothing under it: a file, or missing, as _tree_walk raises for them.
-        handler = _handler_of(fs)
+        handler = fs
         async with handler.operation_limit:
             entry = await handler.info(handler.entry(root))
         if entry["type"] != "directory":

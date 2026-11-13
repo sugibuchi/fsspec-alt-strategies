@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, NewType, TypeAlias
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
+    from collections.abc import AsyncIterator
 
 __all__: list[str] = []
 
@@ -290,103 +290,6 @@ class StorageHandler(ABC):
         raise NotImplementedError(f"{type(self).__name__} opens no file to write")
 
 
-class _FileSystemHandler(StorageHandler):
-    """An fsspec filesystem as a handler, its primitives by path, until the filesystems are made on handlers.
-
-    It calls the filesystem's own primitives with each entry's name, and its
-    ``_cp_file_entry`` and ``_mv_file_entry`` with the entry, where it has
-    them. Its limits and profile are the filesystem's. A router's destination
-    may be any async filesystem, with neither: its limits are then new, and
-    its profile unknown.
-    """
-
-    # The filesystem's recursive _ils gives either order the strategies take.
-    recursive_order = "depth first"
-
-    def __init__(self, fs: Any) -> None:
-        super().__init__(
-            operation_concurrency=getattr(fs, "operation_limit", None) or 32,
-            io_concurrency=getattr(fs, "io_limit", None) or 8,
-        )
-        self.fs = fs
-        self.profile = getattr(fs, "storage_profile", UNKNOWN)
-        self.root = getattr(fs, "root_marker", "")
-
-    def __repr__(self) -> str:
-        return f"<handler of {self.fs!r}>"
-
-    @property
-    def rm_batch_size(self) -> int:
-        """The flat filesystem's own, for `rm_files`."""
-        return self.fs.rm_batch_size  # type: ignore[no-any-return]
-
-    async def load_profile(self) -> StorageProfile:
-        get = getattr(self.fs, "_get_storage_profile", None)
-        return await get() if get is not None else UNKNOWN
-
-    def verify_path(self, path: str) -> None:
-        """Nothing: an fsspec filesystem checks its paths in its own methods."""
-
-    def ils(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
-        return self.fs._ils(entry["name"], **kwargs)  # type: ignore[no-any-return]
-
-    def ils_recursive(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
-        return self.fs._ils(entry["name"], recursive=True, **kwargs)  # type: ignore[no-any-return]
-
-    async def info(self, entry: Entry, **kwargs: Any) -> Entry:
-        return await self.fs._info(entry["name"], **kwargs)  # type: ignore[no-any-return]
-
-    async def rm_file(self, entry: Entry) -> None:
-        await self.fs._rm_file(entry["name"])
-
-    async def rmdir(self, entry: Entry) -> None:
-        await self.fs._rmdir(entry["name"])
-
-    async def makedirs(self, path: StoragePath, exist_ok: bool = False) -> None:
-        await self.fs._makedirs(path, exist_ok=exist_ok)
-
-    async def cp_file(self, entry: Entry, path2: StoragePath) -> None:
-        if (cp := getattr(self.fs, "_cp_file_entry", None)) is not None:
-            await cp(entry, path2)
-        else:
-            await self.fs._cp_file(entry["name"], path2)
-
-    async def mv_file(self, entry: Entry, path2: StoragePath) -> None:
-        if (mv := getattr(self.fs, "_mv_file_entry", None)) is not None:
-            await mv(entry, path2)
-        else:
-            await self.fs._mv_file(entry["name"], path2)
-
-    async def rm_files(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
-        return await self.fs._rm_files([e["name"] for e in entries])  # type: ignore[no-any-return]
-
-    async def rm_tree(self, entry: Entry) -> None:
-        await self.fs._rm_tree(entry["name"])
-
-    async def mv_tree(self, entry: Entry, path2: StoragePath) -> None:
-        await self.fs._mv_tree(entry["name"], path2)
-
-    async def cp_tree(self, entry: Entry, path2: StoragePath) -> None:
-        await self.fs._cp_tree(entry["name"], path2)
-
-
-def _handler_of(fs: Any) -> StorageHandler:
-    """``fs`` if a handler, else the filesystem's handler, made once and kept on it.
-
-    One handler per filesystem, so that a copy within one storage is given the
-    same handler twice, as its source and its destination.
-    """
-    if isinstance(fs, StorageHandler):
-        return fs
-    if isinstance(own := getattr(fs, "handler", None), StorageHandler):
-        return own  # A filesystem made on a handler.
-    handler = fs.__dict__.get("_alt_strategies_handler")
-    if handler is None:
-        handler = _FileSystemHandler(fs)
-        fs.__dict__["_alt_strategies_handler"] = handler
-    return handler  # type: ignore[no-any-return]
-
-
 def _joined(directory: str, name: str) -> StoragePath:
     """The path of a single name in a directory, raising ValueError for a name that is no single name."""
     if not name or name in (".", "..") or "/" in name:
@@ -397,13 +300,6 @@ def _joined(directory: str, name: str) -> StoragePath:
         return StoragePath(directory + name)
     else:
         return StoragePath(f"{directory}/{name}")
-
-
-async def _profile(fs: Any) -> StorageProfile:
-    """The profile of ``fs``'s handler, opened first."""
-    handler = _handler_of(fs)
-    await handler.open()
-    return handler.profile
 
 
 def _limit(concurrency: int | asyncio.Semaphore, name: str) -> asyncio.Semaphore:

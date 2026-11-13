@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import RmState
 
-from ..common.handler import _handler_of
 from ..common.jobs import _Job, _Roots
 from ..common.paths import _check_maxdepth, _trim
 from ._jobs import _batch_size, _check_batch_size, _FlatJobs, _keys_of
@@ -85,7 +84,7 @@ def _flat_rm(
     `RmState`. The call raises ValueError if ``rm_batch_size`` or ``maxdepth``
     is less than 1.
     """
-    _check_batch_size(_batch_size(_handler_of(fs)))
+    _check_batch_size(_batch_size(fs))
     _check_maxdepth(maxdepth)
 
     return _Deletion.operation(fs=fs, path=path, maxdepth=maxdepth)

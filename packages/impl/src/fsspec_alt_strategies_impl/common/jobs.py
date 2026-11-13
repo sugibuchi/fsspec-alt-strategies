@@ -33,7 +33,7 @@ from fsspec.utils import common_prefix
 from fsspec_alt_strategies.profile import UNKNOWN
 from fsspec_alt_strategies.states import CpState
 
-from .handler import StoragePath, _handler_of
+from .handler import StoragePath
 from .operation import Operation, _collect_with_errors
 from .paths import _trim
 
@@ -75,7 +75,7 @@ def _transfer_of(
     ``transfer`` is given. Between two, ``transfer`` is required: the source's
     own would write to the source.
     """
-    src, dst = _handler_of(src_fs), _handler_of(dst_fs)
+    src, dst = src_fs, dst_fs
     if same_storage is None:
         same_storage = src is dst
     if transfer is None:
@@ -236,7 +236,7 @@ class _Jobs(ABC):
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        self.handler: StorageHandler = _handler_of(fs)
+        self.handler: StorageHandler = fs
         self.maxdepth = maxdepth
 
         # The directory roots a pattern matched: fsspec walks them one level less
@@ -519,7 +519,7 @@ class _CopyJobs(_Jobs):
         # The profile is the destination's, as what a copy saves depends on
         # where it writes. Within one storage, it is the source's too. Unknown
         # until setup awaits it.
-        self.dst: StorageHandler = _handler_of(dst_fs)
+        self.dst: StorageHandler = dst_fs
         self.profile = UNKNOWN
         self.implicit_directories = False
         self.parents_required = True
@@ -545,8 +545,8 @@ class _CopyJobs(_Jobs):
         self.files_done = 0
 
     async def setup(self) -> None:
-        # Any async filesystem may be a router's destination: fsspec gives it
-        # no profile, so its handler's is unknown.
+        # The destination's profile, loaded once as its handler opens. A plain
+        # fsspec filesystem a router copies to has an unknown one.
         await self.dst.open()
         self.profile = self.dst.profile
         # Unknown, directories are made first. Implicit directories need none.

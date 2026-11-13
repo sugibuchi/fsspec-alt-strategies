@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
-from ..common.handler import _handler_of, _profile
 from ..common.jobs import _Job, _transfer_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
@@ -127,13 +126,14 @@ def _flat_mv(
         "root_entry": root_entry,
     }
 
-    _check_batch_size(_batch_size(_handler_of(src_fs)))
+    _check_batch_size(_batch_size(src_fs))
     cp_entry, _ = _transfer_of(src_fs, dst_fs, cp_entry, same_storage, "cp_entry")
 
     async def run(op: Operation[Any, MvState]) -> AsyncGenerator[Any]:
         # A rename wins only where the storage is known to rename: the profile,
         # awaited, chooses the jobs.
-        renames = same_storage and (await _profile(dst_fs)).renames_files is True
+        await dst_fs.open()
+        renames = same_storage and dst_fs.profile.renames_files is True
         jobs: _CopyOrMove = (
             _Rename(op=op, **options)
             if renames

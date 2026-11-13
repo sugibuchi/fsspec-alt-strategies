@@ -199,7 +199,7 @@ class TreeFileSystem(_BaseFileSystem):
         detail = kwargs.pop("detail", False)
         root = self._strip_protocol(path)
         walk = _tree_walk(
-            self,
+            self.handler,
             root,
             maxdepth=maxdepth,
             topdown=topdown,
@@ -250,7 +250,7 @@ class TreeFileSystem(_BaseFileSystem):
         detail = kwargs.pop("detail", False)
         entries, _ = await _collect_with_monitors(
             _tree_find(
-                self,
+                self.handler,
                 self._strip_protocol(path),
                 maxdepth=maxdepth,
                 withdirs=withdirs,
@@ -270,7 +270,10 @@ class TreeFileSystem(_BaseFileSystem):
             )
 
         op = _tree_du(
-            self, self._strip_protocol(path), maxdepth=maxdepth, ils_kwargs=kwargs
+            self.handler,
+            self._strip_protocol(path),
+            maxdepth=maxdepth,
+            ils_kwargs=kwargs,
         )
         entries, _ = await _collect_with_monitors(
             op, Call(self._unwrapped(), "du", path)
@@ -283,7 +286,7 @@ class TreeFileSystem(_BaseFileSystem):
         withdirs = kwargs.pop("withdirs", True)
         entries, _ = await _collect_with_monitors(
             _tree_glob(
-                self,
+                self.handler,
                 _strip_only_protocol(self, path),
                 maxdepth=maxdepth,
                 withdirs=withdirs,
@@ -307,7 +310,7 @@ class TreeFileSystem(_BaseFileSystem):
             return
 
         _, errors = await _collect_with_monitors(
-            _tree_rm(self, _strip_only_protocol(self, path), maxdepth=maxdepth),
+            _tree_rm(self.handler, _strip_only_protocol(self, path), maxdepth=maxdepth),
             Call(self._unwrapped(), "rm", path),
             kwargs.get("callback"),
         )

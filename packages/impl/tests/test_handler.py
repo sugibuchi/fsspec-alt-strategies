@@ -7,10 +7,7 @@ from typing import Any
 import pytest
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.common.handler import (
-    StorageHandler,
-    _FileSystemHandler,
-)
+from fsspec_alt_strategies_impl.common.handler import StorageHandler
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_impl.tree.find import _tree_find
@@ -145,23 +142,15 @@ def test_a_parent_the_storage_refuses() -> None:
 async def test_names_a_listing_gave_are_never_verified_again() -> None:
     """A storage holding "a:b", which its handler refuses from a caller, still has it found and deleted."""
 
-    class Strict(_FileSystemHandler):
-        recursive_order = None  # A directory per listing, each by its entry.
-
-        def verify_path(self, path: str) -> None:
-            if ":" in path:
-                raise ValueError(f"A name holds ':': {path!r}")
-
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     fs.add_file("data/a:b/x", b"1")
     fs.add_file("data/y", b"2")
-    view = TreeView(fs)
-    strict = Strict(view)
-    view.__dict__["_alt_strategies_handler"] = strict
+    strict = _Strict(fs)
+    strict.recursive_order = None  # A directory per listing, each by its entry.
 
-    found, errors = await _collect_with_errors(_tree_find(view, "data"))
+    found, errors = await _collect_with_errors(_tree_find(strict, "data"))
     assert (sorted(e["name"] for e in found), errors) == (["data/a:b/x", "data/y"], [])
-    _, errors = await _collect_with_errors(_tree_rm(view, "data"))
+    _, errors = await _collect_with_errors(_tree_rm(strict, "data"))
     assert errors == []
     assert not fs._file_data
     with pytest.raises(ValueError, match="holds ':'"):

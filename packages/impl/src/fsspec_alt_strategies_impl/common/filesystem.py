@@ -461,8 +461,8 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         _, errors = await _collect_with_monitors(
             self._cp_strategy(
-                self,
-                self,
+                self.handler,
+                self.handler,
                 _strip_only_protocol(self, path1),
                 _strip_only_protocol(self, path2),
                 maxdepth=maxdepth,
@@ -501,8 +501,8 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
         _, errors = await _collect_with_monitors(
             self._mv_strategy(
-                self,
-                self,
+                self.handler,
+                self.handler,
                 _strip_only_protocol(self, path1),
                 _strip_only_protocol(self, path2),
                 maxdepth=maxdepth,

@@ -20,8 +20,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..common.handler import _handler_of
-
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
@@ -39,7 +37,7 @@ def _listing(
     as a glob found it, else by its path.
     """
     path, _, name = prefix.rpartition("/")
-    handler = _handler_of(fs)
+    handler = fs
     entry = root if root is not None and root["name"] == path else handler.entry(path)
     return handler.ils_recursive(entry, prefix=name)  # type: ignore[attr-defined, no-any-return]
 

@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import FindState
 
-from ..common.handler import _handler_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from .walk import _chunks, _Listing
@@ -139,7 +138,7 @@ async def _find_listings(
     So the strategies filter and count it as any entry, but count no directory
     listed for it.
     """
-    handler = _handler_of(fs)
+    handler = fs
     root = _trim(path)
     listings = _chunks(
         handler,

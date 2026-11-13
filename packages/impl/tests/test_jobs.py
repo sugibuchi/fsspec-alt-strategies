@@ -25,6 +25,7 @@ from fsspec_alt_strategies_impl.common.jobs import (
     _roots_of,
 )
 from fsspec_alt_strategies_impl.common.operation import Operation, _collect_with_errors
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -248,7 +249,9 @@ class _Copy(_CopyJobs):
     """A copy whose glob yields the entries and errors given, and which copies nothing."""
 
     def __init__(self, path1: Any, path2: str, found: list[Any]) -> None:
-        storage = SimpleNamespace(operation_limit=asyncio.Semaphore(1), _info=_missing)
+        storage = TreeView(
+            SimulatedFileSystem(hierarchical=True, asynchronous=True), info=_missing
+        )
         super().__init__(
             fs=storage,
             dst_fs=storage,

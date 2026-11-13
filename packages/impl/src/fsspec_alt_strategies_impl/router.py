@@ -9,9 +9,10 @@ across two storages runs the source's family's strategy, as its profile's
 ``fs_type`` says, each file by ``_cross_fs_cp_entry`` or ``_cross_fs_mv_entry``,
 which stream the data through the two storages' files unless overridden.
 
-This module depends on `filesystem`, `operation` and `paths` of `common`. It
-imports `cp` and `mv` of a family only to copy or move from a storage of it,
-so a copy may leave out the other family.
+This module depends on `filesystem`, `handler`, `operation` and `paths` of
+`common`. It imports `cp` and `mv` of a family only to copy or move from a
+storage of it, so a copy may leave out the other family. It imports
+`wrapper.tree` only to copy or move to a plain fsspec filesystem.
 """
 
 from __future__ import annotations
@@ -28,9 +29,11 @@ from fsspec.callbacks import DEFAULT_CALLBACK
 from fsspec.spec import AbstractFileSystem
 
 from fsspec_alt_strategies.monitor import Call, Monitored, routing
+from fsspec_alt_strategies.profile import UNKNOWN
 
 from .common.filesystem import (
     _AbstractFileSystemMeta,
+    _BaseFileSystem,
     _copy_errors,
     _raise,
     _range_bounds,
@@ -50,6 +53,7 @@ if TYPE_CHECKING:
 
     from fsspec.callbacks import Callback
 
+    from .common.handler import StorageHandler
     from .common.jobs import _Transfer
     from .common.operation import Operation
 
@@ -187,6 +191,10 @@ class AsyncRoutingFileSystem(
         self.transfer_limit = asyncio.Semaphore(transfer_concurrency)
         self._backends: dict[Hashable, _Backend] = {}
         self._backends_loop: asyncio.AbstractEventLoop | None = None
+
+        # The handlers wrapping plain fsspec filesystems copied or moved to, by id,
+        # each with its filesystem, which the id must not outlive.
+        self._wrapped: dict[int, tuple[Any, StorageHandler]] = {}
 
     # What a subclass implements.
 
@@ -1060,10 +1068,9 @@ class AsyncRoutingFileSystem(
         fsspec's own copy then runs. Each file goes by ``_cross_fs_cp_entry``.
         The operation is returned not yet started.
         """
-        get = getattr(fs1, "_get_storage_profile", None)
-        if get is None:
+        if not isinstance(fs1, _BaseFileSystem):
             return None  # A plain fsspec filesystem: fsspec's own copy.
-        fs_type = (await get()).fs_type
+        fs_type = (await fs1._get_storage_profile()).fs_type
         if fs_type is None:
             return None
 
@@ -1073,8 +1080,8 @@ class AsyncRoutingFileSystem(
             from .tree.cp import _tree_cp  # noqa: PLC0415
 
             return _tree_cp(
-                fs1,
-                fs2,
+                fs1.handler,
+                self._handler(fs2),
                 path1,
                 path2,
                 cp_entry=self._across(fs1, fs2),
@@ -1085,8 +1092,8 @@ class AsyncRoutingFileSystem(
             from .flat.cp import _flat_cp  # noqa: PLC0415
 
             return _flat_cp(
-                fs1,
-                fs2,
+                fs1.handler,
+                self._handler(fs2),
                 path1,
                 path2,
                 cp_entry=self._across(fs1, fs2),
@@ -1110,10 +1117,9 @@ class AsyncRoutingFileSystem(
         copies each key by ``_cross_fs_cp_entry`` instead, and deletes the keys
         copied in batches, by its ``_rm_files``.
         """
-        get = getattr(fs1, "_get_storage_profile", None)
-        if get is None:
+        if not isinstance(fs1, _BaseFileSystem):
             return None  # A plain fsspec filesystem: fsspec's own copy, then rm.
-        fs_type = (await get()).fs_type
+        fs_type = (await fs1._get_storage_profile()).fs_type
         if fs_type is None:
             return None
 
@@ -1123,8 +1129,8 @@ class AsyncRoutingFileSystem(
             from .tree.mv import _tree_mv  # noqa: PLC0415
 
             return _tree_mv(
-                fs1,
-                fs2,
+                fs1.handler,
+                self._handler(fs2),
                 path1,
                 path2,
                 mv_entry=self._across(fs1, fs2, move=True),
@@ -1137,8 +1143,8 @@ class AsyncRoutingFileSystem(
             # By copies, the keys copied deleted in batches by the source's
             # _rm_files: two storages never rename.
             return _flat_mv(
-                fs1,
-                fs2,
+                fs1.handler,
+                self._handler(fs2),
                 path1,
                 path2,
                 cp_entry=self._across(fs1, fs2),
@@ -1147,6 +1153,28 @@ class AsyncRoutingFileSystem(
             )
         else:
             return None
+
+    def _handler(self, fs: AsyncFileSystem) -> StorageHandler:
+        """The handler a strategy copying or moving to `fs` takes.
+
+        A filesystem of this library has its own. A plain fsspec one is wrapped
+        in a tree handler of an unknown profile, which is right on any storage.
+        """
+        if isinstance(fs, _BaseFileSystem):
+            return fs.handler
+
+        wrapped = self._wrapped.get(id(fs))
+        if wrapped is None:
+            from .wrapper.tree import FsspecTreeHandler  # noqa: PLC0415
+
+            handler = FsspecTreeHandler(
+                fs,
+                operation_concurrency=self.transfer_concurrency,
+                io_concurrency=self.transfer_concurrency,
+                storage_profile=UNKNOWN,
+            )
+            wrapped = self._wrapped[id(fs)] = (fs, handler)
+        return wrapped[1]
 
     def _across(
         self, fs1: AsyncFileSystem, fs2: AsyncFileSystem, *, move: bool = False

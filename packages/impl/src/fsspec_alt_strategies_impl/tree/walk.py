@@ -35,7 +35,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from fsspec_alt_strategies.states import WalkState
 
-from ..common.handler import _handler_of
 from ..common.jobs import _Queue
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
@@ -301,7 +300,7 @@ async def _chunks(
     is.
     """
     _check_maxdepth(maxdepth)
-    handler = _handler_of(fs)
+    handler = fs
 
     # Each directory to list by the entry its listing gave, e.g. with the
     # storage's id, else by its path: a root given as a path, verified.

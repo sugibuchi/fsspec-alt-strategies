@@ -176,7 +176,7 @@ class FlatFileSystem(_BaseFileSystem):
     ) -> AsyncGenerator[tuple[str, Any, Any]]:
         detail = kwargs.pop("detail", False)
         root = self._strip_protocol(path)
-        walk = _flat_walk(self, root, maxdepth=maxdepth, topdown=topdown)
+        walk = _flat_walk(self.handler, root, maxdepth=maxdepth, topdown=topdown)
 
         async with aclosing(
             _with_monitors(walk, Call(self._unwrapped(), "walk", path))
@@ -206,7 +206,7 @@ class FlatFileSystem(_BaseFileSystem):
         detail = kwargs.pop("detail", False)
         entries, _ = await _collect_with_monitors(
             _flat_find(
-                self,
+                self.handler,
                 self._strip_protocol(path),
                 maxdepth=maxdepth,
                 withdirs=withdirs,
@@ -223,7 +223,7 @@ class FlatFileSystem(_BaseFileSystem):
                 path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
             )
 
-        op = _flat_du(self, self._strip_protocol(path), maxdepth=maxdepth)
+        op = _flat_du(self.handler, self._strip_protocol(path), maxdepth=maxdepth)
 
         entries, _ = await _collect_with_monitors(
             op, Call(self._unwrapped(), "du", path)
@@ -234,7 +234,7 @@ class FlatFileSystem(_BaseFileSystem):
         detail = kwargs.pop("detail", False)
         entries, _ = await _collect_with_monitors(
             _flat_glob(
-                self,
+                self.handler,
                 _strip_only_protocol(self, path),
                 maxdepth=maxdepth,
                 withdirs=kwargs.pop("withdirs", True),
@@ -256,7 +256,7 @@ class FlatFileSystem(_BaseFileSystem):
             return
 
         _, errors = await _collect_with_monitors(
-            _flat_rm(self, _strip_only_protocol(self, path), maxdepth=maxdepth),
+            _flat_rm(self.handler, _strip_only_protocol(self, path), maxdepth=maxdepth),
             Call(self._unwrapped(), "rm", path),
             kwargs.get("callback"),
         )

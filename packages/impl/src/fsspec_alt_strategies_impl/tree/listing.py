@@ -24,7 +24,6 @@ import heapq
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
-from ..common.handler import _handler_of
 from ..common.paths import _trim
 
 if TYPE_CHECKING:
@@ -74,7 +73,7 @@ async def _tree_ils(
     """
     # A filesystem implementing its _ils by this one gives itself, as before handlers.
     ils_kwargs.pop("recursive", None)
-    handler = _handler_of(fs)
+    handler = fs
     root = _trim(path)
     ahead = _Ahead(handler, ils_kwargs)
     # The directories being yielded, the root first: each is yielding one of the next.

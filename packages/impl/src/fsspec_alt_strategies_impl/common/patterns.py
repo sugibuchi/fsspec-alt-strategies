@@ -24,7 +24,6 @@ from fsspec.utils import glob_translate
 
 from fsspec_alt_strategies.states import GlobState
 
-from .handler import _handler_of
 from .jobs import _Queue
 from .paths import _trim
 
@@ -47,7 +46,7 @@ async def _infos(
     as the answers arrive. Once the operation is cancelled, no new ``_info``
     starts, but those running are yielded.
     """
-    handler = _handler_of(fs)
+    handler = fs
     requests: _Queue[str] = _Queue(handler.operation_limit)
     requests.waiting.extend(dict.fromkeys(paths))
 

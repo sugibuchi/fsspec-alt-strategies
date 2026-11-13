@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import FindState
 
-from ..common.handler import _handler_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ._keys import _close, _dir, _dirs, _listing, _new
@@ -140,7 +139,7 @@ async def _find_entries(
     if not root or (under and not withdirs):
         return
 
-    handler = _handler_of(fs)
+    handler = fs
     try:
         async with handler.operation_limit:
             entry = await handler.info(handler.entry(root))
