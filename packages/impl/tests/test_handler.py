@@ -11,6 +11,7 @@ from fsspec_alt_strategies_impl.common.handler import (
     _FileSystemHandler,
 )
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
+from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
@@ -164,3 +165,60 @@ async def test_names_a_listing_gave_are_never_verified_again() -> None:
     assert not fs._file_data
     with pytest.raises(ValueError, match="holds ':'"):
         strict.entry("data/a:b")
+
+
+class _Strict(TreeView):
+    """A simulated storage refusing paths holding ":" from a caller, as some storages do."""
+
+    def verify_path(self, path: str) -> None:
+        if ":" in path:
+            raise ValueError(f"A name holds ':': {path!r}")
+
+
+def _storage() -> SimulatedFileSystem:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    fs.add_file("data/a/x", b"1")
+    fs.add_file("data/y", b"22")
+    return fs
+
+
+async def test_a_filesystem_on_a_handler_calls_its_primitives() -> None:
+    inner = _storage()
+    fs = TreeFileSystem.of(_Strict(inner), asynchronous=True)
+    assert fs.handler is not None
+    assert await fs._find("data") == ["data/a/x", "data/y"]
+    assert (await fs._info("data/y"))["size"] == 2
+    await fs._copy("data", "copied", recursive=True)
+    assert await inner._cat_file("copied/a/x") == b"1"
+    await fs._rm("data", recursive=True)
+    assert not await inner._exists("data")
+    assert await fs._get_storage_profile() is fs.handler.profile
+
+
+async def test_a_filesystem_on_a_handler_verifies_a_callers_paths() -> None:
+    fs = TreeFileSystem.of(_Strict(_storage()), asynchronous=True)
+    with pytest.raises(ValueError, match="holds ':'"):
+        await fs._info("data/a:b")
+    with pytest.raises(ValueError, match="holds ':'"):
+        await fs._makedirs("data/a:b")
+    with pytest.raises(ValueError, match="holds ':'"):
+        await fs._copy("data/y", "data/c:d")
+
+
+def test_a_handler_class_takes_the_storage_options() -> None:
+    made: list[dict[str, Any]] = []
+
+    class Options(TreeView):
+        def __init__(self, inner: SimulatedFileSystem, **options: Any) -> None:
+            made.append(options)
+            super().__init__(inner)
+
+    class Mine(TreeFileSystem):
+        protocol = "mine"
+        handler_class = Options
+
+    inner = _storage()
+    fs = Mine(inner, region="here", asynchronous=True, skip_instance_cache=True)
+    assert isinstance(fs.handler, Options)
+    # fsspec's own options are the filesystem's: the handler gets the others.
+    assert made == [{"region": "here"}]

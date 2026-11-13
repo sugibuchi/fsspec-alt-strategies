@@ -12,7 +12,6 @@ This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm`, `walk`, and
 
 from __future__ import annotations
 
-from abc import abstractmethod
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +30,7 @@ from .cp import _tree_cp
 from .du import _tree_du
 from .find import _tree_find
 from .glob import _tree_glob
+from .listing import _recursive
 from .mv import _tree_mv
 from .rm import _tree_rm
 from .walk import _tree_walk
@@ -147,8 +147,8 @@ class TreeFileSystem(_BaseFileSystem):
     def __init__(
         self,
         *args: Any,
-        operation_concurrency: int | asyncio.Semaphore,
-        io_concurrency: int | asyncio.Semaphore,
+        operation_concurrency: int | asyncio.Semaphore | None = None,
+        io_concurrency: int | asyncio.Semaphore | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -158,148 +158,88 @@ class TreeFileSystem(_BaseFileSystem):
             **kwargs,
         )
 
-    # What a subclass implements: the storage's primitives.
+    _primitives = (
+        "_ils",
+        "_info",
+        "_rm_file",
+        "_rmdir",
+        "_cp_file_entry",
+        "_mv_file_entry",
+        "_makedirs",
+        "open_async",
+        "_open",
+    )
 
-    @abstractmethod
+    # The storage's primitives: the handler's, unless a subclass implements its own.
+    # Each takes a caller's path, verified by the handler.
+
     def _ils(
         self, path: str, recursive: bool = False, **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
         """List a directory, or all below it, as an async iterator of entries.
 
-        The entries are as fsspec's ``_ls`` gives them with ``detail``: a
-        storage listing a directory in pages yields each page's as it comes. A
-        file yields itself, as fsspec's ``_ls`` lists it. They come in any
-        order: a directory's listing is done when it ends.
-
-        Each entry is a dict with at least:
-
-        - ``"name"``, the full path, without the protocol, a trailing "/"
-          being ignored;
-        - ``"type"``, "directory" or "file";
-        - ``"size"``, in bytes, 0 for a directory.
-
-        Other keys, such as a modification time, are passed on as they are.
-        A missing ``path`` raises FileNotFoundError, when the iteration starts.
-
-        With ``recursive=True``, it lists all below ``path``, at any depth. A
-        directory may be left out, as object stores list only files: the
-        strategies tell it from the paths below it. The entries come in one of
-        two orders, as the strategies count on it to know when a directory is
-        done:
-
-        - depth first: a directory's entry, then all below it, before any other
-          entry. Its entries among themselves may come in any order.
-        - name order: sorted by the whole name, as object stores list keys.
-          A directory's entry may then come apart from what is below it, as
-          "a/b-x" comes between "a/b" and "a/b/c".
-
-        A storage with no recursive listing of its own, or one breaking these
-        orders, answers with ``_tree_ils`` of ``tree/listing.py``. It lists
-        depth first, by this ``_ils`` without ``recursive``, one directory per
-        request, several at a time::
-
-            from .listing import _tree_ils
-
-            def _ils(self, path, recursive=False, **kwargs):
-                if recursive:
-                    return _tree_ils(self, path, recursive=False, **kwargs)
-                else:
-                    ...  # List the entries in path, e.g. a page at a time.
-
-        ``_tree_ils``'s listings ahead hold permits of ``operation_limit`` of
-        their own, beside the one held by the caller of ``_ils``. A directory
-        that fails to list ends the whole listing, with its error.
+        The entries are as fsspec's ``_ls`` gives them with ``detail``. With
+        ``recursive=True``, all below ``path`` come, depth first or in name
+        order: by the handler's recursive listing, or else a directory per
+        request.
         """
+        handler = self._required_handler()
+        entry = handler.entry(self._strip_protocol(path))
+        if recursive:
+            return _recursive(handler, entry, **kwargs)
+        else:
+            return handler.ils(entry, **kwargs)
 
-    @abstractmethod
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Describe a path, raising FileNotFoundError if there is none."""
+        handler = self._required_handler()
+        return await handler.info(handler.entry(self._strip_protocol(path)), **kwargs)
 
-    @abstractmethod
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
-        """Delete a file.
+        """Delete a file."""
+        handler = self._required_handler()
+        await handler.rm_file(handler.entry(self._strip_protocol(path)))
 
-        The strategies call it only on paths they found to be files, by a
-        listing or an ``info``: it need not check that the path is no directory.
-        fsspec's own methods, e.g. ``rm`` when not recursive, may not.
-        """
-
-    @abstractmethod
     async def _rmdir(self, path: str) -> None:
-        """Delete an empty directory.
-
-        A directory already gone raises FileNotFoundError, which the
-        strategies count as deleted: on a storage whose directories go with
-        their last file, it is. The profile's ``implicit_directories=True``
-        saves those requests.
-        """
+        """Delete an empty directory."""
+        handler = self._required_handler()
+        await handler.rmdir(handler.entry(self._strip_protocol(path)))
 
     async def _rm_tree(self, path: str) -> None:
-        """Delete a directory with everything in it, in one request.
+        """Delete a directory with everything in it, in one request, by the handler's ``rm_tree``."""
+        handler = self._required_handler()
+        await handler.rm_tree(handler.entry(self._strip_protocol(path)))  # type: ignore[attr-defined]
 
-        Optional: a subclass whose storage has a recursive delete implements
-        it, and its profile's ``deletes_directories=True`` says so. A recursive
-        ``rm`` then deletes each root by it, with no walk. It is called only
-        then. It takes a file too, which it deletes as ``_rm_file`` does, as a
-        root may be either. A missing path raises FileNotFoundError, as a walk
-        would find it: a storage whose recursive delete succeeds on a missing
-        path asks first.
-        """
-        raise NotImplementedError(f"{type(self).__name__} deletes no directory whole")
-
-    @abstractmethod
     async def _cp_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
-        """Copy a file within the storage, by its entry, to ``path2``.
+        """Copy a file within the storage, by its entry, to ``path2``."""
+        handler = self._required_handler()
+        await handler.cp_file(entry, handler.verified(self._strip_protocol(path2)))
 
-        ``entry`` is the source's, as ``_ils`` or ``_info`` gave it, its
-        ``"name"`` the source path. Its other keys, e.g. the size, may save a
-        request, e.g. one telling whether a copy goes in parts. They may be
-        stale, listed before the copy: a copy must still succeed, or fail as
-        the storage says, if the file changed since.
-        """
-
-    @abstractmethod
     async def _mv_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
-        """Move a file within the storage, by its entry, to ``path2``.
-
-        ``entry`` is as `_cp_file_entry` takes it. A storage renaming a file in
-        one request renames it. One with no rename copies, then deletes the
-        source. A directory moved whole goes by `_mv_tree`.
-        """
+        """Move a file within the storage, by its entry, to ``path2``."""
+        handler = self._required_handler()
+        await handler.mv_file(entry, handler.verified(self._strip_protocol(path2)))
 
     async def _mv_tree(self, path1: str, path2: str) -> None:
-        """Move a directory with everything in it to ``path2``, in one request.
-
-        Optional: a subclass whose storage renames a directory implements it,
-        and its profile's ``renames_directories=True`` says so. A recursive
-        ``mv`` then moves each root by it where it can, with no walk. It is
-        called only then, with ``path2`` missing and its parent existing,
-        having made it: a rename need not make it. It takes a file too, which
-        it moves as ``_mv_file_entry`` does, as a root may be either. A missing
-        ``path1`` raises FileNotFoundError.
-        """
-        raise NotImplementedError(f"{type(self).__name__} moves no directory whole")
+        """Move a directory with everything in it, in one request, by the handler's ``mv_tree``."""
+        handler = self._required_handler()
+        entry = handler.entry(self._strip_protocol(path1))
+        await handler.mv_tree(entry, handler.verified(self._strip_protocol(path2)))  # type: ignore[attr-defined]
 
     async def _cp_tree(self, path1: str, path2: str) -> None:
-        """Copy a directory with everything in it to ``path2``, in one request.
+        """Copy a directory with everything in it, in one request, by the handler's ``cp_tree``."""
+        handler = self._required_handler()
+        entry = handler.entry(self._strip_protocol(path1))
+        await handler.cp_tree(entry, handler.verified(self._strip_protocol(path2)))  # type: ignore[attr-defined]
 
-        Optional: a subclass whose storage copies a directory implements it,
-        and its profile's ``copies_directories=True`` says so. A recursive
-        ``copy`` then copies each root by it where it can, with no walk. It
-        is called only then, with ``path2`` missing and its parent existing,
-        having made it. It takes a file too, which it copies as
-        ``_cp_file_entry`` does, as a root may be either. A missing ``path1``
-        raises FileNotFoundError.
-        """
-        raise NotImplementedError(f"{type(self).__name__} copies no directory whole")
-
-    @abstractmethod
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
         """Create a directory and its parents, raising FileExistsError unless ``exist_ok``."""
+        handler = self._required_handler()
+        await handler.makedirs(handler.verified(self._strip_protocol(path)), exist_ok)
 
     async def _mkdir(
         self, path: str, create_parents: bool = True, **kwargs: Any
@@ -323,18 +263,6 @@ class TreeFileSystem(_BaseFileSystem):
             if kind != "directory":
                 raise NotADirectoryError(parent)
         await self._makedirs(path, exist_ok=True)
-
-    @abstractmethod
-    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        """Open a file whose methods are awaited, as fsspec's ``open_async`` does.
-
-        The file holds ``io_limit`` as its concurrency limit, e.g. an
-        `AsyncFileAdapter` of one of this package's file classes.
-        """
-
-    @abstractmethod
-    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        """Open a file, as fsspec's ``_open`` does, for the sync ``open``."""
 
     # fsspec's recursive methods, answered by the tree strategies.
 
@@ -467,3 +395,6 @@ class TreeFileSystem(_BaseFileSystem):
     # The copy and move that _BaseFileSystem's _copy and _mv start, as fsspec's methods.
     _cp_strategy = staticmethod(_tree_cp)
     _mv_strategy = staticmethod(_tree_mv)
+
+
+TreeFileSystem._family = TreeFileSystem

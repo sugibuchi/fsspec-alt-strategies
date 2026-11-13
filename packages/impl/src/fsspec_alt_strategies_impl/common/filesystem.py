@@ -14,7 +14,8 @@ family's class names.
 The functions below it shape the answers and errors of fsspec's methods, as
 the families' classes give them.
 
-This module depends on `operation`.
+This module depends on `operation` and `handler`, and `fsspec_async` and
+`fsspec_transaction` of `files`.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ import os
 from abc import ABCMeta
 from collections.abc import Iterable
 from glob import has_magic
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks, sync
 from fsspec.callbacks import DEFAULT_CALLBACK
@@ -36,6 +37,8 @@ from fsspec.callbacks import DEFAULT_CALLBACK
 from fsspec_alt_strategies.monitor import Call, Monitored
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 
+from ..files.fsspec_async import AsyncFileAdapter
+from ..files.fsspec_transaction import AdaptiveWritableTransaction, TransactionFile
 from .operation import _collect_with_monitors
 
 if TYPE_CHECKING:
@@ -44,8 +47,23 @@ if TYPE_CHECKING:
     from fsspec import AbstractFileSystem
     from fsspec.callbacks import Callback
 
+    from .handler import StorageHandler
+
 
 _MiB = 1024 * 1024
+
+_FSSPEC_OPTIONS = frozenset(
+    {
+        "asynchronous",
+        "loop",
+        "batch_size",
+        "use_listings_cache",
+        "listings_expiry_time",
+        "max_paths",
+        "skip_instance_cache",
+    }
+)
+"""The storage options fsspec's filesystem takes: a handler takes the others."""
 
 
 _CHANGING = frozenset(
@@ -153,13 +171,66 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     transfer_size: int = 8 * _MiB
     """The bytes read or written at a time by ``_get_file`` and ``_put_file``."""
 
+    handler_class: ClassVar[type[StorageHandler] | None] = None
+    """The class of the handler a filesystem of this class makes, from its storage options."""
+
+    handler: StorageHandler | None = None
+    """The storage's handler, whose primitives the filesystem calls, if it has one."""
+
+    # The family's class, and the primitives a subclass with no handler implements.
+    _family: ClassVar[type]
+    _primitives: ClassVar[tuple[str, ...]] = ()
+
     def __init__(
         self,
         *args: Any,
-        operation_concurrency: int | asyncio.Semaphore,
-        io_concurrency: int | asyncio.Semaphore,
+        operation_concurrency: int | asyncio.Semaphore | None = None,
+        io_concurrency: int | asyncio.Semaphore | None = None,
+        handler: StorageHandler | None = None,
         **kwargs: Any,
     ) -> None:
+        if handler is None and self.handler_class is not None:
+            # fsspec's own options are the filesystem's: the rest, the handler's.
+            options = {
+                k: kwargs.pop(k) for k in list(kwargs) if k not in _FSSPEC_OPTIONS
+            }
+            limits = {
+                k: v
+                for k, v in (
+                    ("operation_concurrency", operation_concurrency),
+                    ("io_concurrency", io_concurrency),
+                )
+                if v is not None
+            }
+            handler = self.handler_class(*args, **limits, **options)
+            args = ()
+        if handler is not None:
+            super().__init__(*args, **kwargs)
+            self._storage_profile_loaded = False
+            self._storage_profile_lock = asyncio.Lock()
+            self.handler = handler
+            self.storage_profile = handler.profile
+            self.operation_concurrency = handler.operation_concurrency
+            self.io_concurrency = handler.io_concurrency
+            self.operation_limit = handler.operation_limit
+            self.io_limit = handler.io_limit
+            return
+        if operation_concurrency is None or io_concurrency is None:
+            raise TypeError("operation_concurrency and io_concurrency are required")
+        # With no handler, a subclass implements every primitive itself.
+        missing = [
+            name
+            for name in self._primitives
+            # Unwrapped, as __init_subclass__ wraps a changing method it defines.
+            if inspect.unwrap(getattr(type(self), name))
+            is inspect.unwrap(getattr(self._family, name))
+        ]
+        if missing:
+            raise TypeError(
+                f"{type(self).__name__} has no handler, and does not implement "
+                + ", ".join(missing)
+            )
+
         # A semaphore given is shared. A number makes a new one.
         if isinstance(operation_concurrency, asyncio.Semaphore):
             operation_limit = operation_concurrency
@@ -219,6 +290,13 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         if self._storage_profile_loaded:
             return self.storage_profile
 
+        if self.handler is not None:
+            # The handler's, as its opening loads it.
+            await self.handler.open()
+            self.storage_profile = self.handler.profile
+            self._storage_profile_loaded = True
+            return self.storage_profile
+
         async with self._storage_profile_lock:
             if not self._storage_profile_loaded:
                 self.storage_profile = await self._load_storage_profile()
@@ -227,7 +305,78 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
-        return self
+        wrapped = getattr(self.handler, "wrapped", None)
+        return wrapped if wrapped is not None else self
+
+    @classmethod
+    def of(cls, handler: StorageHandler, **kwargs: Any) -> Self:
+        """A filesystem on a handler made elsewhere, e.g. a wrapper's, not cached.
+
+        A handler serving another filesystem's paths, as a wrapper does, gives
+        its ``strip_protocol`` and ``unstrip_protocol``, which the filesystem
+        then uses, with its ``root``.
+
+        Parameters
+        ----------
+        handler : StorageHandler
+            The storage's handler.
+        **kwargs
+            Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
+        """
+        fs = cls(handler=handler, skip_instance_cache=True, **kwargs)
+        if (strip := getattr(handler, "strip_protocol", None)) is not None:
+            fs._strip_protocol = strip  # type: ignore[method-assign]
+        if (unstrip := getattr(handler, "unstrip_protocol", None)) is not None:
+            fs.unstrip_protocol = unstrip  # type: ignore[method-assign]
+        fs.root_marker = handler.root
+        return fs
+
+    def _required_handler(self) -> StorageHandler:
+        """The handler, for a primitive a subclass does not implement itself."""
+        if self.handler is None:
+            raise NotImplementedError(
+                f"{type(self).__name__} has no handler, nor this primitive of its own"
+            )
+        return self.handler
+
+    # Files, by the handler: the same file for open_async and the sync open.
+
+    async def _handler_file(self, path: str, mode: str, **kwargs: Any) -> Any:
+        """The handler's file at a caller's path, verified: a reader for "rb", else a writer."""
+        handler = self._required_handler()
+        plain = self._strip_protocol(path)
+        if mode == "rb":
+            return await handler.open_reader(handler.entry(plain), **kwargs)
+        if mode in ("wb", "xb"):
+            return await handler.open_writer(handler.verified(plain), mode, **kwargs)
+        raise ValueError(f"mode must be 'rb', 'wb' or 'xb': {mode!r}")
+
+    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+        """Open a file whose methods are awaited, as fsspec's ``open_async`` does, by the handler."""
+        if kwargs.pop("compression", None):
+            raise ValueError("Compression is not supported by open_async")
+        return AsyncFileAdapter(await self._handler_file(path, mode, **kwargs))
+
+    @_drops_listings
+    def _open(
+        self,
+        path: str,
+        mode: str = "rb",
+        block_size: int | None = None,
+        autocommit: bool = True,
+        cache_options: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Open a file for the sync ``open``, by the handler, on the filesystem's loop.
+
+        Within a transaction, a file written is committed with it: no reader
+        sees it before.
+        """
+        file = sync(self.loop, self._handler_file, path, mode, **kwargs)
+        if autocommit or mode == "rb":
+            return file
+        else:
+            return TransactionFile(AdaptiveWritableTransaction(file))
 
     # fsspec's dircache: listings kept by _ls, for fsspec's own methods and callers.
 

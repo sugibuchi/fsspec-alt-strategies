@@ -263,6 +263,24 @@ class StorageHandler(ABC):
         ``path2``'s parent exists.
         """
 
+    # Files. The filesystem awaits them on its own loop, for its sync open too.
+
+    async def open_reader(self, entry: Entry, **kwargs: Any) -> Any:
+        """Open a file to read, e.g. an `AdaptiveReadableFile`: one used sync or async.
+
+        Its requests hold ``io_limit``, as its concurrency limit. A missing
+        file raises FileNotFoundError, a directory IsADirectoryError.
+        """
+        raise NotImplementedError(f"{type(self).__name__} opens no file to read")
+
+    async def open_writer(self, path: StoragePath, mode: str, **kwargs: Any) -> Any:
+        """Open a file to write, mode "wb" or "xb", e.g. an `AdaptiveWritableFile`: one used sync or async.
+
+        Its requests hold ``io_limit``. Mode "xb" raises FileExistsError where
+        a file is at ``path``, as the storage tells it.
+        """
+        raise NotImplementedError(f"{type(self).__name__} opens no file to write")
+
 
 class _FileSystemHandler(StorageHandler):
     """An fsspec filesystem as a handler, its primitives by path, until the filesystems are made on handlers.
@@ -352,6 +370,8 @@ def _handler_of(fs: Any) -> StorageHandler:
     """
     if isinstance(fs, StorageHandler):
         return fs
+    if isinstance(own := getattr(fs, "handler", None), StorageHandler):
+        return own  # A filesystem made on a handler.
     handler = fs.__dict__.get("_alt_strategies_handler")
     if handler is None:
         handler = _FileSystemHandler(fs)

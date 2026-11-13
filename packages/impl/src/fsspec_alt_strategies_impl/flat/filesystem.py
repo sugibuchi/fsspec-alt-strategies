@@ -13,7 +13,6 @@ This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm`, `walk`, and
 
 from __future__ import annotations
 
-from abc import abstractmethod
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
@@ -138,8 +137,8 @@ class FlatFileSystem(_BaseFileSystem):
     def __init__(
         self,
         *args: Any,
-        operation_concurrency: int | asyncio.Semaphore,
-        io_concurrency: int | asyncio.Semaphore,
+        operation_concurrency: int | asyncio.Semaphore | None = None,
+        io_concurrency: int | asyncio.Semaphore | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -149,74 +148,61 @@ class FlatFileSystem(_BaseFileSystem):
             **kwargs,
         )
 
+        if self.handler is not None:
+            # The handler's, as its rm_files takes them.
+            self.rm_batch_size = self.handler.rm_batch_size  # type: ignore[attr-defined]
         size = getattr(self, "rm_batch_size", None)
         if not isinstance(size, int) or size < 1:
             raise ValueError(f"rm_batch_size must be set, to at least 1: {size}")
 
-    # What a subclass implements: the storage's primitives.
+    _primitives = (
+        "_ils",
+        "_rm_files",
+        "_rmdir",
+        "_makedirs",
+        "_info",
+        "_rm_file",
+        "_cp_file_entry",
+        "_mv_file_entry",
+        "open_async",
+        "_open",
+    )
 
-    @abstractmethod
+    # The storage's primitives: the handler's, unless a subclass implements its own.
+    # Each takes a caller's path, verified by the handler.
+
     def _ils(
         self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
         """List a directory, or every key below it, as an async iterator of entries.
 
-        The entries are as fsspec's ``_ls`` gives them with ``detail``, a key
-        ending with "/" being a directory's marker. A storage listing in pages
-        yields each page's as it comes. ``prefix`` keeps the names starting
-        with ``path/prefix``, or ``prefix`` at the root: object stores list so
-        in one request, with a delimiter or without.
-
-        Without ``recursive``, it lists ``path``'s files and subdirectories,
-        e.g. by an object store's listing with the delimiter "/". A file yields
-        itself, as fsspec's ``_ls`` lists it, and a missing ``path`` raises
-        FileNotFoundError. fsspec's own methods list so, through ``_ls``.
-
-        With ``recursive=True``, it lists every key below ``path``, at any
-        depth, with no directory but markers: the strategies list so, e.g.
-        "data" with the prefix "2024-" for the glob "data/2024-*". Nothing
-        below ``path``, or ``path`` missing, lists nothing: the strategies
-        then ask ``_info``. The keys come in order of their whole names, as
-        object stores list them, across buckets too at the root: the
-        strategies count on it to know when a directory is done. Each key
-        comes once: a key listed twice is copied, moved, deleted or counted
-        twice.
+        Without ``recursive``, the handler's ``ils`` lists ``path``'s files
+        and subdirectories. With it, its ``ils_recursive`` lists every key
+        below ``path`` whose name below it starts with ``prefix``, in name
+        order.
         """
+        handler = self._required_handler()
+        entry = handler.entry(self._strip_protocol(path))
+        if recursive:
+            return handler.ils_recursive(entry, prefix=prefix, **kwargs)  # type: ignore[attr-defined, no-any-return]
+        else:
+            return handler.ils(entry, **kwargs)
 
-    @abstractmethod
     async def _rm_files(self, paths: list[str]) -> Mapping[str, Exception] | None:
-        """Delete several files in one request, e.g. with S3's DeleteObjects.
+        """Delete several files in one request, by the handler's ``rm_files``."""
+        handler = self._required_handler()
+        entries = [handler.entry(self._strip_protocol(p)) for p in paths]
+        return await handler.rm_files(entries)  # type: ignore[attr-defined, no-any-return]
 
-        A key missing is no error. It returns the keys it could not delete,
-        each with an error of its own, e.g. from DeleteObjects' ``Errors``:
-        the strategies count the others deleted. None, or nothing, says all
-        were. It raises only if the request failed whole, which fails every
-        key.
-
-        The strategies give it only keys they listed, or found by an
-        ``info``: it need not check them again. A batch may hold keys of
-        several buckets, as a root at the storage's root or several roots list
-        across them. A storage whose request takes one bucket sends one per
-        bucket of the batch.
-        """
-
-    @abstractmethod
     async def _rmdir(self, path: str) -> None:
-        """Delete an empty directory: on an object store, a bucket.
+        """Delete an empty directory: on an object store, a bucket."""
+        handler = self._required_handler()
+        await handler.rmdir(handler.entry(self._strip_protocol(path)))
 
-        The strategies never call it: keys are their only directories. fsspec's
-        own methods do, e.g. the sync ``rmdir``. fsspec's default does nothing,
-        so a storage with buckets implements it, and one without may too.
-        """
-
-    @abstractmethod
     async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
-        """Create a directory and its parents: on an object store, a bucket, if missing.
-
-        The strategies never call it. fsspec's own methods do, e.g. ``mkdir``
-        and ``makedirs``. fsspec's default does nothing, so a storage with
-        buckets implements it. One with keys only may do nothing on purpose.
-        """
+        """Create a directory and its parents: on an object store, a bucket, if missing."""
+        handler = self._required_handler()
+        await handler.makedirs(handler.verified(self._strip_protocol(path)), exist_ok)
 
     async def _mkdir(
         self, path: str, create_parents: bool = True, **kwargs: Any
@@ -224,54 +210,29 @@ class FlatFileSystem(_BaseFileSystem):
         """Create a directory, as fsspec's ``_mkdir`` does: by ``_makedirs``."""
         await self._makedirs(path, exist_ok=False)
 
-    @abstractmethod
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Describe a path, raising FileNotFoundError if there is none."""
+        handler = self._required_handler()
+        return await handler.info(handler.entry(self._strip_protocol(path)), **kwargs)
 
-    @abstractmethod
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
-        """Delete a file, as fsspec's ``_rm`` does when not recursive.
+        """Delete a file, as fsspec's ``_rm`` does when not recursive."""
+        handler = self._required_handler()
+        await handler.rm_file(handler.entry(self._strip_protocol(path)))
 
-        The flat strategies never call it: they delete with ``_rm_files``.
-        fsspec's own methods do, e.g. ``rm`` when not recursive, on any path.
-        """
-
-    @abstractmethod
     async def _cp_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
-        """Copy a key within the storage, by its entry, to ``path2``.
+        """Copy a key within the storage, by its entry, to ``path2``."""
+        handler = self._required_handler()
+        await handler.cp_file(entry, handler.verified(self._strip_protocol(path2)))
 
-        ``entry`` is the source's, as ``_ils`` or ``_info`` gave it, its
-        ``"name"`` the source key. Its other keys, e.g. the size, may save a
-        request, e.g. one telling whether a copy goes in parts. They may be
-        stale, listed before the copy: a copy must still succeed, or fail as
-        the storage says, if the key changed since.
-        """
-
-    @abstractmethod
     async def _mv_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
-        """Move a key within the storage, by its entry, to ``path2``.
-
-        ``entry`` is as `_cp_file_entry` takes it. The flat strategies call it
-        only where the profile's ``renames_files=True`` says the storage
-        renames: a directory's marker too, its name ending with "/". One with no
-        rename copies, then deletes the source, for fsspec's ``_mv_file``.
-        """
-
-    @abstractmethod
-    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        """Open a file whose methods are awaited, as fsspec's ``open_async`` does.
-
-        The file holds ``io_limit`` as its concurrency limit, e.g. an
-        `AsyncFileAdapter` of one of this package's file classes.
-        """
-
-    @abstractmethod
-    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        """Open a file, as fsspec's ``_open`` does, for the sync ``open``."""
+        """Move a key within the storage, by its entry, to ``path2``."""
+        handler = self._required_handler()
+        await handler.mv_file(entry, handler.verified(self._strip_protocol(path2)))
 
     # fsspec's recursive methods, answered by the flat strategies.
 
@@ -374,3 +335,6 @@ class FlatFileSystem(_BaseFileSystem):
     # The copy and move that _BaseFileSystem's _copy and _mv start, as fsspec's methods.
     _cp_strategy = staticmethod(_flat_cp)
     _mv_strategy = staticmethod(_flat_mv)
+
+
+FlatFileSystem._family = FlatFileSystem
