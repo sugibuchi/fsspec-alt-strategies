@@ -331,8 +331,9 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     It takes a routing handler. By convention, a class below it takes the
     handler's storage options, not a handler: its ``__init__`` makes its
     handler from them, so that fsspec makes it from a URL or a registry. It
-    names its ``protocol``, ``root_marker`` and ``_strip_protocol`` as its
-    handler class's ``protocol``, ``root`` and ``strip_protocol``.
+    names its ``protocol``, ``root_marker``, ``_strip_protocol`` and
+    ``_get_kwargs_from_urls`` as its handler class's ``protocol``, ``root``,
+    ``strip_protocol`` and ``options_from_url``.
 
     Parameters
     ----------
@@ -357,6 +358,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     ...     protocol = Lake.protocol
     ...     root_marker = Lake.root
     ...     _strip_protocol = Lake.strip_protocol
+    ...     _get_kwargs_from_urls = Lake.options_from_url
     ...
     ...     def __init__(self, *, transfer_concurrency, **kwargs):
     ...         super().__init__(Lake(transfer_concurrency=transfer_concurrency), **kwargs)

@@ -83,16 +83,25 @@ The library aims at large cloud storages, such as data lakes holding millions of
 
 ### Handlers and filesystems
 
-A storage is implemented in two parts:
+A storage is implemented in two parts, each with one concern:
 
-- a **storage handler**, which a developer writes: the storage's primitives, its paths, its profile, its limits, and
-  its clients, opened and closed. It subclasses its family's, `TreeFileOperationHandler` or `FlatFileOperationHandler`,
-  which runs the family's strategies;
-- a **filesystem**, `BaseFileSystem`, which implements fsspec's whole API on one handler, running the handler's
-  strategies as its recursive methods. Nobody overrides its methods.
+- a **storage handler** is how the storage is accessed. A developer writes it: the storage's primitives, its paths,
+  its profile, its limits, and its clients, opened and closed. It subclasses its family's, `TreeFileOperationHandler`
+  or `FlatFileOperationHandler`, which runs the family's strategies;
+- a **filesystem**, `BaseFileSystem`, enforces the contract between the client code and the storage. It implements
+  fsspec's whole public API on one handler, running the handler's strategies as its recursive methods. Nobody
+  overrides its methods.
 
-The strategies take handlers, never filesystems. So a convention the library keeps, e.g. a path verified or a listing
-dropped after a change, is kept in one place.
+The filesystem's side of the contract is what the client relies on, whatever the storage:
+
+- the public API, answering and raising as fsspec's methods do;
+- each path verified by the handler before the storage is accessed;
+- each call told to the monitors;
+- the client side's cache, fsspec's `dircache`, updated and dropped as the storage changes.
+
+So nothing a handler does can skip a part of the contract. The strategies take handlers, never filesystems, and a
+handler knows nothing of the client. A convention the library keeps, e.g. a path verified or a listing dropped after
+a change, is kept in one place: the filesystem.
 
 ```text
 _PathHandler                           common/handler.py: paths
@@ -224,14 +233,17 @@ class MyFileSystem(BaseFileSystem):
     protocol = MyHandler.protocol
     root_marker = MyHandler.root
     _strip_protocol = MyHandler.strip_protocol
+    _get_kwargs_from_urls = MyHandler.options_from_url
 
     def __init__(self, account, *, io_concurrency=8, **kwargs):
         super().__init__(MyHandler(account, io_concurrency=io_concurrency), **kwargs)
 ```
 
 It takes storage options, not a handler, so that fsspec makes it from a URL or a registry, caches it and pickles it.
-It names its paths as its handler class's, as fsspec reads them of the class before a filesystem is made. It
-overrides nothing else.
+It names its paths as its handler class's, as fsspec reads them of the class before a filesystem is made. So does
+`_get_kwargs_from_urls`, the handler class's `options_from_url`: the storage options a URL names beyond its path,
+e.g. an account or a host, which fsspec asks for before a filesystem, or a handler, is made. It overrides nothing
+else.
 
 Its `__init__` is what its users call, so its signature names each option, repeating its handler's:
 

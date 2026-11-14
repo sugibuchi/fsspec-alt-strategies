@@ -278,6 +278,25 @@ def test_a_storages_class_names_its_handlers_paths() -> None:
     assert fs.unstrip_protocol("bucket://a/b") == "bucket://a/b"
 
 
+def test_a_storages_class_takes_the_options_its_handler_reads_in_a_url() -> None:
+    class Hosted(_Bucket):
+        @classmethod
+        def options_from_url(cls, url: str) -> dict[str, Any]:
+            host = url.partition("://")[2].partition("@")[0]
+            return {"host": host} if "@" in url else {}
+
+    class HostedFileSystem(BaseFileSystem):
+        protocol = Hosted.protocol
+        _strip_protocol = Hosted.strip_protocol
+        _get_kwargs_from_urls = Hosted.options_from_url
+
+    # By default, a URL names nothing beyond its path.
+    assert _Bucket.options_from_url("bkt://a/b") == {}
+    # fsspec asks the class, before any handler is made.
+    assert HostedFileSystem._get_kwargs_from_urls("bkt://h1@a/b") == {"host": "h1"}
+    assert HostedFileSystem._get_kwargs_from_urls("bkt://a/b") == {}
+
+
 def test_sign_created_and_modified_are_the_handlers() -> None:
     class Dating(_Bucket):
         async def sign(self, entry: Any, expiration: int = 100, **kwargs: Any) -> str:

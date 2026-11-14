@@ -107,6 +107,20 @@ class _PathHandler(ABC):
         else:
             return path
 
+    @classmethod
+    def options_from_url(cls, url: str) -> dict[str, Any]:
+        """The storage options a URL names beyond its path, for fsspec's ``_get_kwargs_from_urls``: here, none.
+
+        fsspec asks a filesystem's class for them as it makes one from a URL,
+        e.g. by ``fsspec.open("abfss://container@account.dfs.core.windows.net/x")``,
+        before any handler is made: so it is a class method. A handler whose
+        URLs name an account, a host or a user returns them, under the names
+        of its storage class's options, which it is made from. A storage's
+        class names it as its ``_get_kwargs_from_urls``, as it names
+        `strip_protocol` as its ``_strip_protocol``.
+        """
+        return {}
+
     def unstrip_protocol(self, name: str) -> str:
         """A path of the storage as a URL, with the first ``protocol``, as fsspec's ``unstrip_protocol``."""
         protocols = (

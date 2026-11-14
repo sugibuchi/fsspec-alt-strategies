@@ -203,13 +203,16 @@ class MyFileSystem(BaseFileSystem):
     protocol = MyHandler.protocol
     root_marker = MyHandler.root
     _strip_protocol = MyHandler.strip_protocol
+    _get_kwargs_from_urls = MyHandler.options_from_url
 
     def __init__(self, account, *, io_concurrency=8, **kwargs):
         super().__init__(MyHandler(account, io_concurrency=io_concurrency), **kwargs)
 ```
 
-A storage's class takes its storage options, makes its handler from them, and names its paths as its handler's. It
-overrides nothing else: what the storage does is the handler's.
+A storage's class takes its storage options, makes its handler from them, and names its paths as its handler's. A
+URL naming more than a path, e.g. an account or a host, gives those options by the handler's `options_from_url`,
+named as the class's `_get_kwargs_from_urls`, so that `fsspec.open(url)` needs no more. The class overrides nothing
+else: what the storage does is the handler's.
 
 Its signature names each of its handler's options, and passes fsspec's on as keywords. `BaseFileSystem` names
 fsspec's options: `asynchronous`, `loop`, `use_listings_cache`, `listings_expiry_time` and `max_paths`. Any other

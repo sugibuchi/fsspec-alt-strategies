@@ -43,6 +43,10 @@ code: read it before adding a strategy or a handler.
 
 ### Handlers and filesystems
 
+- A handler is how a storage is accessed. A filesystem enforces the contract between the client code and the storage:
+  the public API, paths verified before the storage is accessed, monitoring, and the client side's cache updated and
+  dropped. Put each concern on its side: never a contract's part in a handler, nor a storage's access in the
+  filesystem.
 - A storage is a handler, which a developer writes: its primitives, paths, profile, limits and clients. It subclasses
   its family's, `TreeFileOperationHandler` or `FlatFileOperationHandler`, which declares the family's primitives and
   runs its strategies. The strategies take handlers, never filesystems.
@@ -60,7 +64,8 @@ code: read it before adding a strategy or a handler.
 - A storage's own class, by convention, writes its `__init__`, its signature naming each of its handler's options and
   passing fsspec's on, with no helper splitting them. Its `**` is fsspec's, or else options another library names,
   e.g. a token credential's, the handler passing on those its constructor names. It makes its handler from them. It names
-  `protocol`, `root_marker` and `_strip_protocol` as its handler class's, and overrides nothing else. There is no
+  `protocol`, `root_marker`, `_strip_protocol` and `_get_kwargs_from_urls` as its handler class's `protocol`, `root`,
+  `strip_protocol` and `options_from_url`, and overrides nothing else. There is no
   metaclass, no `__init_subclass__` and no decorator reflecting on a class.
 - `FileSystemWrapper` alone takes its handler's paths at runtime, and alone is not cached: it serves a wrapped
   filesystem. The router makes its storages' `BaseFileSystem`s uncached.

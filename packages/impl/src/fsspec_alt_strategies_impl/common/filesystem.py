@@ -67,9 +67,10 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
     handler: its ``__init__`` makes its handler from them, so that fsspec
     makes it from a URL or a registry. Its signature names each of the
     handler's options, as the handler's does, and passes fsspec's on as
-    keywords. It names its ``protocol``, ``root_marker`` and
-    ``_strip_protocol`` as its handler class's ``protocol``, ``root`` and
-    ``strip_protocol``, and overrides nothing else: the rest is the handler's.
+    keywords. It names its ``protocol``, ``root_marker``, ``_strip_protocol``
+    and ``_get_kwargs_from_urls`` as its handler class's ``protocol``,
+    ``root``, ``strip_protocol`` and ``options_from_url``, and overrides
+    nothing else: the rest is the handler's.
 
     A directory that fails to list is yielded empty by ``_walk``, as fsspec's
     ``walk`` yields it. ``on_error`` handles every directory's failure, where
@@ -105,6 +106,7 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
     ...     protocol = MyHandler.protocol
     ...     root_marker = MyHandler.root
     ...     _strip_protocol = MyHandler.strip_protocol
+    ...     _get_kwargs_from_urls = MyHandler.options_from_url
     ...
     ...     def __init__(self, account, **kwargs):
     ...         super().__init__(MyHandler(account), **kwargs)
