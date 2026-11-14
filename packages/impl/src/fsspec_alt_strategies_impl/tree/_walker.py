@@ -380,11 +380,14 @@ class _BottomUp:
 class _SubtreeReader:
     """One subtree listed whole by one recursive listing: each read the directories it completed.
 
-    A splitter for the listing's order turns its entries into each directory's
-    listing: see `_DepthFirstSplit` and `_ParentsFirstSplit`. A listing that
-    fails, whenever it breaks, is the root's failure: what it completed before
-    stands, and the directories it was in are not listed. A storage resumes its
-    own listing where it can, e.g. a page by its continuation token.
+    `_Split` turns its entries into each directory's listing, as the listing
+    passes each directory: depth first, or in name order. A listing in any
+    other order, e.g. parents first, as the profile's ``recursive_order`` may
+    say, tells no directory done before it ends: it is held whole, then taken
+    in name order, which is depth first. A listing that fails, whenever it
+    breaks, is the root's failure: what it completed before stands, and the
+    directories it was in are not listed. A storage resumes its own listing
+    where it can, e.g. a page by its continuation token.
     """
 
     def __init__(
@@ -398,7 +401,7 @@ class _SubtreeReader:
         self.root = root
         self.depth = depth
         self.entries = entries
-        self.split: _DepthFirstSplit | _ParentsFirstSplit | None = None
+        self.split: _Split | None = None
         self.ended = False
 
     async def read(self) -> list[_Listing]:
@@ -406,8 +409,14 @@ class _SubtreeReader:
         done: list[_Listing] = []
         try:
             if self.split is None:
-                kind = _split_of(self.entries, self.handler.profile)
-                self.split = kind(self.root, self.depth)
+                self.split = _Split(self.root, self.depth)
+                if not _depth_first(self.entries, self.handler.profile):
+                    held = [e async for e in self.entries]
+                    self.ended = True
+                    named = sorted(held, key=lambda e: e["name"])
+                    return [
+                        x for e in named for x in self.split.add(e)
+                    ] + self.split.end()
             split = self.split
             while not done:
                 try:
@@ -431,18 +440,13 @@ async def _raising(error: Exception) -> AsyncIterator[Entry]:
     yield  # An async generator, which never yields.
 
 
-def _split_of(
-    entries: AsyncIterator[Entry], profile: StorageProfile
-) -> type[_DepthFirstSplit | _ParentsFirstSplit]:
-    """How a recursive listing is split: depth first where it is `_tree_ils`'s, or the profile declares it so.
+def _depth_first(entries: AsyncIterator[Entry], profile: StorageProfile) -> bool:
+    """Whether a recursive listing is depth first, or in name order: `_tree_ils`'s, or as the profile declares it.
 
     A storage's own listing keeps the order its profile declares. Unknown, it
     is taken as parents first, which is right on any storage.
     """
-    if isinstance(entries, _DepthFirst) or profile.recursive_order == "depth_first":
-        return _DepthFirstSplit
-    else:
-        return _ParentsFirstSplit
+    return isinstance(entries, _DepthFirst) or profile.recursive_order == "depth_first"
 
 
 async def _close(entries: AsyncIterator[Entry]) -> None:
@@ -475,7 +479,7 @@ class _OpenDirectory:
         return _Listing(self.name, self.depth, self.entries)
 
 
-class _DepthFirstSplit:
+class _Split:
     """A recursive listing's entries, depth first or in name order, split into each directory's listing.
 
     All below a directory come together, so it keeps only the directories the
@@ -557,54 +561,6 @@ class _DepthFirstSplit:
         top = self.open[-1]
         del top.pending[directory]
         return _Listing(directory, top.depth + 1, [])
-
-
-class _ParentsFirstSplit:
-    """A recursive listing's entries, parents first, split into each directory's listing.
-
-    A directory's entry comes before what is below it, but the directories'
-    contents interleave, e.g. breadth first: no entry tells that a directory
-    is done. So every directory stays open until the listing ends, as only a
-    parents-first listing needs, and their listings come then, each after
-    those below it.
-    """
-
-    def __init__(self, root: str, root_depth: int) -> None:
-        self.root = root
-        # Every directory seen, by its path, each after its parent.
-        self.directories = {root: _OpenDirectory(root, root_depth)}
-
-    def add(self, entry: dict[str, Any]) -> list[_Listing]:
-        """Hold an entry in its directory: no listing is complete before the end."""
-        name = entry["name"].rstrip("/")
-        if name == self.root:
-            # A file lists itself. A directory may list its own marker.
-            if entry["type"] != "directory":
-                raise _not_a_directory(self.root, entry)
-            return []
-        if not _below(name, self.root):
-            return []  # No storage should list it.
-
-        # A directory not listed, as an object store lists only files, gets an
-        # entry in its parent from the path below it.
-        top = self.directories[self.root]
-        for directory in _between(self.root, name):
-            if (known := self.directories.get(directory)) is None:
-                top.hold({"name": directory, "size": 0, "type": "directory"})
-                known = _OpenDirectory(directory, top.depth + 1)
-                self.directories[directory] = known
-            top = known
-
-        if entry["type"] == "directory":
-            if name in self.directories:
-                return []  # Listed twice, e.g. as its marker too.
-            self.directories[name] = _OpenDirectory(name, top.depth + 1)
-        top.hold(entry)
-        return []
-
-    def end(self) -> list[_Listing]:
-        """Every directory's listing, once the listing has ended: each after those below it."""
-        return [d.listing() for d in reversed(self.directories.values())]
 
 
 def _prefix(directory: str) -> str:

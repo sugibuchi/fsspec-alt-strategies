@@ -466,10 +466,10 @@ A storage's own recursive listing keeps one of two orders, which tell the walk w
 
 The profile's `recursive_order` declares which order a storage's own listing keeps:
 
-- "depth_first" covers both of the above. `_DepthFirstSplit` then closes each directory as the listing passes it.
+- "depth_first" covers both of the above. `_Split` then completes each directory's listing as the listing passes it.
 - "parents_first" covers a directory's entry before what is below it, and nothing more, e.g. breadth first, as
-  Dropbox's recursive listing documents no more. `_ParentsFirstSplit` then keeps every directory open until the
-  listing ends.
+  Dropbox's recursive listing documents no more. No directory is known done before the listing ends, so the walk holds
+  it whole, then takes it in name order, which is depth first.
 - Unknown, the order is taken as "parents_first". The walk cannot tell that order from a depth-first one: by the time
   an entry comes under a directory taken as done, that directory's listing has gone, and a move may have deleted it.
 

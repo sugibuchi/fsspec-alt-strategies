@@ -9,11 +9,7 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree._walker import (
-    _DepthFirstSplit,
-    _ParentsFirstSplit,
-    _split_of,
-)
+from fsspec_alt_strategies_impl.tree._walker import _depth_first
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.mv import _tree_mv
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
@@ -143,14 +139,14 @@ async def test_a_listing_broken_off_yields_its_error(cut_after: int) -> None:
 
 
 @pytest.mark.parametrize("order", [None, "parents_first"])
-async def test_the_default_listing_is_split_depth_first(order: Any) -> None:
+async def test_the_default_listing_is_depth_first(order: Any) -> None:
     # The library's own listing is depth first, whatever the profile says of the
     # storage's: a handler keeping it declares nothing, and pays no more.
     fs = _fs()
     view = TreeView(fs, storage_profile=StorageProfile(recursive_order=order))
     entries = view.ils_recursive(view.entry("data"))
     await view.open()
-    assert _split_of(entries, view.profile) is _DepthFirstSplit
+    assert _depth_first(entries, view.profile)
     await entries.aclose()  # type: ignore[attr-defined]  # A _DepthFirst.
 
     own = TreeView(
@@ -160,4 +156,4 @@ async def test_the_default_listing_is_split_depth_first(order: Any) -> None:
     )
     entries = own.ils_recursive(own.entry("data"))
     await own.open()
-    assert _split_of(entries, own.profile) is _ParentsFirstSplit
+    assert not _depth_first(entries, own.profile)
