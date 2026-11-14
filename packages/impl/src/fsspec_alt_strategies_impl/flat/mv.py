@@ -182,7 +182,7 @@ class _Rename(_CopyOrMove):
         await super().setup()
 
         # A rename makes no parent, as a write may: parents_required tells of
-        # writes only, and _mv_file_entry is called only where the parent exists.
+        # writes only, and mv_file is called only where the parent exists.
         self.parents_required = not self.implicit_directories
 
     async def transfer_file(
