@@ -56,12 +56,18 @@ if TYPE_CHECKING:
         It is the source's ``cp_file`` or ``mv_file`` within one storage, and
         `transfer._across`, or its caller's own, between two. The entry is the
         source's, as its listing or ``info`` gave it, its ``"name"`` the source
-        path. ``missing`` says nothing is at the destination, as the
-        primitives take it: one ignoring it is right all the same.
+        path. ``missing`` says nothing is at the destination, and ``parent``
+        is the destination's parent's entry, as the primitives take them: one
+        ignoring them is right all the same.
         """
 
         def __call__(
-            self, entry: dict[str, Any], path2: str, *, missing: bool = False
+            self,
+            entry: dict[str, Any],
+            path2: str,
+            *,
+            missing: bool = False,
+            parent: dict[str, Any] | None = None,
         ) -> Awaitable[None]: ...
 
 
@@ -111,9 +117,13 @@ def _moves_of(
             copy = cp_entry
 
             async def move(
-                entry: dict[str, Any], path2: str, *, missing: bool = False
+                entry: dict[str, Any],
+                path2: str,
+                *,
+                missing: bool = False,
+                parent: dict[str, Any] | None = None,
             ) -> None:
-                await copy(entry, path2, missing=missing)
+                await copy(entry, path2, missing=missing, parent=parent)
                 await src.rm_file(entry)
 
             mv_entry = move
@@ -706,6 +716,10 @@ class _CopyJobs(_Jobs):
         # copies need not wait for a mkdir.
         self.made: set[str] = set()
 
+        # The entries of the destination directories found or made, by path:
+        # each is the parent hint of what is made inside it.
+        self.directories: dict[str, Entry] = {}
+
         self.files_found = 0
         self.files_done = 0
 
@@ -865,6 +879,8 @@ class _CopyJobs(_Jobs):
                 self.existing.add(destination)
                 into = entry["type"] == "directory"
                 self.made.add(destination if into else destination.rpartition("/")[0])
+                if into:
+                    self.directories[destination] = entry
 
         if not into or (isinstance(self.path1, str) and self.path1.endswith("/")):
             return destination
@@ -936,7 +952,10 @@ class _CopyJobs(_Jobs):
         try:
             try:
                 await cp_entry(
-                    entry, destination, missing=self.known_missing(destination)
+                    entry,
+                    destination,
+                    missing=self.known_missing(destination),
+                    parent=self.parent_of(destination),
                 )
             except FileExistsError as refused:
                 await self.replace_file(cp_entry, entry, destination, refused)
@@ -960,7 +979,25 @@ class _CopyJobs(_Jobs):
             raise refused
 
         await self.dst.rm_file({**found, "name": destination})
-        await cp_entry(entry, destination)
+        await cp_entry(entry, destination, parent=self.parent_of(destination))
+
+    def parent_of(self, path: StoragePath) -> Entry | None:
+        """The entry of a destination's parent, as found or made, as the primitives take it: None if unknown."""
+        try:
+            return self.directories.get(self.dst.parent(path))
+        except ValueError:
+            return None  # A path at the root: no parent of the destination's.
+
+    async def make_directory(self, path: StoragePath) -> None:
+        """Make a destination directory, keeping the entry ``makedirs`` returns as the parent hint of what goes inside."""
+        made = await self.dst.makedirs(
+            path,
+            exist_ok=True,
+            missing=self.known_missing(path),
+            parent=self.parent_of(path),
+        )
+        if made is not None:
+            self.directories[path] = made
 
     # The batches of files, sent to the handler's cp_files or mv_files.
 
@@ -1035,7 +1072,12 @@ class _CopyJobs(_Jobs):
         """
         jobs = self.sent[number]
         transfers = [
-            FileTransfer(j.source, j.destination, self.known_missing(j.destination))
+            FileTransfer(
+                j.source,
+                j.destination,
+                self.known_missing(j.destination),
+                self.parent_of(j.destination),
+            )
             for j in jobs
         ]
         operation: Operation[tuple[str, str], Any]

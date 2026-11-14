@@ -124,17 +124,32 @@ class _TreeHandler(TreeFileOperationHandler):
         await self.inner._rmdir(entry["name"])
 
     async def cp_file(
-        self, entry: dict[str, Any], path2: Any, *, missing: bool = False
+        self,
+        entry: dict[str, Any],
+        path2: Any,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         await self.inner._cp_file(entry["name"], path2)
 
     async def mv_file(
-        self, entry: dict[str, Any], path2: Any, *, missing: bool = False
+        self,
+        entry: dict[str, Any],
+        path2: Any,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         await self.inner._mv_file(entry["name"], path2)
 
     async def makedirs(
-        self, path: Any, exist_ok: bool = False, *, missing: bool = False
+        self,
+        path: Any,
+        exist_ok: bool = False,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         await self.inner._makedirs(path, exist_ok=exist_ok)
 
@@ -343,7 +358,9 @@ async def test_a_rename_moves_a_dir_whole(inner: SimulatedFileSystem) -> None:
     class Renaming(_TreeHandler):
         profile = StorageProfile(renames_directories=True)
 
-        async def mv_tree(self, entry: dict[str, Any], path2: Any) -> None:
+        async def mv_tree(
+            self, entry: dict[str, Any], path2: Any, *, parent: Any = None
+        ) -> None:
             await self.inner._rename(entry["name"], path2)
 
     renaming = _on(Renaming(inner))
@@ -361,7 +378,12 @@ async def test_a_file_moves_by_mv_file_when_not_recursive(
 ) -> None:
     class Renaming(_TreeHandler):
         async def mv_file(
-            self, entry: dict[str, Any], path2: Any, *, missing: bool = False
+            self,
+            entry: dict[str, Any],
+            path2: Any,
+            *,
+            missing: bool = False,
+            parent: Any = None,
         ) -> None:
             await self.inner._rename(entry["name"], path2)
 
@@ -397,7 +419,12 @@ async def test_a_single_file_moves_asking_each_path_once(
         )
 
         async def mv_file(
-            self, entry: dict[str, Any], path2: Any, *, missing: bool = False
+            self,
+            entry: dict[str, Any],
+            path2: Any,
+            *,
+            missing: bool = False,
+            parent: Any = None,
         ) -> None:
             await self.inner._rename(entry["name"], path2)
 

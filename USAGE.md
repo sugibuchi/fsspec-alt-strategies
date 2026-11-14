@@ -139,6 +139,9 @@ class MyHandler(TreeFileOperationHandler):
   needs no request to ask them again.
 - `makedirs`, `cp_file` and `mv_file` take `missing=True` where nothing is at the path, as a copy into a destination it
   found missing knows. A storage asking before each creation, as one never refusing a duplicate must, skips that.
+- They take `parent` too, as do `cp_tree` and `mv_tree`, and a write's entry as `"parent"`: the entry of the path's
+  parent, where the caller holds it. `makedirs` returns the entry of the directory it made, or None, so that a copy
+  passes it on to what goes inside. A storage addressing items by id skips resolving the parent's path.
 - The strategies build paths only by the handler's `join` and `parent`, each verified by `verify_path`. `join` takes
   several paths, as `os.path.join` does, and refuses a segment such as "..".
   So a name another storage listed, e.g. one holding "..", can never leave the directory it is copied into.

@@ -35,13 +35,18 @@ class _Account(StorageHandler):
     async def rm_file(self, entry: Any) -> None: ...
     async def rmdir(self, entry: Any) -> None: ...
     async def makedirs(
-        self, path: str, exist_ok: bool = False, *, missing: bool = False
+        self,
+        path: str,
+        exist_ok: bool = False,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None: ...
     async def cp_file(
-        self, entry: Any, path2: str, *, missing: bool = False
+        self, entry: Any, path2: str, *, missing: bool = False, parent: Any = None
     ) -> None: ...
     async def mv_file(
-        self, entry: Any, path2: str, *, missing: bool = False
+        self, entry: Any, path2: str, *, missing: bool = False, parent: Any = None
     ) -> None: ...
 
 

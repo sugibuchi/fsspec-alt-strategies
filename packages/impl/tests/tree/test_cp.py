@@ -259,7 +259,11 @@ async def test_a_storage_whose_copies_need_parents_where_its_writes_do_not() -> 
     assert await fs._exists("copied/2023/01/part-0.parquet")
 
     async def write(
-        entry: dict[str, Any], destination: str, *, missing: bool = False
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         await fs._pipe_file(destination, await fs._cat_file(entry["name"]))
 

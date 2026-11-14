@@ -1230,10 +1230,14 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         """A file's copy, or move, from ``src`` to ``dst``, under ``transfer_limit``."""
         hook = self.handler.mv_across if move else self.handler.cp_across
 
-        # missing goes nowhere: a copy between storages writes, and the hooks
-        # take no hint.
+        # The hints go nowhere: a copy between storages writes, and the hooks
+        # take none.
         async def request(
-            entry: dict[str, Any], path2: str, *, missing: bool = False
+            entry: dict[str, Any],
+            path2: str,
+            *,
+            missing: bool = False,
+            parent: dict[str, Any] | None = None,
         ) -> None:
             with routing(self):
                 async with self.handler.transfer_limit:

@@ -682,7 +682,11 @@ async def test_moves_to_another_storage(hierarchical_fs: SimulatedFileSystem) ->
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
 
     async def mv_entry(
-        entry: dict[str, Any], destination: str, *, missing: bool = False
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         source = entry["name"]
         await dst._pipe_file(destination, hierarchical_fs._file_data[source].data)
@@ -714,7 +718,11 @@ async def test_moves_to_another_storage_by_cp_entry_then_rm_file(
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
 
     async def cp_entry(
-        entry: dict[str, Any], destination: str, *, missing: bool = False
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         await dst._pipe_file(
             destination, hierarchical_fs._file_data[entry["name"]].data
@@ -842,7 +850,7 @@ async def test_a_dir_moving_whole_goes_by_mv_tree_not_mv_entry(
         await hierarchical_fs._rename(path1, path2)
 
     async def mv_entry(
-        entry: dict[str, Any], path2: str, *, missing: bool = False
+        entry: dict[str, Any], path2: str, *, missing: bool = False, parent: Any = None
     ) -> None:
         entries.append(entry)
 

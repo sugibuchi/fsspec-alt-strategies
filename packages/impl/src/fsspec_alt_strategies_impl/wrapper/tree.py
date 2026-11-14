@@ -125,7 +125,9 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
         else:
             await self.fs._rm(path, recursive=True)
 
-    async def mv_tree(self, entry: Entry, path2: StoragePath) -> None:
+    async def mv_tree(
+        self, entry: Entry, path2: StoragePath, *, parent: Entry | None = None
+    ) -> None:
         # The wrapped one's own rename of a directory, as renames_directories declares.
         path = entry["name"]
         if not self.asynchronous:
@@ -135,7 +137,9 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
         else:
             await self.fs._mv_file(path, path2)
 
-    async def cp_tree(self, entry: Entry, path2: StoragePath) -> None:
+    async def cp_tree(
+        self, entry: Entry, path2: StoragePath, *, parent: Entry | None = None
+    ) -> None:
         # The wrapped one's own copy of a directory, as copies_directories declares.
         path = entry["name"]
         if not self.asynchronous:

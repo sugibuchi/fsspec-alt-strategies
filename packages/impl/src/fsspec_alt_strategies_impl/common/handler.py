@@ -87,11 +87,15 @@ class FileTransfer(NamedTuple):
     missing : bool, default False
         Whether nothing is at ``path2``, as the caller knows: False is always
         right.
+    parent : Entry, optional
+        The entry of ``path2``'s parent, as the caller found or made it: None
+        if it holds none.
     """
 
     entry: Entry
     path2: StoragePath
     missing: bool = False
+    parent: Entry | None = None
 
 
 class _PathHandler(ABC):
@@ -427,25 +431,44 @@ class StorageHandler(_PathHandler):
         is.
         """
 
-    # The primitives making an item take ``missing``: True where the caller
-    # knows nothing is at the path, e.g. a copy into a directory it made
-    # itself, unless another client put something there since. A storage whose
-    # creation never conflicts, e.g. Google Drive's, which would make a second
-    # item of the name, then skips asking what is there first. Any other
-    # storage may ignore it: False is always right.
+    # The primitives making an item take two hints, which any storage may
+    # ignore:
+    #
+    # - ``missing``: True where the caller knows nothing is at the path, e.g. a
+    #   copy into a directory it made itself, unless another client put
+    #   something there since. A storage whose creation never conflicts, e.g.
+    #   Google Drive's, which would make a second item of the name, then skips
+    #   asking what is there first. False is always right.
+    # - ``parent``: the entry of the path's parent, as the caller found it or
+    #   `makedirs` made it, e.g. with the storage's id. A storage addressing
+    #   items by id then needs not resolve the parent's path. None where the
+    #   caller holds none. It may be stale, as any entry may.
 
     @abstractmethod
     async def makedirs(
-        self, path: StoragePath, exist_ok: bool = False, *, missing: bool = False
-    ) -> None:
+        self,
+        path: StoragePath,
+        exist_ok: bool = False,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
+    ) -> Entry | None:
         """Make a directory and its parents, raising FileExistsError unless ``exist_ok``.
 
-        ``missing`` says nothing is at ``path``, as the comment above says.
+        It returns the directory's entry, where the storage tells it, e.g. with
+        its id, so that the caller passes it on as the ``parent`` of what it
+        makes inside, else None. ``missing`` says nothing is at ``path``, and
+        ``parent`` is its parent's entry, as the comment above says.
         """
 
     @abstractmethod
     async def cp_file(
-        self, entry: Entry, path2: StoragePath, *, missing: bool = False
+        self,
+        entry: Entry,
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
     ) -> None:
         """Copy a file within the storage, to ``path2``.
 
@@ -453,25 +476,33 @@ class StorageHandler(_PathHandler):
         stale: a copy must still succeed, or fail as the storage says, if the
         file changed since. A directory at ``path2`` is never replaced: it
         raises IsADirectoryError, or FileExistsError. ``missing`` says nothing
-        is at ``path2``, as the comment above says.
+        is at ``path2``, and ``parent`` is its parent's entry, as the comment
+        above says.
         """
 
     @abstractmethod
     async def mv_file(
-        self, entry: Entry, path2: StoragePath, *, missing: bool = False
+        self,
+        entry: Entry,
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
     ) -> None:
         """Move a file within the storage, to ``path2``, as `cp_file` copies one.
 
         A storage renaming a file in one request renames it. One with no rename
         copies, then deletes the source. The strategies call it only where
-        ``path2``'s parent exists. ``missing`` is `cp_file`'s.
+        ``path2``'s parent exists. ``missing`` and ``parent`` are `cp_file`'s.
         """
 
     # Files: to read, mode "rb", or to write, "wb" or "xb". Each takes an entry
     # whatever the mode: a file to write may not exist yet, its entry then
     # holding its name, and its final size as "size" where the caller knows
     # it, e.g. `pipe_file`'s default, so that a storage needing it up front,
-    # e.g. for an upload session, need not hold the whole file first. To
+    # e.g. for an upload session, need not hold the whole file first. Its
+    # parent's entry, too, as "parent" where the caller holds it, as the
+    # primitives making an item take it. To
     # read, a missing file raises FileNotFoundError, and a directory
     # IsADirectoryError. To write, "xb" raises FileExistsError where a file
     # is, as the storage tells it.

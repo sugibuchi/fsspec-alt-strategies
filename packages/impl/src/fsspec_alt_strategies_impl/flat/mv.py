@@ -190,7 +190,10 @@ class _Rename(_CopyOrMove):
     ) -> None:
         try:
             await self.mv_entry(
-                entry, destination, missing=self.known_missing(destination)
+                entry,
+                destination,
+                missing=self.known_missing(destination),
+                parent=self.parent_of(destination),
             )
         except Exception as e:
             # Yielded among paths, the error must tell its paths itself.

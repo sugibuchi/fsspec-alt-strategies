@@ -237,6 +237,11 @@ An item that exists is named by its entry, a dict as fsspec's `ls` with `detail`
   move says so below a destination it found missing, as nothing is there unless another client puts it. A storage
   whose creation never conflicts, e.g. Google Drive, which makes a second item of the name, skips its lookup. Any
   other may ignore it.
+- `makedirs`, `cp_file`, `mv_file`, `cp_tree` and `mv_tree` take `parent` too: the entry of the path's parent, where
+  the caller holds it, else None. A write's entry holds it as `"parent"`. A storage addressing items by id, e.g. Box
+  or Google Drive, then needs not resolve the parent's path.
+- `makedirs` returns the entry of the directory it made, where the storage tells it. A copy or move keeps it, and the
+  entry of a destination directory its `info` found, as the parent of what goes inside.
 
 #### The filesystem
 

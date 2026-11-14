@@ -1,4 +1,4 @@
-"""Tests of the hints the primitives get: ``missing`` for a destination known empty, and a write's ``size``."""
+"""Tests of the hints the primitives get: ``missing`` for a destination known empty, a parent's entry, and a write's ``size``."""
 
 from __future__ import annotations
 
@@ -30,19 +30,24 @@ def _hinting(base: type) -> type:
             self.hints: dict[str, bool] = {}
 
         async def makedirs(
-            self, path: Any, exist_ok: bool = False, *, missing: bool = False
+            self,
+            path: Any,
+            exist_ok: bool = False,
+            *,
+            missing: bool = False,
+            parent: Any = None,
         ) -> None:
             self.hints[path] = missing
             await super().makedirs(path, exist_ok, missing=missing)
 
         async def cp_file(
-            self, entry: Any, path2: Any, *, missing: bool = False
+            self, entry: Any, path2: Any, *, missing: bool = False, parent: Any = None
         ) -> None:
             self.hints[path2] = missing
             await super().cp_file(entry, path2, missing=missing)
 
         async def mv_file(
-            self, entry: Any, path2: Any, *, missing: bool = False
+            self, entry: Any, path2: Any, *, missing: bool = False, parent: Any = None
         ) -> None:
             self.hints[path2] = missing
             await super().mv_file(entry, path2, missing=missing)
@@ -140,3 +145,91 @@ async def test_a_copy_between_storages_gives_the_source_size_and_says_missing() 
     assert [w.get("size") for w in written] == [4]
     # Written beside the destination, then moved into place: the move is told.
     assert dst.hints == {"b": True}
+
+
+class _Parenting(TreeView):
+    """A view whose ``makedirs`` answers the entry of the directory made, with an id, and noting each ``parent`` told."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.parents: dict[str, Any] = {}
+        self.ids = 0
+
+    async def makedirs(
+        self,
+        path: Any,
+        exist_ok: bool = False,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> Any:
+        self.parents[path] = parent
+        await super().makedirs(path, exist_ok, missing=missing)
+        self.ids += 1
+        return {"name": path, "type": "directory", "id": self.ids}
+
+    async def cp_file(
+        self, entry: Any, path2: Any, *, missing: bool = False, parent: Any = None
+    ) -> None:
+        self.parents[path2] = parent
+        await super().cp_file(entry, path2, missing=missing)
+
+    async def mv_file(
+        self, entry: Any, path2: Any, *, missing: bool = False, parent: Any = None
+    ) -> None:
+        self.parents[path2] = parent
+        await super().mv_file(entry, path2, missing=missing)
+
+
+@pytest.mark.parametrize("strategy", [_tree_cp, _tree_mv])
+async def test_what_goes_into_a_directory_made_gets_its_entry(
+    hierarchical_fs: SimulatedFileSystem, strategy: Any
+) -> None:
+    _tree(hierarchical_fs)
+    # Parents first, each directory made by one makedirs, after its parent.
+    profile = StorageProfile(parents_required=True, copy_parents_required=True)
+    handler = _Parenting(hierarchical_fs, storage_profile=profile)
+    _, errors = await _collect_with_errors(strategy(handler, handler, "data", "new"))
+    assert errors == []
+    names = {p: (e or {}).get("name") for p, e in handler.parents.items()}
+    # Each item made below a directory made gets that directory's entry, with its id.
+    assert names["new/a"] == "new"
+    assert names["new/a/b"] == "new/a"
+    assert names["new/a/b/y"] == "new/a/b"
+    assert names["new/z"] == "new"
+    assert all("id" in e for p, e in handler.parents.items() if p != "new")
+
+
+async def test_what_goes_into_an_existing_directory_gets_its_info() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    fs.add_file("old/keep", b"k")
+    handler = _Parenting(fs)
+    # "old" exists: its info, which placing the copy asks, is the parent of what goes in.
+    _, errors = await _collect_with_errors(_tree_cp(handler, handler, "data/z", "old"))
+    assert errors == []
+    assert handler.parents["old/z"]["name"] == "old"
+    assert handler.parents["old/z"]["type"] == "directory"
+
+
+async def test_a_write_between_storages_gets_the_parent_in_its_entry() -> None:
+    src_fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    dst_fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    src_fs.add_file("a", b"1234")
+    dst_fs.add_dir("d")
+    written: list[dict[str, Any]] = []
+
+    class Destination(_Parenting):
+        async def open_async_file(
+            self, entry: Any, mode: str = "rb", **kwargs: Any
+        ) -> Any:
+            if mode != "rb":
+                written.append(dict(entry))
+            return await super().open_async_file(entry, mode, **kwargs)
+
+    src, dst = TreeView(src_fs), Destination(dst_fs)
+    parent = {"name": "d", "type": "directory", "id": 7}
+    await _across(src, dst)({"name": "a"}, "d/b", parent=parent)
+    # The write, beside the destination, and the move into place both get it.
+    assert [w.get("parent") for w in written] == [parent]
+    assert dst.parents == {"d/b": parent}

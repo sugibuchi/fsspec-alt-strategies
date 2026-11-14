@@ -50,11 +50,19 @@ def _across(
     copy failed is kept.
     """
 
-    async def transfer(entry: Entry, path2: str, *, missing: bool = False) -> None:
+    async def transfer(
+        entry: Entry,
+        path2: str,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
+    ) -> None:
         # The strategies place each file by the destination's path methods: its
         # path is verified already.
         destination: StoragePath = path2  # type: ignore[assignment]
-        await _cross_cp_file(src, entry, dst, destination, missing=missing)
+        await _cross_cp_file(
+            src, entry, dst, destination, missing=missing, parent=parent
+        )
         if move:
             await src.rm_file(entry)
 
@@ -68,24 +76,30 @@ async def _cross_cp_file(
     path: StoragePath,
     *,
     missing: bool = False,
+    parent: Entry | None = None,
 ) -> None:
     """Copy the file of ``entry``, of ``src``, to ``path`` of ``dst``, leaving no part of a file.
 
     ``missing`` is the destination's `StorageHandler.cp_file`'s: it goes to the
-    move of the temporary file into place.
+    move of the temporary file into place. ``parent``, ``path``'s parent's
+    entry, goes to the write, and to that move: the temporary file is beside
+    ``path``, in the same parent.
     """
     await dst.open()
     if dst.profile.atomic_writes:
-        await _write(src, entry, dst, path)
+        await _write(src, entry, dst, path, parent)
         return
 
     temporary = dst.join(
         dst.parent(path), f".{dst.name(path)}.{secrets.token_hex(8)}.part"
     )
     try:
-        size = await _write(src, entry, dst, temporary)
+        size = await _write(src, entry, dst, temporary, parent)
         await dst.mv_file(
-            {"name": temporary, "type": "file", "size": size}, path, missing=missing
+            {"name": temporary, "type": "file", "size": size},
+            path,
+            missing=missing,
+            parent=parent,
         )
     except BaseException as e:
         try:
@@ -102,9 +116,15 @@ async def _cross_cp_file(
 
 
 async def _write(
-    src: StorageHandler, entry: Entry, dst: StorageHandler, path: StoragePath
+    src: StorageHandler,
+    entry: Entry,
+    dst: StorageHandler,
+    path: StoragePath,
+    parent: Entry | None = None,
 ) -> int:
     """Stream the source's file to ``path``, a block at a time, returning its size.
+
+    The write's entry holds its size and its parent's entry, where known.
 
     A size other than the source's raises OSError inside the writer, which then
     completes nothing.
@@ -120,6 +140,8 @@ async def _write(
         target: Entry = {"name": path}
         if isinstance(expected, int):
             target["size"] = expected
+        if parent is not None:
+            target["parent"] = parent
         async with await dst.open_async_file(target, "wb") as writer:
             written = 0
             while block := await reader.read(_BLOCK_SIZE):

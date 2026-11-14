@@ -130,17 +130,32 @@ class _FlatHandler(FlatFileOperationHandler):
         await self.inner._rmdir(entry["name"])
 
     async def makedirs(
-        self, path: Any, exist_ok: bool = False, *, missing: bool = False
+        self,
+        path: Any,
+        exist_ok: bool = False,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         await self.inner._makedirs(path, exist_ok=exist_ok)
 
     async def cp_file(
-        self, entry: dict[str, Any], path2: Any, *, missing: bool = False
+        self,
+        entry: dict[str, Any],
+        path2: Any,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         await self.inner._cp_file(entry["name"], path2)
 
     async def mv_file(
-        self, entry: dict[str, Any], path2: Any, *, missing: bool = False
+        self,
+        entry: dict[str, Any],
+        path2: Any,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         await self.inner._mv_file(entry["name"], path2)
 
@@ -301,7 +316,12 @@ async def test_a_file_moves_as_the_profile_says_when_not_recursive(
         profile = StorageProfile(renames_files=renames_files)
 
         async def mv_file(
-            self, entry: dict[str, Any], path2: Any, *, missing: bool = False
+            self,
+            entry: dict[str, Any],
+            path2: Any,
+            *,
+            missing: bool = False,
+            parent: Any = None,
         ) -> None:
             renamed.append((entry["name"], path2))
             await self.inner._cp_file(entry["name"], path2)

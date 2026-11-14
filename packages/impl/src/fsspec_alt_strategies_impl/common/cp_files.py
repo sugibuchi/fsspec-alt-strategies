@@ -56,7 +56,7 @@ def _cp_each_file(
     """
 
     def send(t: FileTransfer) -> Awaitable[None]:
-        return handler.cp_file(t.entry, t.path2, missing=t.missing)
+        return handler.cp_file(t.entry, t.path2, missing=t.missing, parent=t.parent)
 
     return Operation(
         lambda op: _each(handler, transfers, send, "Copying", _copied, op),
@@ -79,7 +79,7 @@ def _mv_each_file(
     """
 
     def send(t: FileTransfer) -> Awaitable[None]:
-        return handler.mv_file(t.entry, t.path2, missing=t.missing)
+        return handler.mv_file(t.entry, t.path2, missing=t.missing, parent=t.parent)
 
     return Operation(
         lambda op: _each(handler, transfers, send, "Moving", _moved, op),

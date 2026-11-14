@@ -100,6 +100,9 @@ code: read it before adding a strategy or a handler.
 - A copy or move tells `makedirs`, `cp_file`, `mv_file` and its `cp_entry` or `mv_entry` `missing=True` where
   `_CopyJobs.known_missing` holds: the destination, or a directory above it, was found missing. A write's entry holds
   its final `"size"` where the caller knows it. Every override of those primitives takes `missing`, used or not.
+- A copy or move also tells them, and `cp_tree` and `mv_tree`, `parent=`: the destination's parent's entry, as
+  `makedirs` returned it or an `info` found it, kept in `_CopyJobs.directories`. A write's entry holds it as
+  `"parent"`. `makedirs` returns the entry of the directory made, or None. Every override takes `parent`, used or not.
 - A strategy calls only a handler's primitives, such as `ils`, `info` and `rm_file`, never a filesystem's method: the
   filesystem is the caller's.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.

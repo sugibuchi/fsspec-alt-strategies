@@ -91,7 +91,12 @@ class S3fsHandler(FsspecFlatHandler):
             return  # A missing bucket lists nothing, as a missing prefix does.
 
     async def cp_file(
-        self, entry: Entry, path2: StoragePath, *, missing: bool = False
+        self,
+        entry: Entry,
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
     ) -> None:
         size = entry.get("size")
         own = hasattr(self.fs, "_copy_basic") and hasattr(self.fs, "_copy_managed")
@@ -103,7 +108,12 @@ class S3fsHandler(FsspecFlatHandler):
             await self.fs._copy_managed(entry["name"], path2, size)
 
     async def mv_file(
-        self, entry: Entry, path2: StoragePath, *, missing: bool = False
+        self,
+        entry: Entry,
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
     ) -> None:
         # S3 renames nothing: a copy by the listed size, then a delete.
         await self.cp_file(entry, path2)

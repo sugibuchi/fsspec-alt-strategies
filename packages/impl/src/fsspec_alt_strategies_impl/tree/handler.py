@@ -110,15 +110,20 @@ class TreeFileOperationHandler(FileOperationHandler):
         """Delete a directory with everything in it, in one request."""
         raise NotImplementedError(f"{type(self).__name__} deletes no directory whole")
 
-    async def mv_tree(self, entry: Entry, path2: StoragePath) -> None:
+    async def mv_tree(
+        self, entry: Entry, path2: StoragePath, *, parent: Entry | None = None
+    ) -> None:
         """Move a directory with everything in it to ``path2``, in one request.
 
         The strategies call it only with ``path2`` missing and its parent
-        existing, having made it.
+        existing, having made it. ``parent`` is that parent's entry, where the
+        caller holds it, as the primitives making an item take it.
         """
         raise NotImplementedError(f"{type(self).__name__} moves no directory whole")
 
-    async def cp_tree(self, entry: Entry, path2: StoragePath) -> None:
+    async def cp_tree(
+        self, entry: Entry, path2: StoragePath, *, parent: Entry | None = None
+    ) -> None:
         """Copy a directory with everything in it to ``path2``, in one request, as `mv_tree` moves one."""
         raise NotImplementedError(f"{type(self).__name__} copies no directory whole")
 

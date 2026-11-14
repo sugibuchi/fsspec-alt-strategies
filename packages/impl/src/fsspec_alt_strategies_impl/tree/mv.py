@@ -270,14 +270,19 @@ class _Move(_CopyOrMove):
             return super().run(job)
 
     def transfer_whole(self, entry: Entry, destination: StoragePath) -> Awaitable[None]:
-        return self.handler.mv_tree(entry, destination)
+        return self.handler.mv_tree(
+            entry, destination, parent=self.parent_of(destination)
+        )
 
     async def transfer_file(
         self, entry: dict[str, Any], destination: StoragePath
     ) -> None:
         try:
             await self.mv_entry(
-                entry, destination, missing=self.known_missing(destination)
+                entry,
+                destination,
+                missing=self.known_missing(destination),
+                parent=self.parent_of(destination),
             )
         except Exception as e:
             # Yielded among paths, the error must tell its paths itself.

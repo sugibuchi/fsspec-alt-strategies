@@ -60,7 +60,11 @@ def streaming_copy(
     """A ``cp_entry`` between two storages, a block at a time, as the router's."""
 
     async def copy_file(
-        entry: dict[str, Any], destination: str, *, missing: bool = False
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         reader = await open_source(entry["name"], "rb")
         async with reader:
@@ -224,7 +228,11 @@ async def test_a_marker_makes_its_dir() -> None:
         raise FileNotFoundError(path)
 
     async def copy_file(
-        entry: dict[str, Any], destination: str, *, missing: bool = False
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         written.append((entry["name"], destination))
         await dst._pipe_file(destination, keys[entry["name"]])
@@ -275,7 +283,11 @@ async def test_failures_are_yielded_and_the_rest_is_copied(
     stream = streaming_copy(_opener(flat_fs, _Reader), _opener(dst, _Writer))
 
     async def copy_file(
-        entry: dict[str, Any], destination: str, *, missing: bool = False
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         if entry["name"] == "data/README.md":
             raise PermissionError(entry["name"])

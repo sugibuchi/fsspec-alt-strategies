@@ -186,7 +186,7 @@ async def test_no_batch_between_two_storages_or_with_the_callers_copy() -> None:
     )
 
     async def cp_entry(
-        entry: dict[str, Any], path2: str, *, missing: bool = False
+        entry: dict[str, Any], path2: str, *, missing: bool = False, parent: Any = None
     ) -> None:
         await src._cp_file(entry["name"], path2)
 

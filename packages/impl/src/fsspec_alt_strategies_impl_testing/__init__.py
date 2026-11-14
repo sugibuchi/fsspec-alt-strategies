@@ -693,7 +693,11 @@ def _by_name(
     """
 
     async def by_entry(
-        entry: dict[str, Any], path2: str, *, missing: bool = False
+        entry: dict[str, Any],
+        path2: str,
+        *,
+        missing: bool = False,
+        parent: dict[str, Any] | None = None,
     ) -> None:
         await transfer(entry["name"], path2)
 
@@ -882,17 +886,32 @@ class TreeView(_Files, TreeFileOperationHandler):
         await self._rmdir(entry["name"])
 
     async def makedirs(
-        self, path: StoragePath, exist_ok: bool = False, *, missing: bool = False
+        self,
+        path: StoragePath,
+        exist_ok: bool = False,
+        *,
+        missing: bool = False,
+        parent: dict[str, Any] | None = None,
     ) -> None:
         await self._makedirs(path, exist_ok=exist_ok)
 
     async def cp_file(
-        self, entry: dict[str, Any], path2: StoragePath, *, missing: bool = False
+        self,
+        entry: dict[str, Any],
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: dict[str, Any] | None = None,
     ) -> None:
         await self._cp_file_entry(entry, path2)
 
     async def mv_file(
-        self, entry: dict[str, Any], path2: StoragePath, *, missing: bool = False
+        self,
+        entry: dict[str, Any],
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: dict[str, Any] | None = None,
     ) -> None:
         await self._mv_file_entry(entry, path2)
 
@@ -902,13 +921,25 @@ class TreeView(_Files, TreeFileOperationHandler):
         else:
             await self._rm_tree(entry["name"])
 
-    async def mv_tree(self, entry: dict[str, Any], path2: StoragePath) -> None:
+    async def mv_tree(
+        self,
+        entry: dict[str, Any],
+        path2: StoragePath,
+        *,
+        parent: dict[str, Any] | None = None,
+    ) -> None:
         if self._mv_tree is None:
             await super().mv_tree(entry, path2)
         else:
             await self._mv_tree(entry["name"], path2)
 
-    async def cp_tree(self, entry: dict[str, Any], path2: StoragePath) -> None:
+    async def cp_tree(
+        self,
+        entry: dict[str, Any],
+        path2: StoragePath,
+        *,
+        parent: dict[str, Any] | None = None,
+    ) -> None:
         if self._cp_tree is None:
             await super().cp_tree(entry, path2)
         else:
@@ -992,17 +1023,32 @@ class FlatView(_Files, FlatFileOperationHandler):
         await self.fs._rmdir(entry["name"])
 
     async def makedirs(
-        self, path: StoragePath, exist_ok: bool = False, *, missing: bool = False
+        self,
+        path: StoragePath,
+        exist_ok: bool = False,
+        *,
+        missing: bool = False,
+        parent: dict[str, Any] | None = None,
     ) -> None:
         await self._makedirs(path, exist_ok=exist_ok)
 
     async def cp_file(
-        self, entry: dict[str, Any], path2: StoragePath, *, missing: bool = False
+        self,
+        entry: dict[str, Any],
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: dict[str, Any] | None = None,
     ) -> None:
         await self._cp_file_entry(entry, path2)
 
     async def mv_file(
-        self, entry: dict[str, Any], path2: StoragePath, *, missing: bool = False
+        self,
+        entry: dict[str, Any],
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: dict[str, Any] | None = None,
     ) -> None:
         await self._mv_file_entry(entry, path2)
 

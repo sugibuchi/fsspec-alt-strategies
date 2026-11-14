@@ -430,11 +430,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
-            return self.dst.makedirs(
-                job.destination,
-                exist_ok=True,
-                missing=self.known_missing(job.destination),
-            )
+            return self.make_directory(job.destination)
         if job.kind == "whole":
             return self.transfer_whole(job.source, job.destination)
         else:
@@ -509,4 +505,6 @@ class _Copy(_CopyOrMove):
         await self.copy_file(self.cp_entry, entry, destination)
 
     def transfer_whole(self, entry: Entry, destination: StoragePath) -> Awaitable[None]:
-        return self.handler.cp_tree(entry, destination)
+        return self.handler.cp_tree(
+            entry, destination, parent=self.parent_of(destination)
+        )

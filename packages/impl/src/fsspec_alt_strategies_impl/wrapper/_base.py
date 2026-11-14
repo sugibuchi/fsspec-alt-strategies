@@ -155,19 +155,34 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
         await self.call("rmdir", entry["name"])
 
     async def makedirs(
-        self, path: StoragePath, exist_ok: bool = False, *, missing: bool = False
+        self,
+        path: StoragePath,
+        exist_ok: bool = False,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
     ) -> None:
         await self.call("makedirs", path, exist_ok=exist_ok)
 
     # fsspec's copy and move take paths: the entry's name alone, and no info first.
 
     async def cp_file(
-        self, entry: Entry, path2: StoragePath, *, missing: bool = False
+        self,
+        entry: Entry,
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
     ) -> None:
         await self.call("cp_file", entry["name"], path2)
 
     async def mv_file(
-        self, entry: Entry, path2: StoragePath, *, missing: bool = False
+        self,
+        entry: Entry,
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
     ) -> None:
         if self.asynchronous:
             await self.fs._mv_file(entry["name"], path2)
