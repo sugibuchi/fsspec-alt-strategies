@@ -33,7 +33,7 @@ from fsspec.utils import common_prefix
 from fsspec_alt_strategies.profile import UNKNOWN
 from fsspec_alt_strategies.states import CpState
 
-from .handler import StoragePath
+from .handler import FileTransfer, StoragePath
 from .operation import Operation, _collect_with_errors
 from .paths import _trim
 from .transfer import _across
@@ -43,6 +43,7 @@ if TYPE_CHECKING:
         AsyncGenerator,
         Awaitable,
         Callable,
+        Iterable,
         Sequence,
     )
     from typing import Protocol
@@ -253,10 +254,10 @@ class _Queue(Generic[_T]):
                 self.limit.release()
 
 
-def _check_batch_size(batch_size: int) -> None:
-    """Refuse a handler's ``rm_batch_size`` below 1, as no batch could be sent."""
+def _check_batch_size(batch_size: int, name: str = "rm_batch_size") -> None:
+    """Refuse a handler's batch size below 1, e.g. its ``rm_batch_size``, as no batch could be sent."""
     if batch_size < 1:
-        raise ValueError(f"rm_batch_size must be at least 1: {batch_size}")
+        raise ValueError(f"{name} must be at least 1: {batch_size}")
 
 
 def _batch_size(handler: StorageHandler) -> int:
@@ -306,7 +307,7 @@ class _Jobs(ABC):
         # Each batch's outcome, by its paths: the paths deleted, and the errors.
         self._deleted: dict[tuple[str, ...], tuple[list[str], list[Exception]]] = {}
 
-        # The batches to delete, and those deleting, which hold no permit.
+        # The batches to send, e.g. deletions, and those sent, which hold no permit.
         self.deletions: deque[_Job] = deque()
         self.deleting: dict[asyncio.Task[Any], _Job] = {}
 
@@ -590,7 +591,11 @@ class _Jobs(ABC):
         await self.jobs.start(self.run)
         while self.deletions:
             job = self.deletions.popleft()
-            self.deleting[asyncio.ensure_future(self.run(job))] = job
+            self.deleting[asyncio.ensure_future(self.run_batch(job))] = job
+
+    def run_batch(self, job: _Job) -> Awaitable[Any]:
+        """The coroutine sending a batch, e.g. a deletion by ``rm_files``: by `run` unless a subclass runs its own."""
+        return self.run(job)
 
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
         """Handle a job's task done, counting its errors, and return what to yield."""
@@ -623,10 +628,23 @@ class _CopyJobs(_Jobs):
     ``root_entry`` is the entry of ``path1``, a single path, if the caller
     found it already, e.g. to tell a file. A file's is then a root known to be
     a file, not listed to find what it is.
+
+    With ``batching``, the files go to the handler's ``cp_files``, or
+    ``mv_files`` for a subclass whose ``transfers`` is "move", in batches of
+    its ``cp_batch_size`` or ``mv_batch_size``. A family's jobs hand a file's
+    job on by `release`, once its destination's directory is ready. A batch
+    is sent once full, or once the walk has ended with no directory left to
+    make, as no file can join it then. It holds no permit, as a deletion's
+    batch: its operation's requests take theirs. Each file's outcome then
+    goes to the family's `done` or `failed`, as a job of its own would. A
+    copy refused by a destination not overwriting is retried on its own, as
+    `copy_file` replaces it.
     """
 
     verb = "copy"
     doing = "Copying"
+    transfers = "copy"
+    """Which of the handler's strategies a batch of files goes to: "copy" for ``cp_files``, "move" for ``mv_files``."""
 
     def __init__(
         self,
@@ -636,9 +654,27 @@ class _CopyJobs(_Jobs):
         dst: StorageHandler,
         same_storage: bool,
         root_entry: dict[str, Any] | None = None,
+        batching: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
+
+        # The files ready, and the batches sent, by their number: two files
+        # listed under one name, e.g. on Google Drive, may make two batches of
+        # the same paths. The size is the handler's, once open.
+        self.batching = batching
+        self.transfer_batch_size = 1
+        self.ready: list[_Job] = []
+        self.sent: dict[int, list[_Job]] = {}
+        self.batches_sent = 0
+        self._transferred: dict[
+            int, tuple[dict[str, Exception | None], list[Exception]]
+        ] = {}
+        self.walked = False
+
+        # The jobs waiting for their destination directory, by that directory.
+        # A directory listed in several parts is made once, as `made` notes it.
+        self.after_mkdir: dict[str, list[_Job]] = {}
 
         self.path1 = path1
         self.path2 = path2
@@ -692,6 +728,14 @@ class _CopyJobs(_Jobs):
         self.case_insensitive = (
             self.same_storage and self.profile.case_sensitive is False
         )
+        if self.batching:
+            # Within one storage, the source's handler is the destination's.
+            if self.transfers == "copy":
+                self.transfer_batch_size = self.handler.cp_batch_size
+                _check_batch_size(self.transfer_batch_size, "cp_batch_size")
+            else:
+                self.transfer_batch_size = self.handler.mv_batch_size
+                _check_batch_size(self.transfer_batch_size, "mv_batch_size")
 
     def folded(self, path: str) -> str:
         """A path as the storage compares it: folded unless its names are case-sensitive."""
@@ -894,13 +938,179 @@ class _CopyJobs(_Jobs):
                 await cp_entry(
                     entry, destination, missing=self.known_missing(destination)
                 )
-            except FileExistsError:
-                found = await self.dst.info(self.dst.entry(destination))
-                if found["type"] == "directory":
-                    raise
-
-                await self.dst.rm_file({**found, "name": destination})  # type: ignore[typeddict-item]
-                await cp_entry(entry, destination)
+            except FileExistsError as refused:
+                await self.replace_file(cp_entry, entry, destination, refused)
         except Exception as e:
             e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")
             raise
+
+    async def replace_file(
+        self,
+        cp_entry: _Transfer,
+        entry: dict[str, Any],
+        destination: StoragePath,
+        refused: FileExistsError,
+    ) -> None:
+        """Copy a file onto one its destination refused to overwrite: deleted first, unless a directory.
+
+        A directory there raises ``refused`` again: ``rm_file`` takes files only.
+        """
+        found = await self.dst.info(self.dst.entry(destination))
+        if found["type"] == "directory":
+            raise refused
+
+        await self.dst.rm_file({**found, "name": destination})
+        await cp_entry(entry, destination)
+
+    # The batches of files, sent to the handler's cp_files or mv_files.
+
+    def release(self, jobs: Iterable[_Job]) -> None:
+        """Queue jobs whose destination's directory is ready: a file's into the batch, when batching."""
+        for job in jobs:
+            if not self.batching or job.kind != "copy":
+                self.waiting.append(job)
+                continue
+
+            self.ready.append(job)
+            if len(self.ready) >= self.transfer_batch_size:
+                self.send_ready()
+
+    def send_ready(self) -> None:
+        """Queue the batch of the files ready, to be sent without a permit."""
+        jobs, self.ready = self.ready, []
+        paths = tuple(j.path for j in jobs)
+        number = self.batches_sent = self.batches_sent + 1
+        self.sent[number] = jobs
+        batch = _Job("transfers", {"name": paths[-1], "batch": number}, paths=paths)
+        self.deletions.append(batch)
+
+    def exhausted(self) -> None:
+        self.walked = True
+        super().exhausted()
+
+    async def start(self) -> None:
+        # The last batch, once no file can join it: the walk ended, and no
+        # directory is left to make, whose files it would release.
+        if self.ready and self.walked and not self.op.cancelling():
+            making = (*self.waiting, *self.running.values())
+            if not any(j.kind == "mkdir" for j in making):
+                self.send_ready()
+        await super().start()
+
+    def stopping(self) -> None:
+        super().stopping()
+        self.drop_transfers()
+
+    def drop_transfers(self) -> None:
+        """Drop the files ready and the batches not sent, as the operation is cancelled."""
+        self.ready.clear()
+        for job in [j for j in self.deletions if j.kind == "transfers"]:
+            self.deletions.remove(job)
+            for dropped in self.sent.pop(job.source["batch"]):
+                self.dropped(dropped)
+
+    def dropped(self, job: _Job) -> None:
+        """Note a file's job dropped unsent, e.g. by a cancelled batch: neither done nor failed."""
+
+    def transfers_running(self) -> int:
+        """The files in the batches being sent."""
+        return sum(
+            len(self.sent[j.source["batch"]])
+            for j in self.deleting.values()
+            if j.kind == "transfers"
+        )
+
+    def run_batch(self, job: _Job) -> Awaitable[Any]:
+        if job.kind == "transfers":
+            return self.transfer_batch(job.source["batch"])
+        else:
+            return super().run_batch(job)
+
+    async def transfer_batch(self, number: int) -> None:
+        """Send a batch of files by the handler's ``cp_files`` or ``mv_files``, keeping each one's outcome.
+
+        A copy refused by a destination not overwriting is replaced on its own,
+        under a permit, as `copy_file` replaces it. An error with no ``source``
+        is kept apart, yielded as it is.
+        """
+        jobs = self.sent[number]
+        transfers = [
+            FileTransfer(j.source, j.destination, self.known_missing(j.destination))
+            for j in jobs
+        ]
+        if self.transfers == "copy":
+            operation = self.handler.cp_files(transfers)  # type: ignore[attr-defined]
+        else:
+            operation = self.handler.mv_files(transfers)  # type: ignore[attr-defined]
+
+        outcomes: dict[str, Exception | None] = {}
+        apart: list[Exception] = []
+        async with operation as files:
+            async for outcome in files:
+                if not isinstance(outcome, Exception):
+                    outcomes[outcome[0]] = None
+                elif (
+                    source := getattr(outcome, "source", None)
+                ) in outcomes or source is None:
+                    apart.append(outcome)
+                else:
+                    outcomes[source] = outcome
+
+        if self.transfers == "copy":
+            refused = [
+                j for j in jobs if isinstance(outcomes.get(j.path), FileExistsError)
+            ]
+            replaced = await asyncio.gather(
+                *(self.replace_refused(j, outcomes[j.path]) for j in refused),  # type: ignore[arg-type]
+                return_exceptions=True,
+            )
+            for job, error in zip(refused, replaced, strict=True):
+                outcomes[job.path] = error if isinstance(error, Exception) else None
+
+        self._transferred[number] = (outcomes, apart)
+
+    async def replace_refused(self, job: _Job, refused: FileExistsError) -> None:
+        """Replace a file a batch's copy was refused, under a permit, by the source's ``cp_file``."""
+        try:
+            async with self.concurrency_limit:
+                cp_entry = cast("_Transfer", self.handler.cp_file)
+                await self.replace_file(cp_entry, job.source, job.destination, refused)
+        except Exception as e:
+            if e is not refused:  # The batch's own error notes its paths already.
+                e.add_note(f"{self.doing} {job.path!r} to {job.destination!r} failed.")
+            raise
+
+    def finish(self, task: asyncio.Task[Any]) -> list[Any]:
+        """Handle a task done: a batch of files gives each one's outcome to `done` or `failed`."""
+        batch = self.deleting.get(task)
+        if batch is None or batch.kind != "transfers":
+            return super().finish(task)
+
+        del self.deleting[task]
+        jobs = self.sent.pop(batch.source["batch"])
+        self.current = batch.path
+        outcome: list[Any] = []
+        try:
+            task.result()
+        except Exception as e:
+            # Failed whole: one error for all its files, each failed by it.
+            e.add_note(f"{self.doing} {_keys_of(batch.paths)} failed.")
+            for job in jobs:
+                outcome += [
+                    o for o in self.failed(job, e) if all(o is not x for x in outcome)
+                ]
+            self.errors += sum(isinstance(o, Exception) for o in outcome)
+            return outcome
+
+        outcomes, apart = self._transferred.pop(batch.source["batch"])
+        for job in jobs:
+            if job.path not in outcomes:
+                self.dropped(job)  # Neither done nor failed, e.g. cancelled.
+            elif (error := outcomes[job.path]) is None:
+                outcome += self.done(job)
+            else:
+                failed = self.failed(job, error)
+                self.errors += sum(isinstance(o, Exception) for o in failed)
+                outcome += failed
+        self.errors += len(apart)
+        return outcome + apart

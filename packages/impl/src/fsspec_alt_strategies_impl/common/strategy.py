@@ -3,7 +3,7 @@
 """The strategies a handler runs on itself, for a filesystem's recursive methods.
 
 `Strategy` declares one method per strategy: ``walk``, ``find``, ``glob``,
-``du``, ``rm``, ``cp`` and ``mv``. Each takes a strategy's arguments, but the
+``du``, ``rm``, ``rm_files``, ``cp``, ``cp_files``, ``mv`` and ``mv_files``. Each takes a strategy's arguments, but the
 handler it works on, which is ``self``. A family's handler implements them by
 its family's strategies, e.g. `TreeFileOperationHandler`'s ``rm`` by
 ``_tree_rm``. A storage's handler overrides one to choose another, e.g. its
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
         WalkState,
     )
 
-    from .handler import Entry, StorageHandler, StoragePath
+    from .handler import Entry, FileTransfer, StorageHandler, StoragePath
     from .jobs import _Transfer
     from .operation import Operation
 
@@ -229,6 +229,58 @@ class Strategy(ABC):
             Yielding each path deleted, or an error noting its path. It raises
             only an error failing all the files, e.g. a request deleting them
             all.
+        """
+
+    @abstractmethod
+    def cp_files(
+        self, transfers: list[FileTransfer]
+    ) -> Operation[tuple[str, str], CpState]:
+        """Copy files within this storage, e.g. a batch of a recursive ``cp``'s.
+
+        The recursive copies within one storage send their files to it, in
+        batches of the handler's ``cp_batch_size``, once each destination's
+        directory is ready. A family's handler copies each by ``cp_file``, as
+        many at once as ``operation_limit`` allows. A storage copying several
+        files by one request overrides it, e.g. with `cp_files._cp_by_request`
+        and a commit.
+
+        Parameters
+        ----------
+        transfers : list of FileTransfer
+            The files, each with where it goes: at most ``cp_batch_size``.
+
+        Returns
+        -------
+        Operation
+            Yielding ``(source, destination)`` per file copied, or an error
+            noting its paths, with its source's path as its ``source``
+            attribute. A FileExistsError, a destination refusing to overwrite,
+            is retried by the caller, replacing the file on its own. It raises
+            only an error failing all the files, e.g. a request copying them
+            all.
+        """
+
+    @abstractmethod
+    def mv_files(
+        self, transfers: list[FileTransfer]
+    ) -> Operation[tuple[str, str], MvState]:
+        """Move files within this storage, e.g. a batch of a recursive ``mv``'s.
+
+        As `cp_files`, for the files a move renames, in batches of the
+        handler's ``mv_batch_size``: each by ``mv_file`` by default. A file
+        it could not move stays where it was.
+
+        Parameters
+        ----------
+        transfers : list of FileTransfer
+            The files, each with where it goes: at most ``mv_batch_size``.
+
+        Returns
+        -------
+        Operation
+            Yielding ``(source, destination)`` per file moved, or an error
+            noting its paths, with its source's path as its ``source``
+            attribute. It raises only an error failing all the files.
         """
 
     @abstractmethod

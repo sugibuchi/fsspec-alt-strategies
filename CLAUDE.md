@@ -51,12 +51,17 @@ code: read it before adding a strategy or a handler.
   its family's, `TreeFileOperationHandler` or `FlatFileOperationHandler`, which declares the family's primitives and
   runs its strategies. The strategies take handlers, never filesystems.
 - A `FileOperationHandler`, in `common/handler.py`, is a `StorageHandler` with the `Strategy` mixin's methods, `walk`,
-  `find`, `glob`, `du`, `rm`, `rm_files`, `cp` and `mv`, in `common/strategy.py`. Each takes its strategy's arguments
+  `find`, `glob`, `du`, `rm`, `rm_files`, `cp`, `cp_files`, `mv` and `mv_files`, in `common/strategy.py`. Each takes its strategy's arguments
   but the handler, which is `self`, and returns an operation not started. A family's handler implements them by its
   strategies, e.g. `rm` by `_tree_rm`. A storage's handler overrides a method to choose another strategy.
 - `rm_files(entries)` deletes files a caller found: by default `common.rm_files._rm_each_file`, each by `rm_file`. A
   storage deleting many by one request overrides it with `_rm_by_request`, and declares `rm_batch_size`, 1 by
   default. The recursive deletions and moves send it their files in batches, by `_Jobs.send_batch`.
+- `cp_files(transfers)` and `mv_files(transfers)` copy and move `FileTransfer`s within one storage, by default
+  `common.cp_files._cp_each_file` and `_mv_each_file`. A storage overrides them with `_cp_by_request` or
+  `_mv_by_request`, and declares `cp_batch_size` or `mv_batch_size`. The recursive copies and moves within one storage
+  send them their files by `_CopyJobs.release`, unless the caller gives its own `cp_entry` or `mv_entry`. Each error
+  they yield has its source's path as its `source`.
 - `BaseFileSystem` implements fsspec's API on a `FileOperationHandler`, a required argument. Nobody overrides its methods. Its recursive methods, such as `_rm` and `_copy`, run the handler's strategy, e.g. its `rm`, and answer as
   fsspec's method does.
 - A filesystem keeps its handler private, as `self._handler`, so that no caller gets an operation from it. It copies

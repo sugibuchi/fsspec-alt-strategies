@@ -148,7 +148,7 @@ AsyncFileSystem                        fsspec's
   either API, e.g. through `AsyncFileAdapter`, and supports fsspec's transactions in `open_file`, as it chooses.
 
 `FileOperationHandler` adds the `Strategy` mixin's methods, one per strategy: `walk`, `find`, `glob`, `du`, `rm`,
-`rm_files`, `cp` and `mv`. Each takes its strategy's arguments but the handler, which is `self`, and returns an operation, not
+`rm_files`, `cp`, `cp_files`, `mv` and `mv_files`. Each takes its strategy's arguments but the handler, which is `self`, and returns an operation, not
 started, which the filesystem runs. A copy or move takes the destination's handler, `dst`.
 
 Each family's handler class implements them by its strategies, and adds the primitives they call:
@@ -163,6 +163,18 @@ send it their files in batches of the handler's `rm_batch_size`, 1 by default. I
 deletes each by `rm_file`, as many at once as `operation_limit` allows. A storage deleting several files by one
 request overrides it with `rm_files._rm_by_request` and that request, and declares its batch, e.g. 1000 on S3 or 256
 for Azure's Blob Batch.
+
+`cp_files(transfers)` and `mv_files(transfers)` are the strategies copying and moving files within one storage. Each
+`FileTransfer` is a source's entry, where it goes, and whether that is known missing. Their defaults, in `cp_files`,
+send each by `cp_file` or `mv_file`. A storage changing many files by one request, e.g. the Hugging Face Hub's commit,
+overrides them with `_cp_by_request` or `_mv_by_request`, and declares `cp_batch_size` or `mv_batch_size`.
+
+- The recursive copies and moves within one storage send their files to them, unless the caller gives its own
+  `cp_entry` or `mv_entry`. Between two storages, each file streams on its own.
+- A file joins its batch once its destination's directory is ready, whatever the directory. A batch goes once full,
+  or once the walk has ended with no directory left to make.
+- Each file's outcome then goes to the jobs' `done` or `failed`, as a file's own job would. A copy a destination
+  refused to overwrite is replaced on its own, as without batches.
 
 A batch's job holds no permit of `operation_limit`: its operation's requests take theirs, and a permit held around
 them would wait for itself once all were so held.

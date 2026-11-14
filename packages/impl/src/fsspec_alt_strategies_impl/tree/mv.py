@@ -154,7 +154,10 @@ def _tree_mv(
     glob pattern, or a list of them, as the source's ``ils`` takes paths.
     ``mv_entry(entry, destination)`` moves a file by its source entry, as its
     listing gave it: by default, the source's ``mv_file`` within one storage.
-    A storage renaming a file in one request implements ``mv_file`` so.
+    A storage renaming a file in one request implements ``mv_file`` so. Within
+    one storage, unless ``mv_entry`` is given, the files go to the source's
+    ``mv_files`` in batches of its ``mv_batch_size``, as `_tree_cp` sends its
+    copies to ``cp_files``: by default each by ``mv_file``.
     Between two, it defaults to ``cp_entry(entry, destination)``, then the
     source's ``rm_file``. ``cp_entry`` copies a file, as `_tree_cp` takes it:
     by default `transfer._across`. Given ``mv_entry``, a move uses no
@@ -171,8 +174,10 @@ def _tree_mv(
     ValueError if ``maxdepth`` is less than 1. `_tree_cp` does the same, keeping the source.
     """
     _check_maxdepth(maxdepth)
+    given = mv_entry
     _, mv_entry, same_storage = _moves_of(src, dst, cp_entry, mv_entry, same_storage)
     return _Move.operation(
+        batching=same_storage and given is None,
         handler=src,
         dst=dst,
         path1=path1,
@@ -190,6 +195,7 @@ class _Move(_CopyOrMove):
 
     verb = "move"
     doing = "Moving"
+    transfers = "move"
 
     def __init__(self, *, mv_entry: _Transfer, **kwargs: Any) -> None:
         super().__init__(**kwargs)

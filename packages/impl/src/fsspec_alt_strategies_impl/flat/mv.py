@@ -108,7 +108,10 @@ def _flat_mv(
     copies a file by its source entry when the move copies: by default, the
     source's ``cp_file`` within one storage, and `transfer._across` between
     two. ``mv_entry(entry, destination)`` moves one when the move renames: by
-    default, the source's ``mv_file``. Between two storages, nothing is
+    default, the source's ``mv_file``. Within one storage, unless the one used
+    is given, the keys go to the source's ``mv_files`` or ``cp_files``, in
+    batches of its ``mv_batch_size`` or ``cp_batch_size``, as `_flat_cp` sends
+    its copies: by default each by ``mv_file`` or ``cp_file``. Between two storages, nothing is
     renamed, and ``mv_entry`` is not used: the copies' sources are deleted in
     batches instead. ``same_storage`` is whether ``dst`` is ``src``,
     unless given. ``maxdepth`` of 1 moves
@@ -121,6 +124,7 @@ def _flat_mv(
     source's ``rm_batch_size`` or ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
+    given = cp_entry, mv_entry
     cp_entry, mv_entry, same_storage = _moves_of(
         src, dst, cp_entry, mv_entry, same_storage
     )
@@ -143,9 +147,14 @@ def _flat_mv(
         await dst.open()
         renames = same_storage and dst.profile.renames_files is True
         jobs: _CopyOrMove = (
-            _Rename(op=op, mv_entry=mv_entry, **options)
+            _Rename(op=op, mv_entry=mv_entry, batching=given[1] is None, **options)
             if renames
-            else _Move(op=op, cp_entry=cp_entry, **options)
+            else _Move(
+                op=op,
+                cp_entry=cp_entry,
+                batching=same_storage and given[0] is None,
+                **options,
+            )
         )
         async with aclosing(jobs.outcomes()) as outcomes:
             async for outcome in outcomes:
@@ -163,6 +172,7 @@ class _Rename(_CopyOrMove):
 
     verb = "move"
     doing = "Moving"
+    transfers = "move"
 
     def __init__(self, *, mv_entry: _Transfer, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -260,14 +270,25 @@ class _Move(_Copy):
         super().add(entry)
 
     def exhausted(self) -> None:
+        super().exhausted()
         self.listed = True
         self.send_if_ready()
 
     def stopping(self) -> None:
         # The copies not started are dropped, but the keys copied are deleted,
-        # so that none is in both places: the batches stay.
+        # so that none is in both places: the deletions' batches stay.
         self.waiting.clear()
-        self.copying = sum(j.kind == "copy" for j in self.running.values())
+        self.drop_transfers()
+        self.copying = (
+            sum(j.kind == "copy" for j in self.running.values())
+            + self.transfers_running()
+        )
+        self.send_if_ready()
+
+    def dropped(self, job: _Job) -> None:
+        # A copy not sent: its key stays, as one never copied.
+        self.copying -= 1
+        self.copied.pop(job.path)
         self.send_if_ready()
 
     def run(self, job: _Job) -> Awaitable[Any]:

@@ -156,7 +156,12 @@ class MyHandler(TreeFileOperationHandler):
 - A handler whose storage deletes several files by one request, e.g. an object store, overrides the `rm_files`
   strategy with `rm_files._rm_by_request(self, entries, request)`, and declares `rm_batch_size`: a recursive `rm` or
   `mv` then deletes its files in batches. By default, each file is deleted by `rm_file`.
-- The family's strategies are its methods: `walk`, `find`, `glob`, `du`, `rm`, `rm_files`, `cp` and `mv`. Each returns an
+- Likewise, a handler whose storage copies or moves several files by one request overrides the `cp_files` or
+  `mv_files` strategy with `cp_files._cp_by_request` or `_mv_by_request`, and declares `cp_batch_size` or
+  `mv_batch_size`. A recursive `cp` or `mv` within the storage then sends its files in batches. By default, each file
+  goes by `cp_file` or `mv_file`.
+- The family's strategies are its methods: `walk`, `find`, `glob`, `du`, `rm`, `rm_files`, `cp`, `cp_files`, `mv` and
+  `mv_files`. Each returns an
   operation the filesystem runs. Override one to choose another strategy, e.g. one of your own, with the same
   arguments.
 

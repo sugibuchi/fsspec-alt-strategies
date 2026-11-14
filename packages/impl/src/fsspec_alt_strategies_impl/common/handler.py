@@ -25,7 +25,7 @@ import asyncio
 import io
 import os
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, NewType, TypeAlias
+from typing import TYPE_CHECKING, Any, NamedTuple, NewType, TypeAlias
 
 from fsspec.callbacks import DEFAULT_CALLBACK
 from fsspec.utils import stringify_path
@@ -40,7 +40,13 @@ if TYPE_CHECKING:
 
     from fsspec.callbacks import Callback
 
-__all__ = ["Entry", "FileOperationHandler", "StorageHandler", "StoragePath"]
+__all__ = [
+    "Entry",
+    "FileOperationHandler",
+    "FileTransfer",
+    "StorageHandler",
+    "StoragePath",
+]
 
 _MiB = 1024 * 1024
 
@@ -64,6 +70,28 @@ other keys, e.g. ``"type"``, ``"size"``, or the storage's own, e.g. an
 absent on the storage: a missing ``"size"`` is not 0. A key may be stale,
 listed before a change.
 """
+
+
+class FileTransfer(NamedTuple):
+    """A file to copy or move within one storage, as a batch of a recursive copy or move gives it.
+
+    The handler's ``cp_files`` and ``mv_files`` take a list of them, each as
+    its ``cp_file`` and ``mv_file`` take their arguments.
+
+    Attributes
+    ----------
+    entry : Entry
+        The source file's entry, as its listing gave it.
+    path2 : StoragePath
+        Where it goes.
+    missing : bool, default False
+        Whether nothing is at ``path2``, as the caller knows: False is always
+        right.
+    """
+
+    entry: Entry
+    path2: StoragePath
+    missing: bool = False
 
 
 class _PathHandler(ABC):
@@ -407,6 +435,25 @@ class StorageHandler(_PathHandler):
     most here, e.g. 1000 keys as S3's DeleteObjects takes, or 256 blobs as
     Azure's Blob Batch: the files then wait for their batch to fill, or for
     the listing to end.
+    """
+
+    cp_batch_size: int = 1
+    """The most files the strategies give the handler's ``cp_files`` strategy at once: 1 by default.
+
+    By default, a file is copied as soon as its destination's directory is
+    ready. A storage copying several files by one request, e.g. the Hugging
+    Face Hub's commit, overrides ``cp_files``, and declares its most here.
+    The files then wait for their batch to fill, or for the walk to end with
+    every directory made. Only a copy within one storage batches: between
+    two, each file streams on its own.
+    """
+
+    mv_batch_size: int = 1
+    """The most files the strategies give the handler's ``mv_files`` strategy at once: 1 by default.
+
+    As ``cp_batch_size``, for the files a move renames within one storage. A
+    move copying then deleting batches its copies by ``cp_batch_size``, and
+    its deletions by ``rm_batch_size``.
     """
 
     # The primitives making an item take ``missing``: True where the caller

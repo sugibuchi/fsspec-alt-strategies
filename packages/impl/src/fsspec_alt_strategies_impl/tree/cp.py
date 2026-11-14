@@ -167,13 +167,21 @@ def _tree_cp(
     only the files in ``path1``. ``ils_kwargs`` go to each of the source's
     ``ils``, a pattern's glob's too.
 
+    Within one storage, unless ``cp_entry`` is given, the files go to the
+    source's ``cp_files`` in batches of its ``cp_batch_size``: by default each
+    by ``cp_file``. A file joins a batch once its destination's directory is
+    ready, whatever the directory, and a batch goes once full, or once the walk
+    has ended with no directory left to make.
+
     The operation yields ``(source, destination)`` for each file copied, or an
     error, and its state is a `CpState`. The call raises ValueError if
     ``maxdepth`` is less than 1. `_tree_mv` does the same, deleting the source as it goes.
     """
     _check_maxdepth(maxdepth)
+    given = cp_entry
     cp_entry, same_storage = _transfer_of(src, dst, cp_entry, same_storage)
     return _Copy.operation(
+        batching=same_storage and given is None,
         handler=src,
         dst=dst,
         path1=path1,
@@ -200,10 +208,6 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-
-        # The copies waiting for their destination directory, by that directory.
-        # A directory listed in several parts is made once, as `made` notes it.
-        self.after_mkdir: dict[str, list[_Job]] = {}
 
         self.goes_whole = False  # Until the subclass's setup reads the profile.
         self.refused_dirs: set[str] = (
@@ -363,7 +367,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             or directory in self.made
             or not (always or self.parents_required)
         ):
-            self.waiting.extend(copies)
+            self.release(copies)
             return
 
         if directory not in self.after_mkdir:
@@ -400,7 +404,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":
             self.made.add(job.destination)
-            self.waiting.extend(self.after_mkdir.pop(job.destination))
+            self.release(self.after_mkdir.pop(job.destination))
             return []
         if job.kind == "whole":
             self.roots_whole = (self.roots_whole or 0) + 1

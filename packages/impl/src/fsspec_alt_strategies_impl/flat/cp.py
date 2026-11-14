@@ -132,13 +132,21 @@ def _flat_cp(
     only the keys right in ``path1``. ``ils_kwargs`` go to each of the
     source's ``ils_recursive``, a pattern's glob's too.
 
+    Within one storage, unless ``cp_entry`` is given, the files go to the
+    source's ``cp_files`` in batches of its ``cp_batch_size``: by default each
+    by ``cp_file``. A file joins a batch once its destination's directory is
+    ready, whatever the directory, and a batch goes once full, or once the walk
+    has ended with no directory left to make.
+
     The operation yields ``(source, destination)`` for each key copied, or an
     error, and its state is a `CpState`. The call raises ValueError if
     ``maxdepth`` is less than 1. `_flat_mv` does the same, deleting the sources as it goes.
     """
     _check_maxdepth(maxdepth)
+    given = cp_entry
     cp_entry, same_storage = _transfer_of(src, dst, cp_entry, same_storage)
     return _Copy.operation(
+        batching=same_storage and given is None,
         handler=src,
         dst=dst,
         path1=path1,
@@ -159,12 +167,6 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
     directory come apart in the listing, so the directories made are
     remembered, and each is made once. A subclass says how a key goes, in `transfer_file`.
     """
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-
-        # The copies waiting for their destination directory, by that directory.
-        self.after_mkdir: dict[str, list[_Job]] = {}
 
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
@@ -191,7 +193,7 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
             or directory in self.made
             or not (always or self.parents_required)
         ):
-            self.waiting.extend(copies)
+            self.release(copies)
             return
 
         if directory not in self.after_mkdir:
@@ -217,7 +219,7 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":
             self.made.add(job.destination)
-            self.waiting.extend(self.after_mkdir.pop(job.destination))
+            self.release(self.after_mkdir.pop(job.destination))
             return []
 
         self.files_done += 1
@@ -227,7 +229,7 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
         if job.kind == "mkdir":
             # The copies still go: each then reports its own failure, if any.
             self.made.add(job.destination)
-            self.waiting.extend(self.after_mkdir.pop(job.destination))
+            self.release(self.after_mkdir.pop(job.destination))
             error.add_note(f"Creating the directory {job.destination!r} failed.")
 
         # A key's error is noted where it happened, in transfer_file.
