@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     )
     from typing import Protocol
 
-    from .handler import StorageHandler
+    from .handler import Entry, StorageHandler
 
     class _Transfer(Protocol):
         """How one file goes from its source entry to a destination path.
@@ -252,6 +252,25 @@ class _Queue(Generic[_T]):
                 self.limit.release()
 
 
+def _check_batch_size(batch_size: int | None) -> None:
+    """Refuse a handler's ``rm_batch_size`` below 1, or none, where a strategy deletes in batches."""
+    if batch_size is None or batch_size < 1:
+        raise ValueError(f"rm_batch_size must be at least 1: {batch_size}")
+
+
+def _batch_size(handler: StorageHandler) -> int | None:
+    """The most paths a handler's ``rm_files`` takes at once, or None for a handler deleting none in batches."""
+    return handler.rm_batch_size
+
+
+def _keys_of(paths: tuple[str, ...]) -> str:
+    """A batch's paths, for its error's note: all of a few, or the first and last."""
+    if len(paths) <= 3:
+        return ", ".join(map(repr, paths))
+    else:
+        return f"{len(paths)} keys, from {paths[0]!r} to {paths[-1]!r}"
+
+
 class _Jobs(ABC):
     """The jobs of one operation on ``fs``, run while what it changes is found.
 
@@ -259,6 +278,9 @@ class _Jobs(ABC):
     constructor takes keywords only, and passes on what it does not take, so
     that a subclass may join a family's jobs with another base, such as a
     copy's.
+
+    A batch deletion runs by `delete`, and its outcome is told by `refused`:
+    the paths ``rm_files`` could not delete, each with its error.
     """
 
     def __init__(
@@ -276,6 +298,13 @@ class _Jobs(ABC):
 
         # The options of each listing the jobs make, a pattern's glob too.
         self.ils_kwargs: dict[str, Any] = ils_kwargs or {}
+
+        # The paths each batch deleted could not delete, by the batch's paths.
+        self._refused: dict[tuple[str, ...], dict[str, Exception]] = {}
+
+        # The entries of the paths waiting in a batch, as the listing gave them:
+        # a path is deleted by its entry, never by its name verified again.
+        self.batched: dict[str, Entry] = {}
 
         # The directory roots a pattern matched: fsspec walks them one level less
         # deep than a path named, as its glob counted that level already.
@@ -298,6 +327,30 @@ class _Jobs(ABC):
 
         # The source's next item, awaited along with the jobs.
         self.next: asyncio.Task[Any] | None = None
+
+    def batch_entry(self, entry: dict[str, Any]) -> str:
+        """Keep a path's entry until its batch is deleted, and return its name."""
+        name: str = entry["name"]
+        self.batched[name] = entry
+        return name
+
+    async def delete(self, paths: tuple[str, ...]) -> None:
+        """Delete a batch of paths by ``rm_files``, by their entries, keeping those it refused for `refused`."""
+        entries = [self.batched.pop(p, {"name": p}) for p in paths]
+        refused = await self.handler.rm_files(entries)
+        if refused:
+            self._refused[paths] = {k: e for k, e in refused.items() if k in paths}
+
+    def refused(self, paths: tuple[str, ...], note: str) -> dict[str, Exception]:
+        """The paths a batch deleted could not delete, each error noted and counted.
+
+        ``note`` tells a path's failure, its ``{key}`` the path.
+        """
+        refused = self._refused.pop(paths, {})
+        for key, error in refused.items():
+            error.add_note(note.format(key=repr(key)))
+        self.errors += len(refused)
+        return refused
 
     @classmethod
     def operation(cls, **kwargs: Any) -> Operation[Any, Any]:

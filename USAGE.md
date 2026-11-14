@@ -153,6 +153,8 @@ class MyHandler(TreeFileOperationHandler):
   in name order, and `rm_files`, deleting at most `rm_batch_size` keys by one request.
 - `rm_tree`, `mv_tree` and `cp_tree`, a storage's own operations on a whole directory, are optional. The profile
   declares them.
+- A tree handler whose storage deletes several files by one request declares `rm_batch_size`, and implements
+  `rm_files`, as a flat handler does: a recursive `rm` then deletes files in batches.
 - The family's strategies are its methods: `walk`, `find`, `glob`, `du`, `rm`, `cp` and `mv`. Each returns an
   operation the filesystem runs. Override one to choose another strategy, e.g. one of your own, with the same
   arguments.

@@ -17,9 +17,9 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import RmState
 
-from ..common.jobs import _Job, _Roots
+from ..common.jobs import _batch_size, _check_batch_size, _Job, _keys_of, _Roots
 from ..common.paths import _check_maxdepth, _trim
-from ._jobs import _batch_size, _check_batch_size, _FlatJobs, _keys_of
+from ._jobs import _FlatJobs
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
@@ -101,7 +101,8 @@ class _Deletion(_FlatJobs):
         super().__init__(**kwargs)
 
         self.path = path
-        self.batch_size: int = _batch_size(self.handler)
+        # At least 1, as the strategy checked it when called.
+        self.batch_size: int = _batch_size(self.handler) or 1
 
         self.batch: list[str] = []
         self.files_found = 0

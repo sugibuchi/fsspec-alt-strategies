@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import RmState
 
-from ..common.jobs import _Job, _Roots
+from ..common.jobs import _batch_size, _check_batch_size, _Job, _keys_of, _Roots
 from ..common.paths import _check_maxdepth
 from ._jobs import _TreeJobs
 
@@ -69,6 +69,14 @@ def _tree_rm(
     patterns. They are matched as `_tree_glob` matches them, in one search,
     then the directories matched are walked at once.
 
+    A handler declaring ``rm_batch_size`` deletes files in batches of it, by
+    one ``rm_files`` each, as its storage deletes several files by one
+    request, e.g. Azure's blob batch. The files listed join a batch, which is
+    sent once full, while the walk goes on, and the last, smaller one once
+    the walk ends. A directory is deleted once the batches holding its files
+    are. A file its batch refused yields its error and keeps its directory. A
+    batch failing whole yields one error, noting its files.
+
     With ``maxdepth``, it deletes what fsspec's ``_rm`` deletes with it: the
     paths at most ``maxdepth`` levels below ``path``, or below a pattern's
     matches one level less, then ``path`` itself. Directories deeper are not
@@ -85,8 +93,9 @@ def _tree_rm(
 
     Requests: one ``ils_recursive`` per root, which a storage without a
     recursive listing answers with one per directory, or one ``ils`` per
-    directory with ``maxdepth``. One ``rm_file`` per file, and one ``rm_dir``
-    per directory. Patterns, or a list, add the requests of their `_tree_glob`.
+    directory with ``maxdepth``. One ``rm_file`` per file, or with
+    ``rm_batch_size``, one ``rm_files`` per batch, and one ``rm_dir`` per
+    directory. Patterns, or a list, add the requests of their `_tree_glob`.
     With ``deletes_directories``, a root costs one ``rm_tree`` instead. Each
     request holds a permit of the handler's ``operation_limit`` while it
     runs.
@@ -106,9 +115,12 @@ def _tree_rm(
     ``ils``, a pattern's glob's too.
 
     The operation yields each path deleted, or an error, and its state is an
-    `RmState`. The call raises ValueError if ``maxdepth`` is less than 1.
+    `RmState`. The call raises ValueError if ``maxdepth``, or a handler's
+    ``rm_batch_size`` declared, is less than 1.
     """
     _check_maxdepth(maxdepth)
+    if _batch_size(fs) is not None:
+        _check_batch_size(_batch_size(fs))
     return _Deletion.operation(
         fs=fs, path=path, maxdepth=maxdepth, ils_kwargs=ils_kwargs
     )
@@ -121,6 +133,9 @@ class _Deletion(_TreeJobs):
         super().__init__(**kwargs)
 
         self.path = path
+        # The files deleted at once, by rm_files, or None to delete each by rm_file.
+        self.batch_size = _batch_size(self.handler)
+        self.batch: list[str] = []
         # Unknown until setup reads the profile.
         self.deletes_directories = False
         self.implicit_directories = False
@@ -163,8 +178,8 @@ class _Deletion(_TreeJobs):
         )
 
     def file_root(self, entry: dict[str, Any]) -> None:
-        self.files_found = 1
-        self.waiting.append(_Job("file", entry))
+        self.files_found += 1
+        self.queue_file(entry)
 
     def at_limit(self, directory: str) -> None:
         # Deleted only if empty: one that is not fails, as fsspec's deletion
@@ -178,15 +193,34 @@ class _Deletion(_TreeJobs):
         for entry in listing.entries:
             if entry["type"] != "directory":
                 self.files_found += 1
-                self.waiting.append(
-                    _Job("file", {**entry, "name": entry["name"].rstrip("/")})
-                )
+                self.queue_file({**entry, "name": entry["name"].rstrip("/")})
 
         # Empty, or all in it deleted before its last part came.
         if listing.last and self.finished(listing.directory):
             self.remove(listing.directory)
 
+    def queue_file(self, entry: dict[str, Any]) -> None:
+        """Queue a file's deletion: by itself, or in the batch, sent once full."""
+        if self.batch_size is None:
+            self.waiting.append(_Job("file", entry))
+        else:
+            self.batch.append(self.batch_entry(entry))
+            if len(self.batch) >= self.batch_size:
+                self.send()
+
+    def exhausted(self) -> None:
+        # The walk ended: the last, smaller batch goes.
+        if self.batch:
+            self.send()
+
+    def send(self) -> None:
+        """Queue the deletion of the batch, and start another."""
+        paths, self.batch = tuple(self.batch), []
+        self.waiting.append(_Job("files", {"name": paths[-1]}, paths=paths))
+
     def run(self, job: _Job) -> Awaitable[Any]:
+        if job.kind == "files":
+            return self.delete(job.paths)
         if job.kind == "tree":
             return self.handler.rm_tree(job.source)  # type: ignore[attr-defined, no-any-return]
         if job.kind == "directory":
@@ -195,6 +229,15 @@ class _Deletion(_TreeJobs):
             return self.handler.rm_file(job.source)
 
     def done(self, job: _Job) -> list[Any]:
+        if job.kind == "files":
+            # A file refused keeps its directory, as one rm_file failed would.
+            refused = self.refused(job.paths, "Deleting {key} failed.")
+            deleted = [p for p in job.paths if p not in refused]
+            self.files_deleted += len(deleted)
+            for path in deleted:
+                self.after(path)
+            return [*deleted, *refused.values()]
+
         if job.kind in ("directory", "tree"):
             self.directories_deleted += 1
         else:
@@ -204,6 +247,11 @@ class _Deletion(_TreeJobs):
         return [job.path]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
+        if job.kind == "files":
+            # The batch failed whole: its files, and the directories above, stay.
+            error.add_note(f"Deleting {_keys_of(job.paths)} failed.")
+            return [error]
+
         missing = isinstance(error, FileNotFoundError)
         if missing and job.kind == "tree" and job.path == self.path:
             raise error  # The path missing, as the walk would find it.

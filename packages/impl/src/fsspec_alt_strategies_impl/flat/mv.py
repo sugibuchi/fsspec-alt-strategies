@@ -19,10 +19,9 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
-from ..common.jobs import _Job, _moves_of
+from ..common.jobs import _batch_size, _check_batch_size, _Job, _keys_of, _moves_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
-from ._jobs import _batch_size, _check_batch_size, _keys_of
 from .cp import _Copy, _CopyOrMove
 
 if TYPE_CHECKING:
@@ -221,7 +220,8 @@ class _Move(_Copy):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        self.batch_size: int = _batch_size(self.handler)
+        # At least 1, as the strategy checked it when called.
+        self.batch_size: int = _batch_size(self.handler) or 1
 
         # The keys to delete. Each key moving, from its listing to its
         # deletion, has where it is copied, None for a marker: listed again,

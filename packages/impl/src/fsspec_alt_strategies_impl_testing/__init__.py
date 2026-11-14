@@ -795,7 +795,9 @@ class TreeView(_Files, TreeFileOperationHandler):
     instead, a page per request, in name order.
 
     It runs the tree strategies, as a `TreeFileOperationHandler`, so that a
-    filesystem may be made on it too.
+    filesystem may be made on it too. With ``rm_batch_size``, it deletes
+    files in batches, by the filesystem's ``_rm_files``, or ``rm_files`` if
+    given.
 
     It verifies no path: the simulated storage takes any. Its
     ``operation_limit`` is 32 requests at a time unless given, and its profile
@@ -819,10 +821,14 @@ class TreeView(_Files, TreeFileOperationHandler):
         makedirs: Any = None,
         storage_profile: StorageProfile | None = None,
         operation_limit: asyncio.Semaphore | None = None,
+        rm_batch_size: int | None = None,
+        rm_files: Any = None,
     ) -> None:
         super().__init__(operation_concurrency=operation_limit or 32, io_concurrency=8)
         self.fs = fs
         self.recursive_listing = recursive_listing
+        self.rm_batch_size = rm_batch_size
+        self._rm_files = fs._rm_files if rm_files is None else rm_files
         self._dir_ils = dir_ils(fs) if ils is None else ils
         self._info = fs._info if info is None else info
         self._rm_file = fs._rm_file if rm_file is None else rm_file
@@ -859,6 +865,12 @@ class TreeView(_Files, TreeFileOperationHandler):
 
     async def rm_file(self, entry: dict[str, Any]) -> None:
         await self._rm_file(entry["name"])
+
+    async def rm_files(
+        self, entries: list[dict[str, Any]]
+    ) -> Mapping[str, Exception] | None:
+        # Only with rm_batch_size, as a tree handler declares it.
+        return await self._rm_files([e["name"] for e in entries])  # type: ignore[no-any-return]
 
     async def rmdir(self, entry: dict[str, Any]) -> None:
         await self._rmdir(entry["name"])

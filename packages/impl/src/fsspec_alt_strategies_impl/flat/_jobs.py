@@ -17,7 +17,7 @@ This module depends on `_keys`, `find`, `glob`, `handler`, and `handler` and `jo
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _Jobs
 from ._keys import _close, _listing
@@ -27,29 +27,8 @@ from .glob import _flat_glob
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
-    from ..common.handler import Entry, StorageHandler
     from ..common.jobs import _Roots
     from ..common.operation import Operation
-    from .handler import FlatFileOperationHandler
-
-
-def _check_batch_size(batch_size: int) -> None:
-    """Refuse a handler's ``rm_batch_size`` below 1, as no batch could be sent."""
-    if batch_size < 1:
-        raise ValueError(f"rm_batch_size must be at least 1: {batch_size}")
-
-
-def _batch_size(handler: StorageHandler) -> int:
-    """The most keys a flat handler's ``rm_files`` takes at once."""
-    return cast("FlatFileOperationHandler", handler).rm_batch_size
-
-
-def _keys_of(paths: tuple[str, ...]) -> str:
-    """A batch's keys, for its error's note: all of a few, or the first and last."""
-    if len(paths) <= 3:
-        return ", ".join(map(repr, paths))
-    else:
-        return f"{len(paths)} keys, from {paths[0]!r} to {paths[-1]!r}"
 
 
 class _FlatJobs(_Jobs):
@@ -59,43 +38,8 @@ class _FlatJobs(_Jobs):
     ``ils_kwargs`` go to each ``ils_recursive``, a pattern's glob's too. With ``maxdepth``, the keys deeper than it are listed, as a prefix lists
     every key under it, but left out, as fsspec's ``_expand_path`` finds paths.
 
-    A batch deletion runs by `delete`, and its outcome is told by `refused`:
-    the keys ``rm_files`` could not delete, each with its error.
+    A batch deletion runs by `_Jobs`'s `delete`, by the handler's ``rm_files``.
     """
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-
-        # The keys each batch deleted could not delete, by the batch's keys.
-        self._refused: dict[tuple[str, ...], dict[str, Exception]] = {}
-
-        # The entries of the keys waiting in a batch, as the listing gave them:
-        # a key is deleted by its entry, never by its name verified again.
-        self.batched: dict[str, Entry] = {}
-
-    def batch_entry(self, entry: dict[str, Any]) -> str:
-        """Keep a key's entry until its batch is deleted, and return its name."""
-        name: str = entry["name"]
-        self.batched[name] = entry  # type: ignore[assignment]
-        return name
-
-    async def delete(self, paths: tuple[str, ...]) -> None:
-        """Delete a batch of keys by ``rm_files``, by their entries, keeping those it refused for `refused`."""
-        entries = [self.batched.pop(p, {"name": p}) for p in paths]
-        refused = await self.handler.rm_files(entries)  # type: ignore[attr-defined, arg-type]
-        if refused:
-            self._refused[paths] = {k: e for k, e in refused.items() if k in paths}
-
-    def refused(self, paths: tuple[str, ...], note: str) -> dict[str, Exception]:
-        """The keys a batch deleted could not delete, each error noted and counted.
-
-        ``note`` tells a key's failure, its ``{key}`` the key.
-        """
-        refused = self._refused.pop(paths, {})
-        for key, error in refused.items():
-            error.add_note(note.format(key=repr(key)))
-        self.errors += len(refused)
-        return refused
 
     def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
         return _flat_glob(

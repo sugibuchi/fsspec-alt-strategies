@@ -158,6 +158,11 @@ Each family's handler class implements them by its strategies, and adds the prim
 | `TreeFileOperationHandler` | `ils_recursive`, by default `_tree_ils`, and optional `rm_tree`, `mv_tree`, `cp_tree` |
 | `FlatFileOperationHandler` | Required `ils_recursive(entry, prefix=...)`, and `rm_files` of at most `rm_batch_size` keys |
 
+`StorageHandler` declares the batch deletion, `rm_files` with its `rm_batch_size`, for both families. A flat handler
+always has it. A tree handler declares a size where its storage deletes several files by one request, e.g. Azure's
+blob batch: `_tree_rm` then deletes a directory's files in batches, not one by one. None, the default, deletes each by
+`rm_file`.
+
 A handler's class tells its family. A storage's handler overrides a strategy method to choose another strategy, e.g.
 its own. The filesystem calls only what `StorageHandler` declares,
 never finding a method by `getattr`. Beside the primitives, it declares methods with defaults a handler may override:

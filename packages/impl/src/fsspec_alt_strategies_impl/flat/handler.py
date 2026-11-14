@@ -70,17 +70,11 @@ class FlatFileOperationHandler(FileOperationHandler):
     """
 
     rm_batch_size: int = 1000
-    """The most keys `rm_files` takes at once, e.g. 1000 as S3's DeleteObjects takes."""
+    """The most keys `rm_files` takes at once, e.g. 1000 as S3's DeleteObjects takes: a flat handler always has one."""
 
     @abstractmethod
     async def rm_files(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
-        """Delete keys, by one request, at most ``rm_batch_size`` of them.
-
-        It returns the keys it could not delete, each with its error, and
-        raises only if the request failed whole. A batch may span the storage's
-        partitions, e.g. buckets: a storage whose request takes one partition
-        sends one per partition.
-        """
+        """Delete keys, by one request, at most ``rm_batch_size`` of them: as `StorageHandler.rm_files`, required here."""
 
     @abstractmethod
     def ils_recursive(
