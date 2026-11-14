@@ -187,12 +187,7 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
         self, directory: StoragePath, copies: list[_Job], *, always: bool = False
     ) -> None:
         """Queue copies into a destination directory, made first if needed: never the root."""
-        if (
-            directory == self.dst.root
-            or not directory
-            or directory in self.made
-            or not (always or self.parents_required)
-        ):
+        if not self.needs_mkdir(directory, always=always):
             self.release(copies)
             return
 

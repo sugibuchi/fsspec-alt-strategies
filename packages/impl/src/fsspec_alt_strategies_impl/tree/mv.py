@@ -277,17 +277,7 @@ class _Move(_CopyOrMove):
     async def transfer_file(
         self, entry: dict[str, Any], destination: StoragePath
     ) -> None:
-        try:
-            await self.mv_entry(
-                entry,
-                destination,
-                missing=self.known_missing(destination),
-                parent=self.parent_of(destination),
-            )
-        except Exception as e:
-            # Yielded among paths, the error must tell its paths itself.
-            e.add_note(f"{self.doing} {entry['name']!r} to {destination!r} failed.")
-            raise
+        await self.move_file(self.mv_entry, entry, destination)
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":

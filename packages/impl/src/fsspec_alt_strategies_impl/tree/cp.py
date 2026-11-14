@@ -410,12 +410,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         Parents first, a directory's mkdir waits for its parent's, if that is
         not done yet.
         """
-        if (
-            directory == self.dst.root
-            or not directory
-            or directory in self.made
-            or not (always or self.parents_required)
-        ):
+        if not self.needs_mkdir(directory, always=always):
             self.release(copies)
             return
 

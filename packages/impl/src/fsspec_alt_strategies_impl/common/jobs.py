@@ -312,9 +312,9 @@ class _Jobs(ABC):
         # Each batch's outcome, by its number: the paths deleted, and the errors.
         self._deleted: dict[int, tuple[list[str], list[Exception]]] = {}
 
-        # The batches to send, e.g. deletions, and those sent, which hold no permit.
-        self.deletions: deque[_Job] = deque()
-        self.deleting: dict[asyncio.Task[Any], _Job] = {}
+        # The batches to send, of deletions or of copies and moves, and those sent, which hold no permit.
+        self.batches_waiting: deque[_Job] = deque()
+        self.batches_running: dict[asyncio.Task[Any], _Job] = {}
 
         # The entries of each batch to delete, by its number, as the listing
         # gave them: a file is deleted by its entry, never by its name verified
@@ -355,7 +355,7 @@ class _Jobs(ABC):
         self.batched[self.batches_sent] = entries
         paths = tuple(e["name"] for e in entries)
         source = {"name": paths[-1], "batch": self.batches_sent}
-        self.deletions.append(_Job("delete", source, paths=paths))
+        self.batches_waiting.append(_Job("delete", source, paths=paths))
 
     async def delete(self, job: _Job) -> None:
         """Delete a batch by the handler's ``rm_files`` operation, by its entries, keeping its outcome for `deleted`.
@@ -513,9 +513,9 @@ class _Jobs(ABC):
                         yield outcome
         except GeneratorExit:
             self.waiting.clear()
-            self.deletions.clear()
-            while self.running or self.deleting:
-                done, _ = await asyncio.wait([*self.running, *self.deleting])
+            self.batches_waiting.clear()
+            while self.running or self.batches_running:
+                done, _ = await asyncio.wait([*self.running, *self.batches_running])
                 for task in done:
                     self.finish(task)
 
@@ -533,17 +533,17 @@ class _Jobs(ABC):
                 await source.aclose()
 
     async def _cancel_batches(self) -> None:
-        """Cancel the batches deleting: left only by an error, as the jobs are cancelled then."""
-        for task in self.deleting:
+        """Cancel the batches running: left only by an error, as the jobs are cancelled then."""
+        for task in self.batches_running:
             task.cancel()
-        await asyncio.gather(*self.deleting, return_exceptions=True)
-        self.deleting.clear()
+        await asyncio.gather(*self.batches_running, return_exceptions=True)
+        self.batches_running.clear()
 
     def pending(self) -> list[asyncio.Task[Any]]:
         """What to wait for: the jobs, the next item, and a permit if needed."""
         return [
             *self.jobs.pending(),
-            *self.deleting,
+            *self.batches_running,
             *([self.next] if self.next else []),
         ]
 
@@ -571,7 +571,7 @@ class _Jobs(ABC):
         self, task: asyncio.Task[Any], source: AsyncGenerator[Any] | None
     ) -> list[Any] | None:
         """Handle a finished task, returning its step, or None if it has none."""
-        if task in self.running or task in self.deleting:
+        if task in self.running or task in self.batches_running:
             return self.finish(task)
         if task is not self.next or source is None:
             return None  # The waiter's permit, which start takes.
@@ -593,16 +593,16 @@ class _Jobs(ABC):
         of files a move has copied.
         """
         self.waiting.clear()
-        self.deletions.clear()
+        self.batches_waiting.clear()
 
     async def start(self) -> None:
         """Start the jobs waiting, while permits are free, and the batches at once, but none once cancelled."""
         if self.op.cancelling():
             self.stopping()
         await self.jobs.start(self.run)
-        while self.deletions:
-            job = self.deletions.popleft()
-            self.deleting[asyncio.ensure_future(self.run_batch(job))] = job
+        while self.batches_waiting:
+            job = self.batches_waiting.popleft()
+            self.batches_running[asyncio.ensure_future(self.run_batch(job))] = job
 
     def run_batch(self, job: _Job) -> Awaitable[Any]:
         """The coroutine sending a batch, e.g. a deletion by ``rm_files``: by `run` unless a subclass runs its own."""
@@ -610,7 +610,7 @@ class _Jobs(ABC):
 
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
         """Handle a job's task done, counting its errors, and return what to yield."""
-        job = self.running.pop(task, None) or self.deleting.pop(task)
+        job = self.running.pop(task, None) or self.batches_running.pop(task)
         self.current = job.path or job.destination
 
         try:
@@ -963,6 +963,32 @@ class _CopyJobs(_Jobs):
             e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")
             raise
 
+    async def move_file(
+        self, mv_entry: _Transfer, entry: dict[str, Any], destination: StoragePath
+    ) -> None:
+        """Move a file by ``mv_entry``, with the destination's hints. An error raised notes its paths, as it is yielded."""
+        try:
+            await mv_entry(
+                entry,
+                destination,
+                missing=self.known_missing(destination),
+                parent=self.parent_of(destination),
+            )
+        except Exception as e:
+            e.add_note(f"{self.doing} {entry['name']!r} to {destination!r} failed.")
+            raise
+
+    def needs_mkdir(self, directory: StoragePath, *, always: bool = False) -> bool:
+        """Whether a destination directory is made before what goes in it.
+
+        Never the root, nor one made, tried or known to exist. Else only where
+        the storage requires parents, unless ``always``, e.g. for an empty
+        directory, which nothing else makes.
+        """
+        if directory == self.dst.root or not directory or directory in self.made:
+            return False
+        return always or self.parents_required
+
     async def replace_file(
         self,
         cp_entry: _Transfer,
@@ -1019,7 +1045,7 @@ class _CopyJobs(_Jobs):
         number = self.batches_sent = self.batches_sent + 1
         self.sent[number] = jobs
         batch = _Job("transfers", {"name": paths[-1], "batch": number}, paths=paths)
-        self.deletions.append(batch)
+        self.batches_waiting.append(batch)
 
     def exhausted(self) -> None:
         self.walked = True
@@ -1041,8 +1067,8 @@ class _CopyJobs(_Jobs):
     def drop_transfers(self) -> None:
         """Drop the files ready and the batches not sent, as the operation is cancelled."""
         self.ready.clear()
-        for job in [j for j in self.deletions if j.kind == "transfers"]:
-            self.deletions.remove(job)
+        for job in [j for j in self.batches_waiting if j.kind == "transfers"]:
+            self.batches_waiting.remove(job)
             for dropped in self.sent.pop(job.source["batch"]):
                 self.dropped(dropped)
 
@@ -1053,7 +1079,7 @@ class _CopyJobs(_Jobs):
         """The files in the batches being sent."""
         return sum(
             len(self.sent[j.source["batch"]])
-            for j in self.deleting.values()
+            for j in self.batches_running.values()
             if j.kind == "transfers"
         )
 
@@ -1125,11 +1151,11 @@ class _CopyJobs(_Jobs):
 
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
         """Handle a task done: a batch of files gives each one's outcome to `done` or `failed`."""
-        batch = self.deleting.get(task)
+        batch = self.batches_running.get(task)
         if batch is None or batch.kind != "transfers":
             return super().finish(task)
 
-        del self.deleting[task]
+        del self.batches_running[task]
         jobs = self.sent.pop(batch.source["batch"])
         self.current = batch.path
         outcome: list[Any] = []
