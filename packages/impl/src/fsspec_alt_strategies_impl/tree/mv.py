@@ -252,15 +252,16 @@ class _Move(_CopyOrMove):
 
     def add(self, listing: _Listing) -> list[Any] | None:
         self.track(listing)
-        super().add(listing)
+        # The files refused, e.g. a name the destination takes not: yielded.
+        refused = super().add(listing) or []
 
         # All in it moved before its last part came. An empty directory goes once
         # made at the destination, in done.
         empty = listing.first and not listing.entries
         if listing.last and not empty and self.finished(listing.directory):
-            return self.remove(listing.directory)
+            return refused + self.remove(listing.directory)
         else:
-            return None
+            return refused or None
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "rmdir":

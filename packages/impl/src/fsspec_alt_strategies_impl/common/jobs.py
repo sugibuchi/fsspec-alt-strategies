@@ -299,16 +299,18 @@ class _Jobs(ABC):
         # The options of each listing the jobs make, a pattern's glob too.
         self.ils_kwargs: dict[str, Any] = ils_kwargs or {}
 
-        # Each batch's outcome, by its paths: the paths deleted, and the errors.
-        self._deleted: dict[tuple[str, ...], tuple[list[str], list[Exception]]] = {}
+        # Each batch's outcome, by its number: the paths deleted, and the errors.
+        self._deleted: dict[int, tuple[list[str], list[Exception]]] = {}
 
         # The batches to send, e.g. deletions, and those sent, which hold no permit.
         self.deletions: deque[_Job] = deque()
         self.deleting: dict[asyncio.Task[Any], _Job] = {}
 
-        # The entries of the paths waiting in a batch, as the listing gave them:
-        # a path is deleted by its entry, never by its name verified again.
-        self.batched: dict[str, Entry] = {}
+        # The entries of each batch to delete, by its number, as the listing
+        # gave them: a file is deleted by its entry, never by its name verified
+        # again, nor by another file's of the same name.
+        self.batched: dict[int, list[Entry]] = {}
+        self.batches_sent = 0
 
         # The directory roots a pattern matched: fsspec walks them one level less
         # deep than a path named, as its glob counted that level already.
@@ -332,23 +334,27 @@ class _Jobs(ABC):
         # The source's next item, awaited along with the jobs.
         self.next: asyncio.Task[Any] | None = None
 
-    def batch_entry(self, entry: dict[str, Any]) -> str:
-        """Keep a path's entry until its batch is deleted, and return its name."""
-        name: str = entry["name"]
-        self.batched[name] = entry
-        return name
+    def send_batch(self, entries: list[Entry]) -> None:
+        """Queue a batch of files, by their entries as the listing gave them, to be deleted by the handler's ``rm_files``.
 
-    def send_batch(self, paths: tuple[str, ...]) -> None:
-        """Queue a batch of paths, each kept by `batch_entry`, to be deleted by the handler's ``rm_files``."""
-        self.deletions.append(_Job("delete", {"name": paths[-1]}, paths=paths))
+        The batch is numbered, and keeps its entries, never their names
+        alone: two files listed under one name, e.g. on Google Drive, are two
+        entries, and may be in two batches of the same paths.
+        """
+        self.batches_sent += 1
+        self.batched[self.batches_sent] = entries
+        paths = tuple(e["name"] for e in entries)
+        source = {"name": paths[-1], "batch": self.batches_sent}
+        self.deletions.append(_Job("delete", source, paths=paths))
 
-    async def delete(self, paths: tuple[str, ...]) -> None:
-        """Delete a batch by the handler's ``rm_files`` operation, by the paths' entries, keeping its outcome for `deleted`.
+    async def delete(self, job: _Job) -> None:
+        """Delete a batch by the handler's ``rm_files`` operation, by its entries, keeping its outcome for `deleted`.
 
         The operation is iterated to its end, as the batch is one job. An
         error it raises fails the batch whole.
         """
-        entries = [self.batched.pop(p, {"name": p}) for p in paths]
+        number = job.source["batch"]
+        entries = self.batched.pop(number)
         deleted: list[str] = []
         errors: list[Exception] = []
         async with self.handler.rm_files(entries) as operation:
@@ -357,15 +363,15 @@ class _Jobs(ABC):
                     errors.append(outcome)
                 else:
                     deleted.append(outcome)
-        self._deleted[paths] = (deleted, errors)
+        self._deleted[number] = (deleted, errors)
 
-    def deleted(self, paths: tuple[str, ...]) -> tuple[list[str], list[Exception]]:
+    def deleted(self, job: _Job) -> tuple[list[str], list[Exception]]:
         """A batch's paths deleted, and the errors of those it did not delete, counted.
 
         A path neither deleted nor failed, e.g. dropped by a cancelled
         operation, is in neither.
         """
-        deleted, errors = self._deleted.pop(paths, ([], []))
+        deleted, errors = self._deleted.pop(job.source["batch"], ([], []))
         self.errors += len(errors)
         return deleted, errors
 
@@ -661,7 +667,6 @@ class _CopyJobs(_Jobs):
         self.transfer_batch_size = 1
         self.ready: list[_Job] = []
         self.sent: dict[int, list[_Job]] = {}
-        self.batches_sent = 0
         self._transferred: dict[
             int, tuple[dict[str, Exception | None], list[Exception]]
         ] = {}

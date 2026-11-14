@@ -236,7 +236,7 @@ class _Move(_Copy):
         # The keys to delete. Each key moving, from its listing to its
         # deletion, has where it is copied, None for a marker: listed again,
         # it is skipped.
-        self.batch: list[str] = []
+        self.batch: list[dict[str, Any]] = []
         self.copied: dict[str, str | None] = {}
 
         # The copies queued or running, and whether the listing has ended: the
@@ -293,7 +293,7 @@ class _Move(_Copy):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "delete":
-            return self.delete(job.paths)
+            return self.delete(job)
         else:
             return super().run(job)
 
@@ -305,7 +305,7 @@ class _Move(_Copy):
             self.delete_later(job.source)
             return []
 
-        deleted, errors = self.deleted(job.paths)
+        deleted, errors = self.deleted(job)
         for error in errors:
             error.add_note("Once copied: it is in both places.")
         gone = set(deleted)
@@ -337,7 +337,7 @@ class _Move(_Copy):
 
     def delete_later(self, source: dict[str, Any]) -> None:
         """Add a key to the batch to delete, and send the batch if it is ready."""
-        self.batch.append(self.batch_entry(source))
+        self.batch.append(source)
         self.send_if_ready()
 
     def send_if_ready(self) -> None:
@@ -347,5 +347,5 @@ class _Move(_Copy):
 
         done = (self.listed or self.op.cancelling()) and self.copying == 0
         if len(self.batch) >= self.batch_size or done:
-            paths, self.batch = tuple(self.batch), []
-            self.send_batch(paths)
+            entries, self.batch = self.batch, []
+            self.send_batch(entries)

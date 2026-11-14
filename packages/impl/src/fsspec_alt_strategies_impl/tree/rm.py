@@ -142,7 +142,7 @@ class _Deletion(_TreeJobs):
         # The files deleted at once, by rm_files: read as the handler opens,
         # which may tell it, e.g. by the kind of account.
         self.batch_size = 1
-        self.batch: list[str] = []
+        self.batch: list[dict[str, Any]] = []
         # Unknown until setup reads the profile.
         self.deletes_directories = False
         self.implicit_directories = False
@@ -211,7 +211,7 @@ class _Deletion(_TreeJobs):
 
     def queue_file(self, entry: dict[str, Any]) -> None:
         """Queue a file's deletion in the batch, sent once full: at once, in batches of 1."""
-        self.batch.append(self.batch_entry(entry))
+        self.batch.append(entry)
         if len(self.batch) >= self.batch_size:
             self.send()
 
@@ -222,12 +222,12 @@ class _Deletion(_TreeJobs):
 
     def send(self) -> None:
         """Queue the deletion of the batch, and start another."""
-        paths, self.batch = tuple(self.batch), []
-        self.send_batch(paths)
+        entries, self.batch = self.batch, []
+        self.send_batch(entries)
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "delete":
-            return self.delete(job.paths)
+            return self.delete(job)
         if job.kind == "tree":
             return self.handler.rm_tree(job.source)
         else:
@@ -236,7 +236,7 @@ class _Deletion(_TreeJobs):
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "delete":
             # A file refused keeps its directory, as one rm_file failed would.
-            deleted, errors = self.deleted(job.paths)
+            deleted, errors = self.deleted(job)
             self.files_deleted += len(deleted)
             for path in deleted:
                 self.after(path)

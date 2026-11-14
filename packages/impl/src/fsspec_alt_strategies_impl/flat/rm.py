@@ -107,7 +107,7 @@ class _Deletion(_FlatJobs):
         self.path = path
         self.batch_size = self.handler.rm_batch_size
 
-        self.batch: list[str] = []
+        self.batch: list[dict[str, Any]] = []
         self.files_found = 0
         self.files_deleted = 0
 
@@ -127,7 +127,7 @@ class _Deletion(_FlatJobs):
 
     def add(self, entry: dict[str, Any]) -> None:
         self.files_found += 1
-        self.batch.append(self.batch_entry(entry))
+        self.batch.append(entry)
         if len(self.batch) >= self.batch_size:
             self.send()
 
@@ -136,10 +136,10 @@ class _Deletion(_FlatJobs):
             self.send()
 
     def run(self, job: _Job) -> Awaitable[Any]:
-        return self.delete(job.paths)
+        return self.delete(job)
 
     def done(self, job: _Job) -> list[Any]:
-        deleted, errors = self.deleted(job.paths)
+        deleted, errors = self.deleted(job)
         self.files_deleted += len(deleted)
         return [*deleted, *errors]
 
@@ -150,5 +150,5 @@ class _Deletion(_FlatJobs):
 
     def send(self) -> None:
         """Queue the deletion of the batch, and start another."""
-        paths, self.batch = tuple(self.batch), []
-        self.send_batch(paths)
+        entries, self.batch = self.batch, []
+        self.send_batch(entries)

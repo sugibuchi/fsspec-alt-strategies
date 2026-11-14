@@ -17,6 +17,7 @@ This module depends on `_jobs`, and `jobs` and `paths` of `common`.
 from __future__ import annotations
 
 import asyncio
+import errno
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
@@ -95,6 +96,12 @@ def _tree_cp(
     path may then go to the same path, or under it. The copies run
     concurrently, so the destination's paths are created in another order than
     the source's. A storage listing in creation order shows it.
+
+    A storage may list two files of one name in a directory, as Google Drive
+    holds them. Both would go to one place, the second replacing the first:
+    the first goes, and each other yields a FileExistsError, as GNU's ``cp``
+    refuses two sources onto one destination. A move leaves it, and its
+    directory, where they are.
 
     Unlike fsspec's ``copy``, it keeps going past a failure, and reports each.
     A copy cancelled or failed leaves what was copied so far: it deletes
@@ -215,6 +222,11 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         )  # Those whose names the destination refused.
         self.roots_whole: int | None = None
 
+        # The names of the files found so far in each directory being listed:
+        # a second entry of one, as Google Drive lists, would go where the first
+        # went. Dropped once the directory is listed to its last part.
+        self.names: dict[str, set[str]] = {}
+
     async def prepare(self) -> _Roots | None:
         """Place the roots, and queue each directory that can go whole: the rest are walked.
 
@@ -292,19 +304,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
                 return [self.refuse_name(listing.directory, e)]
             return None
 
-        copies, refused = [], []
-        for entry in listing.entries:
-            if entry["type"] != "directory":
-                name = entry["name"].rstrip("/")
-                self.files_found += 1
-                try:
-                    target = self.target(name)
-                except ValueError as e:
-                    refused.append(self.refuse_name(name, e))
-                    continue
-                # The entry goes with its copy, so that cp_entry need not ask it.
-                copies.append(_Job("copy", {**entry, "name": name}, target))
-
+        copies, refused = self.copies(listing)
         if listing.first and listing.last and not listing.entries:
             # An empty directory is made, whatever the storage. With maxdepth,
             # fsspec's copy leaves out directories, and copies files only.
@@ -315,7 +315,56 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             # Parents first, each directory is made once its parent is. Else, a
             # directory holding only directories needs no mkdir: theirs create it.
             self.queue(directory, listing.directory, copies)
+        if listing.last:
+            self.names.pop(listing.directory, None)
         return refused or None
+
+    def copies(self, listing: _Listing) -> tuple[list[_Job], list[Exception]]:
+        """The jobs of the files in a part of a listing, and the errors of those refused.
+
+        A file is refused if the destination takes no such name, or if another
+        file of its name in its directory goes there already.
+        """
+        copies: list[_Job] = []
+        refused: list[Exception] = []
+        names = self.names.setdefault(listing.directory, set())
+        for entry in listing.entries:
+            if entry["type"] == "directory":
+                continue
+            name = entry["name"].rstrip("/")
+            self.files_found += 1
+            try:
+                target = self.target(name)
+            except ValueError as e:
+                refused.append(self.refuse_name(name, e))
+                continue
+            if name in names:
+                refused.append(self.refuse_twice(name, target))
+                continue
+            names.add(name)
+            # The entry goes with its copy, so that cp_entry need not ask it.
+            copies.append(_Job("copy", {**entry, "name": name}, target))
+        return copies, refused
+
+    def refuse_twice(self, path: str, target: StoragePath) -> FileExistsError:
+        """A file listed under the name of another in its directory: counted, noted, to yield, never sent.
+
+        Both would go to one place, the second replacing the first, as on a
+        storage holding several items of one name, e.g. Google Drive. The first
+        goes, and each other is refused, as GNU's `cp` refuses two sources
+        onto one destination: it stays where it is, and so does its directory.
+        """
+        self.errors += 1
+        error = FileExistsError(
+            errno.EEXIST,
+            "Another file of this name in its directory goes there",
+            target,
+        )
+        error.add_note(
+            f"{self.doing} {path!r} to {target!r} refused: another file of that name went"
+            " there."
+        )
+        return error
 
     def below_refused(self, directory: str) -> bool:
         """Whether a source directory is in one whose name the destination refused.

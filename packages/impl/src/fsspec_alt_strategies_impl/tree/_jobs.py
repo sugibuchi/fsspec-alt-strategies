@@ -56,6 +56,10 @@ class _TreeJobs(_Jobs):
         self.remaining: dict[str, int] = {}
         self.parents: dict[str, str] = {}
 
+        # The entries of each path counted and not done: two files listed under
+        # one name, e.g. on Google Drive, are two, each done on its own.
+        self.entries: dict[str, int] = {}
+
         # The directories whose listing goes on, and the subdirectories counted in
         # each: a directory is done only once listed to its last part.
         self.listing: dict[str, set[str]] = {}
@@ -137,7 +141,8 @@ class _TreeJobs(_Jobs):
 
         A storage may list a directory twice, e.g. as a prefix and as its marker
         object, maybe in two parts. Each directory counts once, as the walk lists
-        it once. A file is listed once: its name is not kept.
+        it once. Each file's entry counts, two of one name, e.g. on Google Drive,
+        as two.
         """
         directory = listing.directory
         if listing.first:
@@ -153,6 +158,7 @@ class _TreeJobs(_Jobs):
                 subdirs.add(name)
             self.remaining[directory] += 1
             self.parents[name] = directory
+            self.entries[name] = self.entries.get(name, 0) + 1
 
         if listing.last:
             del self.listing[directory]
@@ -160,11 +166,15 @@ class _TreeJobs(_Jobs):
     def child_done(self, path: str) -> str | None:
         """Count a path done, and return its directory if all in it is now done.
 
-        A path done twice, as one listed twice is, counts once.
+        Each entry of a path counts once: a path done more often than listed,
+        as a directory listed twice is, counts no more.
         """
-        parent = self.parents.pop(path, None)
+        parent = self.parents.get(path)
         if parent is None:
             return None
+        self.entries[path] -= 1
+        if not self.entries[path]:
+            del self.entries[path], self.parents[path]
         self.remaining[parent] -= 1
         return parent if self.finished(parent) else None
 
