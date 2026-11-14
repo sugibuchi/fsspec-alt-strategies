@@ -11,8 +11,8 @@ caller sees of it, whatever copy it comes from, is here:
   it ended;
 - `Monitored`, the marker of a filesystem whose calls monitors watch.
 
-`TreeFileSystem` and `FlatFileSystem` answer fsspec's methods, e.g. ``copy``,
-by running an operation to its end, so their callers see only the answer. A
+A copy of the strategies answers fsspec's methods, e.g. ``copy``, by running
+an operation to its end, so their callers see only the answer. A
 `Monitor` sees the operation itself, as it runs, within a `monitoring` block.
 It is told the `Call` the operation answers, and a call it stops raises
 `CallCancelled`:
@@ -79,11 +79,12 @@ class State:
     current: str | None = None
 
 
-class Monitored(ABC):  # noqa: B024, a marker: it declares no method.
+class Monitored:
     """A filesystem whose fsspec methods tell the monitors of their operations.
 
     A marker: the filesystem classes of the strategies, and their wrappers,
-    inherit it. A filesystem without it is wrapped to be monitored.
+    inherit it. A filesystem without it is wrapped to be monitored. It is a
+    plain class, so that a filesystem class keeps fsspec's metaclass alone.
     """
 
 

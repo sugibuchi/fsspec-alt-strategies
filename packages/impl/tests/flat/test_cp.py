@@ -190,7 +190,13 @@ async def test_markers_are_not_copied() -> None:
     async def info(path: str) -> dict[str, Any]:
         raise FileNotFoundError(path)
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
         source = entry["name"]
         copied.append((source, destination))
 
@@ -276,12 +282,22 @@ async def test_a_list_yields_a_name_taken_when_the_rest_is_in_place(
     assert flat_fs._file_data["a/x"].data == b"a"
 
 
-def test_a_copy_between_two_storages_needs_cp_entry(
+async def test_a_copy_between_two_storages_streams_each_key_by_default(
     flat_fs: SimulatedFileSystem,
 ) -> None:
+    flat_fs.add_file("data/a/x", b"xx")
+    flat_fs.add_file("data/y", b"y")
     other = SimulatedFileSystem(asynchronous=True)
-    with pytest.raises(ValueError, match="cp_entry"):
-        _flat_cp(FlatView(flat_fs), FlatView(other), "data", "copied")
+    op = _flat_cp(FlatView(flat_fs), FlatView(other), "data", "copied")
+    copied, errors = await _collect_with_errors(op)
+    assert (sorted(copied), errors) == (
+        [("data/a/x", "copied/a/x"), ("data/y", "copied/y")],
+        [],
+    )
+    assert {p: f.data for p, f in other._file_data.items()} == {
+        "copied/a/x": b"xx",
+        "copied/y": b"y",
+    }
 
 
 async def test_cp_entry_is_given_the_listings_entries(
@@ -299,3 +315,19 @@ async def test_cp_entry_is_given_the_listings_entries(
     )
     # One info only, where path2 goes: none per file.
     assert flat_fs.stats.calls["info"] == 1
+
+
+async def test_a_name_the_destination_refuses_is_its_own_error(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    """A key holding ".." never leaves the destination: its copy fails, and the others go."""
+    flat_fs.add_file("data/ok.txt", b"1")
+    flat_fs.add_file("data/../../escaped.txt", b"2")
+    copied, errors = await _collect_with_errors(_cp(flat_fs, "data", "copied"))
+    assert copied == [("data/ok.txt", "copied/ok.txt")]
+    assert [type(e) for e in errors] == [ValueError]
+    assert sorted(flat_fs._file_data) == [
+        "copied/ok.txt",
+        "data/../../escaped.txt",
+        "data/ok.txt",
+    ]

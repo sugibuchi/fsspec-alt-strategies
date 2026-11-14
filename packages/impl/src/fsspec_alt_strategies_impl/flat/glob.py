@@ -30,15 +30,19 @@ from ._keys import _close, _dir, _dirs, _listing, _new
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
+    from ..common.handler import StoragePath
+    from .handler import FlatFileOperationHandler
+
 __all__: list[str] = []
 
 
 def _flat_glob(
-    fs: Any,
-    path: str | Sequence[str],
+    handler: FlatFileOperationHandler,
+    path: StoragePath | Sequence[StoragePath],
     *,
     maxdepth: int | None = None,
     withdirs: bool = True,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[dict[str, Any], GlobState]:
     """Find the paths matching glob patterns, listing only the keys they can match.
 
@@ -66,15 +70,17 @@ def _flat_glob(
     Once cancelled, it takes nothing more from the listings. An error from a
     listing ends the operation, raised by its iteration.
 
-    Requests: the pages of one recursive ``_ils`` per listing, one after
+    Requests: the pages of one ``ils_recursive`` per listing, one after
     another: of the prefix's directory, narrowed to the rest of the prefix.
-    One ``_info`` per pattern without wildcards, each holding a permit of the
-    filesystem's ``operation_limit``. The listings hold none.
+    One ``info`` per pattern without wildcards, each holding a permit of the
+    handler's ``operation_limit``. The listings hold none.
 
-    ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``_ils``
+    ``path`` is a pattern, or patterns, of paths on ``handler``, as its ``ils``
     takes them: a trailing "/" matches only directories. ``maxdepth`` is how
     deep a ``**`` goes, and ``withdirs`` whether directories can match, as with
     fsspec's ``_glob``. The listing still lists every key under the prefix.
+    ``ils_kwargs`` go to each ``ils_recursive``, as fsspec's ``_glob`` passes
+    its own on.
 
     The operation yields the entry of each path matched, and its state is a
     `GlobState`. The call raises ValueError if ``maxdepth`` is less than 1,
@@ -97,13 +103,13 @@ def _flat_glob(
         op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any]]:
         found: set[str] = set()
-        async for entry in _infos(fs, literals, op, found):
+        async for entry in _infos(handler, literals, op, found):
             yield entry
 
         for prefix, group in _listings(searches):
             if op.cancelling():
                 return
-            async for match in _matches(fs, prefix, group, op, found):
+            async for match in _matches(handler, prefix, group, op, found, ils_kwargs):
                 yield match
 
     return Operation(run, GlobState())
@@ -123,17 +129,18 @@ def _listings(
 
 
 async def _matches(
-    fs: Any,
+    handler: FlatFileOperationHandler,
     prefix: str,
     searches: list[_Search],
     op: Operation[dict[str, Any], GlobState],
     found: set[str],
+    ils_kwargs: dict[str, Any] | None,
 ) -> AsyncGenerator[dict[str, Any]]:
     """The matches of patterns in one listing, noted in ``found``."""
     # The directories of the key listed last.
     before: list[str] = []
 
-    entries = _listing(fs, prefix)
+    entries = _listing(handler, prefix, ils_kwargs=ils_kwargs)
     try:
         async for entry in entries:
             name = entry["name"]

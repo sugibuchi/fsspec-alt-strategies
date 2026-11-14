@@ -7,30 +7,37 @@ arrives, as fsspec's ``walk`` gives them. A ``descend`` predicate prunes the
 directories it lists, as glob needs.
 
 Its engine, ``_chunks``, is the walk under the other tree strategies, such as
-find, rm and du. It streams each directory's listing in parts, as ``_ils``
+find, rm and du. It streams each directory's listing in parts, as ``ils``
 yields it, so that they act on a directory of hundreds of thousands of files as
 it is listed. ``_tree_walk`` gathers the parts, as fsspec's ``walk`` gives a
 directory whole.
 
-A tree that nothing prunes is listed by one recursive ``_ils``, which gives it
-depth first or in name order. Its entries are split into the same parts, each
-directory's as soon as the listing has passed it. A storage with no recursive
-listing of its own answers it with a directory per request, several at a time.
+A tree that nothing prunes is listed by one ``ils_recursive``. Its entries are
+split into the same parts. Each directory's last part comes as soon as the
+listing has passed it where the order is depth first, which covers name order,
+else once the listing ends: unknown, a listing is only taken to give each
+directory before what is below it. A handler with no recursive listing of its
+own answers it by default with `_tree_ils`, a directory per request, several at
+a time, which is depth first whatever the profile says. Otherwise, the profile
+declares the order. A listing broken off part way is resumed a directory per
+request, from the directories it was in.
+
 Where the walk prunes, it lists each directory it enters on its own, several at
 a time, breadth first.
 
-The tree strategies, and the engines under them, take the filesystem they
-work on, and call its primitives, such as ``_ils``, under its
+The tree strategies, and the engines under them, take the handler they
+work on, and call its primitives, such as ``ils``, under its
 ``operation_limit``.
 
-This module depends on `jobs`, `operation` and `paths` of `common`.
+This module depends on `listing`, and `handler`, `jobs`, `operation` and `paths` of
+`common`.
 """
 
 from __future__ import annotations
 
 import asyncio
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from fsspec_alt_strategies.states import WalkState
@@ -38,16 +45,26 @@ from fsspec_alt_strategies.states import WalkState
 from ..common.jobs import _Queue
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
+from .listing import _DepthFirst, _tree_ils
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Collection, Iterable
+    from collections.abc import (
+        AsyncGenerator,
+        AsyncIterator,
+        Callable,
+        Collection,
+        Iterable,
+    )
+
+    from ..common.handler import Entry, StorageHandler, StoragePath
+    from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
 
 
 def _tree_walk(
-    fs: Any,
-    path: str,
+    handler: TreeFileOperationHandler,
+    path: StoragePath,
     *,
     maxdepth: int | None = None,
     topdown: bool = True,
@@ -60,7 +77,7 @@ def _tree_walk(
     It yields each directory listed as ``(path, dirs, files)``, as fsspec's
     ``walk`` does with ``detail=True``: ``path`` itself first, then each
     directory below it. ``dirs`` and ``files`` map the names in the directory
-    to their ``_ils`` entries. An empty directory yields empty ones. The
+    to their ``ils`` entries. An empty directory yields empty ones. The
     directories come in the order their listings arrive, not in the tree's
     order. A directory that fails to list yields its error instead, and the
     walk goes on with the others. The error names its directory in its note,
@@ -71,9 +88,10 @@ def _tree_walk(
     listed on its own: a recursive listing passes a directory only after all
     below it, and the whole tree would be held. Without, a directory comes
     after all of those below it, as fsspec's ``walk`` orders them, and the tree
-    is listed by one recursive ``_ils``, unless ``maxdepth`` or ``descend``
-    prunes it. A failure then ends the walk of the whole tree, yielding its
-    error as ``path``'s. A walk bottom up that is cancelled leaves out the
+    is listed by one ``ils_recursive``, unless ``maxdepth`` or ``descend``
+    prunes it. A listing broken off part way is resumed a directory per
+    request, so that a directory failing yields its own error, and the walk
+    goes on with the others. A walk bottom up that is cancelled leaves out the
     directories whose subtrees were not done.
 
     Once cancelled, it lists no new directory, and yields the directories of the
@@ -84,16 +102,16 @@ def _tree_walk(
     - with ``on_error="raise"``, the error of the first directory that failed to
       list.
 
-    Requests: top down, or when pruned, one ``_ils`` per directory walked, as
-    the filesystem's ``operation_limit`` allows. Bottom up otherwise, one
-    recursive ``_ils`` of ``path``, which a storage without a recursive listing
+    Requests: top down, or when pruned, one ``ils`` per directory walked, as
+    the handler's ``operation_limit`` allows. Bottom up otherwise, one
+    ``ils_recursive`` of ``path``, which a storage without a recursive listing
     answers with one per directory.
 
-    ``path`` is the directory the walk starts from, listed by the ``_ils`` of
-    ``fs``. ``maxdepth`` of 1 lists only ``path``. ``topdown`` puts a directory
+    ``path`` is the directory the walk starts from, listed by the ``ils`` of
+    ``handler``. ``maxdepth`` of 1 lists only ``path``. ``topdown`` puts a directory
     before those below it. ``descend``, called with the entry of each
     subdirectory found, lets the walk list it only if it returns True.
-    ``ils_kwargs`` go to each ``_ils``, as fsspec's ``walk`` passes its own on.
+    ``ils_kwargs`` go to each ``ils``, as fsspec's ``walk`` passes its own on.
 
     ``on_error`` says what becomes of the error of a directory that fails to
     list:
@@ -122,7 +140,7 @@ def _tree_walk(
         held: dict[str, list[dict[str, Any]]] = {}
         bottom_up = None if topdown else _BottomUp()
         chunks = _chunks(
-            fs,
+            handler,
             path,
             maxdepth=maxdepth,
             descend=walked,
@@ -184,7 +202,7 @@ def _walk_state(state: WalkState, listing: _Listing) -> WalkState:
     return WalkState(
         errors=state.errors + (listing.error is not None),
         current=listing.directory,
-        directories_listed=state.directories_listed + 1,
+        directories_listed=(state.directories_listed or 0) + 1,
         found=state.found + len(listing.entries),
     )
 
@@ -225,11 +243,11 @@ class _Listing:
     """A part of a directory's listing, as ``_chunks`` yields it, or all of it.
 
     ``depth`` is 1 for the directory the walk started from, 2 for its subdirectories,
-    and so on. ``entries`` are as ``_ils`` gives them, without the directory itself,
+    and so on. ``entries`` are as ``ils`` gives them, without the directory itself,
     and empty if the listing failed with ``error``.
 
     A directory's listing comes in parts, each of at most ``chunk_size`` entries,
-    as ``_ils`` yields them: ``first`` on the first part, ``last`` on the last.
+    as ``ils`` yields them: ``first`` on the first part, ``last`` on the last.
     So an empty directory is one part, both first and last, with no entries. A
     failed listing ends with its error, as its last part. `_tree_walk` holds
     each directory whole: one part, both first and last.
@@ -251,8 +269,8 @@ _CHUNK_SIZE = 1000
 
 
 async def _chunks(
-    fs: Any,
-    path: str | Collection[str],
+    handler: TreeFileOperationHandler,
+    path: str | Entry | Collection[str | Entry],
     *,
     maxdepth: int | None = None,
     matched: Collection[str] = (),
@@ -281,16 +299,16 @@ async def _chunks(
     ``_expand_path`` walks them.
 
     The parts of a directory come in order, but those of several directories
-    mix, as the listings run at once. Each listing, by ``fs._ils`` with
-    ``ils_kwargs``, holds a permit of ``fs.operation_limit`` while it runs.
+    mix, as the listings run at once. Each listing, by ``handler.ils`` with
+    ``ils_kwargs``, holds a permit of ``handler.operation_limit`` while it runs.
 
     Once ``stopping`` returns true, no new listing starts, and those in flight
     stop after their current part: a directory stopped so has no last part.
 
-    A tree that nothing prunes is listed whole by one recursive ``_ils``, split
-    into the same parts, as `_produce_tree` says. A failure in it then ends
-    the listing of the whole tree. Without ``maxdepth`` and ``descend``, that
-    is each root. With ``descend``, ``whole`` tells of a directory's entry
+    A tree that nothing prunes is listed whole by one ``ils_recursive``, split
+    into the same parts, as `_produce_tree` says. Without ``maxdepth`` and
+    ``descend``, that is each root. A failure in it is resumed a directory per
+    request, as `_resume` says. With ``descend``, ``whole`` tells of a directory's entry
     whether ``descend`` holds for every directory below it, e.g. below a glob's
     ``**``: such a directory is listed so, and the walk prunes only above it.
     With ``maxdepth``, each directory is listed on its own, so that none deeper
@@ -298,13 +316,16 @@ async def _chunks(
     """
     _check_maxdepth(maxdepth)
 
-    roots = {_trim(p) for p in ([path] if isinstance(path, str) else path)}
+    # Each directory to list by the entry its listing gave, e.g. with the
+    # storage's id, else by its path: a root given as a path, verified.
+    roots, listed = _roots(path)
     trees = _Trees(maxdepth, descend, whole)
     # The directories to list, each with its depth.
-    directories: _Queue[tuple[str, int]] = _Queue(fs.operation_limit)
+    directories: _Queue[tuple[str, int]] = _Queue(handler.operation_limit)
     # The parts listed, a few at a time: a listing waits while they are full.
     parts: asyncio.Queue[_Listing] = asyncio.Queue(maxsize=16)
-    # The subdirectories found so far in each directory being listed, each listed once.
+    # The subdirectories found so far in each directory being listed: a part
+    # yields each once, though a storage may list one twice.
     found: dict[str, set[str]] = {}
 
     def stopped() -> bool:
@@ -315,11 +336,20 @@ async def _chunks(
             directories.waiting.clear()
         await directories.start(
             lambda item: (
-                _produce_tree(fs, ils_kwargs or {}, *item, parts, chunk_size, stopped)
+                _produce_tree(
+                    handler,
+                    ils_kwargs or {},
+                    listed.pop(item[0], None),
+                    *item,
+                    parts,
+                    chunk_size,
+                    stopped,
+                )
                 if item[0] in trees.roots
                 else _produce(
-                    fs,
+                    handler,
                     ils_kwargs or {},
+                    listed.pop(item[0], None),
                     *item,
                     item[0] in roots,
                     parts,
@@ -346,12 +376,16 @@ async def _chunks(
                 if part.directory in roots and part.first:
                     raise part.error
                 _note(part.error, part.directory)
-            elif not trees.listed(part.directory) and (
-                maxdepth is None or part.depth < maxdepth
+            else:
+                part = _once(part, found)
+            if part.error is None and (
+                not trees.listed(part.directory)
+                and (maxdepth is None or part.depth < maxdepth)
             ):
-                subdirs = _new_subdirs(part, descend, found)
-                trees.add(s for s, _ in subdirs)
-                directories.waiting.extend(subdirs)
+                subdirs = _new_subdirs(part, descend)
+                trees.add(name for name, _, _ in subdirs)
+                directories.waiting.extend((name, depth) for name, depth, _ in subdirs)
+                listed.update((name, entry) for name, _, entry in subdirs)
 
             if part.last:
                 found.pop(part.directory, None)
@@ -362,6 +396,22 @@ async def _chunks(
             yield part
     finally:
         await directories.close()
+
+
+def _roots(
+    path: str | Entry | Collection[str | Entry],
+) -> tuple[set[str], dict[str, Entry]]:
+    """The roots of a walk, by path, and the entries of those given as entries, e.g. a glob's matches."""
+    roots: set[str] = set()
+    listed: dict[str, Entry] = {}
+    for root in [path] if isinstance(path, (str, dict)) else path:
+        if isinstance(root, dict):
+            name = _trim(root["name"])
+            listed[name] = {**root, "name": name}
+        else:
+            name = _trim(root)
+        roots.add(name)
+    return roots, listed
 
 
 async def _next_part(
@@ -384,8 +434,9 @@ async def _next_part(
 
 
 async def _produce(
-    fs: Any,
+    handler: StorageHandler,
     ils_kwargs: dict[str, Any],
+    listed: Entry | None,
     directory: str,
     depth: int,
     root: bool,
@@ -393,11 +444,15 @@ async def _produce(
     chunk_size: int,
     stopped: Callable[[], bool],
 ) -> None:
-    """List a directory, putting its parts in ``parts`` as they come, its error last."""
+    """List a directory, putting its parts in ``parts`` as they come, its error last.
+
+    It lists by ``listed``, the entry its parent's listing gave, else by its
+    path, verified: a path refused is the listing's error.
+    """
     first = True
     chunk: list[dict[str, Any]] = []
     try:
-        entries = fs._ils(directory, **ils_kwargs)
+        entries = handler.ils(listed or handler.entry(directory), **ils_kwargs)
         try:
             async for entry in entries:
                 if entry["name"].rstrip("/") == directory:
@@ -427,26 +482,49 @@ async def _produce(
 
 
 async def _produce_tree(
-    fs: Any,
+    handler: TreeFileOperationHandler,
     ils_kwargs: dict[str, Any],
+    listed: Entry | None,
     root: str,
     root_depth: int,
     parts: asyncio.Queue[_Listing],
     chunk_size: int,
     stopped: Callable[[], bool],
+    *,
+    own: bool = True,
 ) -> None:
-    """List a tree by one recursive ``_ils``, putting each directory's parts as a walk would.
+    """List a tree by one recursive listing, putting each directory's parts as a walk would.
 
-    The entries come depth first or in name order, all below a directory
-    together, so a directory is done once the listing has passed it: `_Split`
-    puts its last part then. A failed listing puts what it held, then its error
-    as the root's last part: the directories below it that were not done get
-    none, as when stopped. So the error is the root's first part only if the
-    root itself failed to list, and is then raised as such.
+    The listing is the handler's ``ils_recursive``, or with ``own`` False
+    `_tree_ils`, a directory per request. Depth first or in name order, all
+    below a directory come together, so a directory is done once the listing
+    has passed it: `_Split` puts its last part then. That is `_tree_ils`'s
+    order, and a storage's own where the profile declares the
+    ``recursive_order`` "depth_first". Otherwise, a listing is only known to
+    give a directory before what is below it: `_ParentsFirst` puts every
+    directory's last part once the listing ends.
+
+    A listing failing before anything came puts its error as the root's first
+    and last part, raised as such for a root of the walk. One broken off later
+    is resumed, as `_resume` says: the tree is listed whole all the same, but
+    for the directories that fail again. A recursive listing is long, e.g. a
+    WebDAV body of minutes, and a connection dropped in it would otherwise
+    leave an arbitrary part of the tree unwalked, which fsspec's ``find`` then
+    omits with no error.
     """
-    tree = _Split(root, root_depth, chunk_size)
+    entries: AsyncIterator[Entry] | None = None
     try:
-        entries = fs._ils(root, recursive=True, **ils_kwargs)
+        entry = listed or handler.entry(root)
+        entries = _recursive_listing(handler, own, root, entry, ils_kwargs)
+        splitter = await _splitter(handler, entries)
+    except Exception as e:
+        # Nothing was listed, or the profile could not be told: the root fails.
+        if entries is not None:
+            await _close(entries)
+        await parts.put(_Listing(root, root_depth, [], e, True, True))
+        return
+    tree = splitter(root, root_depth, chunk_size, listed)
+    try:
         try:
             async for entry in entries:
                 for part in tree.add(entry):
@@ -454,17 +532,156 @@ async def _produce_tree(
                 if stopped():
                     return
         finally:
-            if (aclose := getattr(entries, "aclose", None)) is not None:
-                await aclose()
+            await _close(entries)
     except Exception as e:
         # What was listed first, so that only the root's own failure is a first part.
         for part in tree.flush():
             await parts.put(part)
-        await parts.put(_Listing(root, root_depth, [], e, tree.first, True))
+        if tree.first:
+            await parts.put(_Listing(root, root_depth, [], e, True, True))
+        else:
+            await _resume(handler, ils_kwargs, tree, parts, chunk_size, stopped)
         return
 
     for part in tree.end():
         await parts.put(part)
+
+
+def _recursive_listing(
+    handler: TreeFileOperationHandler,
+    own: bool,
+    root: str,
+    entry: Entry,
+    ils_kwargs: dict[str, Any],
+) -> AsyncIterator[Entry]:
+    """The recursive listing of a tree: the handler's own, or with ``own`` False, `_tree_ils`."""
+    if own:
+        return handler.ils_recursive(entry, **ils_kwargs)
+    else:
+        return _tree_ils(handler, entry, **ils_kwargs)
+
+
+async def _close(entries: AsyncIterator[Entry]) -> None:
+    """Close a listing, where it can be: an ``ils_recursive`` gives any async iterator."""
+    if (aclose := getattr(entries, "aclose", None)) is not None:
+        await aclose()
+
+
+async def _splitter(
+    handler: TreeFileOperationHandler, entries: AsyncIterator[Entry]
+) -> type[_Split | _ParentsFirst]:
+    """How a recursive listing is split: depth first where it is `_tree_ils`'s, or the profile declares it so.
+
+    `_tree_ils` lists depth first, whatever the profile says, so a handler
+    keeping it as its ``ils_recursive`` needs to declare nothing. A storage's
+    own listing keeps the order its profile declares. Unknown, it is taken as
+    parents first, which is right on any storage. The handler is opened either
+    way, as the walk starts: its profile is loaded as every strategy loads it.
+    """
+    await handler.open()
+    if (
+        isinstance(entries, _DepthFirst)
+        or handler.profile.recursive_order == "depth_first"
+    ):
+        return _Split
+    else:
+        return _ParentsFirst
+
+
+async def _resume(
+    handler: TreeFileOperationHandler,
+    ils_kwargs: dict[str, Any],
+    tree: _Split | _ParentsFirst,
+    parts: asyncio.Queue[_Listing],
+    chunk_size: int,
+    stopped: Callable[[], bool],
+) -> None:
+    """Walk what a recursive listing broken off left, a directory per request.
+
+    The directories done have had their last part. Those the listing was in,
+    from the root down to the break, are listed again by ``ils``, each on its
+    own, their entries put before left out: `_Open` keeps their names. The
+    subdirectories none of whose entries came, those found so and those
+    pending, are each listed whole by `_tree_ils`, which a failure may break
+    off again. So each round resumes deeper in the tree, and ends.
+
+    It runs under the permit of the listing it resumes, one directory or
+    subtree after another: a failure's path, not a walk's.
+    """
+    for directory in list(tree.open):
+        subtrees: list[tuple[str, Entry | None]] = [*directory.pending.items()]
+        subtrees += await _relist(
+            handler, ils_kwargs, directory, parts, chunk_size, stopped
+        )
+        for name, entry in subtrees:
+            if stopped():
+                return
+            await _produce_tree(
+                handler,
+                ils_kwargs,
+                entry,
+                name,
+                directory.depth + 1,
+                parts,
+                chunk_size,
+                stopped,
+                own=False,
+            )
+        if stopped():
+            return
+
+
+async def _relist(
+    handler: StorageHandler,
+    ils_kwargs: dict[str, Any],
+    directory: _Open,
+    parts: asyncio.Queue[_Listing],
+    chunk_size: int,
+    stopped: Callable[[], bool],
+) -> list[tuple[str, Entry | None]]:
+    """List a directory a recursive listing broke off in, putting the entries it had not put.
+
+    It puts the rest of the directory's parts, its error last if it fails
+    again, and gives the subdirectories it found, by name with their entries.
+    """
+    found: list[tuple[str, Entry | None]] = []
+    chunk: list[dict[str, Any]] = []
+    first = directory.first
+    try:
+        listed = directory.entry or handler.entry(directory.name)
+        entries = handler.ils(listed, **ils_kwargs)
+        try:
+            async for entry in entries:
+                name = entry["name"].rstrip("/")
+                if name == directory.name or name in directory.seen:
+                    continue
+                directory.seen.add(name)
+                chunk.append(entry)
+                if entry["type"] == "directory":
+                    found.append((name, {**entry, "name": name}))
+                if len(chunk) >= chunk_size:
+                    await parts.put(
+                        _Listing(
+                            directory.name, directory.depth, chunk, None, first, False
+                        )
+                    )
+                    first, chunk = False, []
+                    if stopped():
+                        return found
+        finally:
+            if (aclose := getattr(entries, "aclose", None)) is not None:
+                await aclose()
+    except Exception as e:
+        if chunk:
+            await parts.put(
+                _Listing(directory.name, directory.depth, chunk, None, first, False)
+            )
+            first = False
+        await parts.put(_Listing(directory.name, directory.depth, [], e, first, True))
+        return found
+
+    await parts.put(_Listing(directory.name, directory.depth, chunk, None, first, True))
+    return found
 
 
 class _Split:
@@ -487,10 +704,12 @@ class _Split:
     above it are. Once ``chunk_size`` entries are held in all, they are put.
     """
 
-    def __init__(self, root: str, root_depth: int, chunk_size: int) -> None:
+    def __init__(
+        self, root: str, root_depth: int, chunk_size: int, entry: Entry | None = None
+    ) -> None:
         self.root = root
         self.chunk_size = chunk_size
-        self.open = [_Open(root, root_depth)]
+        self.open = [_Open(root, root_depth, entry)]
         self.count = 0  # The entries held.
 
     @property
@@ -515,14 +734,15 @@ class _Split:
             if directory not in top.pending:
                 top.hold({"name": directory, "size": 0, "type": "directory"})
                 self.count += 1
-            top.pending.pop(directory, None)
-            top = _Open(directory, top.depth + 1)
+            # Its entry as listed, to list it by if the listing breaks off in it.
+            listed = top.pending.pop(directory, None)
+            top = _Open(directory, top.depth + 1, listed)
             self.open.append(top)
 
         if entry["type"] == "directory":
             if name in top.pending:
                 return parts  # Listed twice, e.g. as its marker too.
-            top.pending[name] = None
+            top.pending[name] = {**entry, "name": name}
         top.hold(entry)
         self.count += 1
 
@@ -572,19 +792,112 @@ class _Split:
         return [o.part(last=False) for o in self.open if o.entries]
 
 
-class _Open:
-    """A directory the recursive listing is in, with its entries held."""
+class _ParentsFirst:
+    """A recursive listing's entries, parents first, split into each directory's parts.
 
-    def __init__(self, name: str, depth: int) -> None:
+    A directory's entry comes before what is below it, but the directories'
+    contents interleave, e.g. breadth first: no entry tells that a directory
+    is done. So every directory stays open, its entries held as they come,
+    and put a part at a time, parents first, once ``chunk_size`` are held in
+    all. Their last parts come once the listing ends, the deepest first.
+
+    It answers `_resume` as `_Split` does: every directory seen is ``open``,
+    with the names of all its entries, and none ``pending``. That holds every
+    name of the tree, as only a parents-first listing needs.
+    """
+
+    def __init__(
+        self, root: str, root_depth: int, chunk_size: int, entry: Entry | None = None
+    ) -> None:
+        self.root = root
+        self.chunk_size = chunk_size
+        # Every directory seen, by its path, each after its parent.
+        self.directories = {root: _Open(root, root_depth, entry)}
+        self.count = 0  # The entries held.
+        self.current = self.directories[root]  # The directory of the entry listed last.
+
+    @property
+    def open(self) -> list[_Open]:
+        """Every directory seen, parents first: all are open until the listing ends."""
+        return list(self.directories.values())
+
+    @property
+    def first(self) -> bool:
+        """Whether no part of the root has been put yet."""
+        return self.directories[self.root].first
+
+    def add(self, entry: dict[str, Any]) -> list[_Listing]:
+        """Hold an entry in its directory, and the parts it fills."""
+        name = entry["name"].rstrip("/")
+        if name == self.root:
+            # A file lists itself. A directory may list its own marker.
+            if entry["type"] != "directory":
+                raise _not_a_directory(self.root, entry)
+            return []
+        if not _below(name, self.root):
+            return []  # No storage should list it.
+
+        # A directory not listed, as an object store lists only files, gets an
+        # entry in its parent from the path below it.
+        top = self.directories[self.root]
+        for directory in _between(self.root, name):
+            if (known := self.directories.get(directory)) is None:
+                top.hold({"name": directory, "size": 0, "type": "directory"})
+                self.count += 1
+                known = self.directories[directory] = _Open(directory, top.depth + 1)
+            top = known
+
+        # The listing moved to another directory: what is held goes, so that the
+        # strategies act on it while the listing goes on. Only last parts wait.
+        parts = self.flush() if top is not self.current and self.count else []
+        self.current = top
+
+        if entry["type"] == "directory":
+            if name in self.directories:
+                return parts  # Listed twice, e.g. as its marker too.
+            listed = {**entry, "name": name}
+            self.directories[name] = _Open(name, top.depth + 1, listed)
+        top.hold(entry)
+        self.count += 1
+
+        return parts + self.flush() if self.count >= self.chunk_size else parts
+
+    def flush(self) -> list[_Listing]:
+        """The parts of all held, parents first."""
+        self.count = 0
+        return [d.part(last=False) for d in self.directories.values() if d.entries]
+
+    def end(self) -> list[_Listing]:
+        """The last parts of every directory, once the listing has ended: the deepest first."""
+        parts = self.flush()
+        parts += [d.part(last=True) for d in reversed(self.directories.values())]
+        return parts
+
+
+class _Open:
+    """A directory the recursive listing is in, with its entries held.
+
+    It keeps the names of all its entries come so far, put or held, so that a
+    listing broken off in it leaves them out as `_relist` lists it again. That
+    holds a directory's names whole, but only of the directories open, and
+    only their names.
+    """
+
+    def __init__(self, name: str, depth: int, entry: Entry | None = None) -> None:
         self.name = name
         self.depth = depth
+        # Its entry as its parent's listing gave it, None if derived or the root's path alone.
+        self.entry = entry
         self.entries: list[dict[str, Any]] = []
         self.first = True
-        # Its subdirectories listed, below which nothing has come yet, in listing order.
-        self.pending: dict[str, None] = {}
+        # Its subdirectories listed, below which nothing has come yet, in
+        # listing order, each with its entry.
+        self.pending: dict[str, Entry] = {}
+        self.seen: set[str] = set()
 
     def hold(self, entry: dict[str, Any]) -> None:
         self.entries.append(entry)
+        self.seen.add(entry["name"].rstrip("/"))
 
     def part(self, *, last: bool) -> _Listing:
         part = _Listing(self.name, self.depth, self.entries, None, self.first, last)
@@ -608,24 +921,45 @@ def _between(directory: str, name: str) -> list[str]:
     return [prefix + "/".join(parts[: i + 1]) for i in range(len(parts))]
 
 
+def _once(part: _Listing, found: dict[str, set[str]]) -> _Listing:
+    """A part without the subdirectories its directory listed before.
+
+    A storage may list a directory twice, e.g. as a prefix and as its marker
+    object, maybe in two parts: each comes once, so that what consumes the
+    parts counts it once. The names kept are a directory's subdirectories, not
+    its files, until its last part.
+    """
+    seen = found.setdefault(part.directory, set())
+    kept: list[dict[str, Any]] = []
+    for entry in part.entries:
+        if entry["type"] == "directory":
+            name = entry["name"].rstrip("/")
+            if name in seen:
+                continue
+            seen.add(name)
+        kept.append(entry)
+    return part if len(kept) == len(part.entries) else replace(part, entries=kept)
+
+
 def _new_subdirs(
     part: _Listing,
     descend: Callable[[dict[str, Any]], bool] | None,
-    found: dict[str, set[str]],
-) -> list[tuple[str, int]]:
-    """The subdirectories a part adds to list, with their depth, those found before left out.
+) -> list[tuple[str, int, Entry]]:
+    """The subdirectories a part adds to list, each with its depth and its entry, as `_once` left them.
 
-    Each comes once, though a storage may list a directory twice, e.g. with and
-    without its marker object, in two parts.
+    Its entry, as the listing gave it, is what it is listed by, e.g. with the
+    storage's id.
     """
-    seen = found.setdefault(part.directory, set())
-    new = [s for s in dict.fromkeys(_subdirs(part.entries, descend)) if s not in seen]
-    seen.update(new)
-    return [(s, part.depth + 1) for s in new]
+    return [
+        (name, part.depth + 1, {**entry, "name": name})
+        for entry in part.entries
+        if entry["type"] == "directory" and (descend is None or descend(entry))
+        for name in [entry["name"].rstrip("/")]
+    ]
 
 
 class _Trees:
-    """The directories a walk lists whole, by one recursive ``_ils`` each.
+    """The directories a walk lists whole, by one ``ils_recursive`` each.
 
     A directory is so listed when the walk prunes nothing below it: it has no
     ``maxdepth``, and no ``descend``, or ``whole`` holds for it. The directories
@@ -657,16 +991,21 @@ class _Trees:
             )
 
     def listed(self, directory: str) -> bool:
-        """Whether the directory's subdirectories are in a recursive listing."""
-        return any(
-            r in (directory, "") or directory.startswith(r + "/") for r in self.roots
-        )
+        """Whether the directory's subdirectories are in a recursive listing: it, or a directory above it, is a root."""
+        if "" in self.roots:
+            return True
+        path = directory
+        while path:
+            if path in self.roots:
+                return True
+            path = path.rpartition("/")[0]
+        return False
 
 
 def _not_a_directory(root: str, entry: dict[str, Any]) -> NotADirectoryError:
     """The error of a root that is a file, with its entry as the listing gave it.
 
-    A copy or move of the root then hands the entry on, with no ``_info``.
+    A copy or move of the root then hands the entry on, with no ``info``.
     """
     error = NotADirectoryError(root)
     error.entry = {**entry, "name": root}  # type: ignore[attr-defined]

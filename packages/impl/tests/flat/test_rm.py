@@ -210,9 +210,10 @@ async def test_cancel_sends_no_new_batch() -> None:
     assert any(p.startswith("data/") for p in fs._file_data)
 
 
-def test_batch_size_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
+async def test_batch_size_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
+    # Read once the handler is open, as the operation starts.
     with pytest.raises(ValueError, match="batch_size"):
-        _rm(flat_fs, "data", batch_size=0)
+        await _collect_with_errors(_rm(flat_fs, "data", batch_size=0))
 
 
 @pytest.mark.parametrize("maxdepth", [1, 2, 3])

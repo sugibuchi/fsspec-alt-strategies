@@ -1,27 +1,31 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""A filesystem routing each path to the filesystem of its storage.
+"""A filesystem routing each path to the storage of its handler.
 
-`AsyncRoutingFileSystem` is the base of filesystems spanning several storages
-under one namespace, e.g. a cloud's volumes or containers, each with its own
-filesystem. Each inner filesystem runs its own strategies. A copy or move
-across two storages runs the source's family's strategy, as its profile's
-``fs_type`` says, each file by ``_cross_fs_cp_entry`` or ``_cross_fs_mv_entry``,
-which stream the data through the two storages' files unless overridden.
+`RoutingFileSystem` is the filesystem of a namespace spanning several
+storages, e.g. a cloud's volumes or containers, each with a handler of its
+own. A `RoutingHandler`, which a developer implements, says where each path
+goes. The router makes the filesystem of each storage it routes to, on its
+handler, and passes each call on to it, so that the storage's strategies
+run. A copy or move between two storages runs the source handler's
+strategy, each file by the routing handler's ``cp_across`` or
+``mv_across``, which stream the data by `transfer._cross_cp_file` unless
+overridden.
 
-This module depends on `filesystem`, `operation` and `paths` of `common`. It
-imports `cp` and `mv` of a family only to copy or move from a storage of it,
-so a copy may leave out the other family.
+This module depends on `filesystem`, `handler`, `operation`, `paths` and
+`transfer` of `common`. It imports no family: each storage's handler runs
+its own strategies.
 """
 
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import os
 from abc import abstractmethod
 from contextlib import aclosing
 from glob import has_magic
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
 
 from fsspec.asyn import AsyncFileSystem, sync
 from fsspec.callbacks import DEFAULT_CALLBACK
@@ -30,14 +34,22 @@ from fsspec.spec import AbstractFileSystem
 from fsspec_alt_strategies.monitor import Call, Monitored, routing
 
 from .common.filesystem import (
-    _AbstractFileSystemMeta,
+    BaseFileSystem,
+    _answer,
+    _as_given,
     _copy_errors,
     _raise,
     _range_bounds,
-    _strip_only_protocol,
+)
+from .common.handler import (
+    FileOperationHandler,
+    StorageHandler,
+    _limit,
+    _PathHandler,
 )
 from .common.operation import _collect_with_monitors
 from .common.paths import _trim
+from .common.transfer import _cross_cp_file
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -50,99 +62,51 @@ if TYPE_CHECKING:
 
     from fsspec.callbacks import Callback
 
+    from .common.handler import Entry, StoragePath
     from .common.jobs import _Transfer
     from .common.operation import Operation
 
-__all__ = ["AsyncRoutingFileSystem"]
-
-_MiB = 1024 * 1024
+__all__ = ["RoutingFileSystem", "RoutingHandler"]
 
 _Group = tuple[AsyncFileSystem, list[str], list[str]]
 """An inner filesystem, the inner paths given to it, and the router's paths of them."""
 
-_Backend = TypeVar("_Backend", bound=AsyncFileSystem)
-"""The class of a router's inner filesystems, e.g. one per account of a cloud."""
+_Made = TypeVar("_Made", bound="FileOperationHandler | RoutingHandler")
+"""The class of a handler a routing handler makes, e.g. one per volume."""
+
+_Through = tuple[tuple["RoutingHandler", Any], ...]
+"""The routers a path goes through, outermost first, each with the handler it routed to."""
 
 
-class AsyncRoutingFileSystem(
-    AsyncFileSystem, Monitored, Generic[_Backend], metaclass=_AbstractFileSystemMeta
-):
-    """An abstract async filesystem passing each call to the filesystem of the path's storage.
+class RoutingHandler(_PathHandler):
+    """Where each path of a namespace spanning several storages goes, for a `RoutingFileSystem`.
 
-    It suits a namespace spanning several storages, each with a filesystem of
-    its own, e.g. a cloud's volumes, or an account's containers each with its
-    own client. A subclass says where each path goes, and the router passes
-    each fsspec call on:
+    A developer implements, beside `verify_path`, which checks the router's
+    own paths:
 
-    - ``_route(path)`` gives the inner filesystem and its path, or None for a
-      path above every storage, e.g. a catalog holding volumes.
-    - ``_outer(fs, path)`` gives the router's path of an inner one, so that
-      the names answered, e.g. by ``ls`` and ``find``, are the router's.
-    - ``_roots(path)``, if any path is above the storages, lists a directory
-      there, as ``ls`` with ``detail=True`` does.
+    - `route`, the handler of a path's storage and its path there, or None
+      for a path above every storage, e.g. a catalog holding volumes;
+    - `outer`, the router's path of a path of one of the handlers it routes
+      to, so that the names answered, e.g. by ``ls`` and ``find``, are the
+      router's;
+    - `roots`, if any path is above the storages, a listing there.
 
-    ``_route`` is sync, as sync methods route too. A subclass whose inner
-    filesystems are all of one class names it, e.g.
-    ``AsyncRoutingFileSystem[S3FileSystem]``, so that its hooks take that
-    class.
+    It has no primitives: each storage's handler has its own. The handler
+    `route` gives may be another routing handler, which routes the path it
+    is given again. Each handler checks its own paths: a path through two
+    routers is checked three times, by each router and by the storage's
+    handler.
 
-    The primitives, e.g. ``_info``, ``_cat_file`` and ``_open``, call the
-    inner filesystem's own. The recursive methods, e.g. ``_find``, ``_rm`` and
-    ``_copy``, call the inner filesystem's own too, so that its strategies
-    run. Several paths, e.g. of one ``rm``, are grouped by storage, each group
-    sent at once. A failure raised by an inner filesystem gets a note naming
-    the router's path, and its inner one.
-
-    Above the storages, ``ls`` answers from ``_roots``, and ``info`` from
-    ``_root_info``, which a subclass may override. ``find``, ``du`` and
-    ``walk`` are fsspec's own walk, a directory after another, handing each
-    storage's directory to its filesystem. A glob whose literal prefix
-    routes goes whole to that filesystem. Another lists the prefix's roots, as
-    fsspec's ``glob`` does. A change above the storages, e.g. ``rm`` of a
-    catalog, raises PermissionError.
-
-    A copy or move between two paths of one storage is the inner filesystem's
-    own: both paths route to the same inner filesystem. Between two storages,
-    it is the copy or move of the source's family, as its profile's ``fs_type``
-    says: that of `TreeFileSystem` or `FlatFileSystem`, walking or listing the
-    source as they do, with ``maxdepth`` too. Each file goes by
-    ``_cross_fs_cp_entry`` or ``_cross_fs_mv_entry``, which stream the data
-    unless a subclass overrides them, e.g. with a server-side copy. A source of
-    unknown ``fs_type`` is copied by fsspec's own copy, a file at a time. A
-    move between two storages deletes each source file once its copy succeeds,
-    and the source directories left empty.
-
-    Inner filesystems are async, on the router's loop: a sync one raises
-    TypeError, and is to be wrapped, e.g. in a `SyncTreeWrapper`. A subclass
-    makes them when first needed, with `_backend`, so that ``close()`` closes
-    them, and `backends_loop` tells the loop they run on. Pickling keeps the
-    constructor's arguments, as fsspec's own does, so a copy makes its inner
-    filesystems again.
-
-    One transaction is the router's: ``open`` passes ``autocommit`` on, and
-    fsspec adds each file written to the router's transaction. Its commit, or
-    discard, is file by file: it is not atomic across storages. In it,
-    ``pipe_file`` and ``put_file`` write through ``open``, so that their files
-    join it. ``open_async`` takes no part in it, as in fsspec, whose
-    ``open_async`` knows no transaction: its files are the inner filesystem's
-    own, written as they close. Neither does a copy between two storages,
-    which streams through ``open_async``.
-
-    The router has no ``storage_profile``: each storage has its own, which
-    its inner filesystem gives. Its only limit is ``transfer_limit``, the
-    files copied across storages at once. The inner filesystems keep their
-    own limits.
-
-    A `Monitor` sees the calls of the inner filesystems, their ``Call.via``
-    naming the routers they came through. A copy across storages is a call of
-    the router itself.
+    `inner` makes the handlers it routes to, once each, so that `aclose` and
+    `close` close them. A copy or move between two storages goes a file at
+    a time by `cp_across` or `mv_across`, ``transfer_concurrency`` at a time.
+    Through nested routers, the outermost router's are those used.
 
     Parameters
     ----------
-    transfer_concurrency : int
-        The files copied between two storages at a time.
-    **kwargs
-        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
+    transfer_concurrency : int or asyncio.Semaphore
+        The files copied between two storages at a time. A semaphore is used
+        as it is, shared with what else holds it.
 
     Raises
     ------
@@ -151,213 +115,409 @@ class AsyncRoutingFileSystem(
 
     See Also
     --------
-    TreeFileSystem, FlatFileSystem : The inner filesystems it suits best.
+    RoutingFileSystem : The filesystem on it.
 
     Examples
     --------
-    >>> class Lake(AsyncRoutingFileSystem):
+    >>> class Lake(RoutingHandler):
     ...     protocol = "lake"
     ...
-    ...     def _route(self, path):
+    ...     def verify_path(self, path):
+    ...         if self.strip_protocol(path).startswith("/"):
+    ...             raise ValueError(f"Not a path of the lake: {path!r}")
+    ...
+    ...     def route(self, path):
     ...         volume, _, inner = path.partition("/")
     ...         if not volume:
     ...             return None  # The root, above every volume.
-    ...         return self._backend(volume, lambda: self._volume(volume)), inner
+    ...         return self.inner(volume, lambda: VolumeHandler(volume)), inner
     ...
-    ...     def _outer(self, fs, path):
-    ...         return f"{fs.volume}/{path}".rstrip("/")
+    ...     def outer(self, handler, path):
+    ...         return f"{handler.volume}/{path}".rstrip("/")
     ...
-    ...     async def _roots(self, path):
+    ...     async def roots(self, entry):
     ...         return [
     ...             {"name": v, "type": "directory", "size": 0}
     ...             for v in await self.client.list_volumes()
     ...         ]
-    >>> fs = Lake(transfer_concurrency=8)
+    >>> fs = RoutingFileSystem(Lake(transfer_concurrency=8))
     """
 
-    def __init__(self, *args: Any, transfer_concurrency: int, **kwargs: Any) -> None:
-        if transfer_concurrency < 1:
-            raise ValueError(
-                f"transfer_concurrency must be at least 1: {transfer_concurrency}"
-            )
-
-        super().__init__(*args, **kwargs)
-
+    def __init__(self, *, transfer_concurrency: int | asyncio.Semaphore) -> None:
         self.transfer_concurrency = transfer_concurrency
-        self.transfer_limit = asyncio.Semaphore(transfer_concurrency)
-        self._backends: dict[Hashable, _Backend] = {}
-        self._backends_loop: asyncio.AbstractEventLoop | None = None
+        self.transfer_limit = _limit(transfer_concurrency, "transfer_concurrency")
+        self._inner: dict[Hashable, Any] = {}
+        # How many times it closed what it made: a router's filesystems on
+        # handlers made before are stale.
+        self.closes = 0
 
-    # What a subclass implements.
+    # What a developer implements.
 
     @abstractmethod
-    def _route(self, path: str) -> tuple[_Backend, str] | None:
-        """The inner filesystem of a path, and its path there, or None above them all.
+    def route(
+        self, path: StoragePath
+    ) -> tuple[FileOperationHandler | RoutingHandler, str] | None:
+        """The handler of a path's storage, and its path there, or None above them all.
 
-        ``path`` is the router's, without the protocol. A trailing "/" is kept,
-        as it means a directory to a copy or a glob: the router puts it back on
-        the inner path if ``_route`` drops it. ``path`` may be a glob pattern
-        too: where its literal part routes, the whole pattern must route to the
-        same filesystem.
+        ``path`` is the router's, verified, without a trailing "/". It may be a
+        glob pattern: where its literal part routes, the whole pattern must
+        route to the same handler. The handler given checks the path given
+        back, by its ``verify_path``.
 
         It raises FileNotFoundError for a path no storage has, e.g. a missing
-        volume. It may make the inner filesystem, with `_backend`.
+        volume. It is sync, as fsspec's sync methods route too: it makes the
+        handler, by `inner`, without a request.
         """
 
     @abstractmethod
-    def _outer(self, fs: _Backend, path: str) -> str:
-        """The router's path of ``path``, a path of the inner filesystem ``fs``."""
+    def outer(self, handler: FileOperationHandler | RoutingHandler, path: str) -> str:
+        """The router's path of ``path``, a path of ``handler``, one `route` gave."""
 
-    # What a subclass may override.
+    # What a developer may override.
 
-    async def _roots(self, path: str) -> list[dict[str, Any]]:
-        """List a directory above the storages, as ``_ls`` with ``detail=True`` does.
+    async def roots(self, entry: Entry) -> list[Entry]:
+        """List a directory above the storages, its entries named by the router's paths.
 
-        Each entry's name is the router's path. It raises FileNotFoundError
-        for a directory that does not exist.
-
-        Here, there is none: ``_route`` never answers None, e.g. for URLs each
-        naming its storage, and any path raises FileNotFoundError. A subclass
-        with paths above its storages overrides it.
+        It raises FileNotFoundError for a directory that does not exist. Here,
+        there is none: `route` never answers None, e.g. for URLs each naming
+        its storage. A handler with paths above its storages overrides it.
         """
-        raise FileNotFoundError(path)
+        raise FileNotFoundError(entry["name"])
 
-    async def _root_info(self, path: str) -> dict[str, Any]:
-        """Describe a path above the storages, as ``_info`` does.
+    async def root_info(self, entry: Entry) -> Entry:
+        """Describe a path above the storages, as ``info`` does.
 
-        ``path`` is the router's, without the protocol. Here, the root is a
-        bare directory entry, and any other path the entry of its name in
-        ``_roots`` of its parent. A subclass knowing more of them, e.g. the
-        root's own entry, or one request describing a path, overrides it.
-        It raises FileNotFoundError for a path that does not exist.
+        Here, the root is a bare directory entry, and any other path the entry
+        of its name in `roots` of its parent. A handler knowing more, e.g. the
+        root's own entry, or one request describing a path, overrides it. It
+        raises FileNotFoundError for a path that does not exist.
         """
-        if path in ("", self.root_marker):
+        path = entry["name"]
+        if path == self.root:
             return {"name": path, "size": 0, "type": "directory"}
 
-        for entry in await self._roots(self._parent(path)):
-            if entry["name"].rstrip("/") == path:
-                return entry
+        for listed in await self.roots(self.entry(self.parent(path))):
+            if listed["name"].rstrip("/") == path:
+                return listed
 
         raise FileNotFoundError(path)
 
-    async def _cross_fs_cp_entry(
+    async def cp_across(
         self,
-        src_fs: _Backend,
-        src_entry: dict[str, Any],
-        dest_fs: _Backend,
-        dest_path: str,
+        src: StorageHandler,
+        entry: Entry,
+        dst: StorageHandler,
+        path: StoragePath,
     ) -> None:
-        """Copy a file from one storage to another, the paths the inner filesystems'.
+        """Copy a file from one storage to another, the paths their handlers'.
 
-        ``src_entry`` is the source's, as its listing or ``_info`` gave it, its
+        ``entry`` is the source's, as its listing or ``info`` gave it, its
         ``"name"`` the source path. Its size, e.g., may choose how the data
-        goes. It may be stale, as for `TreeFileSystem._cp_file_entry`.
+        goes. It may be stale. ``path`` is the destination's, verified.
 
-        Here, the data is streamed through the router, by both storages'
-        ``open_async``. A block, the source's ``transfer_size``, is read, then
-        written, before the next is read: a copy holds one block in memory,
-        however large the file. A copy failing midway leaves what the
-        destination's file leaves on an exception, e.g. an adaptive file aborts
-        its upload.
-
-        A subclass overrides it with the cloud's server-side copy, e.g. a copy
-        from a URL, and falls back on this one where that cannot be done, e.g.
-        between two clouds. It runs holding a permit of ``transfer_limit``.
+        Here, the data is streamed through the caller, by
+        `transfer._cross_cp_file`: a block at a time, leaving no part of a
+        file, and checking the size written. A handler overrides it with the
+        cloud's copy on the server, e.g. a copy from a URL, and falls back on
+        this one where that cannot be done, e.g. between two clouds. It runs
+        holding a permit of ``transfer_limit``.
         """
-        block_size = getattr(src_fs, "transfer_size", None) or 8 * _MiB
+        await _cross_cp_file(src, entry, dst, path)
 
-        reader = await src_fs.open_async(src_entry["name"], "rb")
-        async with reader:
-            writer = await dest_fs.open_async(dest_path, "wb")
-            async with writer:
-                while block := await reader.read(block_size):
-                    await writer.write(block)
-
-    async def _cross_fs_mv_entry(
+    async def mv_across(
         self,
-        src_fs: _Backend,
-        src_entry: dict[str, Any],
-        dest_fs: _Backend,
-        dest_path: str,
+        src: StorageHandler,
+        entry: Entry,
+        dst: StorageHandler,
+        path: StoragePath,
     ) -> None:
-        """Move a file from one storage to another, the paths the inner filesystems'.
+        """Move a file from one storage to another, as `cp_across` copies one.
 
-        Here, it is ``_cross_fs_cp_entry``, then the source's ``_rm_file``: a
-        source whose copy failed is kept. It runs holding a permit of
-        ``transfer_limit``.
+        Here, it is `cp_across`, then the source's ``rm_file``: a source whose
+        copy failed is kept. It runs holding a permit of ``transfer_limit``.
         """
-        await self._cross_fs_cp_entry(src_fs, src_entry, dest_fs, dest_path)
-        await src_fs._rm_file(src_entry["name"])
+        await self.cp_across(src, entry, dst, path)
+        await src.rm_file(entry)
 
-    def _backend(self, key: Hashable, make: Callable[[], _Backend]) -> _Backend:
-        """The inner filesystem of ``key``, made by ``make`` the first time.
+    # The handlers it makes, and its lifecycle.
 
-        A subclass's ``_route`` makes its inner filesystems with it, e.g. one
-        per volume, or per account and container. ``make`` gives them the
-        router's mode and loop, ``asynchronous=self.asynchronous`` and
-        ``loop=self.loop``. A sync router's calls, e.g. ``open`` and ``sign``,
-        call their sync methods, which run on that loop. Made with
-        ``asynchronous=True`` under a sync router, they would have no loop to
-        run on. ``close()`` closes them.
+    def inner(self, key: Hashable, make: Callable[[], _Made]) -> _Made:
+        """The handler of ``key``, made by ``make`` the first time, e.g. one per volume.
+
+        `route` makes the handlers it routes to by it, so that `aclose` and
+        `close` close them. ``make`` sends no request: a handler opens as
+        its storage is first used.
         """
-        fs = self._backends.get(key)
-        if fs is None:
-            fs = self._backends[key] = make()
-            if self._backends_loop is None:
-                try:
-                    self._backends_loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    self._backends_loop = self._loop
-        return fs
+        made = self._inner.get(key)
+        if made is None:
+            made = self._inner[key] = make()
+        return made
 
-    @property
-    def backends_loop(self) -> asyncio.AbstractEventLoop | None:
-        """The loop the inner filesystems run on, once one is made, else None.
+    async def open(self) -> None:
+        """Nothing: each handler made opens as its storage is first used."""
 
-        It is the loop running when the first was made, or else a sync router's
-        own. Their clients' sessions are bound to it. A subclass holding what
-        they share, e.g. a credential, closes it there, after ``close()``.
-        """
-        return self._backends_loop
+    async def aclose(self) -> None:
+        """Close the handlers made by `inner`, by their `aclose`, and forget them: a later route makes them again."""
+        made, self._inner = self._inner, {}
+        self.closes += 1
+        for handler in made.values():
+            await handler.aclose()
 
     def close(self) -> None:
-        """Close the inner filesystems made by `_backend`, and forget them, and their loop.
+        """Close the handlers made by `inner` at once, by their sync `close`, and forget them.
 
-        Each is closed by its own ``close()``, if it has one. A call after
-        makes them again. A subclass closing what they share takes
-        `backends_loop` first.
+        The filesystem's sync ``close()`` calls it. A later route makes them
+        again.
         """
-        backends, self._backends = self._backends, {}
-        self._backends_loop = None
-        for fs in backends.values():
-            close = getattr(fs, "close", None)
-            if callable(close):
-                close()
+        made, self._inner = self._inner, {}
+        self.closes += 1
+        for handler in made.values():
+            handler.close()
+
+
+def _closes(through: _Through) -> tuple[int, ...]:
+    """How many times each router gone through has closed the handlers it made."""
+    return tuple(router.closes for router, _ in through)
+
+
+class _Storage(NamedTuple):
+    """A storage a router routed to: its handler, its filesystem, and the routers it goes through."""
+
+    handler: FileOperationHandler
+    fs: BaseFileSystem
+    through: _Through
+    closes: tuple[int, ...]
+    """How many times each router gone through had closed its handlers when this was made."""
+
+
+class RoutingFileSystem(AsyncFileSystem, Monitored):
+    """An async filesystem passing each call to the filesystem of the path's storage.
+
+    It suits a namespace spanning several storages, each with a handler of
+    its own, e.g. a cloud's volumes, or an account's containers each with its
+    own client. Its `RoutingHandler` says where each path goes. The router
+    makes the filesystem of each storage it routes to, a `BaseFileSystem` on
+    the storage's handler, and passes each fsspec call on to it.
+
+    The primitives, e.g. ``_info``, ``_cat_file`` and ``_open``, call the
+    storage's filesystem's own. The recursive methods, e.g. ``_find``,
+    ``_rm`` and ``_copy``, call its own too, so that its strategies run.
+    Several paths, e.g. of one ``rm``, are grouped by storage, each group sent
+    at once. A failure raised by a storage gets a note naming the router's
+    path, and its inner one.
+
+    Above the storages, ``ls`` answers from the handler's ``roots``, and
+    ``info`` from its ``root_info``. ``find``, ``du`` and ``walk`` are
+    fsspec's own walk, a directory after another, handing each storage's
+    directory to its filesystem. A glob whose literal prefix routes goes whole
+    to that storage. Another lists the prefix's roots, as fsspec's ``glob``
+    does. A change above the storages, e.g. ``rm`` of a catalog, raises
+    PermissionError.
+
+    A copy or move between two paths of one storage is the storage's own.
+    Between two storages, it is the source handler's ``cp`` or ``mv``,
+    walking or listing the source as its strategy does, with ``maxdepth``
+    too. Each file goes by the handler's
+    ``cp_across`` or ``mv_across``, which stream the data unless the handler
+    overrides them, e.g. with a copy on the server. A move between two
+    storages deletes each source file once its copy succeeds, and the source
+    directories left empty.
+
+    Each path is checked by the routing handler, and its path in a storage by
+    the storage's handler. A routing handler may route to another, whose
+    paths are checked too, and whose names are mapped back through both.
+
+    One transaction is the router's: ``open`` passes ``autocommit`` on, and
+    fsspec adds each file written to the router's transaction. Its commit, or
+    discard, is file by file: it is not atomic across storages. In it,
+    ``pipe_file`` and ``put_file`` write through ``open``, so that their files
+    join it. ``open_async`` takes no part in it, as in fsspec, whose
+    ``open_async`` knows no transaction: its files are the storage's own,
+    written as they close. Neither does a copy between two storages.
+
+    The router has no profile and no limit of its own: each storage's are
+    its handler's, and the files copied across storages at once are bounded
+    by the routing handler's ``transfer_limit``.
+
+    A `Monitor` sees the calls of the storages' filesystems, their
+    ``Call.via`` naming the routers they came through. A copy across storages
+    is a call of the router itself.
+
+    It takes a routing handler. By convention, a class below it takes the
+    handler's storage options, not a handler: its ``__init__`` makes its
+    handler from them, so that fsspec makes it from a URL or a registry. It
+    names its ``protocol``, ``root_marker``, ``_strip_protocol`` and
+    ``_get_kwargs_from_urls`` as its handler class's ``protocol``, ``root``,
+    ``strip_protocol`` and ``options_from_url``.
+
+    Parameters
+    ----------
+    handler : RoutingHandler
+        Where each path goes.
+    asynchronous, loop, use_listings_cache, listings_expiry_time, max_paths
+        fsspec's own options, as `BaseFileSystem` takes them.
+
+    Raises
+    ------
+    TypeError
+        If given an option it does not name, e.g. one misspelled.
+
+    See Also
+    --------
+    RoutingHandler : Where each path goes.
+    BaseFileSystem : The filesystem of each storage.
+
+    Examples
+    --------
+    >>> class LakeFileSystem(RoutingFileSystem):
+    ...     protocol = Lake.protocol
+    ...     root_marker = Lake.root
+    ...     _strip_protocol = Lake.strip_protocol
+    ...     _get_kwargs_from_urls = Lake.options_from_url
+    ...
+    ...     def __init__(self, *, transfer_concurrency, **kwargs):
+    ...         super().__init__(Lake(transfer_concurrency=transfer_concurrency), **kwargs)
+    >>> fs = LakeFileSystem(transfer_concurrency=8)
+    >>> fs = RoutingFileSystem(Lake(transfer_concurrency=8), asynchronous=True)
+    """
+
+    handler: RoutingHandler
+    """The routing handler, which says where each path goes."""
+
+    def __init__(
+        self,
+        handler: RoutingHandler,
+        *,
+        asynchronous: bool = False,
+        loop: asyncio.AbstractEventLoop | None = None,
+        use_listings_cache: bool = True,
+        listings_expiry_time: float | None = None,
+        max_paths: int | None = None,
+    ) -> None:
+        # fsspec's own options, named, as `BaseFileSystem` names them.
+        super().__init__(
+            asynchronous=asynchronous,
+            loop=loop,
+            use_listings_cache=use_listings_cache,
+            listings_expiry_time=listings_expiry_time,
+            max_paths=max_paths,
+        )
+
+        self.handler = handler
+        # The storages routed to, by their handler, each filesystem made once.
+        self._storages: dict[FileOperationHandler, _Storage] = {}
+
+    def unstrip_protocol(self, name: str) -> str:
+        """A path of the router as a URL: its handler's."""
+        return self.handler.unstrip_protocol(name)
+
+    def close(self) -> None:
+        """Release the handlers the routing handler made, and forget their filesystems.
+
+        A call after makes them again. Their clients' sessions, which closing
+        takes a request, are closed by the routing handler's `aclose`.
+        """
+        self._storages = {}
+        self.handler.close()
 
     # Routing.
 
-    def _target(self, path: str) -> tuple[AsyncFileSystem, str] | None:
-        """``_route`` of a path given to a method, refusing a sync filesystem.
+    def _resolve(
+        self, path: str
+    ) -> tuple[_Through, RoutingHandler, FileOperationHandler | None, str]:
+        """Route a router's path through each router, to a storage's handler or above them.
 
+        It gives the routers gone through, the last router, the storage's
+        handler, or None above the storages of the last router, and the path
+        there. Each router checks its path, and the storage's handler its own.
         A trailing "/" of the path is kept on a non-empty inner path, as it
-        means a directory to a copy or a glob: ``_route`` need not keep it.
+        means a directory to a copy or a glob: a route never sees it.
         """
-        plain = _strip_only_protocol(self, path)
-        target = self._route(plain)
-        if target is None:
+        through: list[tuple[RoutingHandler, Any]] = []
+        router = self.handler
+        while True:
+            plain = path.rstrip("/") or path
+            target = router.route(router.verified(plain))
+            if target is None:
+                return tuple(through), router, None, plain
+
+            handler, inner = target
+            if path != plain and inner and not inner.endswith("/"):
+                inner = f"{inner}/"
+            through.append((router, handler))
+            if isinstance(handler, RoutingHandler):
+                router, path = handler, inner
+                continue
+            if not isinstance(handler, FileOperationHandler):
+                raise TypeError(
+                    f"{router!r} routed {plain!r} to {handler!r}: a storage's handler"
+                    " with strategies is needed, a FileOperationHandler. Wrap a"
+                    " filesystem, e.g. in FsspecTreeHandler(fs)."
+                )
+
+            handler.verify_path(inner.rstrip("/") or handler.root)
+            return tuple(through), router, handler, inner
+
+    def _route(self, path: str) -> tuple[BaseFileSystem, str] | None:
+        """The filesystem of a path's storage, and its path there, or None above them all."""
+        through, _, handler, inner = self._resolve(path)
+        if handler is None:
             return None
+        return self._storage(handler, through).fs, inner
 
-        fs, inner = target
-        if not getattr(fs, "async_impl", False):
-            raise TypeError(
-                f"{fs!r} is not async: a router passes its calls on to async "
-                "filesystems only. Wrap it, e.g. in a SyncTreeWrapper."
-            )
+    def _storage(self, handler: FileOperationHandler, through: _Through) -> _Storage:
+        """The storage of a handler, its filesystem made once."""
+        storage = self._storages.get(handler)
+        if storage is not None and storage.closes == _closes(storage.through):
+            return storage
 
-        if plain.endswith("/") and inner and not inner.endswith("/"):
-            return fs, f"{inner}/"
-        else:
-            return target
+        # A miss: the storages a router gone through closed since are dropped,
+        # as their handlers are, rather than kept for ever.
+        self._storages = {
+            h: s for h, s in self._storages.items() if s.closes == _closes(s.through)
+        }
+
+        # Never cached: the router keeps it, and fsspec would key it by the
+        # handler's repr. fsspec's metaclass takes skip_instance_cache, before
+        # __init__ sees the options.
+        fs = BaseFileSystem(  # type: ignore[call-arg]
+            handler,
+            asynchronous=self.asynchronous,
+            loop=self.loop,
+            skip_instance_cache=True,
+        )
+        storage = self._storages[handler] = _Storage(
+            handler, fs, through, _closes(through)
+        )
+        return storage
+
+    def _outer(self, fs: AsyncFileSystem, path: str) -> str:
+        """The router's path of ``path``, a path of a storage's filesystem."""
+        handler = fs._handler
+        return self._lifted(self._storages[handler].through, path)
+
+    @staticmethod
+    def _lifted(through: _Through, path: str) -> str:
+        """A path of the last handler gone through, mapped back to the outermost router's."""
+        for router, handler in reversed(through):
+            path = router.outer(handler, path)
+        return path
+
+    async def _roots(self, path: str) -> list[dict[str, Any]]:
+        """List a directory above the storages, by the routing handler's ``roots``."""
+        through, router, _, inner = self._resolve(path)
+        listed = await router.roots(router.entry(inner))
+        return [{**e, "name": self._lifted(through, e["name"])} for e in listed]
+
+    async def _root_info(self, path: str) -> dict[str, Any]:
+        """Describe a path above the storages, by the routing handler's ``root_info``."""
+        through, router, _, inner = self._resolve(path)
+        entry = await router.root_info(router.entry(inner))
+        return {**entry, "name": self._lifted(through, entry["name"])}
+
+    def _target(self, path: str) -> tuple[AsyncFileSystem, str] | None:
+        """`_route` of a path given to a method, its protocol stripped."""
+        return self._route(self.handler.verified(path, strip_only_protocol=True))
 
     def _required(self, path: str) -> tuple[AsyncFileSystem, str]:
         """``_target`` of a path that must be in a storage, e.g. of a file."""
@@ -382,6 +542,65 @@ class AsyncRoutingFileSystem(
         whole = self._target(path)
         return whole if whole is not None and whole[0] is base[0] else None
 
+    async def _storage_roots(self, path: str) -> list[str]:
+        """The roots of the storages below a path above them, found by `_roots`, level by level."""
+        roots: list[str] = []
+        frontier = [path.rstrip("/")]
+        while frontier:
+            prefix = frontier.pop()
+            for entry in await self._roots(prefix):
+                name = entry["name"].rstrip("/")
+                if self._target(name) is not None:
+                    roots.append(name)
+                elif entry.get("type") == "directory":
+                    frontier.append(name)
+        return sorted(roots)
+
+    async def _spread(self, pattern: str, maxdepth: int | None) -> list[str] | None:
+        """A pattern spanning storages as one pattern per storage it can match, or None to glob as fsspec does.
+
+        The segments above the storages are expanded one at a time: a literal
+        one is taken as it is, and one with wildcards matched against the
+        names `_roots` lists there. Once a path is in a storage, the rest of the
+        pattern is that storage's to glob, so a storage matching no segment
+        above it is never listed: e.g. ``data*/x.txt`` lists the buckets, then
+        ``x.txt`` in each bucket named ``data...``.
+
+        It answers None where fsspec's glob counts what is above the storages:
+        a ``**`` there, a ``maxdepth`` with a ``**``, or a pattern ending above
+        the storages, matching their roots themselves.
+        """
+        segments = pattern.rstrip("/").split("/")
+        trailing = "/" if pattern.endswith("/") else ""
+        if maxdepth is not None and "**" in segments:
+            return None
+
+        spread: list[str] = []
+        frontier = [("", 0)]
+        while frontier:
+            prefix, index = frontier.pop()
+            if prefix and self._target(prefix) is not None:
+                rest = "/".join(segments[index:])
+                spread.append(
+                    f"{prefix}/{rest}{trailing}" if rest else prefix + trailing
+                )
+                continue
+            if index >= len(segments) - 1:
+                return None  # The pattern ends above the storages.
+            segment = segments[index]
+            if segment == "**":
+                return None
+            if not has_magic(segment):
+                frontier.append(
+                    (f"{prefix}/{segment}" if prefix else segment, index + 1)
+                )
+                continue
+            for entry in await self._roots(prefix):
+                name = entry["name"].rstrip("/")
+                if fnmatch.fnmatchcase(name.rpartition("/")[2], segment):
+                    frontier.append((name, index + 1))
+        return sorted(spread)
+
     async def _grouped(self, path: str | Sequence[str]) -> list[_Group]:
         """The paths of a call changing the storages, grouped by inner filesystem.
 
@@ -397,7 +616,9 @@ class AsyncRoutingFileSystem(
             group[2].append(outer)
 
         for p in [path] if isinstance(path, str) else path:
-            target = self._pattern_target(_strip_only_protocol(self, p))
+            target = self._pattern_target(
+                self.handler.verified(p, strip_only_protocol=True)
+            )
             if target is not None:
                 add(target, p)
             elif has_magic(p):
@@ -475,13 +696,18 @@ class AsyncRoutingFileSystem(
         placed: dict[str, str] = {}
         errors: list[Exception] = []
         skipped: set[str] = set()
-        base = _trim(_strip_only_protocol(self, destination))
+        base = _trim(self.handler.verified(destination, strip_only_protocol=True))
 
-        for path in sorted(paths, key=lambda p: _trim(_strip_only_protocol(self, p))):
+        for path in sorted(
+            paths,
+            key=lambda p: _trim(self.handler.verified(p, strip_only_protocol=True)),
+        ):
             if has_magic(path):
                 continue
 
-            name = _trim(_strip_only_protocol(self, path)).rpartition("/")[2]
+            name = _trim(
+                self.handler.verified(path, strip_only_protocol=True)
+            ).rpartition("/")[2]
             target = f"{base}/{name}" if base else name
             if (other := placed.get(target)) is not None:
                 error = FileExistsError(target)
@@ -685,7 +911,7 @@ class AsyncRoutingFileSystem(
             # fsspec's copy gives directories too, which each filesystem makes.
             await self._on(fs2, inner2, path2, fs2._makedirs(inner2, exist_ok=True))
         else:
-            copy_file = self._across(fs1, fs2)
+            copy_file = self._across(fs1._handler, fs2._handler)
             entry = {**entry, "name": inner1}
             await self._on(fs1, inner1, path1, copy_file(entry, inner2))
 
@@ -697,7 +923,7 @@ class AsyncRoutingFileSystem(
             await self._on(fs1, inner1, path1, fs1._mv_file(inner1, inner2, **kwargs))
         else:
             entry = await self._on(fs1, inner1, path1, fs1._info(inner1))
-            mv_file = self._across(fs1, fs2, move=True)
+            mv_file = self._across(fs1._handler, fs2._handler, move=True)
             entry = {**entry, "name": inner1}
             await self._on(fs1, inner1, path1, mv_file(entry, inner2))
 
@@ -741,8 +967,8 @@ class AsyncRoutingFileSystem(
         super().invalidate_cache(path)
 
         if path is None:
-            for fs in self._backends.values():
-                fs.invalidate_cache()
+            for storage in self._storages.values():
+                storage.fs.invalidate_cache()
             return
 
         target = self._target(path)
@@ -811,16 +1037,24 @@ class AsyncRoutingFileSystem(
 
     def _found(self, fs: AsyncFileSystem, found: dict[str, Any], detail: bool) -> Any:
         """An inner ``find`` or ``glob``'s answer with details, as the router's."""
-        entries = {self._outer(fs, n): self._entry(fs, e) for n, e in found.items()}
-        names = sorted(entries)
-        return {n: entries[n] for n in names} if detail else names
+        return _answer([self._entry(fs, e) for e in found.values()], detail)
 
     async def _du(
         self, path: str, total: bool = True, maxdepth: int | None = None, **kwargs: Any
     ) -> Any:
         target = self._target(path)
         if target is None:
-            return await super()._du(path, total=total, maxdepth=maxdepth, **kwargs)
+            if maxdepth is not None:
+                # fsspec's du, as maxdepth counts the levels above the storages.
+                return await super()._du(path, total=total, maxdepth=maxdepth, **kwargs)
+            # Each storage's own du, which sends no request per file.
+            measured = [
+                await self._du(root, total=total, **kwargs)
+                for root in await self._storage_roots(path)
+            ]
+            if total:
+                return sum(measured)
+            return {name: size for sizes in measured for name, size in sizes.items()}
 
         fs, inner = target
         sizes = await self._on(
@@ -830,11 +1064,22 @@ class AsyncRoutingFileSystem(
         return sizes if total else {self._outer(fs, n): s for n, s in sizes.items()}
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
-        target = self._pattern_target(_strip_only_protocol(self, path))
+        verified = self.handler.verified(path, strip_only_protocol=True)
+        target = self._pattern_target(verified)
         detail = kwargs.pop("detail", False)
         if target is None:
-            # fsspec's glob, finding from the literal prefix over _roots.
-            return await super()._glob(path, maxdepth=maxdepth, detail=detail, **kwargs)
+            spread = await self._spread(verified, maxdepth)
+            if spread is None:
+                # fsspec's glob, finding from the literal prefix over _roots.
+                return await super()._glob(
+                    path, maxdepth=maxdepth, detail=detail, **kwargs
+                )
+            # Each storage's own glob of what is below it: none other is listed.
+            entries: list[dict[str, Any]] = []
+            for pattern in spread:
+                found = await self._glob(pattern, detail=True, **kwargs)
+                entries.extend(found.values())
+            return _answer(entries, detail)
 
         fs, inner = target
         found = await self._on(
@@ -851,7 +1096,7 @@ class AsyncRoutingFileSystem(
         **kwargs: Any,
     ) -> list[str]:
         target = (
-            self._pattern_target(_strip_only_protocol(self, path))
+            self._pattern_target(self.handler.verified(path, strip_only_protocol=True))
             if isinstance(path, str)
             else None
         )
@@ -948,15 +1193,14 @@ class AsyncRoutingFileSystem(
                         **kwargs,
                     ),
                 )
-            elif recursive and (
-                op := await self._cross_fs_cp(fs1, sources, fs2, inner2, maxdepth)
-            ):
+            elif recursive:
+                op = self._cross_fs_cp(fs1, sources, fs2, inner2, maxdepth)
                 errors = await self._transferred(
                     op, fs1, sources, fs2, inner2, outers, path2, callback
                 )
                 _raise(_copy_errors(errors, on_error), "Copying")
             else:
-                await super(AsyncRoutingFileSystem, self)._copy(
+                await super(RoutingFileSystem, self)._copy(
                     outers,
                     path2,
                     recursive,
@@ -997,35 +1241,12 @@ class AsyncRoutingFileSystem(
             outer = outer1 if listed else self._one(outer1)
 
             if fs1 is fs2:
-                own = getattr(fs1, "_mv", None)
-                if own is not None:
-                    await self._on(
-                        fs1,
-                        sources,
-                        outer,
-                        own(
-                            sources,
-                            inner2,
-                            recursive=recursive,
-                            maxdepth=maxdepth,
-                            **kwargs,
-                        ),
-                    )
-                    return
-
-                # A plain fsspec filesystem has no async mv: its sync one's way.
-                await self._on(
-                    fs1,
-                    sources,
-                    outer,
-                    fs1._copy(sources, inner2, recursive, "raise", maxdepth, **kwargs),
+                move = fs1._mv(
+                    sources, inner2, recursive=recursive, maxdepth=maxdepth, **kwargs
                 )
-                await self._on(
-                    fs1, sources, outer, fs1._rm(sources, recursive=recursive)
-                )
-            elif recursive and (
-                op := await self._cross_fs_mv(fs1, sources, fs2, inner2, maxdepth)
-            ):
+                await self._on(fs1, sources, outer, move)
+            elif recursive:
+                op = self._cross_fs_mv(fs1, sources, fs2, inner2, maxdepth)
                 errors = await self._transferred(
                     op,
                     fs1,
@@ -1039,125 +1260,79 @@ class AsyncRoutingFileSystem(
                 )
                 _raise(errors, "Moving")
             else:
-                await super(AsyncRoutingFileSystem, self)._copy(
+                await super(RoutingFileSystem, self)._copy(
                     outer, path2, recursive, "raise", maxdepth, **kwargs
                 )
                 await self._rm(outer, recursive=recursive)
 
         await self._each(await self._grouped(path1), mv, "Moving", clashes)
 
-    async def _cross_fs_cp(
+    def _cross_fs_cp(
         self,
         fs1: AsyncFileSystem,
         path1: str | list[str],
         fs2: AsyncFileSystem,
         path2: str,
         maxdepth: int | None = None,
-    ) -> Operation[tuple[str, str], Any] | None:
-        """The recursive copy from ``fs1`` to ``fs2``, by the source's family, or None.
+    ) -> Operation[tuple[str, str], Any]:
+        """The recursive copy from ``fs1`` to ``fs2``, by the source's handler's ``cp``.
 
-        The family is the source's profile's ``fs_type``: None when unknown, and
-        fsspec's own copy then runs. Each file goes by ``_cross_fs_cp_entry``.
-        The operation is returned not yet started.
+        Each file goes by the routing handler's ``cp_across``. The operation is
+        returned not yet started.
         """
-        get = getattr(fs1, "_get_storage_profile", None)
-        if get is None:
-            return None  # A plain fsspec filesystem: fsspec's own copy.
-        fs_type = (await get(path1)).fs_type
-        if fs_type is None:
-            return None
+        src, dst = fs1._handler, fs2._handler
+        return src.cp(
+            dst,
+            _as_given(src, path1),
+            dst.verified(path2, strip_only_protocol=True),
+            cp_entry=self._across(src, dst),
+            same_storage=False,
+            maxdepth=maxdepth,
+        )
 
-        # A family's strategies are imported only when used, so that a copy may
-        # leave out the other family.
-        if fs_type == "tree":
-            from .tree.cp import _tree_cp  # noqa: PLC0415
-
-            return _tree_cp(
-                fs1,
-                fs2,
-                path1,
-                path2,
-                cp_entry=self._across(fs1, fs2),
-                same_storage=False,
-                maxdepth=maxdepth,
-            )
-        if fs_type == "flat":
-            from .flat.cp import _flat_cp  # noqa: PLC0415
-
-            return _flat_cp(
-                fs1,
-                fs2,
-                path1,
-                path2,
-                cp_entry=self._across(fs1, fs2),
-                same_storage=False,
-                maxdepth=maxdepth,
-            )
-        else:
-            return None
-
-    async def _cross_fs_mv(
+    def _cross_fs_mv(
         self,
         fs1: AsyncFileSystem,
         path1: str | list[str],
         fs2: AsyncFileSystem,
         path2: str,
         maxdepth: int | None = None,
-    ) -> Operation[tuple[str, str], Any] | None:
-        """The recursive move from ``fs1`` to ``fs2``, by the source's family, or None.
+    ) -> Operation[tuple[str, str], Any]:
+        """The recursive move from ``fs1`` to ``fs2``, by the source's handler's ``mv``.
 
-        As `_cross_fs_cp`, each file by ``_cross_fs_mv_entry``. A flat source
-        copies each key by ``_cross_fs_cp_entry`` instead, and deletes the keys
-        copied in batches, by its ``_rm_files``.
+        As `_cross_fs_cp`, each file by the routing handler's ``mv_across``,
+        or, where the move copies, e.g. a flat one deleting the keys copied in
+        batches, by its ``cp_across``: two storages never rename.
         """
-        get = getattr(fs1, "_get_storage_profile", None)
-        if get is None:
-            return None  # A plain fsspec filesystem: fsspec's own copy, then rm.
-        fs_type = (await get(path1)).fs_type
-        if fs_type is None:
-            return None
-
-        # A family's strategies are imported only when used, so that a copy may
-        # leave out the other family.
-        if fs_type == "tree":
-            from .tree.mv import _tree_mv  # noqa: PLC0415
-
-            return _tree_mv(
-                fs1,
-                fs2,
-                path1,
-                path2,
-                mv_entry=self._across(fs1, fs2, move=True),
-                same_storage=False,
-                maxdepth=maxdepth,
-            )
-        if fs_type == "flat":
-            from .flat.mv import _flat_mv  # noqa: PLC0415
-
-            # By copies, the keys copied deleted in batches by the source's
-            # _rm_files: two storages never rename.
-            return _flat_mv(
-                fs1,
-                fs2,
-                path1,
-                path2,
-                cp_entry=self._across(fs1, fs2),
-                same_storage=False,
-                maxdepth=maxdepth,
-            )
-        else:
-            return None
+        src, dst = fs1._handler, fs2._handler
+        return src.mv(
+            dst,
+            _as_given(src, path1),
+            dst.verified(path2, strip_only_protocol=True),
+            cp_entry=self._across(src, dst),
+            mv_entry=self._across(src, dst, move=True),
+            same_storage=False,
+            maxdepth=maxdepth,
+        )
 
     def _across(
-        self, fs1: AsyncFileSystem, fs2: AsyncFileSystem, *, move: bool = False
+        self, src: StorageHandler, dst: StorageHandler, *, move: bool = False
     ) -> _Transfer:
-        """A file's copy, or move, from ``fs1`` to ``fs2``, under ``transfer_limit``."""
-        hook = self._cross_fs_mv_entry if move else self._cross_fs_cp_entry
+        """A file's copy, or move, from ``src`` to ``dst``, under ``transfer_limit``."""
+        hook = self.handler.mv_across if move else self.handler.cp_across
 
-        async def request(entry: dict[str, Any], path2: str) -> None:
+        # The hints go nowhere: a copy between storages writes, and the hooks
+        # take none.
+        async def request(
+            entry: dict[str, Any],
+            path2: str,
+            *,
+            missing: bool = False,
+            parent: dict[str, Any] | None = None,
+        ) -> None:
             with routing(self):
-                async with self.transfer_limit:
-                    await hook(fs1, entry, fs2, path2)
+                async with self.handler.transfer_limit:
+                    await hook(src, entry, dst, dst.verified(path2))
 
         return request
 

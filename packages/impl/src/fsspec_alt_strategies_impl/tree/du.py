@@ -18,25 +18,28 @@ from fsspec_alt_strategies.states import DuState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
-from .find import _find_listings
+from .find import _find_listings, _listed
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+
+    from ..common.handler import StoragePath
+    from .handler import TreeFileOperationHandler
 
 
 __all__: list[str] = []
 
 
 def _tree_du(
-    fs: Any,
-    path: str,
+    handler: TreeFileOperationHandler,
+    path: StoragePath,
     *,
     maxdepth: int | None = None,
     ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[dict[str, Any], DuState]:
     """Measure a tree's size from its listings, listing several directories at a time.
 
-    It assumes that ``_ils`` gives each file's size, as fsspec's filesystems do.
+    It assumes that ``ils`` gives each file's size, as fsspec's filesystems do.
     It yields the entry of each file counted, with its ``size``, as fsspec's
     ``_du`` gives with ``total=False``. Its state's ``size`` is their total, as
     fsspec's ``_du`` gives by default.
@@ -52,16 +55,16 @@ def _tree_du(
 
     Once cancelled, it lists no new directory, and counts the listings in flight.
 
-    Requests: one recursive ``_ils`` of ``path``, which a storage without a
+    Requests: one ``ils_recursive`` of ``path``, which a storage without a
     recursive listing answers with one per directory. With ``maxdepth``, one
-    ``_ils`` per directory instead, as the filesystem's ``operation_limit``
+    ``ils`` per directory instead, as the handler's ``operation_limit``
     allows. One ``info`` for ``path``, if a file.
 
-    ``path`` is the directory measured on ``fs``, by its ``_ils`` and ``_info``.
+    ``path`` is the directory measured on ``handler``, by its ``ils`` and ``info``.
     ``maxdepth`` of 1 counts only the files in ``path``. ``ils_kwargs`` go to
-    each ``_ils``, as fsspec's ``du`` passes its own on.
+    each ``ils``, as fsspec's ``du`` passes its own on.
 
-    The operation yields the ``_ils`` entry of each file counted, or the error
+    The operation yields the ``ils`` entry of each file counted, or the error
     of a directory that failed to list, and its state is a `DuState`. The call
     raises ValueError if ``maxdepth`` is less than 1.
     """
@@ -71,7 +74,7 @@ def _tree_du(
         op: Operation[dict[str, Any], DuState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         steps = _find_listings(
-            fs,
+            handler,
             path,
             maxdepth=maxdepth,
             ils_kwargs=ils_kwargs,
@@ -83,12 +86,9 @@ def _tree_du(
         async with aclosing(steps):
             async for listing in steps:
                 files = [e for e in listing.entries if e["type"] != "directory"]
-                op.state = state = DuState(
-                    errors=state.errors + (listing.error is not None),
-                    current=listing.directory,
-                    # Depth 0 is the root's own entry: no directory listed.
-                    directories_listed=state.directories_listed
-                    + (listing.depth > 0 and listing.last),
+                op.state = state = _listed(
+                    state,
+                    listing,
                     files=state.files + len(files),
                     size=state.size + sum(e.get("size") or 0 for e in files),
                 )

@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.states import FindState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.find import _tree_find
@@ -136,16 +137,67 @@ async def test_a_failed_dir_is_yielded() -> None:
     assert op.state.errors == 1
 
 
-async def test_a_failed_dir_ends_the_recursive_listing() -> None:
+async def test_a_failed_dir_in_the_recursive_listing_is_resumed_past() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
     async with _find(fs, "data") as op:
         entries, errors = await _collect_with_errors(op)
-    # Its error, noted with the directory that failed, and nothing after it.
+    # The listing breaks at data/2023, and is resumed a directory per request:
+    # data/2023 fails again, its error noted with it, and the rest is found.
     assert [type(e) for e in errors] == [PermissionError]
-    assert "Listing 'data/2023' failed." in errors[0].__notes__
-    assert _names(entries) == []
+    assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
+    assert _names(entries) == [
+        "data/2024/01/part-0.parquet",
+        "data/2024/02/part-0.parquet",
+        "data/README.md",
+    ]
     assert op.state.errors == 1
+
+
+class _BreakingOff(SimulatedFileSystem):
+    """Breaks its recursive listing off after ``cut_after`` entries, as a dropped connection does."""
+
+    cut_after = 0
+
+    async def _ils_recursive(self, path: str) -> Any:
+        count = 0
+        async for entry in super()._ils_recursive(path):
+            if count == self.cut_after:
+                raise ConnectionResetError(path)
+            count += 1
+            yield entry
+
+
+@pytest.mark.parametrize("cut_after", [1, 2, 4, 6, 8])
+@pytest.mark.parametrize("withdirs", [False, True])
+async def test_a_recursive_listing_broken_off_is_resumed(
+    any_fs: SimulatedFileSystem, cut_after: int, withdirs: bool
+) -> None:
+    fs = _BreakingOff(hierarchical=any_fs.hierarchical, asynchronous=True)
+    fs.cut_after = cut_after
+    _tree(fs)
+    fs.add_file("data/2024/02/part-1.parquet")
+    view = TreeView(fs, recursive_listing=True)
+    entries, errors = await _collect_with_errors(
+        _tree_find(view, "data", withdirs=withdirs)
+    )
+    # The whole tree, with no error: the break is resumed from where it came.
+    assert errors == []
+    expected = await _fsspec_find(fs, "data", withdirs=withdirs)
+    assert sorted(e["name"] for e in entries) == expected
+
+
+async def test_a_resumed_listing_lists_only_what_it_had_not_passed() -> None:
+    fs = _BreakingOff(hierarchical=True, asynchronous=True)
+    fs.cut_after = 4
+    _tree(fs)
+    profile = StorageProfile(recursive_order="depth_first")
+    view = TreeView(fs, recursive_listing=True, storage_profile=profile)
+    await _collect_with_errors(_tree_find(view, "data"))
+    # In name order, the break comes after data/2023/02's entry, nothing below it
+    # yet. The directories open, data and data/2023, are listed again. Then
+    # data/2023/02 whole, and data/2024 with its 01 and 02, a directory per request.
+    assert fs.stats.calls == {"list": 1 + 2 + 1 + 3}
 
 
 async def test_cancel_after_the_first_listing(any_fs: SimulatedFileSystem) -> None:
@@ -194,3 +246,28 @@ async def test_cancel_before_iterating_sends_nothing(
     assert await _collect_with_errors(op) == ([], [])
     assert any_fs.stats.calls == {}
     assert op.cancelled()
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"maxdepth": 3}])
+async def test_a_dir_listed_twice_is_found_once(kwargs: dict[str, Any]) -> None:
+    """A storage listing a directory as a prefix and as its marker object: the walk yields it once.
+
+    Listed recursively, or a directory per request below a ``maxdepth``.
+    """
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _tree(fs)
+
+    async def ils(path: str, **kwargs: Any) -> Any:
+        entries = await fs._ls(path, detail=True)
+        for e in entries:
+            yield e
+        for e in entries:
+            if e["type"] == "directory":
+                yield {**e, "name": e["name"] + "/"}
+
+    found, errors = await _collect_with_errors(
+        _find(fs, "data", withdirs=True, ils=ils, **kwargs)
+    )
+    assert errors == []
+    expected = await _fsspec_find(fs, "data", withdirs=True, **kwargs)
+    assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)

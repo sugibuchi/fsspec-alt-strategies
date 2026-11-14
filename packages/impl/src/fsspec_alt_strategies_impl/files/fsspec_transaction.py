@@ -56,10 +56,10 @@ import threading
 import uuid
 import warnings
 from abc import ABC, abstractmethod
-from typing import IO, TYPE_CHECKING, Any, Literal
+from typing import IO, TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Coroutine
 
     from .adaptive import AdaptiveWritableFile
 
@@ -556,15 +556,17 @@ class AdaptiveWritableTransaction(FileTransaction):
 
     On some storages, the last part makes the file visible, e.g. Google Cloud
     Storage's resumable uploads. ``hold_last_part`` holds it back too, in
-    memory, until commit uploads it.
+    memory, until commit uploads it. By default, the file's class tells it, by
+    its ``last_part_completes``, so that a caller opening a storage's file
+    need not know the storage.
 
     Parameters
     ----------
     file : AdaptiveWritableFile
         The file, open for writing.
-    hold_last_part : bool
+    hold_last_part : bool, optional
         Whether the last part waits for commit, for storages where it makes
-        the file visible.
+        the file visible. The file's ``last_part_completes`` if None.
 
     Examples
     --------
@@ -572,15 +574,17 @@ class AdaptiveWritableTransaction(FileTransaction):
     """
 
     def __init__(
-        self, file: AdaptiveWritableFile, *, hold_last_part: bool = False
+        self, file: AdaptiveWritableFile, *, hold_last_part: bool | None = None
     ) -> None:
         super().__init__(file.path)
 
         self.file = file
+        if hold_last_part is None:
+            hold_last_part = getattr(file, "last_part_completes", False)
         self.hold_last_part = hold_last_part
 
         # The request making the file visible, once closing held it back.
-        self._last: Callable[[], Awaitable[None]] | None = None
+        self._last: Callable[[], Coroutine[Any, Any, None]] | None = None
         self._multipart = False
         self._discarding = False
 
@@ -621,7 +625,7 @@ class AdaptiveWritableTransaction(FileTransaction):
         if self.hold_last_part:
             file._upload_part = hold_last_part  # type: ignore[method-assign]
 
-        return file
+        return cast("IO[bytes]", file)
 
     def end_staging(self) -> None:
         self.file.close()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import gc
+import hashlib
 import io
 import os
 import random
@@ -548,6 +549,50 @@ async def test_sequential_may_be_chosen_when_the_upload_starts(
     assert await flat_fs._cat_file("f.bin") == data
 
 
+class _Chosen(_Writer):
+    """A storage choosing the part size as the upload starts, as a Box session does."""
+
+    chosen = 12 * _KiB
+
+    async def _start_multipart_upload(self) -> None:
+        await super()._start_multipart_upload()
+        self.part_size = self.chosen
+
+
+@pytest.mark.parametrize("size", [100 * _KiB, 96 * _KiB, 13 * _KiB])
+@pytest.mark.parametrize("step", [1 * _KiB, 5 * _KiB, 50 * _KiB])
+async def test_parts_have_the_size_the_storage_chose(
+    flat_fs: SimulatedFileSystem, size: int, step: int
+) -> None:
+    data = os.urandom(size)
+    async with _Chosen(flat_fs, "f.bin") as f:
+        for i in range(0, len(data), step):
+            await f._write(data[i : i + step])
+    parts = [f.parts[i] for i in sorted(f.parts)]
+    # Every part but the last of the size chosen, the last the rest, at most that.
+    assert all(end - start == _Chosen.chosen for start, end, _, _ in parts[:-1])
+    assert 0 < parts[-1][1] - parts[-1][0] <= _Chosen.chosen
+    assert [last for _, _, last, _ in parts] == [False] * (len(parts) - 1) + [True]
+    assert await flat_fs._cat_file("f.bin") == data
+
+
+async def test_written_sees_each_write_in_order(flat_fs: SimulatedFileSystem) -> None:
+    class Hashing(_Chosen):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.sha1 = hashlib.sha1()
+
+        def _written(self, data: memoryview) -> None:
+            self.sha1.update(data)
+
+    data = os.urandom(70 * _KiB)
+    async with Hashing(flat_fs, "f.bin") as f:
+        for i in range(0, len(data), 3 * _KiB):
+            await f._write(data[i : i + 3 * _KiB])
+    # The parts may go out of order, but the hook saw the file as written.
+    assert f.sha1.digest() == hashlib.sha1(data).digest()
+
+
 @pytest.mark.parametrize(
     ("size", "spread", "requests"),
     [
@@ -937,16 +982,37 @@ async def test_a_failed_start_aborts_and_keeps_its_error(
     assert not await flat_fs._exists("f.bin")
 
 
-async def test_a_part_failing_while_closing_raises_as_earlier(
+async def test_the_last_part_failing_raises_its_error_as_a_completion_does(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     f = _Writer(flat_fs, "f.bin")
     f.fail_part = 3  # The last, sent by closing.
     await f._write(os.urandom(40 * _KiB))
-    with pytest.raises(OSError, match="Failed to upload a part") as raised:
+    with pytest.raises(OSError, match="part failed") as raised:
         await f.aclose()
-    assert str(raised.value.__cause__) == "part failed"
+    assert raised.value.__cause__ is None  # Not wrapped.
     assert f.requests == ["start", "abort"]
+
+
+@pytest.mark.parametrize("sequential", [False, True])
+async def test_an_exclusive_write_refused_by_its_last_part_raises_file_exists(
+    flat_fs: SimulatedFileSystem, sequential: bool
+) -> None:
+    """A storage whose last part makes the file visible checks mode "xb" there, as Graph's upload sessions do."""
+
+    class LastPartChecks(_Writer):
+        async def _upload_part(
+            self, data: bytes, start: int, end: int, index: int, last: bool
+        ) -> Any:
+            if last and self.exclusive:
+                raise FileExistsError(errno.EEXIST, "File exists", self.path)
+            return await super()._upload_part(data, start, end, index, last)
+
+    f = LastPartChecks(flat_fs, "f.bin", mode="xb", sequential=sequential)
+    await f._write(os.urandom(40 * _KiB))
+    with pytest.raises(FileExistsError):
+        await f.aclose()
+    assert f.requests[-1] == "abort"
 
 
 @pytest.mark.parametrize("size", [300, 40 * _KiB])  # One upload, or parts.

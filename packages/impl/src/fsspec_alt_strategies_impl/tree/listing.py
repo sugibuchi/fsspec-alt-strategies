@@ -2,17 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """A recursive listing made of one listing per directory, several at a time.
 
-A `TreeFileSystem`'s ``_ils`` lists all below a directory with
-``recursive=True``, depth first or in name order. A storage with a recursive
-listing of its own answers with it. One without answers with `_tree_ils`, which
-lists a directory per request, as ``_ils`` does without ``recursive``.
+A `TreeFileOperationHandler`'s ``ils_recursive`` lists all below a directory,
+in the order the profile's ``recursive_order`` declares: depth first, which
+covers name order, or parents first. A storage with a recursive listing of its
+own implements it so. One without has `_tree_ils`, its default, which lists a
+directory per request by ``ils``. One whose own may be refused, as only
+asking tells, falls back on it. Its listing is a `_DepthFirst`, which the walk
+knows is depth first, whatever the profile declares of the storage's own.
 
 It yields the entries depth first, as a walk visits them: each directory's
 entries in the order its listing gives them, and all below a subdirectory right
 after its entry. So it lists the directories in that order too, but starts the
-next ones ahead, as their entries arrive, so that their listings overlap.
+next ones ahead, as their entries arrive, so that their listings overlap. The
+handler's ``operation_limit`` bounds how many run at once, and `_HELD` how
+much they read ahead.
 
-This module depends on `paths` of `common`.
+This module depends on `handler` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -25,47 +30,92 @@ from typing import TYPE_CHECKING, Any
 from ..common.paths import _trim
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
+
+    from ..common.handler import Entry, StorageHandler
+    from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
 
 
-_AHEAD = 32
-"""The most directories listed ahead of the one being yielded."""
-
 _BATCH = 1000
 """The most entries of a directory read ahead of those yielded: a page's worth."""
 
+_HELD = 32 * _BATCH
+"""The entries read and not yielded, past which no listing ahead starts."""
 
-async def _tree_ils(
-    fs: Any, path: str, **ils_kwargs: Any
-) -> AsyncGenerator[dict[str, Any]]:
-    """List all below a directory depth first, by one ``_ils`` per directory.
 
-    It yields what a recursive ``_ils`` yields: each entry below ``path``, at
+def _tree_ils(
+    handler: TreeFileOperationHandler, entry: Entry, **ils_kwargs: Any
+) -> _DepthFirst:
+    """List all below a directory depth first, by one ``ils`` per directory.
+
+    It yields what an ``ils_recursive`` yields: each entry below ``entry``, at
     any depth, depth first. A directory's entries come in the order its
-    ``_ils`` gives them, each subdirectory's followed by all below it. A file
-    lists itself, as ``_ils`` lists it. A directory listed twice, e.g. as a
+    ``ils`` gives them, each subdirectory's followed by all below it. A file
+    lists itself, as ``ils`` lists it. A directory listed twice, e.g. as a
     prefix and as its marker object, is yielded twice, but listed once.
 
-    It lists the directories that come next while it yields, up to `_AHEAD` of
-    them, the nearest first. Each such listing holds a permit of the
-    filesystem's ``operation_limit`` while it reads a batch of entries, a
-    page's worth: what it read waits for its turn, holding no permit. The
-    directory being yielded is listed under the permit its caller holds, as for
-    any ``_ils``. So it needs no permit more to go on.
+    It lists the directories that come next while it yields, the nearest
+    first, as many at once as the handler's ``operation_limit`` lets it.
+    Each such listing holds a permit while it reads a batch of entries, a
+    page's worth: what it read waits for its turn, holding no permit. No
+    listing ahead starts while `_HELD` entries wait so, which bounds the
+    memory to that, plus a batch per listing in flight. Only the listings in
+    flight count, not those waiting: a tree of small directories is listed as
+    fast as the limit allows, whatever its size. The directory being yielded
+    is listed under the permit its caller holds, as for any ``ils``. So it
+    needs no permit more to go on.
 
-    A directory below ``path`` that fails to list raises its error, noted with
+    A directory below ``entry`` that fails to list raises its error, noted with
     its path, and ends the listing: a recursive listing cannot go on past a
-    failure. A missing ``path`` raises FileNotFoundError, when the iteration
-    starts, as its own ``_ils`` raises it.
+    failure. The walk under the strategies resumes it a directory per request.
+    A missing ``entry`` raises FileNotFoundError, when the iteration starts, as
+    its own ``ils`` raises it.
 
-    ``ils_kwargs`` go to each ``_ils``.
+    ``entry`` is the directory's entry, as its parent's listing gave it, or as
+    the handler's ``entry`` makes it from a path: it is listed by it whole, so
+    that a storage addressing items by id asks nothing again. ``ils_kwargs`` go
+    to each ``ils``.
+
+    The listing is a `_DepthFirst`, so that the walk takes it as depth first
+    on a handler whose profile leaves the order unknown, or declares its own
+    listing parents first: this one is the library's, whatever the storage.
     """
-    root = _trim(path)
-    ahead = _Ahead(fs, ils_kwargs)
+    return _DepthFirst(_entries(handler, entry, ils_kwargs))
+
+
+class _DepthFirst:
+    """A listing depth first by construction, `_tree_ils`'s: the walk closes each directory as it passes it.
+
+    It is the listing's own type that tells the walk, not the handler's class:
+    a handler overriding ``ils_recursive`` may still answer with `_tree_ils`,
+    e.g. where its storage refuses its own listing.
+    """
+
+    def __init__(self, entries: AsyncGenerator[dict[str, Any]]) -> None:
+        self._entries = entries
+
+    def __aiter__(self) -> _DepthFirst:
+        return self
+
+    def __anext__(self) -> Awaitable[dict[str, Any]]:
+        return self._entries.__anext__()
+
+    async def aclose(self) -> None:
+        await self._entries.aclose()
+
+
+async def _entries(
+    handler: TreeFileOperationHandler,
+    entry: Entry,
+    ils_kwargs: dict[str, Any],
+) -> AsyncGenerator[dict[str, Any]]:
+    """The entries `_tree_ils` yields, as its docstring says."""
+    root = _trim(entry["name"])
+    ahead = _Ahead(handler, ils_kwargs)
     # The directories being yielded, the root first: each is yielding one of the next.
-    stack = [ahead.take(root)]
+    stack = [ahead.take(root, entry)]
 
     try:
         while stack:
@@ -98,43 +148,52 @@ async def _tree_ils(
 class _Ahead:
     """The directories found but not yielded yet, some of them listed ahead."""
 
-    def __init__(self, fs: Any, ils_kwargs: dict[str, Any]) -> None:
-        self.fs = fs
+    def __init__(self, handler: StorageHandler, ils_kwargs: dict[str, Any]) -> None:
+        self.handler = handler
         self.ils_kwargs = ils_kwargs
         self.found: dict[str, _DirListing] = {}
         # The directories found and not listed yet, the nearest first: depth
         # first, a path comes before another as its parts do.
         self.queue: list[tuple[list[str], str]] = []
-        self.listed = 0  # The directories listed ahead, not taken yet.
+        self.held = 0  # The entries read and not yielded yet.
+        self.closed = False
 
-    def add(self, directory: str) -> None:
-        """Note a subdirectory read in a listing, to list it ahead."""
-        self.found[directory] = _DirListing(self, directory)
+    def add(self, directory: str, entry: Entry) -> None:
+        """Note a subdirectory read in a listing, with its entry, to list it ahead."""
+        self.found[directory] = _DirListing(self, directory, entry)
         heapq.heappush(self.queue, (directory.split("/"), directory))
         self.start()
 
     def start(self) -> None:
-        """Start listing the nearest directories found, up to `_AHEAD` at a time."""
-        while self.queue and self.listed < _AHEAD:
+        """Start listing the nearest directories found, while few entries wait.
+
+        Each listing waits for a permit of ``operation_limit``, so the limit
+        bounds those in flight. Those waiting get theirs in the order they
+        started, the nearest first.
+        """
+        while not self.closed and self.queue and self.held < _HELD:
             _, directory = heapq.heappop(self.queue)
             listing = self.found.get(directory)
             if listing is not None:  # Else taken already, to be yielded.
                 listing.task = asyncio.ensure_future(listing.read_ahead())
-                self.listed += 1
 
-    def take(self, directory: str) -> _DirListing:
+    def yielded(self) -> None:
+        """Note an entry yielded, which may let a listing ahead start."""
+        self.held -= 1
+        if self.held == _HELD - 1:
+            self.start()
+
+    def take(self, directory: str, entry: Entry | None = None) -> _DirListing:
         """The listing of the directory to yield next, listed ahead or not."""
         listing = self.found.pop(directory, None)
         if listing is None:
-            return _DirListing(self, directory)
-
-        if listing.task is not None:
-            self.listed -= 1
-            self.start()
-        return listing
+            return _DirListing(self, directory, entry)
+        else:
+            return listing
 
     async def close(self, stack: list[_DirListing]) -> None:
         """Stop the listings ahead, and close those of every directory left."""
+        self.closed = True  # A listing cancelled below starts no other.
         listings = [*stack, *self.found.values()]
         tasks = [lst.task for lst in listings if lst.task is not None]
         for task in tasks:
@@ -145,11 +204,15 @@ class _Ahead:
 
 
 class _DirListing:
-    """A directory's ``_ils``, read a batch at a time, ahead of its turn or in it."""
+    """A directory's ``ils``, read a batch at a time, ahead of its turn or in it."""
 
-    def __init__(self, ahead: _Ahead, directory: str) -> None:
+    def __init__(
+        self, ahead: _Ahead, directory: str, entry: Entry | None = None
+    ) -> None:
         self.ahead = ahead
         self.directory = directory
+        # Its parent's listing gave it, e.g. with the storage's id: the root's is its path alone.
+        self.entry = entry if entry is not None else ahead.handler.entry(directory)
         # Each entry read, with the path of a subdirectory it is the first entry of.
         self.entries: deque[tuple[dict[str, Any], str | None]] = deque()
         self.subdirectories: set[str] = set()
@@ -176,11 +239,12 @@ class _DirListing:
                 return None
             else:
                 await self.read()
+        self.ahead.yielded()
         return self.entries.popleft()
 
     async def read_ahead(self) -> None:
         """Read a batch ahead of the directory's turn, under a permit of its own."""
-        async with self.ahead.fs.operation_limit:
+        async with self.ahead.handler.operation_limit:
             self.reading = True
             try:
                 await self.read()
@@ -190,11 +254,12 @@ class _DirListing:
     async def read(self) -> None:
         """Read a batch of entries, noting the subdirectories in it to list ahead."""
         if self.iterator is None:
-            self.iterator = self.ahead.fs._ils(self.directory, **self.ahead.ils_kwargs)
+            self.iterator = self.ahead.handler.ils(self.entry, **self.ahead.ils_kwargs)
 
         try:
             for _ in range(_BATCH):
                 entry = await anext(self.iterator)
+                self.ahead.held += 1
                 self.entries.append((entry, self.subdirectory(entry)))
         except StopAsyncIteration:
             self.done = True
@@ -214,7 +279,7 @@ class _DirListing:
         ):
             return None
         self.subdirectories.add(name)
-        self.ahead.add(name)
+        self.ahead.add(name, {**entry, "name": name})
         return name
 
     async def close(self) -> None:

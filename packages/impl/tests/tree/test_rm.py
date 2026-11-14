@@ -240,17 +240,49 @@ async def test_a_failed_listing_keeps_its_dirs_and_the_rest_goes() -> None:
     assert not await fs._exists("data/2024")
 
 
-async def test_a_failed_listing_ends_the_recursive_listing() -> None:
+async def test_a_failed_listing_in_the_recursive_listing_is_resumed_past() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
     op = _rm(fs, "data")
     deleted, errors = await _collect_with_errors(op)
+    # The listing breaks at data/2023, and is resumed a directory per request:
+    # data/2023 fails again, and the rest is deleted, as with a maxdepth.
     assert [type(e) for e in errors] == [PermissionError]
-    assert "Listing 'data/2023' failed." in errors[0].__notes__
-    # data/2023 comes first, depth first: nothing was found to delete before it.
-    assert deleted == []
-    assert fs.stats.calls["delete"] == 0
-    assert await fs._exists("data/2024/01/part-0.parquet")
+    assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
+    assert not any(p.startswith("data/2023") for p in deleted)
+    assert await fs._exists("data/2023/01/part-0.parquet")
+    assert not await fs._exists("data/2024")
+    assert not await fs._exists("data/README.md")
+
+
+class _BreakingOff(SimulatedFileSystem):
+    """Breaks its recursive listing off after ``cut_after`` entries, as a dropped connection does."""
+
+    cut_after = 0
+
+    async def _ils_recursive(self, path: str) -> Any:
+        count = 0
+        async for entry in super()._ils_recursive(path):
+            if count == self.cut_after:
+                raise ConnectionResetError(path)
+            count += 1
+            yield entry
+
+
+@pytest.mark.parametrize("cut_after", [1, 2, 3, 5, 8])
+async def test_a_recursive_listing_broken_off_deletes_the_whole_tree(
+    any_fs: SimulatedFileSystem, cut_after: int
+) -> None:
+    fs = _BreakingOff(hierarchical=any_fs.hierarchical, asynchronous=True)
+    fs.cut_after = cut_after
+    _tree(fs)
+    view = TreeView(fs, recursive_listing=True)
+    deleted, errors = await _collect_with_errors(_tree_rm(view, "data"))
+    # Each directory is deleted once all in it is, as without the break.
+    assert errors == []
+    assert deleted[-1] == "data"
+    assert not await fs._exists("data")
+    assert await fs._exists("other/kept")
 
 
 class _Doubling(SimulatedFileSystem):
@@ -326,8 +358,17 @@ async def test_cancel_after_the_listing() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
     fs.add_file("root/sub/file")
     fs.add_file("root/file")
+
+    async def ils(path: str, **kwargs: Any) -> Any:
+        # Still listing once root/file is deleted, whatever the loop's order of
+        # two requests of equal latency: its file's deletion would be in flight.
+        if path == "root/sub":
+            await asyncio.sleep(0.05)
+        for entry in await fs._ls(path, detail=True, **kwargs):
+            yield entry
+
     # With a maxdepth, each directory is listed on its own.
-    op = _rm(fs, "root", maxdepth=2, concurrency_limit=asyncio.Semaphore(10))
+    op = _rm(fs, "root", maxdepth=2, ils=ils, concurrency_limit=asyncio.Semaphore(10))
     async for path in op:
         op.cancel()
         assert path == "root/file"
@@ -375,7 +416,7 @@ async def test_cancelling_the_task_leaves_nothing_running() -> None:
     assert fs._in_flight == 0
 
 
-async def test_a_file_found_already_gone_is_not_yielded() -> None:
+async def test_a_file_found_already_gone_counts_as_deleted() -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     _tree(fs)
 
@@ -388,8 +429,9 @@ async def test_a_file_found_already_gone_is_not_yielded() -> None:
     op = _rm(fs, "data", rm_file=rm_file)
     deleted, errors = await _collect_with_errors(op)
     assert errors == []
-    assert "data/README.md" not in deleted
-    assert op.state.files_deleted == 4
+    # Gone is deleted, as rm_files takes it: no error, and yielded.
+    assert "data/README.md" in deleted
+    assert op.state.files_deleted == 5
     # Its directory goes all the same.
     assert deleted[-1] == "data"
     assert not await fs._exists("data")
@@ -628,3 +670,148 @@ async def test_maxdepth_deep_enough_deletes_everything(
 async def test_maxdepth_below_1_is_refused(any_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="maxdepth"):
         _rm(any_fs, "data", maxdepth=0)
+
+
+def _batching(fs: SimulatedFileSystem, size: int, rm_files: Any = None) -> TreeView:
+    """A view deleting files in batches of ``size``, by the filesystem's own, or ``rm_files``."""
+    return TreeView(fs, rm_batch_size=size, rm_files=rm_files)
+
+
+async def test_a_handler_with_a_batch_size_deletes_files_in_batches(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    hierarchical_fs.add_dir("data/empty")
+    batches: list[list[str]] = []
+
+    async def rm_files(paths: list[str]) -> None:
+        batches.append(sorted(paths))
+        await hierarchical_fs._rm_files(paths)
+
+    op = _tree_rm(_batching(hierarchical_fs, 2, rm_files), "data")
+    deleted, errors = await _collect_with_errors(op)
+    assert errors == []
+    # The 5 files in batches of at most 2, each file once, then the 8 directories.
+    assert sorted(p for b in batches for p in b) == sorted(_FILES)
+    assert all(len(b) <= 2 for b in batches) and len(batches) == 3
+    assert set(deleted) == {
+        *_FILES,
+        "data",
+        "data/empty",
+        "data/2023",
+        "data/2024",
+        "data/2023/01",
+        "data/2023/02",
+        "data/2024/01",
+        "data/2024/02",
+    }
+    assert deleted[-1] == "data"
+    assert not await hierarchical_fs._exists("data")
+    assert op.state == RmState(
+        current="data", files_found=5, files_deleted=5, directories_deleted=8
+    )
+
+
+async def test_a_file_its_batch_refused_keeps_its_directory(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    refused = "data/2023/01/part-0.parquet"
+
+    async def rm_files(paths: list[str]) -> dict[str, Exception]:
+        await hierarchical_fs._rm_files([p for p in paths if p != refused])
+        return {refused: PermissionError(refused)} if refused in paths else {}
+
+    deleted, errors = await _collect_with_errors(
+        _tree_rm(_batching(hierarchical_fs, 10, rm_files), "data")
+    )
+    assert [type(e) for e in errors] == [PermissionError]
+    assert f"Deleting {refused!r} failed." in errors[0].__notes__
+    # The file, and the directories above it, stay: the rest goes.
+    assert refused not in deleted
+    assert {"data/2023/01", "data/2023", "data"}.isdisjoint(deleted)
+    assert await hierarchical_fs._exists(refused)
+    assert not await hierarchical_fs._exists("data/2024")
+
+
+async def test_a_batch_failing_whole_keeps_its_files_and_directories(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+
+    async def rm_files(paths: list[str]) -> None:
+        raise OSError("throttled")
+
+    deleted, errors = await _collect_with_errors(
+        _tree_rm(_batching(hierarchical_fs, 10, rm_files), "data")
+    )
+    assert [str(e) for e in errors] == ["throttled"]
+    assert "5 keys" in errors[0].__notes__[0]
+    assert deleted == []
+    assert all([await hierarchical_fs._exists(p) for p in _FILES])
+
+
+async def test_a_batch_size_below_1_is_refused(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    # Read once the handler is open, as the operation starts.
+    with pytest.raises(ValueError, match="rm_batch_size"):
+        await _collect_with_errors(_tree_rm(_batching(hierarchical_fs, 0), "data"))
+
+
+async def test_files_matched_or_listed_are_batched_too(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    batches: list[list[str]] = []
+
+    async def rm_files(paths: list[str]) -> None:
+        batches.append(sorted(paths))
+        await hierarchical_fs._rm_files(paths)
+
+    files = ["data/README.md", "data/2023/01/part-0.parquet"]
+    op = _tree_rm(_batching(hierarchical_fs, 10, rm_files), files)
+    deleted, errors = await _collect_with_errors(op)
+    assert errors == []
+    # One request for both: e.g. one commit of the Hub, rather than one per file.
+    assert batches == [sorted(files)]
+    assert set(files) <= set(deleted)
+    assert op.state.files_found == op.state.files_deleted == 2
+
+
+async def test_a_single_file_is_deleted_by_a_batch(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    batches: list[list[str]] = []
+
+    async def rm_files(paths: list[str]) -> None:
+        batches.append(paths)
+        await hierarchical_fs._rm_files(paths)
+
+    path = "data/README.md"
+    deleted, errors = await _collect_with_errors(
+        _tree_rm(_batching(hierarchical_fs, 10, rm_files), path)
+    )
+    assert (deleted, errors, batches) == ([path], [], [[path]])
+    assert not await hierarchical_fs._exists(path)
+
+
+async def test_a_directory_given_with_a_slash_goes_whole_by_its_name(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    seen: list[str] = []
+    profile = StorageProfile(deletes_directories=True)
+    deleted, errors = await _collect_with_errors(
+        _rm(
+            hierarchical_fs,
+            "data/",
+            rm_tree=_rm_tree(hierarchical_fs, seen),
+            profile=profile,
+        )
+    )
+    # rm_tree is given the directory's path, and it is yielded so: no "data/".
+    assert errors == []
+    assert seen == ["data"]
+    assert deleted == ["data"]

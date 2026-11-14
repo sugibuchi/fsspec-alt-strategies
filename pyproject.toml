@@ -40,6 +40,18 @@ source = [
     "packages/impl/src/fsspec_alt_strategies_impl_cli",
 ]
 
+[tool.mypy]
+# The packages' sources. The tests are checked by running them.
+files = ["packages/common/src", "packages/impl/src"]
+python_version = "3.11"
+# An ignore no longer needed is an error, so that none outlives its reason.
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+# fsspec ships no type hints: its objects are Any.
+module = ["fsspec", "fsspec.*"]
+ignore_missing_imports = true
+
 [tool.ruff]
 exclude = [
     ".tox",

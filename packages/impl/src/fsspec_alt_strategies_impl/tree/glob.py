@@ -15,7 +15,7 @@ pattern is ruled out too, as nothing below it can match.
 
 Below a ``**``, nothing is pruned. So a directory below which a pattern prunes
 nothing, e.g. ``data`` for ``data/**/*.csv``, is listed by one recursive
-``_ils``.
+``ils``.
 
 Several patterns are matched in one walk per tree: a directory is listed once if
 any of them can match in it, and each path is matched with all of them.
@@ -35,19 +35,21 @@ from fsspec_alt_strategies.states import GlobState
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _inside, _Search
-from .find import _find_listings
+from .find import _find_listings, _listed
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
+    from ..common.handler import StoragePath
+    from .handler import TreeFileOperationHandler
     from .walk import _Listing
 
 __all__: list[str] = []
 
 
 def _tree_glob(
-    fs: Any,
-    path: str | Sequence[str],
+    handler: TreeFileOperationHandler,
+    path: StoragePath | Sequence[StoragePath],
     *,
     maxdepth: int | None = None,
     withdirs: bool = True,
@@ -63,7 +65,7 @@ def _tree_glob(
 
     It yields each match as its directory's listing arrives, so the matches are
     not in order. fsspec's ``_glob`` sorts them, by name. A storage listing a
-    directory twice, e.g. as a prefix and as its marker object, yields it twice.
+    directory twice, e.g. as a prefix and as its marker object, yields it once.
 
     Several patterns match what fsspec's globs of each match together, each
     path once. They are matched in one walk per tree, rather than one per
@@ -95,20 +97,20 @@ def _tree_glob(
     Once cancelled, it lists no new directory, and yields the matches of the
     listings in flight.
 
-    Requests: one ``_ils`` per directory a pattern can match in, as the
-    filesystem's ``operation_limit`` allows. Without ``maxdepth``, a directory
-    at the pattern's first ``**`` is listed by one recursive ``_ils``, with all
+    Requests: one ``ils`` per directory a pattern can match in, as the
+    handler's ``operation_limit`` allows. Without ``maxdepth``, a directory
+    at the pattern's first ``**`` is listed by one ``ils_recursive``, with all
     below it: ``data/*/**/*.csv`` lists ``data``, then each directory in it.
     One ``info`` per pattern without wildcards, and per literal root directory
     walked that a pattern matches, e.g. that of ``data/**``.
 
-    ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``_ils``
+    ``path`` is a pattern, or patterns, of paths on ``handler``, as its ``ils``
     takes them: a trailing "/" matches only directories. ``maxdepth`` is how
     deep a ``**`` goes, and ``withdirs`` whether directories can match, as with
-    fsspec's ``_glob``. ``ils_kwargs`` go to each ``_ils``, as fsspec's
+    fsspec's ``_glob``. ``ils_kwargs`` go to each ``ils``, as fsspec's
     ``glob`` passes its own on.
 
-    The operation yields the ``_ils`` entry of each path matched, or the error
+    The operation yields the ``ils`` entry of each path matched, or the error
     of a directory that failed to list, and its state is a `GlobState`. The call
     raises ValueError if ``maxdepth`` is less than 1, or a ``**`` is not a
     whole segment.
@@ -127,14 +129,14 @@ def _tree_glob(
         op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         found: set[str] = set()
-        infos = _infos(fs, literals, op, found)
+        infos = _infos(handler, literals, op, found)
         async for entry in infos:
             yield entry
 
         for root, group in _walks(searches):
             if op.cancelling():
                 return
-            walk = _walk(fs, root, group, op, found, ils_kwargs)
+            walk = _walk(handler, root, group, op, found, ils_kwargs)
             async for match in walk:
                 yield match
 
@@ -156,7 +158,7 @@ def _walks(searches: list[_Search]) -> list[tuple[str, list[_Search]]]:
 
 
 async def _walk(
-    fs: Any,
+    handler: TreeFileOperationHandler,
     root: str,
     searches: list[_Search],
     op: Operation[dict[str, Any], GlobState],
@@ -170,7 +172,7 @@ async def _walk(
     # nothing. Its find includes the root directory itself, which few patterns
     # match.
     steps = _find_listings(
-        fs,
+        handler,
         root,
         maxdepth=None if None in depths else max(d for d in depths if d is not None),
         descend=lambda e: any(s.descend(e) for s in searches),
@@ -206,12 +208,9 @@ def _matches_in(
             and e["name"].rstrip("/") not in found
         ]
 
-    op.state = GlobState(
-        errors=state.errors + (listing.error is not None),
-        current=listing.directory,
-        # Depth 0 is the root's own entry: no directory listed.
-        directories_listed=state.directories_listed
-        + (listing.depth > 0 and listing.last),
+    op.state = _listed(
+        state,
+        listing,
         matched=state.matched + len(matches) - (listing.error is not None),
     )
 

@@ -5,10 +5,10 @@
 `_flat_mv` is an alternative to fsspec's recursive ``mv`` for flat storages.
 fsspec's copies every key, then deletes them all, each stage listing the
 prefix first. `_flat_mv` moves each key as soon as the listing gives it: by
-one ``_mv_file_entry``, or by a copy, deleting the copied keys in batches while
+one rename, or by a copy, deleting the copied keys in batches while
 the listing goes on.
 
-This module depends on `_jobs`, `cp`, and `jobs`, `operation` and `paths` of
+This module depends on `_jobs`, `cp`, and `handler`, `jobs`, `operation` and `paths` of
 `common`.
 """
 
@@ -19,29 +19,33 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
-from ..common.jobs import _Job, _transfer_of
+from ..common.jobs import _Job, _keys_of, _moves_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
-from ._jobs import _check_batch_size, _keys_of
 from .cp import _Copy, _CopyOrMove
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Sequence
+    from collections.abc import AsyncGenerator, Sequence
 
+    from ..common.handler import StorageHandler, StoragePath
     from ..common.jobs import _Transfer
+    from .handler import FlatFileOperationHandler
 
 __all__: list[str] = []
 
 
 def _flat_mv(
-    src_fs: Any,
-    dst_fs: Any,
-    path1: str | Sequence[str],
-    path2: str,
+    src: FlatFileOperationHandler,
+    dst: StorageHandler,
+    path1: StoragePath | Sequence[StoragePath],
+    path2: StoragePath,
     *,
     cp_entry: _Transfer | None = None,
+    mv_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
+    path1_entry: dict[str, Any] | None = None,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], MvState]:
     """Move the keys under a prefix, each as soon as it is listed.
 
@@ -50,24 +54,24 @@ def _flat_mv(
 
     It moves each key in one of two ways, by the destination's profile:
 
-    - by the source's ``_mv_file_entry``: each key is moved by one as soon as
-      the listing gives it, and yielded once moved. It wins on storages
-      renaming a key in one request, which copies no data.
+    - by renames: each key is moved by one ``mv_entry`` as soon as the
+      listing gives it, and yielded once moved. It wins on storages renaming
+      a key in one request, which copies no data.
     - by copies: each key is copied by one ``cp_entry`` as soon as the listing
       gives it. The keys copied are deleted in batches of the source's
-      ``rm_batch_size``, each by one of its ``_rm_files``, and the last,
+      ``rm_batch_size``, each by one of its ``rm_files``, and the last,
       smaller batch once all is copied. A key is moved, and yielded, once its
       batch is deleted. It wins on object stores, which rename nothing, but
       delete many keys in one request.
 
-    It moves by ``_mv_file_entry`` only within one storage whose profile's
-    ``renames_files`` is True. Unknown, it copies and deletes in batches,
+    It renames only within one storage whose profile's ``renames_files`` is
+    True. Unknown, it copies and deletes in batches,
     which is right on any storage: about one request per key either way, but
     a rename copies no data.
 
-    The destination is described by ``dst_fs`` and its profile, as with
+    The destination is described by ``dst`` and its profile, as with
     `_flat_cp`. Between two storages, ``same_storage`` is False, and
-    ``cp_entry`` copies to the other storage. ``_rm_files`` always deletes the
+    ``cp_entry`` copies to the other storage. ``rm_files`` always deletes the
     source's.
 
     A directory's marker, a key ending with "/", is moved too, but not yielded.
@@ -94,49 +98,61 @@ def _flat_mv(
     FileNotFoundError if ``path1`` does not exist, or matches nothing, and
     ValueError if ``path2`` is inside it within one storage.
 
-    Requests: as `_flat_cp`, with one ``_mv_file_entry`` per key instead of its
-    ``cp_entry``, or with one ``_rm_files`` more per batch.
+    Requests: as `_flat_cp`, with one ``mv_entry`` per key instead of its
+    ``cp_entry``, or with one ``rm_files`` more per batch.
 
-    ``src_fs`` is the filesystem moved from, and ``dst_fs`` the one moved to,
-    ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
-    glob pattern, or a list of them, as the source's ``_ils`` takes paths.
+    ``src`` is the handler moved from, and ``dst`` the one moved to,
+    ``src`` again within one storage. ``path1`` is a directory, a file, a
+    glob pattern, or a list of them, as the source's ``ils`` takes paths.
     ``path2`` places them as `_flat_cp` does. ``cp_entry(entry, destination)``
-    copies a file by its source entry when the move copies: the source's
-    ``_cp_file_entry`` by default, within one storage. ``same_storage`` is
-    whether ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 moves
-    only the keys right in ``path1``.
+    copies a file by its source entry when the move copies: by default, the
+    source's ``cp_file`` within one storage, and `transfer._across` between
+    two. ``mv_entry(entry, destination)`` moves one when the move renames: by
+    default, the source's ``mv_file``. Within one storage, unless the one used
+    is given, the keys go to the source's ``mv_files`` or ``cp_files``, in
+    batches of its ``mv_batch_size`` or ``cp_batch_size``, as `_flat_cp` sends
+    its copies: by default each by ``mv_file`` or ``cp_file``. Between two storages, nothing is
+    renamed, and ``mv_entry`` is not used: the copies' sources are deleted in
+    batches instead. ``same_storage`` is whether ``dst`` is ``src``,
+    unless given. ``maxdepth`` of 1 moves
+    only the keys right in ``path1``. ``path1_entry`` is as `_flat_cp` takes it.
+    ``ils_kwargs`` go to each of the source's ``ils_recursive``, a pattern's
+    glob's too.
 
     The operation yields ``(source, destination)`` for each key moved, or an
     error, and its state is an `MvState`. The call raises ValueError if the
-    source's ``rm_batch_size`` or ``maxdepth`` is less than 1, or ``cp_entry``
-    is missing between two storages.
+    source's ``rm_batch_size`` or ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
-    if same_storage is None:
-        same_storage = src_fs is dst_fs
+    given = cp_entry, mv_entry
+    cp_entry, mv_entry, same_storage = _moves_of(
+        src, dst, cp_entry, mv_entry, same_storage
+    )
     options = {
-        "fs": src_fs,
-        "dst_fs": dst_fs,
+        "handler": src,
+        "dst": dst,
         "path1": path1,
         "path2": path2,
         "same_storage": same_storage,
         "maxdepth": maxdepth,
+        "path1_entry": path1_entry,
+        "ils_kwargs": ils_kwargs,
     }
-
-    _check_batch_size(src_fs.rm_batch_size)
-    cp_entry, _ = _transfer_of(src_fs, dst_fs, cp_entry, same_storage, "cp_entry")
 
     async def run(op: Operation[Any, MvState]) -> AsyncGenerator[Any]:
         # A rename wins only where the storage is known to rename: the profile,
         # awaited, chooses the jobs.
-        renames = (
-            same_storage
-            and (await dst_fs._get_storage_profile(path2)).renames_files is True
-        )
+        await dst.open()
+        renames = same_storage and dst.profile.renames_files is True
         jobs: _CopyOrMove = (
-            _Rename(op=op, **options)
+            _Rename(op=op, mv_entry=mv_entry, batching=given[1] is None, **options)
             if renames
-            else _Move(op=op, cp_entry=cp_entry, **options)
+            else _Move(
+                op=op,
+                cp_entry=cp_entry,
+                batching=same_storage and given[0] is None,
+                **options,
+            )
         )
         async with aclosing(jobs.outcomes()) as outcomes:
             async for outcome in outcomes:
@@ -145,30 +161,11 @@ def _flat_mv(
     return Operation(run, MvState())
 
 
-class _Rename(_CopyOrMove):
-    """The jobs of one `_flat_mv` by ``_mv_file_entry``: one move per key.
-
-    The source's ``_mv_file_entry`` moves each key where a copy would put it. A
-    directory's marker is moved too, but not yielded.
-    """
+class _Moving(_CopyOrMove):
+    """What both kinds of flat move share: their words, and their state."""
 
     verb = "move"
     doing = "Moving"
-
-    async def setup(self) -> None:
-        await super().setup()
-
-        # A rename makes no parent, as a write may: parents_required tells of
-        # writes only, and _mv_file_entry is called only where the parent exists.
-        self.parents_required = not self.implicit_directories
-
-    async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
-        try:
-            await self.fs._mv_file_entry(entry, destination)
-        except Exception as e:
-            # Yielded among paths, the error must tell its paths itself.
-            e.add_note(f"{self.doing} {entry['name']!r} to {destination!r} failed.")
-            raise
 
     def state(self) -> MvState:
         return MvState(
@@ -178,13 +175,41 @@ class _Rename(_CopyOrMove):
             files_moved=self.files_done,
         )
 
+
+class _Rename(_Moving):
+    """The jobs of one `_flat_mv` by renames: one ``mv_entry`` per key.
+
+    ``mv_entry`` moves each key where a copy would put it. A directory's
+    marker is moved too, but not yielded.
+    """
+
+    transfers = "move"
+
+    def __init__(self, *, mv_entry: _Transfer, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.mv_entry = mv_entry
+
+    async def setup(self) -> None:
+        await super().setup()
+
+        # A rename makes no parent, as a write may: parents_required tells of
+        # writes only, and mv_file is called only where the parent exists.
+        self.parents_required = not self.implicit_directories
+
+    async def transfer_file(
+        self, entry: dict[str, Any], destination: StoragePath
+    ) -> None:
+        await self.move_file(self.mv_entry, entry, destination)
+
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
         if name.endswith("/"):
             # With maxdepth, directories stay, as fsspec's copy leaves them out.
             if self.maxdepth is None:
+                # Into its parent once made, as a key goes: mv_file is called
+                # only where the parent exists.
                 job = _Job("marker", entry, self.target(name))
-                self.waiting.append(job)
+                self.queue(self.dst.parent(self.target(name.rstrip("/"))), [job])
             return
         super().add(entry)
 
@@ -195,35 +220,20 @@ class _Rename(_CopyOrMove):
             return super().done(job)
 
 
-class _Move(_Copy):
+class _Move(_Moving, _Copy):
     """The jobs of one `_flat_mv` by copies: a copy per key, then a deletion per batch."""
-
-    verb = "move"
-    doing = "Moving"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        self.batch_size: int = self.fs.rm_batch_size
-
-        # The keys to delete. Each key moving, from its listing to its
-        # deletion, has where it is copied, None for a marker: listed again,
-        # it is skipped.
-        self.batch: list[str] = []
+        # Each key moving, from its listing to its deletion, has where it is
+        # copied, None for a marker: listed again, it is skipped.
         self.copied: dict[str, str | None] = {}
 
         # The copies queued or running, and whether the listing has ended: the
         # last batch goes once both say all is copied.
         self.copying = 0
         self.listed = False
-
-    def state(self) -> MvState:
-        return MvState(
-            errors=self.errors,
-            current=self.current,
-            files_found=self.files_found,
-            files_moved=self.files_done,
-        )
 
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
@@ -232,10 +242,12 @@ class _Move(_Copy):
         if name.endswith("/"):
             if self.maxdepth is not None:
                 return  # Directories stay, as fsspec's copy leaves them out.
-            # A directory's marker: deleted, its directory made as _flat_cp makes it.
-            self.copied[name] = None
-            self.delete_later(name)
+            # A directory's marker: its directory made as _flat_cp makes it, then
+            # the marker deleted. A name the destination refuses raises first:
+            # the marker stays.
             super().add(entry)
+            self.copied[name] = None
+            self.delete_later(entry)
             return
 
         self.copied[name] = self.target(name)
@@ -243,47 +255,51 @@ class _Move(_Copy):
         super().add(entry)
 
     def exhausted(self) -> None:
+        super().exhausted()
         self.listed = True
         self.send_if_ready()
 
     def stopping(self) -> None:
         # The copies not started are dropped, but the keys copied are deleted,
-        # so that none is in both places.
-        deletions = [j for j in self.waiting if j.kind == "delete"]
+        # so that none is in both places: the deletions' batches stay.
         self.waiting.clear()
-        self.waiting.extend(deletions)
-        self.copying = sum(j.kind == "copy" for j in self.running.values())
+        self.drop_transfers()
+        self.copying = (
+            sum(j.kind == "file" for j in self.running.values())
+            + self.transfers_running()
+        )
         self.send_if_ready()
 
-    def run(self, job: _Job) -> Awaitable[Any]:
-        if job.kind == "delete":
-            return self.delete(job.paths)
-        else:
-            return super().run(job)
+    def dropped(self, job: _Job) -> None:
+        # A copy not sent: its key stays, as one never copied.
+        self.copying -= 1
+        self.copied.pop(job.path)
+        self.send_if_ready()
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":
             return super().done(job)
-        if job.kind == "copy":
+        if job.kind == "file":
             self.copying -= 1
-            self.delete_later(job.path)
+            self.delete_later(job.source)
             return []
 
-        refused = self.refused(
-            job.paths, "Deleting {key} failed, once copied: it is in both places."
-        )
+        deleted, errors = self.deleted(job)
+        for error in errors:
+            error.add_note("Once copied: it is in both places.")
+        gone = set(deleted)
         moved: list[Any] = []
         for path in job.paths:
             destination = self.copied.pop(path)
-            if destination is not None and path not in refused:
+            if destination is not None and path in gone:
                 self.files_done += 1
                 moved.append((path, destination))
-        return [*moved, *refused.values()]
+        return [*moved, *errors]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         if job.kind == "mkdir":
             return super().failed(job, error)
-        if job.kind == "copy":
+        if job.kind == "file":
             self.copying -= 1
             self.copied.pop(job.path)
             self.send_if_ready()
@@ -298,17 +314,13 @@ class _Move(_Copy):
         )
         return [error]
 
-    def delete_later(self, source: str) -> None:
-        """Add a key to the batch to delete, and send the batch if it is ready."""
-        self.batch.append(source)
+    def delete_later(self, source: dict[str, Any]) -> None:
+        """Add a key copied to the batch to delete, and send the batch if it is ready."""
+        self.to_delete.append(source)
         self.send_if_ready()
 
     def send_if_ready(self) -> None:
-        """Send the batch if full, or if nothing more can join it."""
-        if not self.batch:
-            return
-
+        """Send the batch if full, or if nothing more can join it: the listing ended, or cancelled, and no copy left."""
         done = (self.listed or self.op.cancelling()) and self.copying == 0
-        if len(self.batch) >= self.batch_size or done:
-            paths, self.batch = tuple(self.batch), []
-            self.waiting.append(_Job("delete", {"name": paths[-1]}, paths=paths))
+        if len(self.to_delete) >= self.rm_batch_size or done:
+            self.flush_deletions()

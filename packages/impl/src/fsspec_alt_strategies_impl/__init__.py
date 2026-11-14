@@ -4,9 +4,9 @@
 
 fsspec's defaults assume a flat key space, as object stores have. The strategies
 here come in two families: `tree`, for storages with a hierarchical namespace,
-and `flat`, for object stores. Each family's abstract filesystem class runs
-them as its recursive methods, and the wrappers give them to any existing
-fsspec filesystem.
+and `flat`, for object stores. Each family's handler runs them, and the
+`BaseFileSystem` on a handler runs its strategies as its recursive
+methods. The wrappers give them to any existing fsspec filesystem.
 
 They are meant to be copied into a project, not installed. Each class is
 imported from its module, so that a copy may leave out what it does not use. The

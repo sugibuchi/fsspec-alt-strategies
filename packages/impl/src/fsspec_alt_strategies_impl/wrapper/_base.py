@@ -1,277 +1,281 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""What the wrappers share: the filesystem wrapped, its primitives, awaited or run in threads.
+"""What the wrapping handlers share: an fsspec filesystem's methods, awaited or run in threads.
 
-`_AsyncFileSystemWrapper` awaits an async filesystem's coroutines on its loop.
-`_SyncFileSystemWrapper` runs a sync one's methods, each in a thread. Both
-pass the wrapped one's data methods, such as ``_cat_file``, on as they are,
-under ``io_limit``. A family's wrapper adds its own primitives.
+`_FsspecHandler` calls the filesystem it wraps: its async methods, awaited on
+its loop, where ``fs.async_impl`` says it has them, or else its sync ones, each
+in a thread of the handler's own. So a sync filesystem, e.g. a
+``DirFileSystem`` over a local one, is wrapped as sync, whatever its class. A
+family's handler adds its own primitives.
 
-This module depends on `sync_client` of `common`, `fsspec_async` of `files`,
-and `listing` of `tree`.
+This module depends on `filesystem`, `handler` and `clients` of `common`, and
+`fsspec_async` of `files`.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..common.sync_client import SyncClientSupport
+from fsspec.callbacks import DEFAULT_CALLBACK
+
+from ..common.clients import SyncClientSupport
+from ..common.filesystem import BaseFileSystem
+from ..common.handler import StorageHandler
 from ..files.fsspec_async import SyncFileAdapter
-from ..tree.listing import _tree_ils
 
 if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncIterator
 
-    from fsspec.asyn import AsyncFileSystem
-    from fsspec.spec import AbstractFileSystem
+    from fsspec import AbstractFileSystem
+    from fsspec.callbacks import Callback
 
     from fsspec_alt_strategies.profile import StorageProfile
+
+    from ..common.handler import Entry, StoragePath
 
 __all__: list[str] = []
 
 
-class _FileSystemWrapper:
-    """The filesystem wrapped, and its paths, as the wrapper's own."""
+def _unwrapped(fs: AbstractFileSystem) -> AbstractFileSystem:
+    """A wrapped filesystem, as a monitor's `Call` names it: one of this package's names its own, e.g. a wrapper's."""
+    return fs._unwrapped() if isinstance(fs, BaseFileSystem) else fs
 
-    # Made on demand, and dropped after: fsspec keeps none.
-    cachable = False
-    io_limit: asyncio.Semaphore
+
+def _async_impl(fs: AbstractFileSystem) -> bool:
+    """Whether a filesystem's async methods work: its ``async_impl``, and that of the one it chains over.
+
+    A filesystem chained over another, e.g. fsspec's ``DirFileSystem`` in its
+    ``fs``, declares ``async_impl`` on its class, but its async methods call
+    the other's: they work only if that one's do.
+    """
+    if not getattr(fs, "async_impl", False):
+        return False
+    inner = getattr(fs, "fs", None)
+    if inner is not None and hasattr(inner, "async_impl"):
+        return _async_impl(inner)
+    return True
+
+
+class _FsspecHandler(SyncClientSupport, StorageHandler):
+    """An fsspec filesystem's primitives, its data methods and its files, as a handler's.
+
+    Its paths are the wrapped filesystem's: it verifies none, as the wrapped
+    one checks its own, and strips and unstrips the protocol as it does.
+
+    A sync filesystem's calls run in threads of the handler's own, as many as
+    both concurrencies together, when both are numbers: a filesystem unsafe to
+    call from several threads needs both at 1. `close` and `aclose` shut them down.
+
+    Each option left out is the class's: a generic handler's is the one right
+    on any storage, an unknown profile and one request at a time. A dedicated
+    handler, e.g. `S3fsHandler`, declares its own as class attributes, as the
+    storage it wraps is known. The batch sizes are the strategies', so the
+    generic handlers, which mix in `Strategy`, take them.
+    """
+
+    operation_concurrency: int | asyncio.Semaphore = 1
+    """The strategies' requests at a time, unless given: one, right on any storage."""
+
+    io_concurrency: int | asyncio.Semaphore = 1
+    """The data methods' calls at a time, unless given: one, right on any storage."""
 
     def __init__(
         self,
-        fs: Any,
+        fs: AbstractFileSystem,
         *,
-        storage_profile: StorageProfile,
-        **kwargs: Any,
+        operation_concurrency: int | asyncio.Semaphore | None = None,
+        io_concurrency: int | asyncio.Semaphore | None = None,
+        storage_profile: StorageProfile | None = None,
     ) -> None:
+        super().__init__(
+            operation_concurrency=(
+                self.operation_concurrency
+                if operation_concurrency is None
+                else operation_concurrency
+            ),
+            io_concurrency=(
+                self.io_concurrency if io_concurrency is None else io_concurrency
+            ),
+        )
         self.fs = fs
-        # A wrapper's storage is the one it wraps: its profile comes with it.
-        self.storage_profile = storage_profile
-        super().__init__(**kwargs)
+        if storage_profile is not None:
+            self.profile = storage_profile
+        # The wrapped one's paths: its protocol, its root and its stripping.
+        self.protocol = fs.protocol
+        self.root = getattr(fs, "root_marker", "")
+        # Its async methods only where they work.
+        self.asynchronous = _async_impl(fs)
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} of {self.fs!r}>"
 
-    def _strip_protocol(self, path: Any) -> Any:  # type: ignore[override]
-        # The wrapped filesystem's paths, not this class's protocol.
+    def _thread_count(self) -> int | None:
+        # The data methods hold no permit of operation_limit: they need threads
+        # of their own.
+        concurrencies = (self.operation_concurrency, self.io_concurrency)
+        if isinstance(concurrencies[0], int) and isinstance(concurrencies[1], int):
+            return concurrencies[0] + concurrencies[1]
+        else:
+            return None
+
+    async def call(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        """The wrapped filesystem's method ``name``: its ``_name`` awaited, or ``name`` in a thread."""
+        if self.asynchronous:
+            return await getattr(self.fs, f"_{name}")(*args, **kwargs)
+        else:
+            return await self.run_in_thread(getattr(self.fs, name), *args, **kwargs)
+
+    # Its paths, as the wrapped filesystem's.
+
+    def verify_path(self, path: str) -> None:
+        """Nothing: the wrapped filesystem checks its paths in its own methods."""
+
+    def strip_protocol(self, path: Any) -> Any:  # type: ignore[override]
+        # The wrapped filesystem's, which its class may override: an instance's.
         return self.fs._strip_protocol(path)
 
     def unstrip_protocol(self, name: str) -> str:
         return self.fs.unstrip_protocol(name)
 
-    # The sync methods fsspec leaves to each filesystem, the wrapped one's as
-    # they are: a router passes them on to its storages.
+    # The primitives.
 
-    def created(self, path: str) -> Any:
-        return self.fs.created(path)
+    async def ils(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
+        # fsspec has no listing in pages: the wrapped one's ls, all at once.
+        for listed in await self.call("ls", entry["name"], detail=True, **kwargs):
+            yield listed
 
-    def modified(self, path: str) -> Any:
-        return self.fs.modified(path)
+    async def info(self, entry: Entry, **kwargs: Any) -> Entry:
+        return await self.call("info", entry["name"], **kwargs)
 
-    def sign(self, path: str, expiration: int = 100, **kwargs: Any) -> str:
-        return self.fs.sign(path, expiration=expiration, **kwargs)
+    async def rm_file(self, entry: Entry) -> None:
+        await self.call("rm_file", entry["name"])
+
+    async def rmdir(self, entry: Entry) -> None:
+        await self.call("rmdir", entry["name"])
+
+    async def makedirs(
+        self,
+        path: StoragePath,
+        exist_ok: bool = False,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
+    ) -> None:
+        await self.call("makedirs", path, exist_ok=exist_ok)
+
+    # fsspec's copy and move take paths: the entry's name alone, and no info first.
+
+    async def cp_file(
+        self,
+        entry: Entry,
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
+    ) -> None:
+        await self.call("cp_file", entry["name"], path2)
+
+    async def mv_file(
+        self,
+        entry: Entry,
+        path2: StoragePath,
+        *,
+        missing: bool = False,
+        parent: Entry | None = None,
+    ) -> None:
+        if self.asynchronous:
+            await self.fs._mv_file(entry["name"], path2)
+        else:
+            # A sync filesystem's own move, e.g. a local rename, is its mv.
+            await self.run_in_thread(self.fs.mv, entry["name"], path2)
+
+    # The data methods, the wrapped filesystem's as they are, each under a
+    # permit of io_limit: the wrapped one's requests take none of the handler's.
+
+    async def cat_file(
+        self,
+        entry: Entry,
+        start: int | None = None,
+        end: int | None = None,
+        **kwargs: Any,
+    ) -> bytes:
+        async with self.io_limit:
+            return await self.call(
+                "cat_file", entry["name"], start=start, end=end, **kwargs
+            )
+
+    async def pipe_file(
+        self, path: StoragePath, value: bytes, mode: str = "overwrite", **kwargs: Any
+    ) -> None:
+        async with self.io_limit:
+            await self.call("pipe_file", path, value, mode=mode, **kwargs)
+
+    async def get_file(
+        self,
+        entry: Entry,
+        lpath: str,
+        callback: Callback = DEFAULT_CALLBACK,
+        **kwargs: Any,
+    ) -> None:
+        async with self.io_limit:
+            await self.call(
+                "get_file", entry["name"], lpath, callback=callback, **kwargs
+            )
+
+    async def put_file(
+        self,
+        lpath: str,
+        path: StoragePath,
+        mode: str = "overwrite",
+        callback: Callback = DEFAULT_CALLBACK,
+        **kwargs: Any,
+    ) -> None:
+        async with self.io_limit:
+            await self.call(
+                "put_file", lpath, path, mode=mode, callback=callback, **kwargs
+            )
+
+    # The files, the wrapped filesystem's own: its async ones awaited, and its
+    # sync ones for fsspec's open, with its own transactions. They close as the
+    # wrapped one's do: one left by an exception may keep what was written, so
+    # the profile declares no atomic_writes unless the library's writer aborts.
+
+    def open_file(
+        self,
+        entry: Entry,
+        mode: str = "rb",
+        *,
+        loop: asyncio.AbstractEventLoop | None,
+        autocommit: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        # The wrapped filesystem's sync file, on its own loop, with its own transactions.
+        return self.fs._open(entry["name"], mode=mode, autocommit=autocommit, **kwargs)
+
+    async def open_async_file(
+        self, entry: Entry, mode: str = "rb", **kwargs: Any
+    ) -> Any:
+        path = entry["name"]
+        if self.asynchronous:
+            return await self.fs.open_async(path, mode, **kwargs)
+        file = await self.run_in_thread(self.fs.open, path, mode, **kwargs)
+        return SyncFileAdapter(file)
+
+    # The sync methods fsspec leaves to each filesystem, the wrapped one's. They
+    # are sync, also of an async filesystem: each runs in a thread, as fsspec's
+    # sync() refuses the loop running this.
+
+    async def created(self, entry: Entry) -> Any:
+        return await self.run_in_thread(self.fs.created, entry["name"])
+
+    async def modified(self, entry: Entry) -> Any:
+        return await self.run_in_thread(self.fs.modified, entry["name"])
+
+    async def sign(self, entry: Entry, expiration: int = 100, **kwargs: Any) -> str:
+        sign = self.fs.sign
+        name = entry["name"]
+        return await self.run_in_thread(sign, name, expiration=expiration, **kwargs)
 
     def invalidate_cache(self, path: str | None = None) -> None:
         self.fs.invalidate_cache(path)
-
-    def _unwrapped(self) -> Any:
-        """The filesystem wrapped, itself unwrapped if a wrapper: a `Call` names it.
-
-        A wrapper is made on demand, and dropped after: the filesystem it wraps
-        is the one its callers know.
-        """
-        unwrap = getattr(self.fs, "_unwrapped", None)
-        return unwrap() if unwrap is not None else self.fs
-
-
-class _AsyncFileSystemWrapper(_FileSystemWrapper):
-    """The primitives of an async filesystem, awaited on its loop."""
-
-    fs: AsyncFileSystem
-
-    def __init__(self, fs: AsyncFileSystem, **kwargs: Any) -> None:
-        # Its coroutines run on its loop, so the wrapper's do too.
-        kwargs.setdefault("asynchronous", fs.asynchronous)
-        if not fs.asynchronous:
-            kwargs.setdefault("loop", fs.loop)
-        super().__init__(fs, **kwargs)
-
-    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
-        return await self.fs._ls(path, detail=detail, **kwargs)
-
-    async def _ils(
-        self, path: str, recursive: bool = False, **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            # fsspec's find gives all at once, in no stated order: one listing per directory.
-            async for entry in _tree_ils(self, path, recursive=False, **kwargs):
-                yield entry
-            return
-
-        # fsspec has no listing in pages: the wrapped one's _ls, all at once.
-        for entry in await self.fs._ls(path, detail=True, **kwargs):
-            yield entry
-
-    async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
-        return await self.fs._info(path, **kwargs)
-
-    async def _rm_file(self, path: str, **kwargs: Any) -> None:
-        await self.fs._rm_file(path, **kwargs)
-
-    # fsspec's copy and move take paths: the entry's name alone, and no _info
-    # first. A subclass overriding _cp_file or _mv_file, e.g. with a rename,
-    # is so used by the strategies too.
-    async def _cp_file_entry(
-        self, entry: dict[str, Any], path2: str, **kwargs: Any
-    ) -> None:
-        await self._cp_file(entry["name"], path2, **kwargs)
-
-    async def _mv_file_entry(
-        self, entry: dict[str, Any], path2: str, **kwargs: Any
-    ) -> None:
-        await self._mv_file(entry["name"], path2, **kwargs)
-
-    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        await self.fs._cp_file(path1, path2, **kwargs)
-
-    async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        await self.fs._mv_file(path1, path2, **kwargs)
-
-    async def _rmdir(self, path: str) -> None:
-        await self.fs._rmdir(path)
-
-    async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
-        await self.fs._makedirs(path, exist_ok=exist_ok)
-
-    async def _mkdir(
-        self, path: str, create_parents: bool = True, **kwargs: Any
-    ) -> None:
-        await self.fs._mkdir(path, create_parents=create_parents, **kwargs)
-
-    async def _cat_file(
-        self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any
-    ) -> bytes:
-        async with self.io_limit:
-            return await self.fs._cat_file(path, start=start, end=end, **kwargs)
-
-    async def _pipe_file(self, path: str, value: bytes, **kwargs: Any) -> None:
-        async with self.io_limit:
-            await self.fs._pipe_file(path, value, **kwargs)
-
-    async def _get_file(self, rpath: str, lpath: str, **kwargs: Any) -> None:
-        async with self.io_limit:
-            await self.fs._get_file(rpath, lpath, **kwargs)
-
-    async def _put_file(self, lpath: str, rpath: str, **kwargs: Any) -> None:
-        async with self.io_limit:
-            await self.fs._put_file(lpath, rpath, **kwargs)
-
-    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        return await self.fs.open_async(path, mode, **kwargs)
-
-    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        return self.fs._open(path, mode=mode, **kwargs)
-
-
-class _SyncFileSystemWrapper(SyncClientSupport, _FileSystemWrapper):
-    """The primitives of a sync filesystem, each run in a thread of the wrapper's own.
-
-    There are as many threads as ``operation_concurrency`` and
-    ``io_concurrency`` together, when both are numbers. ``operation_limit`` and
-    ``io_limit`` bound how many run at once: a filesystem unsafe to call from
-    several threads needs both at 1.
-    """
-
-    fs: AbstractFileSystem
-
-    def _thread_count(self) -> int | None:
-        # The data methods hold no permit of operation_limit: they need threads
-        # of their own.
-        concurrencies = (self.operation_concurrency, self.io_concurrency)  # type: ignore[attr-defined]
-        if all(isinstance(c, int) for c in concurrencies):
-            return sum(concurrencies)
-        else:
-            return None
-
-    async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
-        return await self._run_in_thread(self.fs.ls, path, detail=detail, **kwargs)
-
-    async def _ils(
-        self, path: str, recursive: bool = False, **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            # fsspec's find gives all at once, in no stated order: one listing per directory.
-            async for entry in _tree_ils(self, path, recursive=False, **kwargs):
-                yield entry
-            return
-
-        # fsspec has no listing in pages: the wrapped one's ls, all at once.
-        for entry in await self._run_in_thread(self.fs.ls, path, detail=True, **kwargs):
-            yield entry
-
-    async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
-        return await self._run_in_thread(self.fs.info, path, **kwargs)
-
-    async def _rm_file(self, path: str, **kwargs: Any) -> None:
-        await self._run_in_thread(self.fs.rm_file, path, **kwargs)
-
-    # fsspec's copy and move take paths: the entry's name alone, and no info
-    # first. A subclass overriding _cp_file or _mv_file, e.g. with a rename,
-    # is so used by the strategies too.
-    async def _cp_file_entry(
-        self, entry: dict[str, Any], path2: str, **kwargs: Any
-    ) -> None:
-        await self._cp_file(entry["name"], path2, **kwargs)
-
-    async def _mv_file_entry(
-        self, entry: dict[str, Any], path2: str, **kwargs: Any
-    ) -> None:
-        await self._mv_file(entry["name"], path2, **kwargs)
-
-    async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        await self._run_in_thread(self.fs.cp_file, path1, path2, **kwargs)
-
-    async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        # A sync filesystem's own move, e.g. a local rename, is its mv.
-        await self._run_in_thread(self.fs.mv, path1, path2, **kwargs)
-
-    async def _rmdir(self, path: str) -> None:
-        await self._run_in_thread(self.fs.rmdir, path)
-
-    async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
-        await self._run_in_thread(self.fs.makedirs, path, exist_ok=exist_ok)
-
-    async def _mkdir(
-        self, path: str, create_parents: bool = True, **kwargs: Any
-    ) -> None:
-        await self._run_in_thread(
-            self.fs.mkdir, path, create_parents=create_parents, **kwargs
-        )
-
-    async def _cat_file(
-        self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any
-    ) -> bytes:
-        async with self.io_limit:
-            return await self._run_in_thread(
-                self.fs.cat_file, path, start=start, end=end, **kwargs
-            )
-
-    async def _pipe_file(self, path: str, value: bytes, **kwargs: Any) -> None:
-        async with self.io_limit:
-            await self._run_in_thread(self.fs.pipe_file, path, value, **kwargs)
-
-    async def _get_file(self, rpath: str, lpath: str, **kwargs: Any) -> None:
-        async with self.io_limit:
-            await self._run_in_thread(self.fs.get_file, rpath, lpath, **kwargs)
-
-    async def _put_file(self, lpath: str, rpath: str, **kwargs: Any) -> None:
-        async with self.io_limit:
-            await self._run_in_thread(self.fs.put_file, lpath, rpath, **kwargs)
-
-    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        file = await self._run_in_thread(self.fs.open, path, mode, **kwargs)
-        return SyncFileAdapter(file)
-
-    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        return self.fs._open(path, mode=mode, **kwargs)

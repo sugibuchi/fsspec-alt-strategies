@@ -1,16 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""gcsfs's ``GCSFileSystem``, wrapped as a `FlatFileSystem`, listing by prefix and deleting in full batches.
+"""gcsfs's ``GCSFileSystem``, wrapped as a `FlatFileOperationHandler`, listing by prefix and deleting in full batches.
 
-`GcsfsWrapper` uses what gcsfs has beside fsspec's API:
+`GcsfsHandler` uses what gcsfs has beside fsspec's API:
 
-- its recursive ``_ils`` gives gcsfs's ``_find`` the prefix, which lists only
+- its ``ils_recursive`` gives gcsfs's ``_find`` the prefix, which lists only
   the objects starting with it: for the glob "data/2024-*", those of
   "data/2024-", not all of "data/". gcsfs still gathers every page before
   answering, so the listing is held whole, not streamed.
-- its ``_rm_files`` deletes a batch by gcsfs's own ``_rm_files``, one batch
+- its ``rm_files`` deletes a batch by gcsfs's own ``_rm_files``, one batch
   request of up to 100 objects, GCS's most. gcsfs's ``_rm``, which the generic
-  wrapper calls, sends batches of 20 since gcsfs 2026's ``ExtendedGcsFileSystem``,
+  handler calls, sends batches of 20 since gcsfs 2026's ``ExtendedGcsFileSystem``,
   and on a bucket with a hierarchical namespace first asks each key's info.
 
 Its copies are the generic one's, as gcsfs's ``objects.rewrite`` asks nothing
@@ -18,13 +18,14 @@ first.
 
 On a bucket with a hierarchical namespace, folders are objects of their own,
 which the flat strategies never delete: a recursive ``rm`` or ``mv`` leaves
-them. Such a bucket suits `AsyncTreeWrapper`, whose ``_rmdir`` is gcsfs's,
-deleting a folder. A filesystem serving both kinds of bucket is two under a
-router.
+them. Such a bucket suits `FsspecTreeHandler`, whose ``rmdir`` is gcsfs's,
+deleting a folder. As a handler has one profile, the whole of GCS is a
+router, holding a handler per bucket: each wrapped as its kind of bucket
+suits.
 
 It imports nothing of gcsfs: it calls the wrapped filesystem's own methods.
 Those are private, as of gcsfs 2026.x: where ``_find`` takes no ``prefix``, or
-``_rm_files`` is missing, it lists or deletes as the generic wrapper does.
+``_rm_files`` is missing, it lists or deletes as the generic handler does.
 
 This module depends on `flat`.
 """
@@ -34,45 +35,69 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any
 
-from .flat import AsyncFlatWrapper
+from fsspec_alt_strategies.profile import StorageProfile
+
+from .flat import FsspecFlatHandler
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Mapping
 
-__all__ = ["GcsfsWrapper"]
+    from ..common.handler import Entry
+
+__all__ = ["GCSFS_PROFILE", "GcsfsHandler"]
+
+GCSFS_PROFILE = StorageProfile(
+    parents_required=False,
+    copy_parents_required=False,
+    implicit_directories=None,
+    renames_files=False,
+    renames_directories=False,
+    deletes_directories=False,
+    copies_directories=False,
+    case_sensitive=True,
+)
+"""GCS through gcsfs, for buckets without a hierarchical namespace.
+
+One with it has folders of their own, which the flat strategies leave after a
+recursive rm or mv: wrap it as a tree. Both kinds served are a router, a
+filesystem per bucket. Its mv is fsspec's copy, then a delete.
+"""
 
 _BATCH = 100
 """The most calls one GCS batch request takes."""
 
 
-class GcsfsWrapper(AsyncFlatWrapper):
-    """A gcsfs filesystem as a `FlatFileSystem`, listing by prefix and deleting in full batches.
+class GcsfsHandler(FsspecFlatHandler):
+    """A gcsfs filesystem as a flat handler, listing by prefix and deleting in full batches.
 
-    It takes what `AsyncFlatWrapper` takes. ``rm_batch_size`` is best a
-    multiple of 100, the most objects one batch request deletes. It suits
-    buckets without a hierarchical namespace.
+    It declares what is known of GCS: `GCSFS_PROFILE`, 32 requests and 8 data
+    calls at a time, and batches of 100 deletions, the most objects one batch
+    request deletes. It takes what `FsspecFlatHandler` takes, to change one:
+    ``rm_batch_size`` is best a multiple of 100. It suits buckets without a
+    hierarchical namespace.
 
     Examples
     --------
-    >>> flat = GcsfsWrapper(
-    ...     gcsfs.GCSFileSystem(),
-    ...     rm_batch_size=100,
-    ...     operation_concurrency=32,
-    ...     io_concurrency=8,
-    ...     storage_profile=known_implementations["gcsfs.core.GCSFileSystem"]["storage_profile"],
-    ... )
+    >>> flat = FileSystemWrapper(GcsfsHandler(gcsfs.GCSFileSystem()))
     """
 
-    def _ils(
-        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        if recursive and path and _takes_prefix(self.fs._find):
+    profile = GCSFS_PROFILE
+    operation_concurrency = 32
+    io_concurrency = 8
+    rm_batch_size = _BATCH
+
+    def ils_recursive(
+        self, entry: Entry, *, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[Entry]:
+        path = entry["name"]
+        if path and not kwargs and self.asynchronous and _takes_prefix(self.fs._find):
             return self._objects(path, prefix)
         else:
-            # The buckets, or one directory: as the generic wrapper lists them.
-            return super()._ils(path, recursive=recursive, prefix=prefix, **kwargs)
+            # The buckets, or a caller's options, which gcsfs's find takes: as the
+            # generic handler lists them.
+            return super().ils_recursive(entry, prefix=prefix, **kwargs)
 
-    async def _objects(self, path: str, prefix: str) -> AsyncIterator[dict[str, Any]]:
+    async def _objects(self, path: str, prefix: str) -> AsyncIterator[Entry]:
         """Every object starting with ``path/prefix``, in name order, listed by that prefix."""
         try:
             found = await self.fs._find(path, detail=True, prefix=prefix)
@@ -81,16 +106,17 @@ class GcsfsWrapper(AsyncFlatWrapper):
         for entry in sorted(found.values(), key=lambda e: e["name"]):
             yield entry
 
-    async def _rm_files(self, paths: list[str]) -> dict[str, Exception] | None:
+    async def _rm_batch(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
         # gcsfs batches deletions only on Google's own endpoint: elsewhere, e.g. on
         # an emulator, its _rm deletes one object per request.
         rm_files = getattr(self.fs, "_rm_files", None)
         if rm_files is None or not getattr(self.fs, "on_google", False):
-            return await super()._rm_files(paths)
+            return await super()._rm_batch(entries)
 
+        paths = [e["name"] for e in entries]
         refused: dict[str, Exception] = {}
         for start in range(0, len(paths), _BATCH):
-            batch = list(paths[start : start + _BATCH])
+            batch = paths[start : start + _BATCH]
             refused.update(await self._refused(batch, await rm_files(batch)))
         return refused
 

@@ -59,7 +59,13 @@ def streaming_copy(
 ) -> Any:
     """A ``cp_entry`` between two storages, a block at a time, as the router's."""
 
-    async def copy_file(entry: dict[str, Any], destination: str) -> None:
+    async def copy_file(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
         reader = await open_source(entry["name"], "rb")
         async with reader:
             writer = await open_destination(destination, "wb")
@@ -225,7 +231,13 @@ async def test_a_failure_is_yielded_and_the_rest_is_copied(
     _tree(hierarchical_fs)
     stream = streaming_copy(_opener(hierarchical_fs, _Reader), _opener(dst, _Writer))
 
-    async def copy_file(entry: dict[str, Any], destination: str) -> None:
+    async def copy_file(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
         if entry["name"] == "data/README.md":
             raise PermissionError(entry["name"])
         await stream(entry, destination)

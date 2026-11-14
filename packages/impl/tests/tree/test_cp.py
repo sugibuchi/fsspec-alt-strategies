@@ -18,7 +18,16 @@ from fsspec_alt_strategies_impl_testing import (
     TreeView,
 )
 
-_PRIMITIVES = {"ils", "info", "rm_file", "rm_dir", "rm_tree", "cp_file", "mv_file"}
+_PRIMITIVES = {
+    "ils",
+    "info",
+    "rm_file",
+    "rm_dir",
+    "rm_tree",
+    "cp_tree",
+    "cp_file",
+    "mv_file",
+}
 """The keyword arguments that replace a primitive of the filesystem."""
 
 
@@ -229,9 +238,47 @@ async def test_requests(hierarchical_fs: SimulatedFileSystem) -> None:
     assert await hierarchical_fs._exists("copied/empty")
 
     hierarchical_fs.reset_stats()
-    profile = StorageProfile(parents_required=False)
+    # Within one storage, its own copy's parents are what the profile tells.
+    profile = StorageProfile(copy_parents_required=False)
     await _collect_with_errors(_cp(hierarchical_fs, "data", "again", profile=profile))
     assert hierarchical_fs.stats.calls["mkdir"] == 1  # Only the empty directory.
+
+
+async def test_a_storage_whose_copies_need_parents_where_its_writes_do_not() -> None:
+    """As Microsoft Graph: an upload makes its parents, the storage's own copy does not."""
+    fs = SimulatedFileSystem(
+        hierarchical=True,
+        parents_required=False,
+        copy_parents_required=True,
+        asynchronous=True,
+    )
+    _tree(fs)
+    profile = StorageProfile(parents_required=False, copy_parents_required=True)
+    _, errors = await _collect_with_errors(_cp(fs, "data", "copied", profile=profile))
+    assert errors == []
+    assert await fs._exists("copied/2023/01/part-0.parquet")
+
+    async def write(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
+        await fs._pipe_file(destination, await fs._cat_file(entry["name"]))
+
+    # A copy from another storage writes, as a router's does: no mkdir.
+    fs.reset_stats()
+    op = _cp(fs, "data", "written", profile=profile, same_storage=False, cp_entry=write)
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert "mkdir" not in fs.stats.calls
+    assert await fs._exists("written/2023/01/part-0.parquet")
+
+    # Declared as its writes, the storage's copies fail.
+    wrong = StorageProfile(parents_required=False, copy_parents_required=False)
+    _, errors = await _collect_with_errors(_cp(fs, "data", "wrong", profile=wrong))
+    assert errors and {type(e) for e in errors} == {FileNotFoundError}
 
 
 async def test_a_storage_requiring_parents() -> None:
@@ -244,6 +291,41 @@ async def test_a_storage_requiring_parents() -> None:
     assert await fs._exists("new/deep/copied/2023/01/part-0.parquet")
     _, errors = await _collect_with_errors(_cp(fs, "data/README.md", "other/README.md"))
     assert errors == []
+
+
+async def test_a_storage_requiring_parents_gets_each_directory_once() -> None:
+    fs = SimulatedFileSystem(
+        hierarchical=True, parents_required=True, asynchronous=True
+    )
+    _tree(fs)
+    fs.add_dir("data/empty")
+    made: list[str] = []
+
+    async def mkdir(path: str, exist_ok: bool = False) -> None:
+        # One directory per request, as SFTP's MKDIR: its parent must exist.
+        made.append(path)
+        await fs._mkdir(path, create_parents=False)
+
+    profile = StorageProfile(parents_required=True)
+    _, errors = await _collect_with_errors(
+        _cp(fs, "data", "copied", profile=profile, dst_makedirs=mkdir)
+    )
+    assert errors == []
+    # Each directory once, after its parent: 2023 and 2024 too, holding only
+    # directories, so that theirs need no parent made.
+    assert sorted(made) == [
+        "copied",
+        "copied/2023",
+        "copied/2023/01",
+        "copied/2023/02",
+        "copied/2024",
+        "copied/2024/01",
+        "copied/empty",
+    ]
+    for path in made:
+        parent = path.rpartition("/")[0]
+        assert not parent or made.index(parent) < made.index(path)
+    assert await fs._exists("copied/2023/01/part-0.parquet")
 
 
 async def test_a_storage_refusing_to_overwrite() -> None:
@@ -343,6 +425,153 @@ async def test_a_dir_failing_to_be_created_keeps_its_files() -> None:
     assert await fs._exists("copied/2024/01/part-0.parquet")
 
 
+def _copying(fs: SimulatedFileSystem) -> dict[str, Any]:
+    """A storage's copy of a directory as cp_tree, declared to copy directories."""
+    return {
+        "cp_tree": fs._copy_tree,
+        "profile": StorageProfile(copies_directories=True),
+    }
+
+
+async def test_a_dir_is_copied_whole(hierarchical_fs: SimulatedFileSystem) -> None:
+    _tree(hierarchical_fs)
+    hierarchical_fs.add_dir("data/empty")
+    hierarchical_fs.reset_stats()
+    op = _cp(hierarchical_fs, "data", "copied", **_copying(hierarchical_fs))
+    assert await _collect_with_errors(op) == ([("data", "copied")], [])
+    # Where path2 goes, found free, then the copy: nothing is listed.
+    assert hierarchical_fs.stats.calls == {"info": 1, "copy": 1}
+    assert op.state == CpState(current="data", roots_copied=1)
+    for path in _FILES:
+        target = "copied" + path[len("data") :]
+        assert hierarchical_fs._file_data[target].data == path.encode()
+    assert await hierarchical_fs._isdir("copied/empty")
+    assert await hierarchical_fs._exists("data/README.md")
+
+
+async def test_each_dir_of_a_list_is_copied_whole(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    hierarchical_fs.reset_stats()
+    op = _cp(
+        hierarchical_fs,
+        ["data/2023", "data/README.md"],
+        "archive",
+        **_copying(hierarchical_fs),
+    )
+    copied, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert sorted(copied) == [
+        ("data/2023", "archive/2023"),
+        ("data/README.md", "archive/README.md"),
+    ]
+    # The directory whole; the file by its own cp_file, as ever.
+    assert op.state.roots_copied == 1
+    assert hierarchical_fs.stats.calls["copy"] == 2
+    assert await hierarchical_fs._exists("archive/2023/01/part-0.parquet")
+
+
+@pytest.mark.parametrize(
+    ("path1", "path2", "kwargs"),
+    [
+        # The target exists: what goes merges into it.
+        ("data", "archive", {}),
+        # The contents go onto path2.
+        ("data/", "copied", {}),
+        # A directory copied whole would take the deeper files along.
+        ("data", "copied", {"maxdepth": 5}),
+    ],
+)
+async def test_a_merge_copies_file_by_file(
+    hierarchical_fs: SimulatedFileSystem,
+    path1: str,
+    path2: str,
+    kwargs: dict[str, Any],
+) -> None:
+    _tree(hierarchical_fs)
+    hierarchical_fs.add_dir("archive/data")
+    hierarchical_fs.reset_stats()
+    op = _cp(hierarchical_fs, path1, path2, **_copying(hierarchical_fs), **kwargs)
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert op.state.roots_copied == (None if kwargs else 0)
+    assert hierarchical_fs.stats.calls["copy"] == len(_FILES)
+
+
+async def test_a_dir_failing_to_be_copied_whole_is_the_roots_error(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    # Wrongly declared: an object store copies no directory at once.
+    op = _cp(flat_fs, "data", "copied", **_copying(flat_fs))
+    copied, errors = await _collect_with_errors(op)
+    # Its cause, not one failure per file: nothing is walked.
+    assert copied == []
+    assert [type(e) for e in errors] == [NotImplementedError]
+    assert "Copying 'data' to 'copied' failed." in errors[0].__notes__
+    assert (op.state.roots_copied, op.state.files_copied) == (0, 0)
+
+
+async def test_unknown_no_dir_is_copied_whole(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    op = _cp(hierarchical_fs, "data", "copied", cp_tree=hierarchical_fs._copy_tree)
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert op.state.roots_copied is None
+    assert hierarchical_fs.stats.calls["copy"] == len(_FILES)
+
+
+def _folding(fs: SimulatedFileSystem) -> Any:
+    """An ``info`` as on a storage whose names are not case-sensitive: any case finds a path."""
+
+    async def info(path: str, **kwargs: Any) -> dict[str, Any]:
+        for name in [*fs._file_data, *fs._dirs]:
+            if name.lower() == path.lower():
+                return await fs._info(name)
+        raise FileNotFoundError(path)
+
+    return info
+
+
+@pytest.mark.parametrize("path2", ["DATA", "Data"])
+async def test_a_dir_copied_onto_itself_in_another_case_is_left(
+    hierarchical_fs: SimulatedFileSystem, path2: str
+) -> None:
+    _tree(hierarchical_fs)
+    hierarchical_fs.reset_stats()
+    profile = StorageProfile(case_sensitive=False)
+    op = _cp(
+        hierarchical_fs, "data", path2, info=_folding(hierarchical_fs), profile=profile
+    )
+    assert await _collect_with_errors(op) == ([], [])
+    assert hierarchical_fs.stats.calls == {}
+
+
+async def test_a_dir_copied_into_itself_in_another_case_is_refused(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    profile = StorageProfile(case_sensitive=False)
+    with pytest.raises(ValueError, match="Cannot copy 'data' into itself"):
+        await _collect_with_errors(
+            _cp(hierarchical_fs, "data", "DATA/inner", profile=profile)
+        )
+
+
+async def test_unknown_case_a_dir_goes_into_its_other_case(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    # As fsspec compares paths: "DATA", found by a folding info, is another.
+    op = _cp(hierarchical_fs, "data", "DATA", info=_folding(hierarchical_fs))
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert await hierarchical_fs._exists("DATA/data/README.md")
+
+
 def _shallow(fs: SimulatedFileSystem) -> None:
     """A tree with files at each level, so that fsspec places by the root."""
     for path in ["a.txt", "b.txt", "2023/x.txt", "2023/01/y.txt", "2023/01/02/z.txt"]:
@@ -407,12 +636,22 @@ async def test_a_list_yields_a_name_taken_when_the_rest_is_in_place(
     assert any_fs._file_data["a/x"].data == b"a"
 
 
-def test_a_copy_between_two_storages_needs_cp_entry(
+async def test_a_copy_between_two_storages_streams_each_file_by_default(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
+    hierarchical_fs.add_file("data/a/x", b"xx")
+    hierarchical_fs.add_file("data/y", b"y")
     other = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    with pytest.raises(ValueError, match="cp_entry"):
-        _tree_cp(TreeView(hierarchical_fs), TreeView(other), "data", "copied")
+    op = _tree_cp(TreeView(hierarchical_fs), TreeView(other), "data", "copied")
+    copied, errors = await _collect_with_errors(op)
+    assert (sorted(copied), errors) == (
+        [("data/a/x", "copied/a/x"), ("data/y", "copied/y")],
+        [],
+    )
+    assert {p: f.data for p, f in other._file_data.items()} == {
+        "copied/a/x": b"xx",
+        "copied/y": b"y",
+    }
 
 
 async def test_cp_entry_is_given_the_listings_entries(
@@ -430,3 +669,17 @@ async def test_cp_entry_is_given_the_listings_entries(
     )
     # One info only, where path2 goes: none per file.
     assert hierarchical_fs.stats.calls["info"] == 1
+
+
+async def test_a_name_the_destination_refuses_is_its_own_error(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    """A key holding ".." never leaves the destination: its copy fails, and the others go."""
+    hierarchical_fs.add_file("data/ok.txt", b"1")
+    hierarchical_fs.add_file("data/../../escaped.txt", b"2")
+    copied, errors = await _collect_with_errors(_cp(hierarchical_fs, "data", "copied"))
+    assert copied == [("data/ok.txt", "copied/ok.txt")]
+    assert [type(e) for e in errors] == [ValueError]
+    assert not any(
+        "escaped" in p and not p.startswith("data/") for p in hierarchical_fs._file_data
+    )

@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl.tree.du import _tree_du
@@ -23,6 +24,8 @@ from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 
 def _view(fs: SimulatedFileSystem, **kwargs: Any) -> TreeView:
+    # The simulated listing comes by name, declared depth first, which covers it.
+    kwargs.setdefault("storage_profile", StorageProfile(recursive_order="depth_first"))
     return TreeView(fs, recursive_listing=True, **kwargs)
 
 
@@ -62,6 +65,39 @@ async def test_find_lists_once(any_fs: SimulatedFileSystem) -> None:
 
     # One recursive listing, where a walk lists each of the 7 directories.
     assert any_fs.stats.calls["list"] == 1
+
+
+class _Refusing(TreeView):
+    """A storage refusing its recursive listing, as only asking tells.
+
+    As a handler does, it falls back on `ils_by_directory` itself, and asks no more.
+    """
+
+    refused = 0
+
+    async def ils_recursive(self, entry: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+        if self.recursive_listing:
+            self.refused += 1  # Asked, and refused.
+            self.recursive_listing = False
+        async for found in self.ils_by_directory(entry, **kwargs):
+            yield found
+
+
+async def test_a_refused_recursive_listing_lists_each_directory(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    expected = await AsyncFileSystem._find(any_fs, "data", withdirs=True)
+    handler = _Refusing(any_fs, recursive_listing=True)
+
+    for _ in range(2):
+        found, errors = await _collect_with_errors(
+            _tree_find(handler, "data", withdirs=True)
+        )
+        assert errors == []
+        assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)
+    # Asked once: the handler lists a directory per request after it.
+    assert handler.refused == 1
 
 
 async def test_find_lists_a_page_per_request(any_fs: SimulatedFileSystem) -> None:

@@ -116,6 +116,85 @@ async def test_cancel_takes_no_more_from_the_listing() -> None:
     assert names == ["data/2023/01"]
 
 
+def _failing_after(fs: SimulatedFileSystem, keys: int) -> Any:
+    """A ``list_prefix`` failing once it has given ``keys`` keys."""
+
+    async def list_prefix(prefix: str) -> Any:
+        given = 0
+        async for entry in fs._list_prefix(prefix):
+            if given == keys:
+                raise OSError("throttled")
+            given += 1
+            yield entry
+
+    return list_prefix
+
+
+@pytest.mark.parametrize("topdown", [True, False])
+async def test_a_failed_listing_yields_its_error_last(
+    flat_fs: SimulatedFileSystem, topdown: bool
+) -> None:
+    _tree(flat_fs)
+    # data/2023/01 and data/2023/02 are listed, then the listing fails.
+    items: list[Any] = [
+        item
+        async for item in _walk(
+            flat_fs,
+            "data",
+            topdown=topdown,
+            list_prefix=_failing_after(flat_fs, 2),
+            on_error=None,
+        )
+    ]
+
+    error = items[-1]
+    assert isinstance(error, OSError)
+    assert error.directory == "data"  # type: ignore[attr-defined]
+    assert "Listing 'data' failed." in error.__notes__
+    # The directories done come first: data/2023/01, which the second key closed.
+    assert [d for d, _, _ in items[:-1]] == ["data/2023/01"]
+
+
+async def test_on_error_raise_raises_the_listings_error(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    with pytest.raises(OSError, match="throttled"):
+        await _collect_with_errors(
+            _walk(
+                flat_fs,
+                "data",
+                list_prefix=_failing_after(flat_fs, 2),
+                on_error="raise",
+            )
+        )
+
+
+async def test_on_error_omit_or_a_callable_leaves_the_error_out(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    handled: list[Exception] = []
+    for on_error in ("omit", handled.append):
+        items, errors = await _collect_with_errors(
+            _walk(
+                flat_fs,
+                "data",
+                topdown=False,
+                list_prefix=_failing_after(flat_fs, 2),
+                on_error=on_error,
+            )
+        )
+        assert errors == []
+        assert [d for d, _, _ in items] == ["data/2023/01"]
+    assert [str(e) for e in handled] == ["throttled"]
+
+
+def test_on_error_must_be_known(flat_fs: SimulatedFileSystem) -> None:
+    with pytest.raises(ValueError, match="on_error"):
+        _walk(flat_fs, "data", on_error="ignore")
+
+
 def test_maxdepth_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="at least 1"):
         _walk(flat_fs, "data", maxdepth=0)

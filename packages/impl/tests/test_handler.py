@@ -1,0 +1,347 @@
+"""Tests of `StorageHandler`'s paths: what a handler verifies, and how it builds paths."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
+from fsspec_alt_strategies_impl.common.handler import StorageHandler
+from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
+from fsspec_alt_strategies_impl.tree.find import _tree_find
+from fsspec_alt_strategies_impl.tree.rm import _tree_rm
+from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
+
+
+class _Account(StorageHandler):
+    """Paths of one storage account, "account/container/...", refusing names holding ":"."""
+
+    def __init__(self, account: str = "acct") -> None:
+        super().__init__(operation_concurrency=1, io_concurrency=1)
+        self.account = account
+        self.checked: list[str] = []
+
+    def verify_path(self, path: str) -> None:
+        self.checked.append(path)
+        if path.split("/", 1)[0] != self.account:
+            raise ValueError(f"Not a path of {self.account!r}: {path!r}")
+        if ":" in path:
+            raise ValueError(f"A name holds ':': {path!r}")
+
+    # The primitives, which these tests never call.
+    def ils(self, entry: Any, **kwargs: Any) -> Any: ...
+    async def info(self, entry: Any, **kwargs: Any) -> Any: ...
+    async def rm_file(self, entry: Any) -> None: ...
+    async def rmdir(self, entry: Any) -> None: ...
+    async def makedirs(
+        self,
+        path: str,
+        exist_ok: bool = False,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None: ...
+    async def cp_file(
+        self, entry: Any, path2: str, *, missing: bool = False, parent: Any = None
+    ) -> None: ...
+    async def mv_file(
+        self, entry: Any, path2: str, *, missing: bool = False, parent: Any = None
+    ) -> None: ...
+
+
+async def test_aclose_never_closes_and_a_later_open_opens_again() -> None:
+    class Counted(_Account):
+        loads = closes = 0
+
+        async def load_profile(self) -> Any:
+            self.loads += 1
+            return await super().load_profile()
+
+        def close(self) -> None:
+            self.closes += 1
+
+    handler = Counted()
+    await handler.open()
+    await handler.aclose()
+    # A handler taking its sync close as closing for good is still open to calls.
+    assert handler.closes == 0
+    await handler.open()
+    assert handler.loads == 2
+
+
+def test_verify_path_is_abstract() -> None:
+    class NoVerify(_Account):
+        verify_path = StorageHandler.verify_path  # type: ignore[assignment]
+
+    with pytest.raises(TypeError, match="verify_path"):
+        NoVerify()
+
+
+def test_join_checks_each_segment_then_verifies_the_path_once() -> None:
+    handler = _Account()
+    assert handler.join("acct/c", "x") == "acct/c/x"
+    assert handler.checked == ["acct/c/x"]
+    handler.checked.clear()
+    # Several paths, each split: a leading delimiter starts no root again.
+    assert handler.join("acct/c", "a/b", "/d/", "e") == "acct/c/a/b/d/e"
+    assert handler.checked == ["acct/c/a/b/d/e"]
+
+    for path in (".", "..", "a/../../other", "a//b"):
+        with pytest.raises(ValueError, match="Not a name"):
+            handler.join("acct/c", path)
+    with pytest.raises(ValueError, match="holds ':'"):
+        handler.join("acct/c", "a:b")
+
+
+def test_join_of_nothing_is_the_directory() -> None:
+    handler = _Account()
+    assert handler.join("acct/c") == "acct/c"
+    assert handler.join("acct/c", "", "/") == "acct/c"
+    assert handler.checked == []
+
+
+def test_a_storage_overrides_its_delimiter_split_and_segments() -> None:
+    class Keys(_Account):
+        delimiter = ":"
+
+        def verify_path(self, path: str) -> None:
+            self.checked.append(path)
+
+        def _verify_segment(self, segment: str) -> None:
+            super()._verify_segment(segment)
+            if segment.startswith("~"):
+                raise ValueError(f"Not a name here: {segment!r}")
+
+    handler = Keys()
+    assert handler.join("acct", "a:b", "c") == "acct:a:b:c"
+    assert handler.parent("acct:a:b") == "acct:a"
+    assert handler.name("acct:a:b") == "b"
+    with pytest.raises(ValueError, match="Not a name here"):
+        handler.join("acct", "a:~b")
+
+
+async def test_verify_path_sees_the_callers_url_and_verified_strips_it() -> None:
+    class Hosted(_Any):
+        protocol = "acct"
+
+    handler = Hosted()
+    assert handler.verified("acct://acct/c/") == "acct/c"
+    # What a URL names beyond the path is the handler's to check, before it goes.
+    assert handler.checked == ["acct://acct/c/"]
+
+    handler.checked.clear()
+    await BaseFileSystem(handler, skip_instance_cache=True)._info("acct://acct/c")
+    assert handler.checked == ["acct://acct/c"]
+
+
+def test_verified_is_a_callers_path_once_verified() -> None:
+    handler = _Account()
+    assert handler.verified("acct/c/x") == "acct/c/x"
+    assert handler.checked == ["acct/c/x"]
+    with pytest.raises(ValueError, match="Not a path of 'acct'"):
+        handler.verified("other/c/x")
+
+
+def test_entry_verifies_the_path_it_wraps() -> None:
+    handler = _Account()
+    assert handler.entry("acct/c/x") == {"name": "acct/c/x"}
+    assert handler.checked == ["acct/c/x"]
+    with pytest.raises(ValueError, match="Not a path of 'acct'"):
+        handler.entry("other/c/x")
+
+
+def test_a_path_of_another_account_is_refused() -> None:
+    handler = _Account()
+    handler.verify_path("acct/c/x")
+    with pytest.raises(ValueError, match="Not a path of 'acct'"):
+        handler.verify_path("other/c/x")
+    # Joining below the root of another account's path is refused too.
+    with pytest.raises(ValueError, match="Not a path of 'acct'"):
+        handler.join("other", "c")
+
+
+class _Any(_Account):
+    """Any path, as a storage refusing nothing."""
+
+    def verify_path(self, path: str) -> None:
+        self.checked.append(path)
+
+
+@pytest.mark.parametrize(
+    ("root", "path", "parent", "name"),
+    [
+        ("", "a/b", "a", "b"),
+        ("", "a/b/", "a", "b"),
+        ("", "a", "", "a"),
+        ("/", "/a/b", "/a", "b"),
+        ("/", "/a", "/", "a"),
+    ],
+)
+def test_parent_and_name(root: str, path: str, parent: str, name: str) -> None:
+    # The root is the class's, as strip_protocol, a class method, reads it.
+    handler = type("Rooted", (_Any,), {"root": root})()
+    assert (handler.parent(path), handler.name(path)) == (parent, name)
+    assert handler.checked == [parent]
+
+
+@pytest.mark.parametrize("root", ["", "/"])
+def test_the_root_has_no_parent(root: str) -> None:
+    handler = _Any()
+    handler.root = root
+    with pytest.raises(ValueError, match="no parent"):
+        handler.parent(root)
+
+
+def test_a_parent_the_storage_refuses() -> None:
+    """Paths are "account/container/...": an account's root is "acct", whose parent is none."""
+    handler = _Account()
+    handler.root = "acct"
+    assert handler.parent("acct/c/x") == "acct/c"
+    assert handler.parent("acct/c") == "acct"
+    with pytest.raises(ValueError, match="no parent"):
+        handler.parent("acct")
+
+
+async def test_names_a_listing_gave_are_never_verified_again() -> None:
+    """A storage holding "a:b", which its handler refuses from a caller, still has it found and deleted."""
+
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    fs.add_file("data/a:b/x", b"1")
+    fs.add_file("data/y", b"2")
+    strict = _Strict(fs)
+    strict.recursive_order = None  # A directory per listing, each by its entry.
+
+    found, errors = await _collect_with_errors(_tree_find(strict, "data"))
+    assert (sorted(e["name"] for e in found), errors) == (["data/a:b/x", "data/y"], [])
+    _, errors = await _collect_with_errors(_tree_rm(strict, "data"))
+    assert errors == []
+    assert not fs._file_data
+    with pytest.raises(ValueError, match="holds ':'"):
+        strict.entry("data/a:b")
+
+
+class _Strict(TreeView):
+    """A simulated storage refusing paths holding ":" from a caller, as some storages do."""
+
+    def verify_path(self, path: str) -> None:
+        if ":" in path:
+            raise ValueError(f"A name holds ':': {path!r}")
+
+
+def _storage() -> SimulatedFileSystem:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    fs.add_file("data/a/x", b"1")
+    fs.add_file("data/y", b"22")
+    return fs
+
+
+async def test_a_filesystem_on_a_handler_calls_its_primitives() -> None:
+    inner = _storage()
+    fs = BaseFileSystem(_Strict(inner), asynchronous=True)
+    assert fs._handler is not None
+    assert await fs._find("data") == ["data/a/x", "data/y"]
+    assert (await fs._info("data/y"))["size"] == 2
+    await fs._copy("data", "copied", recursive=True)
+    assert await inner._cat_file("copied/a/x") == b"1"
+    await fs._rm("data", recursive=True)
+    assert not await inner._exists("data")
+
+
+async def test_a_filesystem_on_a_handler_verifies_a_callers_paths() -> None:
+    fs = BaseFileSystem(_Strict(_storage()), asynchronous=True)
+    with pytest.raises(ValueError, match="holds ':'"):
+        await fs._info("data/a:b")
+    with pytest.raises(ValueError, match="holds ':'"):
+        await fs._makedirs("data/a:b")
+    with pytest.raises(ValueError, match="holds ':'"):
+        await fs._copy("data/y", "data/c:d")
+
+
+def test_a_filesystem_needs_a_handler() -> None:
+    with pytest.raises(TypeError, match="handler"):
+        BaseFileSystem()  # type: ignore[call-arg]
+
+
+class _Bucket(TreeView):
+    protocol = ("bkt", "bucket")
+    root = ""
+
+
+class _BucketFileSystem(BaseFileSystem):
+    """A storage's class: its paths named as its handler class's, by convention."""
+
+    protocol = _Bucket.protocol
+    root_marker = _Bucket.root
+    _strip_protocol = _Bucket.strip_protocol
+
+    def __init__(self, inner: SimulatedFileSystem, **kwargs: Any) -> None:
+        super().__init__(_Bucket(inner), **kwargs)
+
+
+def test_a_storages_class_names_its_handlers_paths() -> None:
+    assert _BucketFileSystem._strip_protocol("bucket://a/b/") == "a/b"
+    assert _BucketFileSystem._strip_protocol(["bkt://a", "bkt::b"]) == ["a", "b"]
+    fs = _BucketFileSystem(_storage(), asynchronous=True)
+    assert fs._strip_protocol("bkt://a") == "a"
+    # A URL is the handler's.
+    assert fs.unstrip_protocol("a/b") == "bkt://a/b"
+    assert fs.unstrip_protocol("bucket://a/b") == "bucket://a/b"
+
+
+def test_a_storages_class_takes_the_options_its_handler_reads_in_a_url() -> None:
+    class Hosted(_Bucket):
+        @classmethod
+        def options_from_url(cls, url: str) -> dict[str, Any]:
+            host = url.partition("://")[2].partition("@")[0]
+            return {"host": host} if "@" in url else {}
+
+    class HostedFileSystem(BaseFileSystem):
+        protocol = Hosted.protocol
+        _strip_protocol = Hosted.strip_protocol
+        _get_kwargs_from_urls = Hosted.options_from_url
+
+    # By default, a URL names nothing beyond its path.
+    assert _Bucket.options_from_url("bkt://a/b") == {}
+    # fsspec asks the class, before any handler is made.
+    assert HostedFileSystem._get_kwargs_from_urls("bkt://h1@a/b") == {"host": "h1"}
+    assert HostedFileSystem._get_kwargs_from_urls("bkt://a/b") == {}
+
+
+def test_sign_created_and_modified_are_the_handlers() -> None:
+    class Dating(_Bucket):
+        async def sign(self, entry: Any, expiration: int = 100, **kwargs: Any) -> str:
+            return f"https://signed/{entry['name']}?e={expiration}"
+
+        async def created(self, entry: Any) -> Any:
+            return ("created", entry["name"])
+
+        async def modified(self, entry: Any) -> Any:
+            return ("modified", entry["name"])
+
+    # Sync filesystems, as fsspec's methods are sync.
+    fs = _BucketFileSystem(_storage(), skip_instance_cache=True)
+    with pytest.raises(NotImplementedError, match="signs no URL"):
+        fs.sign("bkt://a/b")
+    with pytest.raises(NotImplementedError, match="no creation time"):
+        fs.created("bkt://a/b")
+    with pytest.raises(NotImplementedError, match="no modification time"):
+        fs.modified("bkt://a/b")
+    fs = BaseFileSystem(Dating(_storage()))
+    assert fs.sign("a/b", expiration=5) == "https://signed/a/b?e=5"
+    assert (fs.created("a/b"), fs.modified("a/b")) == (
+        ("created", "a/b"),
+        ("modified", "a/b"),
+    )
+
+
+def test_paths_of_a_storage_rooted_at_slash_are_absolute() -> None:
+    class Drive(_Account):
+        protocol = "drive"
+        root = "/"
+
+    assert Drive.strip_protocol("drive://a/b/") == "/a/b"
+    assert Drive.strip_protocol("drive:///a/b") == "/a/b"
+    assert Drive.strip_protocol("a") == "/a"
+    assert Drive.strip_protocol("drive://") == "/"
+    assert Drive.strip_protocol("/") == "/"

@@ -220,8 +220,8 @@ async def test_a_storage_moving_a_file_in_one_request(
 async def test_profile_saves_the_mkdirs(hierarchical_fs: SimulatedFileSystem) -> None:
     _tree(hierarchical_fs)
     hierarchical_fs.add_dir("data/empty")
-    # Its mv_file copies, then deletes: a write, which makes its directory.
-    profile = StorageProfile(parents_required=False, renames_files=False)
+    # Its mv_file copies, then deletes: a copy, which makes its directory.
+    profile = StorageProfile(copy_parents_required=False, renames_files=False)
     await _collect_with_errors(_mv(hierarchical_fs, "data", "moved", profile=profile))
     # Only the empty directory needs one: the copies create the others.
     assert hierarchical_fs.stats.calls["mkdir"] == 1
@@ -376,9 +376,91 @@ async def test_unknown_no_dir_is_moved_whole(
     assert hierarchical_fs.stats.calls["rename"] == len(_FILES)
 
 
+def _folding(fs: SimulatedFileSystem) -> Any:
+    """An ``info`` as on a storage whose names are not case-sensitive: any case finds a path."""
+
+    async def info(path: str, **kwargs: Any) -> dict[str, Any]:
+        for name in [*fs._file_data, *fs._dirs]:
+            if name.lower() == path.lower():
+                return await fs._info(name)
+        raise FileNotFoundError(path)
+
+    return info
+
+
+@pytest.mark.parametrize(
+    ("path1", "path2"),
+    [
+        ("data", "DATA"),  # A directory.
+        ("data/README.md", "data/readme.md"),  # A file, by mv_tree too.
+    ],
+)
+async def test_a_path_moved_onto_itself_in_another_case_is_renamed(
+    hierarchical_fs: SimulatedFileSystem, path1: str, path2: str
+) -> None:
+    _tree(hierarchical_fs)
+    hierarchical_fs.reset_stats()
+    kwargs = _renaming(hierarchical_fs)
+    kwargs["profile"] = StorageProfile(renames_directories=True, case_sensitive=False)
+    op = _mv(hierarchical_fs, path1, path2, info=_folding(hierarchical_fs), **kwargs)
+    assert await _collect_with_errors(op) == ([(path1, path2)], [])
+    # Not asked: the destination found would be the source itself.
+    assert hierarchical_fs.stats.calls == {"rename": 1}
+    assert op.state.roots_renamed == 1
+    assert not await hierarchical_fs._exists(path1)
+    assert await hierarchical_fs._exists(path2)
+
+
+async def test_a_dir_moved_onto_itself_in_another_case_needs_a_rename(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    hierarchical_fs.reset_stats()
+    profile = StorageProfile(case_sensitive=False)
+    op = _mv(
+        hierarchical_fs, "data", "DATA", info=_folding(hierarchical_fs), profile=profile
+    )
+    with pytest.raises(ValueError, match="itself in another case"):
+        await _collect_with_errors(op)
+    assert hierarchical_fs.stats.calls == {}
+
+
+@pytest.mark.parametrize(
+    ("path1", "path2"),
+    [
+        ("data", "data"),  # The same path.
+        ("data/", "DATA"),  # Its contents onto themselves.
+        ("data", "DATA/"),  # Into itself, by the trailing "/".
+    ],
+)
+async def test_a_dir_moved_onto_itself_is_left(
+    hierarchical_fs: SimulatedFileSystem, path1: str, path2: str
+) -> None:
+    _tree(hierarchical_fs)
+    hierarchical_fs.reset_stats()
+    kwargs = _renaming(hierarchical_fs)
+    kwargs["profile"] = StorageProfile(renames_directories=True, case_sensitive=False)
+    op = _mv(hierarchical_fs, path1, path2, info=_folding(hierarchical_fs), **kwargs)
+    assert await _collect_with_errors(op) == ([], [])
+    assert hierarchical_fs.stats.calls == {}
+
+
+async def test_a_dir_moved_into_itself_in_another_case_is_refused(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    profile = StorageProfile(renames_directories=True, case_sensitive=False)
+    with pytest.raises(ValueError, match="Cannot move 'data' into itself"):
+        await _collect_with_errors(
+            _mv(hierarchical_fs, "data", "DATA/inner", profile=profile)
+        )
+
+
 def test_implicit_dirs_cannot_require_parents() -> None:
     with pytest.raises(ValueError, match="parents_required"):
         StorageProfile(implicit_directories=True, parents_required=True)
+    with pytest.raises(ValueError, match="copy_parents_required"):
+        StorageProfile(implicit_directories=True, copy_parents_required=True)
 
 
 async def test_a_storage_requiring_parents() -> None:
@@ -390,7 +472,7 @@ async def test_a_storage_requiring_parents() -> None:
     assert errors == []
     assert await fs._exists("new/deep/moved/2023/01/part-0.parquet")
     # Wrongly declared, the profile makes each copy fail, and keeps the source.
-    wrong = StorageProfile(parents_required=False, renames_files=False)
+    wrong = StorageProfile(copy_parents_required=False, renames_files=False)
     _, errors = await _collect_with_errors(
         _mv(fs, "new/deep/moved", "elsewhere", profile=wrong)
     )
@@ -599,7 +681,13 @@ async def test_moves_to_another_storage(hierarchical_fs: SimulatedFileSystem) ->
     _tree(hierarchical_fs)
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
 
-    async def mv_entry(entry: dict[str, Any], destination: str) -> None:
+    async def mv_entry(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
         source = entry["name"]
         await dst._pipe_file(destination, hierarchical_fs._file_data[source].data)
         await hierarchical_fs._rm_file(source)
@@ -621,6 +709,40 @@ async def test_moves_to_another_storage(hierarchical_fs: SimulatedFileSystem) ->
     assert not any(p.startswith("data/") for p in hierarchical_fs._file_data)
     assert not await hierarchical_fs._exists("data")
     assert op.state.roots_renamed is None
+
+
+async def test_moves_to_another_storage_by_cp_entry_then_rm_file(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+
+    async def cp_entry(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
+        await dst._pipe_file(
+            destination, hierarchical_fs._file_data[entry["name"]].data
+        )
+
+    source = TreeView(hierarchical_fs)
+    op = _tree_mv(
+        source,
+        TreeView(dst),
+        "data",
+        "moved",
+        cp_entry=cp_entry,
+        same_storage=False,
+    )
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert sorted(dst._file_data) == sorted("moved" + p[len("data") :] for p in _FILES)
+    assert not await hierarchical_fs._exists("data")
+    # Each file copied by cp_entry, then deleted by the source's rm_file.
+    assert hierarchical_fs.stats.calls["delete"] >= len(_FILES)
 
 
 def _shallow(fs: SimulatedFileSystem) -> None:
@@ -727,7 +849,9 @@ async def test_a_dir_moving_whole_goes_by_mv_tree_not_mv_entry(
         trees.append((path1, path2))
         await hierarchical_fs._rename(path1, path2)
 
-    async def mv_entry(entry: dict[str, Any], path2: str) -> None:
+    async def mv_entry(
+        entry: dict[str, Any], path2: str, *, missing: bool = False, parent: Any = None
+    ) -> None:
         entries.append(entry)
 
     view = TreeView(

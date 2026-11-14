@@ -1,4 +1,4 @@
-"""Tests of `FlatFileSystem`, checked against fsspec's own methods on the same data."""
+"""Tests of `BaseFileSystem`, checked against fsspec's own methods on the same data."""
 
 from __future__ import annotations
 
@@ -11,12 +11,18 @@ from fsspec.callbacks import Callback
 
 from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
+from fsspec_alt_strategies_impl.common.rm_files import rm_by_request
 from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
 )
 from fsspec_alt_strategies_impl.files.fsspec_async import AsyncFileAdapter
-from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
+from fsspec_alt_strategies_impl.files.fsspec_transaction import (
+    AdaptiveWritableTransaction,
+    TransactionFile,
+)
+from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -73,76 +79,143 @@ async def _open_file(
     return _Writer(inner, path, **kwargs)
 
 
-class _Flat(FlatFileSystem):
-    """A FlatFileSystem whose primitives are a simulated object store's."""
+class _FlatHandler(FlatFileOperationHandler):
+    """A simulated object store's primitives, as a flat handler."""
 
     protocol = "flattest"
-    cachable = False
-    storage_profile = StorageProfile()
+    profile = StorageProfile()
     rm_batch_size = 2
 
-    def __init__(self, inner: SimulatedFileSystem, **kwargs: Any) -> None:
-        options = {
-            "operation_concurrency": 4,
-            "io_concurrency": 2,
-        }
-        super().__init__(**{**options, **kwargs})
+    def __init__(
+        self,
+        inner: SimulatedFileSystem,
+        *,
+        operation_concurrency: Any = 4,
+        io_concurrency: Any = 2,
+    ) -> None:
+        super().__init__(
+            operation_concurrency=operation_concurrency, io_concurrency=io_concurrency
+        )
         self.inner = inner
 
-    def _ils(
-        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+    def verify_path(self, path: str) -> None:
+        """Nothing: the simulated storage takes any path."""
+
+    def ils_recursive(  # type: ignore[override]
+        self, entry: dict[str, Any], *, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            return self.inner._list_prefix(f"{path}/{prefix}" if path else prefix)
-        else:
-            return self._ls_directory(path)
+        path = entry["name"]
+        return self.inner._list_prefix(f"{path}/{prefix}" if path else prefix)  # type: ignore[no-any-return]
 
-    async def _ls_directory(self, path: str) -> AsyncIterator[dict[str, Any]]:
-        for entry in await self.inner._ls(path, detail=True):
-            yield entry
+    async def ils(  # type: ignore[override]
+        self, entry: dict[str, Any], **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        for listed in await self.inner._ls(entry["name"], detail=True):
+            yield listed
 
-    async def _rm_files(self, paths: list[str]) -> None:
-        await self.inner._rm_files(paths)
+    def rm_files(self, entries: list[dict[str, Any]]) -> Any:
+        # One request per batch, as an object store deletes keys.
+        return rm_by_request(self, entries, self._rm_batch)
 
-    async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
-        return await self.inner._info(path)
+    async def _rm_batch(self, entries: list[dict[str, Any]]) -> None:
+        await self.inner._rm_files([e["name"] for e in entries])
 
-    async def _rm_file(self, path: str, **kwargs: Any) -> None:
-        await self.inner._rm_file(path)
+    async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return await self.inner._info(entry["name"])  # type: ignore[no-any-return]
 
-    async def _rmdir(self, path: str) -> None:
-        await self.inner._rmdir(path)
+    async def rm_file(self, entry: dict[str, Any]) -> None:
+        await self.inner._rm_file(entry["name"])
 
-    async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
+    async def rmdir(self, entry: dict[str, Any]) -> None:
+        await self.inner._rmdir(entry["name"])
+
+    async def makedirs(
+        self,
+        path: Any,
+        exist_ok: bool = False,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
         await self.inner._makedirs(path, exist_ok=exist_ok)
 
-    async def _cp_file_entry(
-        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    async def cp_file(
+        self,
+        entry: dict[str, Any],
+        path2: Any,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         await self.inner._cp_file(entry["name"], path2)
 
-    async def _mv_file_entry(
-        self, entry: dict[str, Any], path2: str, **kwargs: Any
+    async def mv_file(
+        self,
+        entry: dict[str, Any],
+        path2: Any,
+        *,
+        missing: bool = False,
+        parent: Any = None,
     ) -> None:
         await self.inner._mv_file(entry["name"], path2)
 
-    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        # The same file, for the sync API, on the filesystem's loop.
-        path = self._strip_protocol(path)
-        return sync(
-            self.loop,
+    def open_file(
+        self,
+        entry: dict[str, Any],
+        mode: str = "rb",
+        *,
+        loop: Any,
+        autocommit: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        file = sync(
+            loop,
             _open_file,
             self.inner,
-            path,
+            entry["name"],
             mode,
-            loop=self.loop,
             concurrency_limit=self.io_limit,
         )
+        if autocommit or mode == "rb":
+            return file
+        else:
+            return TransactionFile(AdaptiveWritableTransaction(file))
 
-    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        path = self._strip_protocol(path)
-        file = await _open_file(self.inner, path, mode, concurrency_limit=self.io_limit)
-        return AsyncFileAdapter(file)
+    async def open_async_file(
+        self, entry: dict[str, Any], mode: str = "rb", **kwargs: Any
+    ) -> Any:
+        return AsyncFileAdapter(
+            await _open_file(
+                self.inner, entry["name"], mode, concurrency_limit=self.io_limit
+            )
+        )
+
+
+class _Flat(BaseFileSystem):
+    """A BaseFileSystem on a simulated object store, made from it as from storage options."""
+
+    protocol = _FlatHandler.protocol
+    _strip_protocol = _FlatHandler.strip_protocol
+    cachable = False
+
+    def __init__(
+        self,
+        inner: SimulatedFileSystem,
+        operation_concurrency: Any = 4,
+        io_concurrency: Any = 2,
+        **kwargs: Any,
+    ) -> None:
+        handler = _FlatHandler(
+            inner,
+            operation_concurrency=operation_concurrency,
+            io_concurrency=io_concurrency,
+        )
+        super().__init__(handler, **kwargs)
+
+
+def _on(handler: FlatFileOperationHandler) -> Any:
+    """A BaseFileSystem on a handler, async."""
+    return BaseFileSystem(handler, asynchronous=True)
 
 
 _FILES = [
@@ -239,17 +312,22 @@ async def test_a_file_moves_as_the_profile_says_when_not_recursive(
 ) -> None:
     renamed: list[tuple[str, str]] = []
 
-    class Renaming(_Flat):
-        storage_profile = StorageProfile(renames_files=renames_files)
+    class Renaming(_FlatHandler):
+        profile = StorageProfile(renames_files=renames_files)
 
-        async def _mv_file_entry(
-            self, entry: dict[str, Any], path2: str, **kwargs: Any
+        async def mv_file(
+            self,
+            entry: dict[str, Any],
+            path2: Any,
+            *,
+            missing: bool = False,
+            parent: Any = None,
         ) -> None:
             renamed.append((entry["name"], path2))
             await self.inner._cp_file(entry["name"], path2)
             await self.inner._rm_file(entry["name"])
 
-    fs = Renaming(inner, asynchronous=True)
+    fs = _on(Renaming(inner))
     inner.reset_stats()
     await fs._mv("data/README.md", "moved.md")
     assert renamed == ([("data/README.md", "moved.md")] if renames_files else [])
@@ -265,12 +343,13 @@ async def test_data_goes_through_the_files(
     assert inner._file_data["new.txt"].data == b"hello"
 
 
-def test_rm_batch_size_must_be_set(inner: SimulatedFileSystem) -> None:
-    class Unset(_Flat):
+async def test_rm_batch_size_must_be_set(inner: SimulatedFileSystem) -> None:
+    class Unset(_FlatHandler):
         rm_batch_size = 0
 
+    # The handler's, which the strategy deleting in batches checks.
     with pytest.raises(ValueError, match="rm_batch_size"):
-        Unset(inner)
+        await _on(Unset(inner))._rm("data", recursive=True)
 
 
 async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
@@ -296,15 +375,17 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
     assert monitor.items == 7 + len(_FILES)
 
 
-@pytest.mark.parametrize("primitive", ["_rm_files", "_rmdir", "_makedirs"])
-def test_a_subclass_missing_a_primitive_is_refused(primitive: str) -> None:
+@pytest.mark.parametrize("primitive", ["rmdir", "makedirs"])
+def test_a_handler_missing_a_primitive_is_refused(primitive: str) -> None:
     # Still abstract, as if not written: fsspec's _rmdir and _makedirs would do nothing.
     incomplete = type(
-        "Incomplete", (_Flat,), {primitive: getattr(FlatFileSystem, primitive)}
+        "Incomplete",
+        (_FlatHandler,),
+        {primitive: getattr(FlatFileOperationHandler, primitive)},
     )
 
     with pytest.raises(TypeError, match=primitive):
-        incomplete(SimulatedFileSystem(), asynchronous=True)
+        incomplete(SimulatedFileSystem())
 
 
 def test_buckets_are_made_and_deleted_by_the_subclass() -> None:
@@ -316,6 +397,23 @@ def test_buckets_are_made_and_deleted_by_the_subclass() -> None:
         fs.mkdir("bucket")
     fs.rmdir("bucket")
     assert not inner.exists("bucket")
+
+
+def test_mkdir_without_parents_needs_the_parent() -> None:
+    inner = SimulatedFileSystem(hierarchical=True)
+    fs = _Flat(inner)
+    with pytest.raises(FileNotFoundError):
+        fs.mkdir("bucket/d", create_parents=False)
+    assert not inner.exists("bucket")
+
+    fs.mkdir("bucket/d")
+    assert inner.isdir("bucket/d")
+    fs.mkdir("bucket/e", create_parents=False)
+    assert inner.isdir("bucket/e")
+
+    inner.pipe_file("bucket/f", b"f")
+    with pytest.raises(NotADirectoryError):
+        fs.mkdir("bucket/f/g", create_parents=False)
 
 
 async def test_what_the_strategies_leave_to_fsspec(
@@ -365,11 +463,62 @@ async def test_copy_and_mv_with_maxdepth(fs: _Flat, inner: SimulatedFileSystem) 
     assert "data/2023/top.txt" in inner._file_data
 
 
-async def test_cp_file_asks_info_then_copies_the_entry(
+async def test_cp_file_hands_the_handler_the_path_alone(
     fs: _Flat, inner: SimulatedFileSystem
 ) -> None:
     inner.reset_stats()
     await fs._cp_file("data/README.md", "copied.md")
-    # The default _cp_file asks the source's entry once, then hands it on.
-    assert inner.stats.calls == {"info": 1, "copy": 1}
+    # The handler is given the source's path as its entry, and asks no info.
+    assert inner.stats.calls == {"copy": 1}
     assert inner._file_data["copied.md"].data == b"x" * 10
+
+
+@pytest.mark.parametrize("path2", ["data/moved.md", "new/moved.md"])
+async def test_a_single_file_moves_asking_each_path_once(
+    inner: SimulatedFileSystem, path2: str
+) -> None:
+    class Renaming(_FlatHandler):
+        profile = StorageProfile(renames_files=True)
+
+    renaming = _on(Renaming(inner))
+    inner.reset_stats()
+    await renaming._mv("data/README.md", path2)
+    # The source's info goes on as its entry: the key is not listed. The
+    # simulated object store's _mv_file is a copy, then a deletion, and its
+    # _makedirs sends nothing.
+    assert inner.stats.calls == {"info": 2, "copy": 1, "delete": 1}
+    assert inner._file_data[path2].data == b"x" * 10
+
+
+@pytest.mark.parametrize("path2", ["data/copied.md", "data/2024/", "new/copied.md"])
+async def test_a_single_file_copies_as_fsspecs_asking_each_path_once(
+    fs: _Flat, inner: SimulatedFileSystem, path2: str
+) -> None:
+    inner.reset_stats()
+    await fs._copy("data/README.md", path2)
+    # Asked once each, unless path2 ends with "/": the key is not listed.
+    assert inner.stats.calls["info"] == (1 if path2.endswith("/") else 2)
+    assert inner.stats.calls["copy"] == 1
+    assert "list" not in inner.stats.calls
+    reference = SimulatedFileSystem()
+    for path, file in inner._file_data.items():
+        if not path.startswith(("data/copied", "data/2024/README", "new/")):
+            reference.add_file(path, file.data)
+    reference.copy("data/README.md", path2)
+    assert {p: f.data for p, f in inner._file_data.items()} == {
+        p: f.data for p, f in reference._file_data.items()
+    }
+
+
+async def test_ls_keeps_the_listing_and_a_change_drops_it(
+    fs: _Flat, inner: SimulatedFileSystem
+) -> None:
+    listed = await fs._ls("data", detail=False)
+    inner.reset_stats()
+    assert await fs._ls("data", detail=False) == listed
+    assert inner.stats.calls == {}
+    # The strategies list the storage, never the listing kept.
+    inner.add_file("data/new.txt", b"new")
+    assert "data/new.txt" in await fs._find("data")
+    await fs._rm_file("data/new.txt")
+    assert len(fs.dircache) == 0

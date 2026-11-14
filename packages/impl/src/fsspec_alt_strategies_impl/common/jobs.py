@@ -16,7 +16,7 @@ family finds what to copy, `_CopyJobs` where it goes. The two define no
 method in common, and their constructors take keywords and pass the rest on,
 so either order works.
 
-This module depends on `operation` and `paths`.
+This module depends on `handler`, `operation`, `paths` and `transfer`.
 """
 
 from __future__ import annotations
@@ -26,63 +26,114 @@ from abc import ABC, abstractmethod
 from collections import deque
 from contextlib import aclosing
 from glob import has_magic
-from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar, cast
 
 from fsspec.utils import common_prefix
 
 from fsspec_alt_strategies.profile import UNKNOWN
 from fsspec_alt_strategies.states import CpState
 
+from .handler import FileTransfer, StoragePath
 from .operation import Operation, _collect_with_errors
 from .paths import _trim
+from .transfer import _across
 
 if TYPE_CHECKING:
     from collections.abc import (
         AsyncGenerator,
         Awaitable,
         Callable,
+        Iterable,
         Sequence,
     )
-    from typing import Self, TypeAlias
+    from typing import Protocol
 
-    _Transfer: TypeAlias = Callable[[dict[str, Any], str], Awaitable[None]]
-    """How one file goes from its source entry to a destination path.
+    from .handler import Entry, FileOperationHandler, StorageHandler
 
-    It is the source's ``_cp_file_entry`` or ``_mv_file_entry`` within one
-    storage, or a router's copy or move of a file between two. The entry is the
-    source's, as its listing or ``_info`` gave it, its ``"name"`` the source
-    path.
-    """
+    class _Transfer(Protocol):
+        """How one file goes from its source entry to a destination path.
+
+        It is the source's ``cp_file`` or ``mv_file`` within one storage.
+        Between two, a copy's is `transfer._across`, and a move's that copy,
+        then the source's ``rm_file``, unless the caller gives its own. The entry is the
+        source's, as its listing or ``info`` gave it, its ``"name"`` the source
+        path. ``missing`` says nothing is at the destination, and ``parent``
+        is the destination's parent's entry, as the primitives take them: one
+        ignoring them is right all the same.
+        """
+
+        def __call__(
+            self,
+            entry: dict[str, Any],
+            path2: str,
+            *,
+            missing: bool = False,
+            parent: dict[str, Any] | None = None,
+        ) -> Awaitable[None]: ...
+
 
 _T = TypeVar("_T")
 
 
 def _transfer_of(
-    src_fs: Any,
-    dst_fs: Any,
-    transfer: _Transfer | None,
+    src: StorageHandler,
+    dst: StorageHandler,
+    cp_entry: _Transfer | None,
     same_storage: bool | None,
-    name: str,
 ) -> tuple[_Transfer, bool]:
-    """How a copy or move sends each file, and whether it stays in one storage.
+    """How a copy sends each file, and whether it stays in one storage.
 
-    ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given. Within
-    one storage, a file goes by the source's own ``_cp_file_entry`` or
-    ``_mv_file_entry``, as ``name``, "cp_entry" or "mv_entry", says, unless
-    ``transfer`` is given. Between two, ``transfer`` is required: the source's
-    own would write to the source.
+    ``same_storage`` is whether ``dst`` is ``src``, unless given. Unless
+    ``cp_entry`` is given, a file goes by the source's own ``cp_file`` within
+    one storage, and by `transfer._across` between two, its data through the
+    caller.
     """
     if same_storage is None:
-        same_storage = src_fs is dst_fs
-    if transfer is None:
-        if not same_storage:
-            raise ValueError(f"{name} is required between two storages")
-        transfer = getattr(src_fs, f"_{name.removesuffix('_entry')}_file_entry")
-    return transfer, same_storage
+        same_storage = src is dst
+    if cp_entry is None:
+        # A primitive takes a StoragePath, which the strategies pass: a _Transfer.
+        cp_entry = cast("_Transfer", src.cp_file) if same_storage else _across(src, dst)
+    return cp_entry, same_storage
+
+
+def _moves_of(
+    src: StorageHandler,
+    dst: StorageHandler,
+    cp_entry: _Transfer | None,
+    mv_entry: _Transfer | None,
+    same_storage: bool | None,
+) -> tuple[_Transfer, _Transfer, bool]:
+    """How a move sends each file, by copy and by move, and whether it stays in one storage.
+
+    ``cp_entry`` is as `_transfer_of` makes it. ``mv_entry``, unless given, is
+    the source's ``mv_file`` within one storage. Between two, it is
+    ``cp_entry``, then the source's ``rm_file``: a file whose copy failed is
+    kept. So a caller's copy, e.g. a cloud's copy from a URL, moves too.
+    """
+    cp_entry, same_storage = _transfer_of(src, dst, cp_entry, same_storage)
+    if mv_entry is None:
+        if same_storage:
+            mv_entry = cast("_Transfer", src.mv_file)
+        else:
+            copy = cp_entry
+
+            async def move(
+                entry: dict[str, Any],
+                path2: str,
+                *,
+                missing: bool = False,
+                parent: dict[str, Any] | None = None,
+            ) -> None:
+                await copy(entry, path2, missing=missing, parent=parent)
+                await src.rm_file(entry)
+
+            mv_entry = move
+
+    return cp_entry, mv_entry, same_storage
 
 
 class _Job(NamedTuple):
-    """A request to make: its kind, e.g. "copy", its source, and where it goes.
+    """A request to make: its kind, e.g. "file", a file's own copy or move, its source, and where it goes.
 
     ``source`` is the source's entry, as its listing gave it, so that a copy or
     a move hands it on: at least its ``"name"``, all a path known otherwise
@@ -91,13 +142,13 @@ class _Job(NamedTuple):
 
     kind: str
     source: dict[str, Any]
-    destination: str = ""
+    destination: StoragePath = StoragePath("")
     paths: tuple[str, ...] = ()
 
     @property
     def path(self) -> str:
         """The source's path."""
-        return self.source["name"]  # type: ignore[no-any-return]
+        return self.source["name"]
 
 
 class _Roots(NamedTuple):
@@ -156,6 +207,13 @@ class _Queue(Generic[_T]):
     `pending`, along with the owner's requests, it picks up the permits that
     others sharing the limit give back. The owner takes each finished
     request's item back with `pop`.
+
+    A request's permit is given back once, by whichever comes first: `pop`,
+    or the task's done callback. The callback alone would be late: it runs a
+    turn of the loop after the task ends, and `asyncio.wait` reports a task
+    done before that. An operation ending on it would then end holding a
+    permit. The callback still gives back that of a task nobody pops, e.g.
+    one cancelled before it ran.
     """
 
     def __init__(self, limit: asyncio.Semaphore) -> None:
@@ -163,14 +221,23 @@ class _Queue(Generic[_T]):
         self.waiting: deque[_T] = deque()
         self.running: dict[asyncio.Task[Any], _T] = {}
         self.waiter: asyncio.Task[bool] | None = None
+        # The requests whose permit is not given back yet.
+        self.holding: set[asyncio.Task[Any]] = set()
 
     async def start(self, run: Callable[[_T], Awaitable[Any]]) -> None:
         """Start the request of each item waiting, while permits are free."""
         while self.waiting and await self._take():
             item = self.waiting.popleft()
             task = asyncio.ensure_future(run(item))
-            task.add_done_callback(lambda _: self.limit.release())
+            self.holding.add(task)
+            task.add_done_callback(self._give_back)
             self.running[task] = item
+
+    def _give_back(self, task: asyncio.Task[Any]) -> None:
+        """Give back a request's permit, unless it was already."""
+        if task in self.holding:
+            self.holding.remove(task)
+            self.limit.release()
 
     async def _take(self) -> bool:
         """Take a permit if one is free now, or got by the waiter."""
@@ -189,10 +256,14 @@ class _Queue(Generic[_T]):
         """The requests running, and the waiter for a permit if items wait."""
         if self.waiting and self.waiter is None:
             self.waiter = asyncio.ensure_future(self.limit.acquire())
-        return [*self.running, *([self.waiter] if self.waiting else [])]
+        pending = list(self.running)
+        if self.waiting and self.waiter is not None:
+            pending.append(self.waiter)
+        return pending
 
     def pop(self, task: asyncio.Task[Any]) -> _T | None:
-        """The item of a request done, or None for the waiter, whose permit `start` takes."""
+        """The item of a request done, its permit given back, or None for the waiter, whose permit `start` takes."""
+        self._give_back(task)
         return self.running.pop(task, None)
 
     async def close(self) -> None:
@@ -201,6 +272,8 @@ class _Queue(Generic[_T]):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        for task in tasks:
+            self._give_back(task)
         self.running.clear()
 
         waiter, self.waiter = self.waiter, None
@@ -211,33 +284,76 @@ class _Queue(Generic[_T]):
                 self.limit.release()
 
 
-class _Jobs(ABC):
-    """The jobs of one operation on ``fs``, run while what it changes is found.
+def _check_batch_size(batch_size: int, name: str) -> None:
+    """Refuse a handler's batch size below 1, e.g. its ``rm_batch_size``, as no batch could be sent."""
+    if batch_size < 1:
+        raise ValueError(f"{name} must be at least 1: {batch_size}")
 
-    Each request holds a permit of the filesystem's ``operation_limit``. The
+
+def _keys_of(paths: tuple[str, ...]) -> str:
+    """A batch's paths, for its error's note: all of a few, or the first and last."""
+    if len(paths) <= 3:
+        return ", ".join(map(repr, paths))
+    else:
+        return f"{len(paths)} keys, from {paths[0]!r} to {paths[-1]!r}"
+
+
+class _Jobs(ABC):
+    """The jobs of one operation on ``handler``, run while what it changes is found.
+
+    Each request holds a permit of the handler's ``operation_limit``. The
     constructor takes keywords only, and passes on what it does not take, so
     that a subclass may join a family's jobs with another base, such as a
     copy's.
+
+    A batch deletion, queued by `send_batch`, runs the handler's ``rm_files``
+    operation, by `delete`, and its outcome is told by `deleted`: the paths it
+    deleted, and the errors of those it did not. A batch holds no permit of
+    the limit: its operation's requests take theirs, which a permit held
+    around them would wait for.
     """
 
     def __init__(
         self,
         *,
-        fs: Any,
+        handler: FileOperationHandler,
         op: Operation[Any, Any],
         maxdepth: int | None = None,
+        ils_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        self.fs = fs
+        self.handler: FileOperationHandler = handler
         self.maxdepth = maxdepth
+
+        # The options of each listing the jobs make, a pattern's glob too.
+        self.ils_kwargs: dict[str, Any] = ils_kwargs or {}
+
+        # Each batch's outcome, by its number: the paths deleted, and the errors.
+        self._deleted: dict[int, tuple[list[str], list[Exception]]] = {}
+
+        # The batches to send, of deletions or of copies and moves, and those sent, which hold no permit.
+        self.batches_waiting: deque[_Job] = deque()
+        self.batches_running: dict[asyncio.Task[Any], _Job] = {}
+
+        # The entries of each batch to delete, by its number, as the listing
+        # gave them: a file is deleted by its entry, never by its name verified
+        # again, nor by another file's of the same name.
+        self.batched: dict[int, list[Entry]] = {}
+        self.batches_sent = 0
+
+        # The files to delete, gathered into a batch of the handler's
+        # rm_batch_size, read by setup once the handler is open, as a handler may
+        # know it only then, e.g. by the kind of account.
+        self.to_delete: list[Entry] = []
+        self.rm_batch_size = 1
 
         # The directory roots a pattern matched: fsspec walks them one level less
         # deep than a path named, as its glob counted that level already.
         self.matched: set[str] = set()
 
         # The source's requests, the jobs, and a pattern's glob share it.
-        self.concurrency_limit: asyncio.Semaphore = fs.operation_limit
+        self.concurrency_limit: asyncio.Semaphore = self.handler.operation_limit
         self.jobs: _Queue[_Job] = _Queue(self.concurrency_limit)
 
         # The queue's own, which the subclasses queue their jobs in.
@@ -254,6 +370,59 @@ class _Jobs(ABC):
         # The source's next item, awaited along with the jobs.
         self.next: asyncio.Task[Any] | None = None
 
+    def queue_deletion(self, entry: Entry) -> None:
+        """Add a file to the batch to delete, sent once full: at once, in batches of 1."""
+        self.to_delete.append(entry)
+        if len(self.to_delete) >= self.rm_batch_size:
+            self.flush_deletions()
+
+    def flush_deletions(self) -> None:
+        """Send the batch to delete, if any, e.g. its last, smaller one once the walk has ended."""
+        if self.to_delete:
+            entries, self.to_delete = self.to_delete, []
+            self.send_batch(entries)
+
+    def send_batch(self, entries: list[Entry]) -> None:
+        """Queue a batch of files, by their entries as the listing gave them, to be deleted by the handler's ``rm_files``.
+
+        The batch is numbered, and keeps its entries, never their names
+        alone: two files listed under one name, e.g. on Google Drive, are two
+        entries, and may be in two batches of the same paths.
+        """
+        self.batches_sent += 1
+        self.batched[self.batches_sent] = entries
+        paths = tuple(e["name"] for e in entries)
+        source = {"name": paths[-1], "batch": self.batches_sent}
+        self.batches_waiting.append(_Job("delete", source, paths=paths))
+
+    async def delete(self, job: _Job) -> None:
+        """Delete a batch by the handler's ``rm_files`` operation, by its entries, keeping its outcome for `deleted`.
+
+        The operation is iterated to its end, as the batch is one job. An
+        error it raises fails the batch whole.
+        """
+        number = job.source["batch"]
+        entries = self.batched.pop(number)
+        deleted: list[str] = []
+        errors: list[Exception] = []
+        async with self.handler.rm_files(entries) as operation:
+            async for outcome in operation:
+                if isinstance(outcome, Exception):
+                    errors.append(outcome)
+                else:
+                    deleted.append(outcome)
+        self._deleted[number] = (deleted, errors)
+
+    def deleted(self, job: _Job) -> tuple[list[str], list[Exception]]:
+        """A batch's paths deleted, and the errors of those it did not delete, counted.
+
+        A path neither deleted nor failed, e.g. dropped by a cancelled
+        operation, is in neither.
+        """
+        deleted, errors = self._deleted.pop(job.source["batch"], ([], []))
+        self.errors += len(errors)
+        return deleted, errors
+
     @classmethod
     def operation(cls, **kwargs: Any) -> Operation[Any, Any]:
         """An operation running new jobs of this class, made at once with ``kwargs``.
@@ -261,18 +430,24 @@ class _Jobs(ABC):
         Made at once, the jobs give the operation its first state, e.g. whether
         a move renames directories, as they read it from the profile once.
         """
-        jobs: Self | None = None
+        jobs: Any = None
         op: Operation[Any, Any] = Operation(
-            lambda _: jobs.outcomes(),  # type: ignore[union-attr]
-            None,  # type: ignore[arg-type]  # The jobs' own, set below.
+            lambda _: jobs.outcomes(),
+            None,  # The jobs' own, set below.
         )
         jobs = cls(op=op, **kwargs)
         op.state = jobs.state()
         return op
 
-    # A hook, not abstract: only the jobs reading a profile await it.
-    async def setup(self) -> None:  # noqa: B027
-        """Read what the jobs need of the storage before preparing, e.g. its profile."""
+    async def setup(self) -> None:
+        """Read what the jobs need of the storage before preparing: here the handler's ``rm_batch_size``, once open.
+
+        A subclass reading more, e.g. the profile, calls it first. A batch size
+        below 1 raises ValueError, as no batch could be sent.
+        """
+        await self.handler.open()
+        self.rm_batch_size = self.handler.rm_batch_size
+        _check_batch_size(self.rm_batch_size, "rm_batch_size")
 
     @abstractmethod
     async def prepare(self) -> _Roots | None:
@@ -283,10 +458,10 @@ class _Jobs(ABC):
         """The operation's state now."""
 
     @abstractmethod
-    def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
-        """The family's glob of ``pattern`` on ``fs``, within ``maxdepth``."""
+    def glob(self, pattern: StoragePath | Sequence[StoragePath]) -> Operation[Any, Any]:
+        """The family's glob of ``pattern`` on ``handler``, within ``maxdepth``."""
 
-    async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
+    async def glob_roots(self, pattern: StoragePath | Sequence[StoragePath]) -> _Roots:
         """The roots matching glob patterns, noting those a pattern matched.
 
         The glob's errors go to ``found``, yielded first.
@@ -382,8 +557,9 @@ class _Jobs(ABC):
                         yield outcome
         except GeneratorExit:
             self.waiting.clear()
-            while self.running:
-                done, _ = await asyncio.wait(self.running)
+            self.batches_waiting.clear()
+            while self.running or self.batches_running:
+                done, _ = await asyncio.wait([*self.running, *self.batches_running])
                 for task in done:
                     self.finish(task)
 
@@ -396,12 +572,24 @@ class _Jobs(ABC):
                 await asyncio.gather(self.next, return_exceptions=True)
 
             await self.jobs.close()
+            await self._cancel_batches()
             if source is not None:
                 await source.aclose()
 
+    async def _cancel_batches(self) -> None:
+        """Cancel the batches running: left only by an error, as the jobs are cancelled then."""
+        for task in self.batches_running:
+            task.cancel()
+        await asyncio.gather(*self.batches_running, return_exceptions=True)
+        self.batches_running.clear()
+
     def pending(self) -> list[asyncio.Task[Any]]:
         """What to wait for: the jobs, the next item, and a permit if needed."""
-        return [*self.jobs.pending(), *([self.next] if self.next else [])]
+        return [
+            *self.jobs.pending(),
+            *self.batches_running,
+            *([self.next] if self.next else []),
+        ]
 
     async def begin(
         self, roots: _Roots, source: AsyncGenerator[Any] | None
@@ -427,7 +615,7 @@ class _Jobs(ABC):
         self, task: asyncio.Task[Any], source: AsyncGenerator[Any] | None
     ) -> list[Any] | None:
         """Handle a finished task, returning its step, or None if it has none."""
-        if task in self.running:
+        if task in self.running or task in self.batches_running:
             return self.finish(task)
         if task is not self.next or source is None:
             return None  # The waiter's permit, which start takes.
@@ -443,22 +631,30 @@ class _Jobs(ABC):
         return self.fed(item)
 
     def stopping(self) -> None:
-        """Drop the jobs waiting, as the operation is cancelled.
+        """Drop the jobs and batches waiting, as the operation is cancelled.
 
         A subclass may keep those finishing what was done, e.g. the deletions
         of files a move has copied.
         """
         self.waiting.clear()
+        self.batches_waiting.clear()
 
     async def start(self) -> None:
-        """Start the jobs waiting, while permits are free, but none once cancelled."""
+        """Start the jobs waiting, while permits are free, and the batches at once, but none once cancelled."""
         if self.op.cancelling():
             self.stopping()
         await self.jobs.start(self.run)
+        while self.batches_waiting:
+            job = self.batches_waiting.popleft()
+            self.batches_running[asyncio.ensure_future(self.run_batch(job))] = job
+
+    def run_batch(self, job: _Job) -> Awaitable[Any]:
+        """The coroutine sending a batch: here a deletion, by ``rm_files``. A subclass sending batches of its own runs them."""
+        return self.delete(job)
 
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
         """Handle a job's task done, counting its errors, and return what to yield."""
-        job = self.running.pop(task)
+        job = self.jobs.pop(task) or self.batches_running.pop(task)
         self.current = job.path or job.destination
 
         try:
@@ -472,67 +668,137 @@ class _Jobs(ABC):
 
 
 class _CopyJobs(_Jobs):
-    """The jobs of a copy or a move: where each path goes, onto ``dst_fs``.
+    """The jobs of a copy or a move: where each path goes, onto ``dst``.
 
     A path under ``prefix`` goes to the same place under ``base``. For a list,
     a path under a root of ``places`` goes there instead. `prepare` sets them,
     before `target` is used.
 
-    ``dst_fs`` is the filesystem copied to, described by its profile, unknown
+    ``dst`` is the handler copied to, described by its profile, unknown
     if it has none. Within one storage, it is the source, and ``same_storage``
     is True: a path copied onto itself, or under itself, is refused. Between two, a path may go to the same path, or under
-    it, as that is another storage's.
+    it, as that is another storage's. The paths are compared folded on a storage
+    whose names are not case-sensitive, as its profile says.
+
+    ``path1_entry`` is the entry of ``path1``, a single path, if the caller
+    found it already, e.g. to tell a file. A file's is then a root known to be
+    a file, not listed to find what it is.
+
+    With ``batching``, the files go to the handler's ``cp_files``, or
+    ``mv_files`` for a subclass whose ``transfers`` is "move", in batches of
+    its ``cp_batch_size`` or ``mv_batch_size``. A family's jobs hand a file's
+    job on by `release`, once its destination's directory is ready. A batch
+    is sent once full, or once the walk has ended with no directory left to
+    make, as no file can join it then. It holds no permit, as a deletion's
+    batch: its operation's requests take theirs. Each file's outcome then
+    goes to the family's `done` or `failed`, as a job of its own would. A
+    copy refused by a destination not overwriting is retried on its own, as
+    `copy_file` replaces it.
     """
 
     verb = "copy"
     doing = "Copying"
+    transfers = "copy"
+    """Which of the handler's strategies a batch of files goes to: "copy" for ``cp_files``, "move" for ``mv_files``."""
 
     def __init__(
         self,
         *,
-        path1: str | Sequence[str],
-        path2: str,
-        dst_fs: Any,
+        path1: StoragePath | Sequence[StoragePath],
+        path2: StoragePath,
+        dst: StorageHandler,
         same_storage: bool,
+        path1_entry: dict[str, Any] | None = None,
+        batching: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
 
+        # The files ready, and the batches sent, by their number: two files
+        # listed under one name, e.g. on Google Drive, may make two batches of
+        # the same paths. The size is the handler's, once open.
+        self.batching = batching
+        self.transfer_batch_size = 1
+        self.ready: list[_Job] = []
+        self.sent: dict[int, list[_Job]] = {}
+        self._transferred: dict[
+            int, tuple[dict[str, Exception | None], list[Exception]]
+        ] = {}
+        self.walked = False
+
+        # The jobs waiting for their destination directory, by that directory.
+        # A directory listed in several parts is made once, as `made` notes it.
+        self.after_mkdir: dict[str, list[_Job]] = {}
+
         self.path1 = path1
         self.path2 = path2
         self.same_storage = same_storage
+        self.path1_entry = path1_entry
 
         # The profile is the destination's, as what a copy saves depends on
         # where it writes. Within one storage, it is the source's too. Unknown
         # until setup awaits it.
-        self.dst_fs = dst_fs
+        self.dst: StorageHandler = dst
         self.profile = UNKNOWN
         self.implicit_directories = False
         self.parents_required = True
+        self.case_insensitive = False
 
+        # Set by prepare: the destination's path, verified, where the prefix goes.
         self.prefix = ""
-        self.base = ""
+        self.base = StoragePath("")
 
         # For a list: where each root goes, by the root.
-        self.places: dict[str, str] = {}
+        self.places: dict[str, StoragePath] = {}
 
-        # The destinations found missing, which need no asking again, e.g.
-        # by a move renaming a root onto one.
+        # The destinations found missing, and those found existing, which need
+        # no asking again, e.g. by a move renaming a root onto one.
         self.missing: set[str] = set()
+        self.existing: set[str] = set()
+
+        # The destination directories made, tried, or known to exist: their
+        # copies need not wait for a mkdir.
+        self.made: set[str] = set()
+
+        # The entries of the destination directories found or made, by path:
+        # each is the parent hint of what is made inside it.
+        self.directories: dict[str, Entry] = {}
 
         self.files_found = 0
         self.files_done = 0
 
     async def setup(self) -> None:
-        # Any async filesystem may be a router's destination: fsspec gives it
-        # no profile, so its storage is unknown.
-        get = getattr(self.dst_fs, "_get_storage_profile", None)
-        self.profile = await get(self.path2) if get is not None else UNKNOWN
+        await super().setup()
+        # The destination's profile, loaded once as its handler opens. A plain
+        # fsspec filesystem a router copies to has an unknown one.
+        await self.dst.open()
+        self.profile = self.dst.profile
         # Unknown, directories are made first. Implicit directories need none.
+        # Within one storage, a file goes by the storage's own copy or move,
+        # whose parents the profile tells apart from a write's.
         self.implicit_directories = bool(self.profile.implicit_directories)
-        self.parents_required = (
-            self.profile.parents_required is not False and not self.implicit_directories
+        declared = (
+            self.profile.copy_parents_required
+            if self.same_storage
+            else self.profile.parents_required
         )
+        self.parents_required = declared is not False and not self.implicit_directories
+        # Only within one storage are a source and its destination compared.
+        self.case_insensitive = (
+            self.same_storage and self.profile.case_sensitive is False
+        )
+        if self.batching:
+            # Within one storage, the source's handler is the destination's.
+            if self.transfers == "copy":
+                self.transfer_batch_size = self.handler.cp_batch_size
+                _check_batch_size(self.transfer_batch_size, "cp_batch_size")
+            else:
+                self.transfer_batch_size = self.handler.mv_batch_size
+                _check_batch_size(self.transfer_batch_size, "mv_batch_size")
+
+    def folded(self, path: str) -> str:
+        """A path as the storage compares it: folded unless its names are case-sensitive."""
+        return path.lower() if self.case_insensitive else path
 
     def state(self) -> Any:
         return CpState(
@@ -544,7 +810,8 @@ class _CopyJobs(_Jobs):
 
     async def prepare(self) -> _Roots | None:
         """Set where the paths go, as fsspec's ``copy`` places them."""
-        destination = _trim(self.path2)
+        # The caller's destination, as the handler verifies it: ValueError if refused.
+        destination = self.dst.verified(_trim(self.path2))
 
         if not isinstance(self.path1, str):
             roots = await self._place(destination)
@@ -561,25 +828,39 @@ class _CopyJobs(_Jobs):
             self.base = destination
         else:
             root = _trim(self.path1)
-            if root == destination and self.same_storage:
-                return None
-            roots = _Roots([{"name": root}])
+            if self.same_storage and self.folded(root) == self.folded(destination):
+                # Onto itself: left as it is, unless a move to another case.
+                recased = root != destination and self.verb == "move"
+                if not recased or self.path1.endswith("/") or self.path2.endswith("/"):
+                    return None
+                return self.recased(root, destination)
+            roots = await self._single(root, destination)
             sources = [root]
-            self.prefix = root
-            self.base = await self._base(root, destination)
 
         for source in sources if self.same_storage else ():
-            target = self.target(source)
-            if target == source and len(sources) == 1:
+            target, folded = self.folded(self.target(source)), self.folded(source)
+            if target == folded and len(sources) == 1:
                 return None
-            if not source or target == source or target.startswith(source + "/"):
+            if not source or target == folded or target.startswith(folded + "/"):
                 raise ValueError(
-                    f"Cannot {self.verb} {source!r} into itself: {target!r}"
+                    f"Cannot {self.verb} {source!r} into itself: {self.target(source)!r}"
                 )
 
         return roots
 
-    async def _place(self, destination: str) -> _Roots:
+    def recased(self, root: str, destination: StoragePath) -> _Roots:
+        """The root of a single path moved onto itself in another case, to be renamed.
+
+        On a storage whose names are not case-sensitive, only a rename of the
+        root whole changes its case: a move doing so places it, as a root
+        going to a destination found missing. Here, it raises ValueError.
+        """
+        raise ValueError(
+            f"Cannot {self.verb} {root!r} to {destination!r}, itself in another"
+            " case: the storage renames nothing whole"
+        )
+
+    async def _place(self, destination: StoragePath) -> _Roots:
         """Place each root of a list into ``destination``, under its name.
 
         Two roots of the same name would go to the same place. As GNU's cp
@@ -589,11 +870,11 @@ class _CopyJobs(_Jobs):
         roots = await self.glob_roots(self.path1)
         directories = {d["name"]: d for d in roots.directories}
         files = {f["name"]: f for f in roots.files}
-        placed: dict[str, str] = {}
+        placed: dict[StoragePath, str] = {}
 
         for source in sorted(roots.paths):
             name = source.rpartition("/")[2]
-            target = f"{destination}/{name}" if destination else name
+            target = self.dst.join(destination, name)
             if (other := placed.get(target)) is not None:
                 error = FileExistsError(target)
                 error.add_note(
@@ -611,59 +892,339 @@ class _CopyJobs(_Jobs):
             [files[s] for s in self.places if s in files],
         )
 
-    async def _base(self, root: str, destination: str) -> str:
-        """Where ``root``, a single path, goes: into ``destination``, or onto it."""
+    async def _single(self, root: str, destination: StoragePath) -> _Roots:
+        """Place a single path, and return it as a root: a file if its entry says so."""
+        self.prefix = root
+        self.base = await self._base(root, destination)
+        if self.same_storage:
+            # The root's parent exists: e.g. a file renamed in its directory needs no mkdir.
+            self.made.add(root.rpartition("/")[0])
+
+        entry = self.path1_entry
+        if entry is not None and entry["type"] != "directory":
+            return _Roots([], [{**entry, "name": root}])
+        else:
+            return _Roots([{"name": root}])
+
+    async def _base(self, root: str, destination: StoragePath) -> StoragePath:
+        """Where ``root``, a single path, goes: into ``destination``, or onto it.
+
+        What its ``_info`` finds is kept: a destination missing or existing,
+        and the directory it shows to exist, which needs no mkdir.
+        """
         if self.path2.endswith("/"):
             into = True
         else:
             try:
-                entry = await self.dst_fs._info(destination)
-                into = entry["type"] == "directory"
+                entry = await self.dst.info(self.dst.entry(destination))
             except FileNotFoundError:
                 self.missing.add(destination)
                 into = False
+            else:
+                self.existing.add(destination)
+                into = entry["type"] == "directory"
+                self.made.add(destination if into else destination.rpartition("/")[0])
+                if into:
+                    self.directories[destination] = entry
 
-        if not into or self.path1.endswith("/"):
+        if not into or (isinstance(self.path1, str) and self.path1.endswith("/")):
             return destination
 
         name = root.rsplit("/", 1)[-1]
-        return f"{destination}/{name}" if destination else name
+        return self.dst.join(destination, name)
 
-    def target(self, path: str) -> str:
-        """Where a path goes."""
+    def target(self, path: str) -> StoragePath:
+        """Where a path goes, each name below its root checked by the destination's ``join``.
+
+        A name the destination refuses, e.g. "..", raises ValueError: a path
+        listed on the source never leaves the destination. A flat storage's
+        directory marker, a key ending with "/", keeps its "/".
+        """
         if self.places:
             # The root it is under, found from the path up.
             root = path
             while root not in self.places and "/" in root:
                 root = root.rpartition("/")[0]
-            return self.places[root] + path[len(root) :]
-
-        if self.prefix:
-            return self.base + path[len(self.prefix) :]
+            target = self.dst.join(self.places[root], path[len(root) :])
+        elif self.prefix:
+            target = self.dst.join(self.base, path[len(self.prefix) :])
         else:
-            return f"{self.base}/{path}" if self.base else path
+            target = self.dst.join(self.base, path)
+
+        if path.endswith("/") and not target.endswith("/"):
+            # A flat storage's marker is a key: its directory's path and a "/".
+            return StoragePath(f"{target}/")
+        else:
+            return target
+
+    def known_missing(self, target: str) -> bool:
+        """Whether nothing is at a destination, as the operation knows: it, or a directory above it, was found missing.
+
+        All below a destination found missing is missing too, unless another
+        client puts something there meanwhile: the primitives making it are
+        told so, by ``missing=True``, and a storage whose creation never
+        conflicts asks nothing first.
+        """
+        path = target.rstrip("/")
+        while path:
+            if path in self.missing:
+                return True
+            path = path.rpartition("/")[0]
+        return False
+
+    def refuse_name(self, path: str, error: ValueError) -> ValueError:
+        """A path whose name the destination refuses, as its ``target`` raised: counted, noted, to yield.
+
+        It is the path's own error. The operation goes on with the others.
+        """
+        self.errors += 1
+        error.add_note(
+            f"{self.doing} {path!r} refused: the destination takes no such name."
+        )
+        return error
 
     async def copy_file(
-        self, cp_entry: _Transfer, entry: dict[str, Any], destination: str
+        self, cp_entry: _Transfer, entry: dict[str, Any], destination: StoragePath
     ) -> None:
         """Copy a file by ``cp_entry``, replacing a file there the destination keeps.
 
         A destination refusing to overwrite, as fsspec's copy does not, costs
-        an ``_info``, an ``_rm_file`` and a copy more. A directory there is no file
-        to replace: ``_rm_file`` takes files only. The job holds its permit
+        an ``info``, an ``rm_file`` and a copy more. A directory there is no file
+        to replace: ``rm_file`` takes files only. The job holds its permit
         already. An error raised notes its paths, as it is yielded among paths.
         """
         source = entry["name"]
         try:
             try:
-                await cp_entry(entry, destination)
-            except FileExistsError:
-                found = await self.dst_fs._info(destination)
-                if found["type"] == "directory":
-                    raise
-
-                await self.dst_fs._rm_file(destination)
-                await cp_entry(entry, destination)
+                await cp_entry(
+                    entry,
+                    destination,
+                    missing=self.known_missing(destination),
+                    parent=self.parent_of(destination),
+                )
+            except FileExistsError as refused:
+                await self.replace_file(cp_entry, entry, destination, refused)
         except Exception as e:
             e.add_note(f"{self.doing} {source!r} to {destination!r} failed.")
             raise
+
+    async def move_file(
+        self, mv_entry: _Transfer, entry: dict[str, Any], destination: StoragePath
+    ) -> None:
+        """Move a file by ``mv_entry``, with the destination's hints. An error raised notes its paths, as it is yielded."""
+        try:
+            await mv_entry(
+                entry,
+                destination,
+                missing=self.known_missing(destination),
+                parent=self.parent_of(destination),
+            )
+        except Exception as e:
+            e.add_note(f"{self.doing} {entry['name']!r} to {destination!r} failed.")
+            raise
+
+    def needs_mkdir(self, directory: StoragePath, *, always: bool = False) -> bool:
+        """Whether a destination directory is made before what goes in it.
+
+        Never the root, nor one made, tried or known to exist. Else only where
+        the storage requires parents, unless ``always``, e.g. for an empty
+        directory, which nothing else makes.
+        """
+        if directory == self.dst.root or not directory or directory in self.made:
+            return False
+        return always or self.parents_required
+
+    async def replace_file(
+        self,
+        cp_entry: _Transfer,
+        entry: dict[str, Any],
+        destination: StoragePath,
+        refused: FileExistsError,
+    ) -> None:
+        """Copy a file onto one its destination refused to overwrite: deleted first, unless a directory.
+
+        A directory there raises ``refused`` again: ``rm_file`` takes files only.
+        """
+        found = await self.dst.info(self.dst.entry(destination))
+        if found["type"] == "directory":
+            raise refused
+
+        await self.dst.rm_file({**found, "name": destination})
+        await cp_entry(entry, destination, parent=self.parent_of(destination))
+
+    def parent_of(self, path: StoragePath) -> Entry | None:
+        """The entry of a destination's parent, as found or made, as the primitives take it: None if unknown."""
+        try:
+            return self.directories.get(self.dst.parent(path))
+        except ValueError:
+            return None  # A path at the root: no parent of the destination's.
+
+    async def make_directory(self, path: StoragePath) -> None:
+        """Make a destination directory, keeping the entry ``makedirs`` returns as the parent hint of what goes inside."""
+        made = await self.dst.makedirs(
+            path,
+            exist_ok=True,
+            missing=self.known_missing(path),
+            parent=self.parent_of(path),
+        )
+        if made is not None:
+            self.directories[path] = made
+
+    # The batches of files, sent to the handler's cp_files or mv_files.
+
+    def release(self, jobs: Iterable[_Job]) -> None:
+        """Queue jobs whose destination's directory is ready: a file's into the batch, when batching."""
+        for job in jobs:
+            if not self.batching or job.kind != "file":
+                self.waiting.append(job)
+                continue
+
+            self.ready.append(job)
+            if len(self.ready) >= self.transfer_batch_size:
+                self.send_ready()
+
+    def send_ready(self) -> None:
+        """Queue the batch of the files ready, to be sent without a permit."""
+        jobs, self.ready = self.ready, []
+        paths = tuple(j.path for j in jobs)
+        number = self.batches_sent = self.batches_sent + 1
+        self.sent[number] = jobs
+        batch = _Job("transfers", {"name": paths[-1], "batch": number}, paths=paths)
+        self.batches_waiting.append(batch)
+
+    def exhausted(self) -> None:
+        self.walked = True
+        super().exhausted()
+
+    async def start(self) -> None:
+        # The last batch, once no file can join it: the walk ended, and no
+        # directory is left to make, whose files it would release.
+        if self.ready and self.walked and not self.op.cancelling():
+            making = (*self.waiting, *self.running.values())
+            if not any(j.kind == "mkdir" for j in making):
+                self.send_ready()
+        await super().start()
+
+    def stopping(self) -> None:
+        super().stopping()
+        self.drop_transfers()
+
+    def drop_transfers(self) -> None:
+        """Drop the files ready and the batches not sent, as the operation is cancelled."""
+        self.ready.clear()
+        for job in [j for j in self.batches_waiting if j.kind == "transfers"]:
+            self.batches_waiting.remove(job)
+            for dropped in self.sent.pop(job.source["batch"]):
+                self.dropped(dropped)
+
+    def dropped(self, job: _Job) -> None:
+        """Note a file's job dropped unsent, e.g. by a cancelled batch: neither done nor failed."""
+
+    def transfers_running(self) -> int:
+        """The files in the batches being sent."""
+        return sum(
+            len(self.sent[j.source["batch"]])
+            for j in self.batches_running.values()
+            if j.kind == "transfers"
+        )
+
+    def run_batch(self, job: _Job) -> Awaitable[Any]:
+        if job.kind == "transfers":
+            return self.transfer_batch(job.source["batch"])
+        else:
+            return super().run_batch(job)
+
+    async def transfer_batch(self, number: int) -> None:
+        """Send a batch of files by the handler's ``cp_files`` or ``mv_files``, keeping each one's outcome.
+
+        A copy refused by a destination not overwriting is replaced on its own,
+        under a permit, as `copy_file` replaces it. An error with no ``source``
+        is kept apart, yielded as it is.
+        """
+        jobs = self.sent[number]
+        transfers = [
+            FileTransfer(
+                j.source,
+                j.destination,
+                self.known_missing(j.destination),
+                self.parent_of(j.destination),
+            )
+            for j in jobs
+        ]
+        operation: Operation[tuple[str, str], Any]
+        if self.transfers == "copy":
+            operation = self.handler.cp_files(transfers)
+        else:
+            operation = self.handler.mv_files(transfers)
+
+        outcomes: dict[str, Exception | None] = {}
+        apart: list[Exception] = []
+        async with operation as files:
+            async for outcome in files:
+                if not isinstance(outcome, Exception):
+                    outcomes[outcome[0]] = None
+                elif (
+                    source := getattr(outcome, "source", None)
+                ) in outcomes or source is None:
+                    apart.append(outcome)
+                else:
+                    outcomes[source] = outcome
+
+        if self.transfers == "copy":
+            refused = [
+                j for j in jobs if isinstance(outcomes.get(j.path), FileExistsError)
+            ]
+            replaced = await asyncio.gather(
+                *(self.replace_refused(j, outcomes[j.path]) for j in refused),  # type: ignore[arg-type]
+                return_exceptions=True,
+            )
+            for job, error in zip(refused, replaced, strict=True):
+                outcomes[job.path] = error if isinstance(error, Exception) else None
+
+        self._transferred[number] = (outcomes, apart)
+
+    async def replace_refused(self, job: _Job, refused: FileExistsError) -> None:
+        """Replace a file a batch's copy was refused, under a permit, by the source's ``cp_file``."""
+        try:
+            async with self.concurrency_limit:
+                cp_entry = cast("_Transfer", self.handler.cp_file)
+                await self.replace_file(cp_entry, job.source, job.destination, refused)
+        except Exception as e:
+            if e is not refused:  # The batch's own error notes its paths already.
+                e.add_note(f"{self.doing} {job.path!r} to {job.destination!r} failed.")
+            raise
+
+    def finish(self, task: asyncio.Task[Any]) -> list[Any]:
+        """Handle a task done: a batch of files gives each one's outcome to `done` or `failed`."""
+        batch = self.batches_running.get(task)
+        if batch is None or batch.kind != "transfers":
+            return super().finish(task)
+
+        del self.batches_running[task]
+        jobs = self.sent.pop(batch.source["batch"])
+        self.current = batch.path
+        outcome: list[Any] = []
+        try:
+            task.result()
+        except Exception as e:
+            # Failed whole: one error for all its files, each failed by it.
+            e.add_note(f"{self.doing} {_keys_of(batch.paths)} failed.")
+            for job in jobs:
+                outcome += [
+                    o for o in self.failed(job, e) if all(o is not x for x in outcome)
+                ]
+            self.errors += sum(isinstance(o, Exception) for o in outcome)
+            return outcome
+
+        outcomes, apart = self._transferred.pop(batch.source["batch"])
+        for job in jobs:
+            if job.path not in outcomes:
+                self.dropped(job)  # Neither done nor failed, e.g. cancelled.
+            elif (error := outcomes[job.path]) is None:
+                outcome += self.done(job)
+            else:
+                failed = self.failed(job, error)
+                self.errors += sum(isinstance(o, Exception) for o in failed)
+                outcome += failed
+        self.errors += len(apart)
+        return outcome + apart

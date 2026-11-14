@@ -26,20 +26,26 @@ from .walk import _chunks
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
+    from ..common.handler import StoragePath
     from ..common.jobs import _Roots
     from ..common.operation import Operation
+    from .handler import TreeFileOperationHandler
     from .walk import _Listing
 
 
 class _TreeJobs(_Jobs):
-    """The jobs of one operation, run while the tree of ``fs`` is walked.
+    """The jobs of one operation, run while the tree of ``handler`` is walked.
 
-    ``fs`` is the filesystem walked, by its ``_ils`` and ``_info``, each
-    request holding a permit of its ``operation_limit``. With ``maxdepth``, the
+    ``handler`` is the handler walked, by its ``ils`` and ``info``, each
+    request holding a permit of its ``operation_limit``. ``ils_kwargs`` go to
+    each ``ils``, a pattern's glob's too. With ``maxdepth``, the
     walk lists no directory deeper than it, as fsspec's ``_expand_path`` finds
     paths. Each subdirectory the walk leaves unlisted goes to `at_limit`, as
     fsspec finds it, but not what is in it.
     """
+
+    handler: TreeFileOperationHandler
+    """The handler walked: a tree's, which the tree strategies take."""
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -50,9 +56,13 @@ class _TreeJobs(_Jobs):
         self.remaining: dict[str, int] = {}
         self.parents: dict[str, str] = {}
 
-        # The directories whose listing goes on, and the subdirectories counted in
-        # each: a directory is done only once listed to its last part.
-        self.listing: dict[str, set[str]] = {}
+        # The entries of each path counted and not done: two files listed under
+        # one name, e.g. on Google Drive, are two, each done on its own.
+        self.entries: dict[str, int] = {}
+
+        # The directories whose listing goes on: a directory is done only once
+        # listed to its last part.
+        self.listing: set[str] = set()
 
     @abstractmethod
     def add(self, listing: _Listing) -> list[Any] | None:
@@ -61,8 +71,10 @@ class _TreeJobs(_Jobs):
         It returns what is done at once, if anything, e.g. a directory found gone.
         """
 
-    def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
-        return _tree_glob(self.fs, pattern, maxdepth=self.maxdepth)
+    def glob(self, pattern: StoragePath | Sequence[StoragePath]) -> Operation[Any, Any]:
+        return _tree_glob(
+            self.handler, pattern, maxdepth=self.maxdepth, ils_kwargs=self.ils_kwargs
+        )
 
     def unlisted(self, directory: str) -> bool:
         """Whether a root directory is at the depth limit already: a match, at 1."""
@@ -70,17 +82,17 @@ class _TreeJobs(_Jobs):
 
     def source(self, roots: _Roots) -> AsyncGenerator[_Listing] | None:
         """The listings of the root directories, if any, walked at once."""
-        directories = [
-            d["name"] for d in roots.directories if not self.unlisted(d["name"])
-        ]
+        # Their entries, e.g. as a glob found them, so that each is listed by it.
+        directories = [d for d in roots.directories if not self.unlisted(d["name"])]
         if not directories:
             return None
         else:
             return _chunks(
-                self.fs,
+                self.handler,
                 directories,
                 maxdepth=self.maxdepth,
                 matched=self.matched,
+                ils_kwargs=self.ils_kwargs,
                 stopping=self.op.cancelling,
             )
 
@@ -99,8 +111,10 @@ class _TreeJobs(_Jobs):
         try:
             return await super().begin(roots, source)
         except NotADirectoryError as e:
-            # The root is a file: its listing's entry, which the walk noted.
+            # The root is a file: its listing's entry, which the walk noted. The
+            # walk has ended, as it would have once listed.
             self.file_root(getattr(e, "entry", None) or {"name": e.args[0]})
+            self.exhausted()
             return []
 
     def fed(self, item: _Listing) -> list[Any]:
@@ -125,36 +139,36 @@ class _TreeJobs(_Jobs):
     def track(self, listing: _Listing) -> None:
         """Count the paths in a part of a directory's listing, for `child_done`.
 
-        A storage may list a directory twice, e.g. as a prefix and as its marker
-        object, maybe in two parts. Each directory counts once, as the walk lists
-        it once. A file is listed once: its name is not kept.
+        The walk yields each subdirectory once, though a storage may list one
+        twice. Each file's entry counts, two of one name, e.g. on Google Drive,
+        as two.
         """
         directory = listing.directory
         if listing.first:
             self.remaining[directory] = 0
-            self.listing[directory] = set()
+            self.listing.add(directory)
 
-        subdirs = self.listing[directory]
         for entry in listing.entries:
             name = entry["name"].rstrip("/")
-            if entry["type"] == "directory":
-                if name in subdirs:
-                    continue
-                subdirs.add(name)
             self.remaining[directory] += 1
             self.parents[name] = directory
+            self.entries[name] = self.entries.get(name, 0) + 1
 
         if listing.last:
-            del self.listing[directory]
+            self.listing.discard(directory)
 
     def child_done(self, path: str) -> str | None:
         """Count a path done, and return its directory if all in it is now done.
 
-        A path done twice, as one listed twice is, counts once.
+        Each entry of a path counts once: a path done more often than listed
+        counts no more.
         """
-        parent = self.parents.pop(path, None)
+        parent = self.parents.get(path)
         if parent is None:
             return None
+        self.entries[path] -= 1
+        if not self.entries[path]:
+            del self.entries[path], self.parents[path]
         self.remaining[parent] -= 1
         return parent if self.finished(parent) else None
 

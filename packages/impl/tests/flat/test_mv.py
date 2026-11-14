@@ -165,8 +165,10 @@ async def test_a_key_its_batch_refused_is_yielded_and_the_others_moved(
     moved, errors = await _collect_with_errors(op)
     assert sorted(m[0] for m in moved) == sorted(p for p in _FILES if p != refused)
     assert [type(e) for e in errors] == [PermissionError]
+    # The deletion's note, then the move's.
     assert errors[0].__notes__ == [
-        f"Deleting {refused!r} failed, once copied: it is in both places."
+        f"Deleting {refused!r} failed.",
+        "Once copied: it is in both places.",
     ]
     assert refused in flat_fs._file_data
     assert (op.state.files_moved, op.state.errors) == (len(_FILES) - 1, 1)
@@ -175,7 +177,13 @@ async def test_a_key_its_batch_refused_is_yielded_and_the_others_moved(
 async def test_a_failed_copy_keeps_its_source(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
         source = entry["name"]
         if source == "data/README.md":
             raise PermissionError(source)
@@ -198,7 +206,13 @@ async def test_cancel_still_deletes_the_keys_copied() -> None:
     _tree(fs)
     copied = []
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
         source = entry["name"]
         await fs._cp_file(source, destination)
         copied.append(source)
@@ -214,9 +228,10 @@ async def test_cancel_still_deletes_the_keys_copied() -> None:
         assert source not in fs._file_data
 
 
-def test_batch_size_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
+async def test_batch_size_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
+    # Read once the handler is open, as the operation starts.
     with pytest.raises(ValueError, match="batch_size"):
-        _mv(flat_fs, "data", "moved", batch_size=0)
+        await _collect_with_errors(_mv(flat_fs, "data", "moved", batch_size=0))
 
 
 _BY_MV_FILE = {"cp_entry": None, "rm_files": None, "batch_size": None}
@@ -307,7 +322,13 @@ async def test_batches_delete_markers_without_copying_them() -> None:
     async def info(path: str) -> dict[str, Any]:
         raise FileNotFoundError(path)
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
         source = entry["name"]
         copied.append(source)
         keys[destination] = keys[source]
@@ -352,7 +373,13 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
     async def info(path: str) -> dict[str, Any]:
         raise FileNotFoundError(path)
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
         source = entry["name"]
         copied.append(source)
         keys[destination] = keys[source]
@@ -391,7 +418,13 @@ async def test_moves_to_another_storage(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
         source = entry["name"]
         await dst._pipe_file(destination, flat_fs._file_data[source].data)
 
@@ -474,3 +507,71 @@ async def test_mv_entry_is_given_the_listings_entries(
     assert sorted((e["name"], e["size"]) for e in flat_fs.entries) == [
         (p, len(p)) for p in _FILES
     ]
+
+
+async def test_renames_by_the_mv_entry_given(flat_fs: SimulatedFileSystem) -> None:
+    _tree(flat_fs)
+    renamed: list[tuple[str, str]] = []
+
+    async def mv_entry(
+        entry: dict[str, Any],
+        destination: str,
+        *,
+        missing: bool = False,
+        parent: Any = None,
+    ) -> None:
+        renamed.append((entry["name"], destination))
+        await flat_fs._mv_file(entry["name"], destination)
+
+    view = FlatView(
+        flat_fs,
+        storage_profile=StorageProfile(implicit_directories=True, renames_files=True),
+    )
+    moved, errors = await _collect_with_errors(
+        _flat_mv(view, view, "data", "moved", mv_entry=mv_entry)
+    )
+    assert errors == []
+    assert sorted(renamed) == sorted(moved)
+    assert len(moved) == len(_FILES)
+
+
+async def test_a_marker_moves_once_its_parent_is_made() -> None:
+    """mv_file is called only where the parent exists: a marker too, nested ones in order."""
+    keys = {"data/x/": b"", "data/x/y/": b"", "data/a.txt": b"a"}
+    events: list[str] = []
+
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
+        for name in sorted(keys):
+            if name.startswith(prefix):
+                yield {"name": name, "size": len(keys[name]), "type": "file"}
+
+    async def info(path: str) -> dict[str, Any]:
+        raise FileNotFoundError(path)
+
+    async def mv_file(source: str, destination: str) -> None:
+        events.append(f"mv {destination}")
+        keys[destination] = keys.pop(source)
+
+    async def makedirs(path: str, exist_ok: bool = False) -> None:
+        events.append(f"mkdir {path}")
+
+    op = _mv(
+        None,
+        "data",
+        "moved",
+        list_prefix=list_prefix,
+        info=info,
+        mv_file=mv_file,
+        dst_info=info,
+        dst_makedirs=makedirs,
+        dst_rm_file=_nothing,
+        concurrency_limit=asyncio.Semaphore(4),
+        # Directories of their own, made before what goes in them.
+        profile=StorageProfile(implicit_directories=False),
+        **_BY_MV_FILE,
+    )
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    # Each marker after its parent made: moved/x/ after moved, moved/x/y/ after moved/x.
+    assert events.index("mv moved/x/") > events.index("mkdir moved")
+    assert events.index("mv moved/x/y/") > events.index("mkdir moved/x")

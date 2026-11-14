@@ -5,7 +5,7 @@
 `_flat_cp` is an alternative to fsspec's recursive ``copy`` for flat storages.
 fsspec's lists every key first, then copies them. `_flat_cp` copies each key
 as soon as the listing gives it. The destination may be another storage, flat
-or a tree: within one, it is the same filesystem given twice.
+or a tree: within one, it is the same handler given twice.
 
 This module depends on `_jobs`, and `jobs` and `paths` of `common`.
 """
@@ -24,21 +24,25 @@ if TYPE_CHECKING:
 
     from fsspec_alt_strategies.states import CpState
 
+    from ..common.handler import StorageHandler, StoragePath
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
+    from .handler import FlatFileOperationHandler
 
 __all__: list[str] = []
 
 
 def _flat_cp(
-    src_fs: Any,
-    dst_fs: Any,
-    path1: str | Sequence[str],
-    path2: str,
+    src: FlatFileOperationHandler,
+    dst: StorageHandler,
+    path1: StoragePath | Sequence[StoragePath],
+    path2: StoragePath,
     *,
     cp_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
+    path1_entry: dict[str, Any] | None = None,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], CpState]:
     """Copy the keys under a prefix, copying as the listing goes on.
 
@@ -52,13 +56,12 @@ def _flat_cp(
     The keys are listed as `_flat_find` lists them, and each is copied by one
     ``cp_entry`` as soon as the listing gives it.
 
-    The destination is described by ``dst_fs`` and its ``storage_profile``,
+    The destination is described by ``dst`` and its ``profile``,
     unknown if it has none, and may be flat or a tree. Within one storage,
-    ``dst_fs`` is ``src_fs``, and ``same_storage`` is True: a path copied onto
+    ``dst`` is ``src``, and ``same_storage`` is True: a path copied onto
     itself, or under itself, is refused. Between two, ``cp_entry`` copies from
-    one to the other, e.g. the router's ``_cross_fs_cp_entry``, and every byte
-    may go through the caller. A path may then go to the same path, or under
-    it.
+    one to the other, by default `transfer._across`, its data through the
+    caller. A path may then go to the same path, or under it.
 
     Unless the profile says it needs none, a directory is made at the
     destination before the first key copied into it, by one ``dst_makedirs``.
@@ -96,7 +99,7 @@ def _flat_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests
-    of their `_flat_glob`. The pages of one recursive ``_ils`` per root, one
+    of their `_flat_glob`. The pages of one ``ils_recursive`` per root, one
     after another, one ``cp_entry`` per key, and one ``dst_makedirs`` per
     destination directory with keys or a marker. A destination refusing to
     overwrite costs a ``dst_info``, a ``dst_rm_file`` and a ``cp_entry`` more
@@ -104,60 +107,73 @@ def _flat_cp(
     source's ``operation_limit`` while it runs, a ``cp_entry`` between two
     storages too.
 
-    The destination's profile's ``parents_required=False``, or
+    The destination's profile's ``parents_required=False`` between two
+    storages, ``copy_parents_required=False`` within one, or
     ``implicit_directories=True``, saves the ``dst_makedirs`` of each directory
     with keys, as their copies create it. ``implicit_directories=True`` saves
-    those of the markers too.
+    those of the markers too. A directory known to exist needs none: the
+    ``dst_info`` of ``path2`` shows it or its parent, and within one storage,
+    ``path1``'s parent exists.
 
-    The primitives are called above by what they do: ``_ils`` is the source's
-    ``_ils``, and ``dst_info``, ``dst_makedirs`` and ``dst_rm_file`` the
-    destination's ``_info``, ``_makedirs`` and ``_rm_file``.
+    ``path1_entry``, the entry of ``path1`` as the caller found it, saves the
+    listing of a single file: it is copied as the entry says.
 
-    ``src_fs`` is the filesystem copied from, and ``dst_fs`` the one copied
-    to, ``src_fs`` again within one storage. ``path1`` is a directory, a file,
-    a glob pattern, or a list of them, as the source's ``_ils`` takes paths.
-    ``cp_entry(entry, destination)`` copies a file: the source's
-    ``_cp_file_entry`` by default, within one storage. ``same_storage`` is
-    whether ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 copies
-    only the keys right in ``path1``.
+    The primitives are named above as the handlers' own: ``ils`` is the
+    source's ``ils_recursive``, and ``dst_info``, ``dst_makedirs`` and
+    ``dst_rm_file`` the destination's ``info``, ``makedirs`` and ``rm_file``.
+
+    ``src`` is the handler copied from, and ``dst`` the one copied
+    to, ``src`` again within one storage. ``path1`` is a directory, a file,
+    a glob pattern, or a list of them, as the source's ``ils`` takes paths.
+    ``cp_entry(entry, destination)`` copies a file: by default, the source's
+    ``cp_file`` within one storage, and `transfer._across` between two.
+    ``same_storage`` is
+    whether ``dst`` is ``src``, unless given. ``maxdepth`` of 1 copies
+    only the keys right in ``path1``. ``ils_kwargs`` go to each of the
+    source's ``ils_recursive``, a pattern's glob's too.
+
+    Within one storage, unless ``cp_entry`` is given, the files go to the
+    source's ``cp_files`` in batches of its ``cp_batch_size``: by default each
+    by ``cp_file``. A file joins a batch once its destination's directory is
+    ready, whatever the directory, and a batch goes once full, or once the walk
+    has ended with no directory left to make.
 
     The operation yields ``(source, destination)`` for each key copied, or an
     error, and its state is a `CpState`. The call raises ValueError if
-    ``maxdepth`` is less than 1, or ``cp_entry`` is missing between two
-    storages. `_flat_mv` does the same, deleting the sources as it goes.
+    ``maxdepth`` is less than 1. `_flat_mv` does the same, deleting the sources as it goes.
     """
     _check_maxdepth(maxdepth)
-    cp_entry, same_storage = _transfer_of(
-        src_fs, dst_fs, cp_entry, same_storage, "cp_entry"
-    )
+    given = cp_entry
+    cp_entry, same_storage = _transfer_of(src, dst, cp_entry, same_storage)
     return _Copy.operation(
-        fs=src_fs,
-        dst_fs=dst_fs,
+        batching=same_storage and given is None,
+        handler=src,
+        dst=dst,
         path1=path1,
         path2=path2,
         same_storage=same_storage,
         maxdepth=maxdepth,
         cp_entry=cp_entry,
+        path1_entry=path1_entry,
+        ils_kwargs=ils_kwargs,
     )
 
 
 class _CopyOrMove(_CopyJobs, _FlatJobs):
     """The jobs of a copy or a move: a directory made where needed, and one per key.
 
-    The keys listed are the source's, ``fs``. A key's job waits for its
+    The keys listed are the source's, ``handler``. A key's job waits for its
     destination directory, when the destination needs it. The keys of one
     directory come apart in the listing, so the directories made are
     remembered, and each is made once. A subclass says how a key goes, in `transfer_file`.
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-
-        # The destination directories made, or tried: their keys need not wait.
-        self.made: set[str] = set()
-
-        # The copies waiting for their destination directory, by that directory.
-        self.after_mkdir: dict[str, list[_Job]] = {}
+    def fed(self, item: dict[str, Any]) -> list[Any]:
+        try:
+            return super().fed(item)
+        except ValueError as e:
+            # A key whose name the destination refuses, e.g. "..": its own error.
+            return [self.refuse_name(item["name"], e)]
 
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
@@ -171,19 +187,15 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
         self.files_found += 1
         target = self.target(name)
         # The entry goes with its copy, so that cp_entry need not ask it.
-        job = _Job("copy", entry, target)
-        self.queue(target.rpartition("/")[0], [job])
+        job = _Job("file", entry, target)
+        self.queue(self.dst.parent(target), [job])
 
     def queue(
-        self, directory: str, copies: list[_Job], *, always: bool = False
+        self, directory: StoragePath, copies: list[_Job], *, always: bool = False
     ) -> None:
-        """Queue copies into a destination directory, made first if needed."""
-        if (
-            not directory
-            or directory in self.made
-            or not (always or self.parents_required)
-        ):
-            self.waiting.extend(copies)
+        """Queue copies into a destination directory, made first if needed: never the root."""
+        if not self.needs_mkdir(directory, always=always):
+            self.release(copies)
             return
 
         if directory not in self.after_mkdir:
@@ -192,18 +204,20 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
 
     def run(self, job: _Job) -> Awaitable[Any]:
         if job.kind == "mkdir":
-            return self.dst_fs._makedirs(job.destination, exist_ok=True)
+            return self.make_directory(job.destination)
         else:
             return self.transfer_file(job.source, job.destination)
 
     @abstractmethod
-    async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
+    async def transfer_file(
+        self, entry: dict[str, Any], destination: StoragePath
+    ) -> None:
         """Copy or move a key, by its entry. An error raised notes its paths, as it is yielded."""
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":
             self.made.add(job.destination)
-            self.waiting.extend(self.after_mkdir.pop(job.destination))
+            self.release(self.after_mkdir.pop(job.destination))
             return []
 
         self.files_done += 1
@@ -213,7 +227,7 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
         if job.kind == "mkdir":
             # The copies still go: each then reports its own failure, if any.
             self.made.add(job.destination)
-            self.waiting.extend(self.after_mkdir.pop(job.destination))
+            self.release(self.after_mkdir.pop(job.destination))
             error.add_note(f"Creating the directory {job.destination!r} failed.")
 
         # A key's error is noted where it happened, in transfer_file.
@@ -227,5 +241,7 @@ class _Copy(_CopyOrMove):
         super().__init__(**kwargs)
         self.cp_entry = cp_entry
 
-    async def transfer_file(self, entry: dict[str, Any], destination: str) -> None:
+    async def transfer_file(
+        self, entry: dict[str, Any], destination: StoragePath
+    ) -> None:
         await self.copy_file(self.cp_entry, entry, destination)

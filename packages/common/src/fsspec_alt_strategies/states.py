@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """The states of the operations several families have, such as a find's.
 
-An operation of each family, e.g. the ``find`` of a ``TreeFileSystem`` and of
-a ``FlatFileSystem``, reports its progress with one state class, which a
-monitor reads. A field that only some of them can count is None in the
-others: e.g. ``directories_listed`` of a ``FlatFileSystem``'s ``find``, which
-lists keys, not directories.
+An operation of each family, e.g. the ``find`` of the tree strategies and of
+the flat ones, reports its progress with one state class, which a monitor
+reads. A field that only some of them can count is None in the others: e.g.
+``directories_listed`` of the flat strategies' ``find``, which lists keys,
+not directories.
 
 This module depends on `monitor`.
 """
@@ -35,8 +35,8 @@ class WalkState(State):
     Attributes
     ----------
     directories_listed : int or None
-        The directories listed so far, those that failed included. None for a
-        ``FlatFileSystem``, which lists no directories.
+        The directories listed so far, those that failed included. None for the
+        flat strategies, which list no directories.
     found : int
         The entries found so far.
     """
@@ -52,8 +52,8 @@ class FindState(State):
     Attributes
     ----------
     directories_listed : int or None
-        The directories listed so far, those that failed included. None for a
-        ``FlatFileSystem``, which lists no directories.
+        The directories listed so far, those that failed included. None for the
+        flat strategies, which list no directories.
     found : int
         The paths found so far.
     """
@@ -69,8 +69,8 @@ class DuState(State):
     Attributes
     ----------
     directories_listed : int or None
-        The directories listed so far, those that failed included. None for a
-        ``FlatFileSystem``, which lists no directories.
+        The directories listed so far, those that failed included. None for the
+        flat strategies, which list no directories.
     files : int
         The files counted so far.
     size : int
@@ -90,8 +90,8 @@ class GlobState(State):
     Attributes
     ----------
     directories_listed : int or None
-        The directories listed so far, those that failed included. None for a
-        ``FlatFileSystem``, which lists no directories.
+        The directories listed so far, those that failed included. None for the
+        flat strategies, which list no directories.
     matched : int
         The paths matched so far.
     """
@@ -111,8 +111,8 @@ class RmState(State):
     files_deleted : int
         The files deleted so far.
     directories_deleted : int or None
-        The directories deleted so far. None for a ``FlatFileSystem``,
-        which deletes no directories.
+        The directories deleted so far. None for the flat
+        strategies, which delete no directories.
     """
 
     files_found: int = 0
@@ -130,10 +130,14 @@ class CpState(State):
         The files found so far. It grows as the walk or the listing goes on.
     files_copied : int
         The files copied so far.
+    roots_copied : int or None
+        The directories copied whole, each by one ``cp_tree``, what is in them
+        neither found nor counted. None unless the storage copies directories so.
     """
 
     files_found: int = 0
     files_copied: int = 0
+    roots_copied: int | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -148,9 +152,9 @@ class MvState(State):
         The files moved so far: copied, and their source deleted.
     directories_moved : int or None
         The source directories deleted so far, once all in them was moved. None
-        for a ``FlatFileSystem``, which deletes no directories.
+        for the flat strategies, which delete no directories.
     roots_renamed : int or None
-        The directories moved whole, each by one ``_mv_tree``, what is in them
+        The directories moved whole, each by one ``mv_tree``, what is in them
         neither found nor counted. None unless the storage moves directories so.
     """
 

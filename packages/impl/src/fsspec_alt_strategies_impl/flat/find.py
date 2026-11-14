@@ -6,7 +6,7 @@
 same paths. fsspec's, and the object stores' own, gather every page of the
 listing before answering. `_flat_find` yields each path as its page arrives.
 
-This module depends on `_keys`, and `operation` and `paths` of `common`.
+This module depends on `_keys`, and `handler`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -23,15 +23,19 @@ from ._keys import _close, _dir, _dirs, _listing, _new
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
+    from ..common.handler import StoragePath
+    from .handler import FlatFileOperationHandler
+
 __all__: list[str] = []
 
 
 def _flat_find(
-    fs: Any,
-    path: str,
+    handler: FlatFileOperationHandler,
+    path: StoragePath,
     *,
     maxdepth: int | None = None,
     withdirs: bool = False,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[dict[str, Any], FindState]:
     """Find the files under a prefix, from one listing streamed as it comes.
 
@@ -55,15 +59,17 @@ def _flat_find(
     Once cancelled, it takes nothing more from the listing. An error from the
     listing ends the operation, raised by its iteration.
 
-    Requests: the pages of one recursive ``_ils`` of ``path``, one after
-    another. One ``_info`` for ``path`` itself, if nothing is under it, or
-    with ``withdirs``, holding a permit of the filesystem's
+    Requests: the pages of one ``ils_recursive`` of ``path``, one after
+    another. One ``info`` for ``path`` itself, if nothing is under it, or
+    with ``withdirs``, holding a permit of the handler's
     ``operation_limit``. The listing holds none.
 
-    ``path`` is the directory searched on ``fs``. Its recursive ``_ils`` lists
+    ``path`` is the directory searched on ``handler``. Its ``ils_recursive`` lists
     every key below a directory, in name order, each key once. ``maxdepth`` of
     1 finds only the files in ``path``, though the listing still lists every
     key under it. ``withdirs`` finds directories too, ``path`` included.
+    ``ils_kwargs`` go to the ``ils_recursive``, as fsspec's ``_find`` passes
+    its own on.
 
     The operation yields the entry of each path found, and its state is a
     `FindState`. The call raises ValueError if ``maxdepth`` is less than 1.
@@ -74,10 +80,11 @@ def _flat_find(
         op: Operation[dict[str, Any], FindState],
     ) -> AsyncGenerator[dict[str, Any]]:
         steps = _find_entries(
-            fs,
+            handler,
             path,
             maxdepth=maxdepth,
             withdirs=withdirs,
+            ils_kwargs=ils_kwargs,
             stopping=op.cancelling,
         )
 
@@ -90,11 +97,12 @@ def _flat_find(
 
 
 async def _find_entries(
-    fs: Any,
+    handler: FlatFileOperationHandler,
     path: str,
     *,
     maxdepth: int | None = None,
     withdirs: bool = False,
+    ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[dict[str, Any]]:
     """The entries under ``path``, as fsspec's ``_find`` finds them.
@@ -104,8 +112,8 @@ async def _find_entries(
     treated as fsspec's ``_find`` treats it:
 
     - missing, it yields nothing;
-    - a file, it yields the file's ``_info`` entry;
-    - a directory, it yields the directory's own ``_info`` entry with
+    - a file, it yields the file's ``info`` entry;
+    - a directory, it yields the directory's own ``info`` entry with
       ``withdirs``, unless stopping.
 
     Once ``stopping`` returns true, it takes no more from the listing. An error
@@ -118,7 +126,7 @@ async def _find_entries(
     # The directories of the key listed last.
     before: list[str] = []
 
-    entries = _listing(fs, prefix)
+    entries = _listing(handler, prefix, ils_kwargs=ils_kwargs)
     try:
         async for entry in entries:
             under = True
@@ -138,10 +146,9 @@ async def _find_entries(
 
     if not root or (under and not withdirs):
         return
-
     try:
-        async with fs.operation_limit:
-            entry = await fs._info(root)
+        async with handler.operation_limit:
+            entry = await handler.info(handler.entry(root))
     except FileNotFoundError:
         return
 

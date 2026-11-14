@@ -5,17 +5,18 @@
 `_tree_find` is an alternative to fsspec's ``_find``, with the same paths.
 fsspec's walks a tree one directory at a time, unless the filesystem lists
 whole trees. `_tree_find` lists the tree as `_tree_walk` does: by one recursive
-``_ils``, or a directory per request, several at a time.
+``ils``, or a directory per request, several at a time.
 
-This module depends on `walk`, and `operation` and `paths` of `common`.
+This module depends on `walk`, and `handler`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
 
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, TypeVar
 
-from fsspec_alt_strategies.states import FindState
+from fsspec_alt_strategies.states import DuState, FindState, GlobState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
@@ -24,12 +25,15 @@ from .walk import _chunks, _Listing
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
+    from ..common.handler import StorageHandler, StoragePath
+    from .handler import TreeFileOperationHandler
+
 __all__: list[str] = []
 
 
 def _tree_find(
-    fs: Any,
-    path: str,
+    handler: TreeFileOperationHandler,
+    path: StoragePath,
     *,
     maxdepth: int | None = None,
     withdirs: bool = False,
@@ -39,12 +43,12 @@ def _tree_find(
 
     It finds the paths fsspec's ``_find`` finds. A missing ``path`` finds
     nothing, and a file finds itself. A directory that fails to list yields its
-    error. With ``maxdepth``, the rest of the tree is still searched. Without,
-    the tree's one recursive listing ends there.
+    error, and the rest of the tree is still searched. Without ``maxdepth``, the
+    tree's one recursive listing broken off is resumed a directory per request.
 
     It yields each path as its directory's listing arrives, so the paths are not
     in order. fsspec's ``_find`` sorts them, by name. A storage listing a
-    directory twice, e.g. as a prefix and as its marker object, yields it twice.
+    directory twice, e.g. as a prefix and as its marker object, yields it once.
 
     It wins over fsspec's ``_find`` on storages that list one directory per
     request, with many directories: their listings overlap. It gains nothing on
@@ -54,18 +58,18 @@ def _tree_find(
     Once cancelled, it lists no new directory, and yields the paths of the
     listings in flight.
 
-    Requests: one recursive ``_ils`` of ``path``, which a storage without a
+    Requests: one ``ils_recursive`` of ``path``, which a storage without a
     recursive listing answers with one per directory. With ``maxdepth``, one
-    ``_ils`` per directory instead, as the filesystem's ``operation_limit``
+    ``ils`` per directory instead, as the handler's ``operation_limit``
     allows. One ``info`` more for ``path`` itself, if a file, or a directory
     with ``withdirs``.
 
-    ``path`` is the directory searched on ``fs``, by its ``_ils`` and ``_info``.
+    ``path`` is the directory searched on ``handler``, by its ``ils`` and ``info``.
     ``maxdepth`` of 1 finds only the files in ``path``. ``withdirs`` finds
-    directories too, ``path`` included. ``ils_kwargs`` go to each ``_ils``, as
+    directories too, ``path`` included. ``ils_kwargs`` go to each ``ils``, as
     fsspec's ``find`` passes its own on.
 
-    The operation yields the ``_ils`` entry of each path found, or the error
+    The operation yields the ``ils`` entry of each path found, or the error
     of a directory that failed to list, and its state is a `FindState`. The call
     raises ValueError if ``maxdepth`` is less than 1.
     """
@@ -76,7 +80,7 @@ def _tree_find(
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         root = _trim(path)
         steps = _find_listings(
-            fs,
+            handler,
             root,
             maxdepth=maxdepth,
             ils_kwargs=ils_kwargs,
@@ -91,13 +95,8 @@ def _tree_find(
                 found = [
                     e for e in listing.entries if withdirs or e["type"] != "directory"
                 ]
-                op.state = state = FindState(
-                    errors=state.errors + (listing.error is not None),
-                    current=listing.directory,
-                    # Depth 0 is the root's own entry: no directory listed.
-                    directories_listed=state.directories_listed
-                    + (listing.depth > 0 and listing.last),
-                    found=state.found + len(found),
+                op.state = state = _listed(
+                    state, listing, found=state.found + len(found)
                 )
 
                 if listing.error is not None:
@@ -109,8 +108,26 @@ def _tree_find(
     return Operation(run, FindState(directories_listed=0))
 
 
+_S = TypeVar("_S", FindState, DuState, GlobState)
+
+
+def _listed(state: _S, listing: _Listing, **counts: int) -> _S:
+    """A state once a part of a listing is out, with ``counts`` its own: its error, and its directory once its last part comes.
+
+    Depth 0 is the root's own entry, which is no directory listed.
+    """
+    return replace(
+        state,
+        errors=state.errors + (listing.error is not None),
+        current=listing.directory,
+        directories_listed=(state.directories_listed or 0)
+        + (listing.depth > 0 and listing.last),
+        **counts,
+    )
+
+
 async def _find_listings(
-    fs: Any,
+    handler: TreeFileOperationHandler,
     path: str,
     *,
     maxdepth: int | None = None,
@@ -138,7 +155,7 @@ async def _find_listings(
     """
     root = _trim(path)
     listings = _chunks(
-        fs,
+        handler,
         root,
         maxdepth=maxdepth,
         descend=descend,
@@ -155,31 +172,34 @@ async def _find_listings(
         except (FileNotFoundError, NotADirectoryError) as e:
             # Only the root's own listing raises them: any later one is yielded.
             if file_root and isinstance(e, NotADirectoryError):
-                async with fs.operation_limit:
-                    entry = await fs._info(root)
+                # The file's entry, as its listing gave it, else asked.
+                entry = getattr(e, "entry", None)
+                if entry is None:
+                    async with handler.operation_limit:
+                        entry = await handler.info(handler.entry(root))
                 yield _Listing(root, 0, [entry])
             return
 
         yield root_listing
         if root_listing.last:
-            async for listing in _root_entry(fs, root, dir_root, stopping):
+            async for listing in _root_entry(handler, root, dir_root, stopping):
                 yield listing
 
         async for listing in listings:
             yield listing
             if listing.directory == root and listing.last:
-                async for entry in _root_entry(fs, root, dir_root, stopping):
-                    yield entry
+                async for own in _root_entry(handler, root, dir_root, stopping):
+                    yield own
 
 
 async def _root_entry(
-    fs: Any,
+    handler: StorageHandler,
     root: str,
     dir_root: bool,
     stopping: Callable[[], object] | None,
 ) -> AsyncGenerator[_Listing]:
     """The root directory's own ``info`` entry, as a listing of depth 0, if asked."""
     if dir_root and not (stopping and stopping()):
-        async with fs.operation_limit:
-            entry = await fs._info(root)
+        async with handler.operation_limit:
+            entry = await handler.info(handler.entry(root))
         yield _Listing(root, 0, [entry])

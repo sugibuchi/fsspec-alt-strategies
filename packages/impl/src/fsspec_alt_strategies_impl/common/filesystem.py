@@ -1,199 +1,268 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""What the filesystem classes of the families share, e.g. `TreeFileSystem`'s.
+"""The filesystem on a handler: fsspec's API, its recursive methods the handler's strategies.
 
-`_BaseFileSystem` holds the two concurrency limits, and moves data through
-file objects: its ``_cat_file``, ``_pipe_file``, ``_get_file`` and
-``_put_file`` open the file with ``open_async``, which a subclass implements.
-Its ``_cp_file`` and ``_mv_file`` ask a path's ``_info``, then copy or move by
-the families' ``_cp_file_entry`` and ``_mv_file_entry``. fsspec's methods on
-many paths, such as ``_cat``, call those on one path ``io_concurrency`` at a
-time.
+`BaseFileSystem` implements fsspec's API on a `FileOperationHandler`. Each
+primitive, e.g. ``_info`` or ``_rm_file``, calls the handler's, on the
+caller's path as the handler verifies it. Its recursive methods, ``_walk``,
+``_find``, ``_du``, ``_glob``, and ``_rm``, ``_copy`` and ``_mv`` when
+recursive, run the handler's strategies, e.g. its ``rm``. It moves data by
+the handler too: its ``_cat_file``, ``_pipe_file``, ``_get_file`` and
+``_put_file`` call the handler's. fsspec's methods on many paths, such as
+``_cat``, call those on one path ``io_concurrency`` at a time.
 
-The functions below it shape the answers and errors of fsspec's methods, as
-the families' classes give them.
+The functions below it shape the answers and errors of fsspec's methods.
 
-This module depends on nothing else in the package.
+This module depends on `operation` and `handler`.
 """
 
 from __future__ import annotations
 
-import asyncio
-import io
 import math
 import os
-from abc import ABCMeta
 from collections.abc import Iterable
+from contextlib import aclosing
 from glob import has_magic
 from typing import TYPE_CHECKING, Any, Self
 
-from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
+from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks, sync
 from fsspec.callbacks import DEFAULT_CALLBACK
 
-from fsspec_alt_strategies.monitor import Monitored
-from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
+from fsspec_alt_strategies.monitor import Call, Monitored
+
+from .operation import _collect_with_monitors, _with_monitors
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    import asyncio
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 
     from fsspec import AbstractFileSystem
     from fsspec.callbacks import Callback
 
+    from .handler import FileOperationHandler, StorageHandler, StoragePath
+
+__all__ = ["BaseFileSystem"]
 
 _MiB = 1024 * 1024
 
 
-class _AbstractFileSystemMeta(type(AsyncFileSystem), ABCMeta):  # type: ignore[misc]
-    """fsspec's metaclass, which caches instances, with ABCMeta's abstract methods.
+class BaseFileSystem(AsyncFileSystem, Monitored):
+    """An async filesystem on a handler, its recursive methods the handler's strategies.
 
-    A filesystem class has fsspec's metaclass already. ABCMeta must join it, so
-    that a subclass missing an abstract method fails at once, when made.
+    Make one on a handler, or give a storage a class of its own below it, so
+    that fsspec makes it from a URL. It implements fsspec's API on its handler, a
+    `FileOperationHandler`: each primitive, e.g. ``_info`` or ``_rm_file``,
+    calls the handler's, on the caller's path as the handler verifies it. It
+    overrides fsspec's ``_walk``, ``_find``, ``_du``, ``_glob``, and ``_rm``,
+    ``_copy`` and ``_mv`` when recursive, with the handler's strategies, e.g.
+    its ``walk``. Their answers are fsspec's, and their failures are raised, a
+    single one as it is, several in an ExceptionGroup.
+
+    What the storage does is the handler's alone: its primitives, its profile,
+    its limits, its strategies and its files. The filesystem keeps it
+    private, so that no caller gets an operation from its strategies: they
+    watch them with a monitor.
+
+    By convention, a storage's class takes its storage options, not a
+    handler: its ``__init__`` makes its handler from them, so that fsspec
+    makes it from a URL or a registry. Its signature names each of the
+    handler's options, as the handler's does, and passes fsspec's on as
+    keywords. It names its ``protocol``, ``root_marker``, ``_strip_protocol``
+    and ``_get_kwargs_from_urls`` as its handler class's ``protocol``,
+    ``root``, ``strip_protocol`` and ``options_from_url``, and overrides
+    nothing else: the rest is the handler's.
+
+    A directory that fails to list is yielded empty by ``_walk``, as fsspec's
+    ``walk`` yields it. ``on_error`` handles every directory's failure, where
+    fsspec's applies it to the root only, as its walk recurses without it.
+
+    Parameters
+    ----------
+    handler : FileOperationHandler
+        The storage's handler.
+    asynchronous : bool, default False
+        Whether the filesystem's caller runs an event loop, as in fsspec.
+    loop : asyncio.AbstractEventLoop, optional
+        The loop of the sync methods, as in fsspec: else fsspec's own.
+    use_listings_cache, listings_expiry_time, max_paths
+        fsspec's options of the listings ``ls`` keeps.
+
+    Raises
+    ------
+    TypeError
+        If given an option it does not name, e.g. one misspelled: fsspec's own
+        constructors ignore it. fsspec's ``batch_size`` is not taken: the
+        handler's ``io_concurrency`` bounds the paths handled at a time.
+
+    See Also
+    --------
+    TreeFileOperationHandler : A handler of a storage with a hierarchical namespace.
+    FlatFileOperationHandler : A handler of a flat storage, such as an object store.
+
+    Examples
+    --------
+    >>> fs = BaseFileSystem(MyHandler("mine"), asynchronous=True)
+    >>> class MyFileSystem(BaseFileSystem):
+    ...     protocol = MyHandler.protocol
+    ...     root_marker = MyHandler.root
+    ...     _strip_protocol = MyHandler.strip_protocol
+    ...     _get_kwargs_from_urls = MyHandler.options_from_url
+    ...
+    ...     def __init__(self, account, **kwargs):
+    ...         super().__init__(MyHandler(account), **kwargs)
+    >>> fs = MyFileSystem("mine")
     """
 
-
-class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemMeta):
-    """An async filesystem with two concurrency limits, moving data through files.
-
-    ``operation_limit`` bounds the requests of the strategies, such as
-    listings, deletions and copies. ``io_limit`` bounds the reads and writes of
-    data: ``open_async`` gives it to the files it opens, as their
-    ``concurrency_limit``. Each is an `asyncio.Semaphore`: the one given as
-    the concurrency, so that several filesystems share it, or else a new one,
-    of the number given.
-
-    ``storage_profile`` tells the strategies what the storage does. It is one
-    for the whole filesystem, and always set: one whose storage is unknown says
-    so, with ``UNKNOWN``. Where a request finds it, e.g. whether an
-    account has a hierarchical namespace, a subclass sets what it knows and
-    overrides ``_load_storage_profile(path)`` too, which may ask the storage at
-    one of the paths the first operation needing it is given. The strategies
-    and the subclass's primitives get it with
-    ``await self._get_storage_profile(paths)``, which loads it once, sets it as
-    ``storage_profile``, and returns it.
-    A storage whose profile differs by path, e.g. per bucket, is several
-    filesystems under a router.
-
-    Each family's class declares the abstract methods its subclasses implement,
-    so that a reader finds them all in one place.
-    """
-
-    storage_profile: StorageProfile = UNKNOWN
-    """What the storage does, for the strategies: unknown, right on any storage, by default.
-
-    A subclass sets what it knows. One overriding ``_load_storage_profile``
-    too has it replaced by the profile `_get_storage_profile` loads.
-    """
-
-    transfer_size: int = 8 * _MiB
-    """The bytes read or written at a time by ``_get_file`` and ``_put_file``."""
+    _handler: FileOperationHandler
+    """The storage's handler, whose primitives and strategies the filesystem calls."""
 
     def __init__(
         self,
-        *args: Any,
-        operation_concurrency: int | asyncio.Semaphore,
-        io_concurrency: int | asyncio.Semaphore,
-        **kwargs: Any,
+        handler: FileOperationHandler,
+        *,
+        asynchronous: bool = False,
+        loop: asyncio.AbstractEventLoop | None = None,
+        use_listings_cache: bool = True,
+        listings_expiry_time: float | None = None,
+        max_paths: int | None = None,
     ) -> None:
-        # A semaphore given is shared. A number makes a new one.
-        if isinstance(operation_concurrency, asyncio.Semaphore):
-            operation_limit = operation_concurrency
-        elif operation_concurrency < 1:
-            raise ValueError(
-                f"operation_concurrency must be at least 1: {operation_concurrency}"
-            )
-        else:
-            operation_limit = asyncio.Semaphore(operation_concurrency)
+        # fsspec's own options, named: fsspec's constructors take any keyword
+        # and ignore those they do not know, so a misspelled option would
+        # change nothing, silently. fsspec's batch_size is not among them:
+        # the handler's io_concurrency bounds the paths handled at a time.
+        super().__init__(
+            asynchronous=asynchronous,
+            loop=loop,
+            use_listings_cache=use_listings_cache,
+            listings_expiry_time=listings_expiry_time,
+            max_paths=max_paths,
+        )
 
-        if isinstance(io_concurrency, asyncio.Semaphore):
-            io_limit = io_concurrency
-        elif io_concurrency < 1:
-            raise ValueError(f"io_concurrency must be at least 1: {io_concurrency}")
-        else:
-            io_limit = asyncio.Semaphore(io_concurrency)
+        self._handler = handler
 
-        super().__init__(*args, **kwargs)
+    def unstrip_protocol(self, name: str) -> str:
+        """A path of the storage as a URL: the handler's."""
+        return self._handler.unstrip_protocol(name)
 
-        # Named apart from a subclass's own members.
-        self._storage_profile_loaded = False
-        self._storage_profile_lock = asyncio.Lock()
-
-        self.operation_concurrency = operation_concurrency
-        self.io_concurrency = io_concurrency
-        self.operation_limit = operation_limit
-        self.io_limit = io_limit
-
-    async def _load_storage_profile(self, path: str) -> StorageProfile:
-        """Find the profile, with a path the storage may be asked at: here, ``storage_profile``.
-
-        A subclass overrides it where the profile is found by a request, e.g.
-        whether an account has a hierarchical namespace. A credential limited
-        to a container may ask that only within the container. ``path`` is one
-        of the paths the operation needing the profile is given, maybe a glob
-        pattern. It tells where to ask, never what the profile is: the profile
-        is one for the whole filesystem.
-
-        `_get_storage_profile` sets what it returns as ``storage_profile``,
-        then never calls it again. One that cannot tell at ``path`` raises: the
-        next path is tried, or the next operation's. Returning ``UNKNOWN``
-        instead sets that for good, which is right on any storage.
-        """
-        return self.storage_profile
-
-    async def _get_storage_profile(self, path: str | Sequence[str]) -> StorageProfile:
-        """``storage_profile``, loaded first by `_load_storage_profile` with one of ``path``.
-
-        ``path`` is the path, or the paths, an operation is given, e.g. a
-        copy's destination. Once loaded, ``storage_profile`` is returned as it
-        is. Until then, each path is tried in turn, until
-        `_load_storage_profile` finds the profile, then set as
-        ``storage_profile``. If it fails at all of them, it raises: a single
-        error as it is, several in an ExceptionGroup. A first call loads it
-        while the others wait, then find it loaded.
-
-        The strategies await it when they start. The subclass's primitives may
-        await it too, with the paths they are given, e.g. a ``_rmdir``
-        depending on whether directories are real.
-        """
-        # Once loaded, no call waits for the lock.
-        if self._storage_profile_loaded:
-            return self.storage_profile
-
-        paths = [path] if isinstance(path, str) else list(path)
-        if not paths:
-            raise ValueError("No path to load the storage profile with")
-        async with self._storage_profile_lock:
-            if self._storage_profile_loaded:
-                return self.storage_profile
-
-            errors: list[Exception] = []
-            for p in paths:
-                try:
-                    profile = await self._load_storage_profile(p)
-                except Exception as e:
-                    errors.append(e)
-                else:
-                    self.storage_profile = profile
-                    self._storage_profile_loaded = True
-                    return profile
-
-        if len(errors) == 1:
-            raise errors[0]
-        else:
-            raise ExceptionGroup("The storage profile could not be loaded", errors)
-
-    def _unwrapped(self) -> AsyncFileSystem:
-        """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
+    def _unwrapped(self) -> AbstractFileSystem:
+        """The filesystem a monitor is told of, in its `Call`: this one. A wrapper names the one it wraps."""
         return self
 
+    # Files, the handler's as they are: open_async_file's for open_async, and
+    # open_file's for the sync open.
+
+    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+        """Open a file whose methods are awaited, as fsspec's ``open_async`` does: the handler's `open_async_file`.
+
+        A file opened to write drops the listings kept, as it opens: the file
+        knows no filesystem.
+        """
+        # The path first: one the handler refuses fails before anything is done.
+        entry = self._handler.entry(path)
+        if kwargs.pop("compression", None):
+            raise ValueError("Compression is not supported by open_async")
+        _check_mode(mode)
+        if mode != "rb":
+            self._drop_listings()
+        return await self._handler.open_async_file(entry, mode, **kwargs)
+
+    def _open(
+        self,
+        path: str,
+        mode: str = "rb",
+        block_size: int | None = None,
+        autocommit: bool = True,
+        cache_options: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Open a file for the sync ``open``: the handler's `open_file`, given the filesystem's loop.
+
+        ``autocommit`` is passed on: within a transaction, the handler's file
+        joins it, if the handler supports transactions. ``block_size`` and
+        ``cache_options`` are passed on where given. A file opened to write
+        drops the listings kept, as `open_async` does.
+        """
+        # The path first: one the handler refuses fails before anything is done.
+        entry = self._handler.entry(path)
+        _check_mode(mode)
+        if mode != "rb":
+            self._drop_listings()
+        if block_size is not None:
+            kwargs["block_size"] = block_size
+        if cache_options is not None:
+            kwargs["cache_options"] = cache_options
+        return self._handler.open_file(
+            entry, mode, loop=self.loop, autocommit=autocommit, **kwargs
+        )
+
+    # fsspec's dircache: listings kept by _ls, for fsspec's own methods and callers.
+
+    async def _ls(
+        self, path: str, detail: bool = True, refresh: bool = False, **kwargs: Any
+    ) -> Any:
+        """List a directory, as fsspec's ``_ls`` does: all of ``_ils``'s entries, or their names.
+
+        As in fsspec's implementations, the listing is kept in ``dircache``
+        once listed whole, and a later ``_ls`` of the path answers from it,
+        unless ``refresh=True``. ``use_listings_cache=False`` keeps none. A
+        listing with other keyword arguments, e.g. a version, is not kept.
+
+        Only ``_ls`` uses the listings kept. The strategies list with ``_ils``,
+        which neither reads nor fills them, so a listing kept never changes
+        what they do. ``_info`` asks the storage, never them. Any change made
+        through the filesystem drops them all, by `_drop_listings`. A change made
+        by another client is not seen until then, or until ``refresh=True`` or
+        ``invalidate_cache()``.
+        """
+        key = self._strip_protocol(path)
+        entries = None if refresh or kwargs else self.dircache.get(key)
+        if entries is None:
+            entries = [entry async for entry in self._ils(path, **kwargs)]
+            if not kwargs:
+                self.dircache[key] = entries
+        return list(entries) if detail else [e["name"] for e in entries]
+
+    def _drop_listings(self) -> None:
+        """Drop all the listings kept: each method changing the storage calls it once it ends, failed or not."""
+        self.dircache.clear()
+
+    def invalidate_cache(self, path: str | None = None) -> None:
+        """Drop the listings kept of ``path``, of what is below it, and of its parents: all, without one."""
+        if path is None:
+            self.dircache.clear()
+        else:
+            path = self._strip_protocol(path)
+            for key in list(self.dircache):
+                below, above = key.startswith(f"{path}/"), path.startswith(f"{key}/")
+                if key == path or below or above or not key:
+                    self.dircache.pop(key, None)
+        super().invalidate_cache(path)
+        self._handler.invalidate_cache(path)  # E.g. a wrapped filesystem's own.
+
     def close(self) -> None:
-        """Release what the filesystem holds: here, nothing.
+        """Release what the filesystem holds: its handler's, by the handler's sync `close`.
 
         fsspec never calls it. A router closes its inner filesystems with it,
-        and ``with`` closes the filesystem it opened. A subclass, or a mixin
-        such as `SyncClientSupport`, releases its own, e.g. a client or
-        threads, and calls this one. It may be called more than once: each
-        releases what is held then.
+        and ``with`` closes the filesystem it opened. It may be called more
+        than once: each releases what is held then.
         """
+        self._handler.close()
+
+    # fsspec's sync methods it leaves to each filesystem: the handler's, awaited on
+    # the filesystem's loop. A handler without them raises NotImplementedError.
+
+    def created(self, path: str) -> Any:
+        """When an item was created, as fsspec's ``created`` answers: the handler's `created`."""
+        return sync(self.loop, self._handler.created, self._handler.entry(path))
+
+    def modified(self, path: str) -> Any:
+        """When an item was last modified, as fsspec's ``modified`` answers: the handler's `modified`."""
+        return sync(self.loop, self._handler.modified, self._handler.entry(path))
+
+    def sign(self, path: str, expiration: int = 100, **kwargs: Any) -> str:
+        """A signed URL of a file, as fsspec's ``sign`` answers: the handler's `sign`."""
+        entry = self._handler.entry(path)
+        return sync(self.loop, self._handler.sign, entry, expiration, **kwargs)
 
     def __enter__(self) -> Self:
         return self
@@ -201,76 +270,362 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    async def _single_file(self, path: str | Sequence[str]) -> bool:
-        """Whether ``path`` names one existing file, with no pattern.
+    async def _single_file(self, path: str | Sequence[str]) -> dict[str, Any] | None:
+        """The entry of the one existing file ``path`` names, with no pattern, else None.
 
         fsspec's ``mv`` of a file that is not recursive copies it, then deletes
         it, never calling ``_mv_file``. The families move such a file with
         their recursive strategy instead, which moves it as a recursive move
-        would: by the storage's rename, where the class uses one.
+        would: by the storage's rename, where the class uses one. A copy goes
+        the same way. The entry goes to the strategy, which then need not list
+        the file to tell what it is.
         """
         if not isinstance(path, str) or has_magic(path) or path.endswith("/"):
-            return False
+            return None
 
         try:
-            entry = await self._info(self._strip_protocol(path))
+            entry = await self._info(path)
         except FileNotFoundError:
-            return False
+            return None
 
-        return entry["type"] != "directory"
+        return entry if entry["type"] != "directory" else None
+
+    # The storage's primitives: the handler's, each on a caller's path, verified by it.
+
+    def _ils(
+        self, path: str, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        """List a directory, or all below it, as an async iterator of entries.
+
+        The entries are as fsspec's ``_ls`` gives them with ``detail``. With
+        ``recursive=True``, all below ``path`` come by the handler's
+        ``ils_recursive``, in its family's order, e.g. a flat handler's by
+        name, narrowed by its ``prefix``.
+        """
+        handler = self._handler
+        entry = handler.entry(path)
+        if recursive:
+            return handler.ils_recursive(entry, **kwargs)
+        else:
+            return handler.ils(entry, **kwargs)
+
+    async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Describe a path, raising FileNotFoundError if there is none."""
+        handler = self._handler
+        return await handler.info(handler.entry(path), **kwargs)
+
+    async def _rm_file(self, path: str, **kwargs: Any) -> None:
+        """Delete a file, as fsspec's ``_rm`` does when not recursive."""
+        try:
+            handler = self._handler
+            await handler.rm_file(handler.entry(path))
+        finally:
+            self._drop_listings()
+
+    async def _rmdir(self, path: str) -> None:
+        """Delete an empty directory: on an object store, a bucket."""
+        try:
+            handler = self._handler
+            await handler.rmdir(handler.entry(path))
+        finally:
+            self._drop_listings()
+
+    async def _makedirs(self, path: str, exist_ok: bool = False) -> None:
+        """Create a directory and its parents, raising FileExistsError unless ``exist_ok``."""
+        try:
+            handler = self._handler
+            await handler.makedirs(handler.verified(path), exist_ok)
+        finally:
+            self._drop_listings()
+
+    async def _mkdir(
+        self, path: str, create_parents: bool = True, **kwargs: Any
+    ) -> None:
+        """Create a directory, as fsspec's local ``mkdir`` does, by the handler's ``makedirs``.
+
+        fsspec's own does nothing. What exists is the handler's to tell: an
+        existing path raises FileExistsError, as ``makedirs`` raises it,
+        while a prefix within a bucket may need nothing made. Without
+        ``create_parents``, a missing parent raises FileNotFoundError, and one
+        that is a file NotADirectoryError: no parent is made.
+        """
+        try:
+            handler = self._handler
+            target = handler.verified(path)
+            if not create_parents and target != handler.root:
+                parent = handler.parent(target)
+                if parent != handler.root:
+                    try:
+                        kind = (await handler.info(handler.entry(parent)))["type"]
+                    except FileNotFoundError:
+                        raise FileNotFoundError(parent) from None
+                    if kind != "directory":
+                        raise NotADirectoryError(parent)
+            await handler.makedirs(target, exist_ok=False)
+        finally:
+            self._drop_listings()
+
+    # fsspec's recursive methods, answered by the handler's strategies.
+
+    async def _walk(
+        self,
+        path: str,
+        maxdepth: int | None = None,
+        topdown: bool = True,
+        on_error: str | Callable[[Exception], Any] = "omit",
+        **kwargs: Any,
+    ) -> AsyncGenerator[tuple[str, Any, Any]]:
+        detail = kwargs.pop("detail", False)
+        root = self._handler.verified(path)
+        walk = self._handler.walk(
+            root,
+            maxdepth=maxdepth,
+            topdown=topdown,
+            # The failed directories' errors, which fsspec's on_error then handles:
+            # its "omit" still yields them empty.
+            on_error="raise" if on_error == "raise" else None,
+            ils_kwargs=kwargs,
+        )
+
+        async with aclosing(
+            _with_monitors(walk, Call(self._unwrapped(), "walk", path))
+        ) as items:
+            try:
+                async for item in items:
+                    if isinstance(item, Exception):
+                        directory = getattr(item, "directory", root)
+                        yield _failed_dir(directory, item, on_error, detail)
+                        continue
+
+                    directory, dirs, files = item
+                    if not detail:
+                        dirs, files = list(dirs), list(files)
+                    yield directory, dirs, files
+            except NotADirectoryError:
+                # fsspec's walk of a file yields the file, under no name.
+                entry = await self._info(root)
+                yield (root, {}, {"": entry}) if detail else (root, [], [""])
+            except OSError as e:
+                # A missing root, or an error raised: fsspec's on_error handles
+                # it as a failure to list the root.
+                yield _failed_dir(root, e, on_error, detail)
+
+    async def _find(
+        self,
+        path: str,
+        maxdepth: int | None = None,
+        withdirs: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        detail = kwargs.pop("detail", False)
+        handler = self._handler
+        entries, _ = await _collect_with_monitors(
+            handler.find(
+                handler.verified(path),
+                maxdepth=maxdepth,
+                withdirs=withdirs,
+                ils_kwargs=kwargs,
+            ),
+            Call(self._unwrapped(), "find", path),
+        )
+        return _answer(entries, detail)
+
+    async def _du(
+        self, path: str, total: bool = True, maxdepth: int | None = None, **kwargs: Any
+    ) -> Any:
+        if kwargs.pop("withdirs", False):
+            return await super()._du(
+                path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
+            )
+
+        handler = self._handler
+        op = handler.du(handler.verified(path), maxdepth=maxdepth, ils_kwargs=kwargs)
+        entries, _ = await _collect_with_monitors(
+            op, Call(self._unwrapped(), "du", path)
+        )
+        return _du_answer(op.state.size, entries, total)
+
+    async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
+        detail = kwargs.pop("detail", False)
+        withdirs = kwargs.pop("withdirs", True)
+        handler = self._handler
+        entries, _ = await _collect_with_monitors(
+            handler.glob(
+                handler.verified(path, strip_only_protocol=True),
+                maxdepth=maxdepth,
+                withdirs=withdirs,
+                ils_kwargs=kwargs,
+            ),
+            Call(self._unwrapped(), "glob", path),
+        )
+        return _answer(entries, detail)
+
+    async def _rm(
+        self,
+        path: str | list[str],
+        recursive: bool = False,
+        batch_size: int | None = None,
+        maxdepth: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        try:
+            if not recursive:
+                await super()._rm(path, recursive, batch_size, maxdepth, **kwargs)
+                return
+
+            _, errors = await _collect_with_monitors(
+                self._handler.rm(_as_given(self._handler, path), maxdepth=maxdepth),
+                Call(self._unwrapped(), "rm", path),
+                kwargs.get("callback"),
+            )
+            _raise(errors, "Deleting")
+        finally:
+            self._drop_listings()
+
+    async def _copy(
+        self,
+        path1: str | list[str],
+        path2: str | list[str],
+        recursive: bool = False,
+        on_error: str | None = None,
+        maxdepth: int | None = None,
+        batch_size: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Copy files, as fsspec's ``copy`` does: with the handler's ``cp`` when recursive.
+
+        A single file goes by the handler's ``cp`` too, recursive or not,
+        which needs not ask it again, as fsspec's does.
+        """
+        try:
+            entry = None
+            if isinstance(path2, str) and not recursive:
+                entry = await self._single_file(path1)
+            if not isinstance(path2, str) or (not recursive and entry is None):
+                await super()._copy(
+                    path1, path2, recursive, on_error, maxdepth, batch_size, **kwargs
+                )
+                return
+            if entry is not None:
+                # As fsspec's copy: a path given, not recursive, raises if missing.
+                on_error = on_error or "raise"
+
+            handler = self._handler
+            _, errors = await _collect_with_monitors(
+                handler.cp(
+                    handler,
+                    _as_given(self._handler, path1),
+                    handler.verified(path2, strip_only_protocol=True),
+                    maxdepth=maxdepth,
+                    path1_entry=entry,
+                ),
+                Call(self._unwrapped(), "copy", path1, path2),
+                kwargs.get("callback"),
+            )
+            _raise(_copy_errors(errors, on_error), "Copying")
+        finally:
+            self._drop_listings()
+
+    async def _mv(
+        self,
+        path1: str | list[str],
+        path2: str,
+        recursive: bool = False,
+        maxdepth: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Move files, as fsspec's ``mv`` does: with the handler's ``mv`` when recursive.
+
+        A single file goes by the handler's ``mv`` too, recursive or not, so
+        that it moves by the handler's ``mv_file``, the storage's rename where
+        it has one.
+        """
+        try:
+            if path1 == path2:
+                return
+
+            entry = None
+            if not recursive:
+                entry = await self._single_file(path1)
+                if entry is None:
+                    # fsspec's own: a copy, then the deletion of its sources.
+                    await self._copy(
+                        path1, path2, recursive, "raise", maxdepth, **kwargs
+                    )
+                    await self._rm(path1, recursive=recursive)
+                    return
+
+            handler = self._handler
+            _, errors = await _collect_with_monitors(
+                handler.mv(
+                    handler,
+                    _as_given(self._handler, path1),
+                    handler.verified(path2, strip_only_protocol=True),
+                    maxdepth=maxdepth,
+                    path1_entry=entry,
+                ),
+                Call(self._unwrapped(), "mv", path1, path2),
+                kwargs.get("callback"),
+            )
+            _raise(errors, "Moving")
+        finally:
+            self._drop_listings()
+
+    # fsspec makes sync methods only from the async ones it knows: _mv and _rmdir are
+    # not. Each awaits the instance's own, so that a subclass's override is the one run.
+
+    def mv(self, path1: str | list[str], path2: str, **kwargs: Any) -> None:
+        return sync(self.loop, self._mv, path1, path2, **kwargs)
+
+    def rmdir(self, path: str) -> None:
+        return sync(self.loop, self._rmdir, path)
 
     async def _cp_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        """Copy a file, as fsspec's ``_cp_file`` does: by ``_cp_file_entry``, with its ``_info``.
+        """Copy a file, as fsspec's ``_cp_file`` does: by the handler's ``cp_file``, with its path alone.
 
-        The strategies call ``_cp_file_entry`` with the entry their listing found.
-        fsspec's own methods, and other callers, know only the path: its entry
-        is asked first. A subclass whose copy needs nothing of the entry may
-        override this too, to save that request.
+        The strategies pass on the entry their listing found. fsspec's own
+        methods, and other callers, know only the path: the handler takes an
+        entry whose keys are unknown, asking the storage only where it needs
+        them.
         """
-        entry = await self._info(path1)
-        await self._cp_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
+        try:
+            handler = self._handler
+            await handler.cp_file(handler.entry(path1), handler.verified(path2))
+        finally:
+            self._drop_listings()
 
     async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
-        """Move a file, as fsspec's ``_mv_file`` does: by ``_mv_file_entry``, with its ``_info``.
+        """Move a file, as fsspec's ``_mv_file`` does: by the handler's ``mv_file``, with its path alone.
 
         As `_cp_file`, for a move.
         """
-        entry = await self._info(path1)
-        await self._mv_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
+        try:
+            handler = self._handler
+            await handler.mv_file(handler.entry(path1), handler.verified(path2))
+        finally:
+            self._drop_listings()
 
     async def _cat_file(
         self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any
     ) -> bytes:
-        """Read a file, or a range of it, through a file of ``open_async``.
+        """Read a file, or a range of it, by the handler's `cat_file`.
 
-        The file's requests each hold a permit of ``io_limit``. A subclass
-        overriding this, or ``_pipe_file``, ``_get_file`` or ``_put_file``, e.g.
-        with one download, holds a permit for each request it sends itself. It
-        holds none while it calls the filesystem's files, which take their own:
-        held around them, it would wait for itself. fsspec's methods on many
-        paths call it at most ``io_concurrency`` at a time, whatever it does.
+        The handler holds the permits of ``io_limit``, as its files or its
+        own requests take them. fsspec's methods on many paths call it at
+        most ``io_concurrency`` at a time.
         """
-        f = await self.open_async(path, "rb", **kwargs)
-        async with f:
-            position = 0
-            if start is not None:
-                position = start if start >= 0 else max(0, f.size + start)
-                await _skip(f, position, self.transfer_size)
-
-            if end is not None:
-                if end < 0:
-                    end = f.size + end
-                return await f.read(max(0, end - position))
-            else:
-                return await f.read()
+        entry = self._handler.entry(path)
+        return await self._handler.cat_file(entry, start=start, end=end, **kwargs)
 
     async def _pipe_file(
         self, path: str, value: bytes, mode: str = "overwrite", **kwargs: Any
     ) -> None:
-        """Write a file whole, through a file of ``open_async``: see `_cat_file` for ``io_limit``."""
-        f = await self.open_async(path, "xb" if mode == "create" else "wb", **kwargs)
-        async with f:
-            await f.write(value)
+        """Write a file whole, by the handler's `pipe_file`: see `_cat_file`."""
+        try:
+            target = self._handler.verified(path)
+            await self._handler.pipe_file(target, value, mode=mode, **kwargs)
+        finally:
+            self._drop_listings()
 
     async def _get_file(
         self,
@@ -279,21 +634,11 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
-        """Copy a file to a local path, through a file of ``open_async``: see `_cat_file` for ``io_limit``."""
-        if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
+        """Copy a file to a local path, by the handler's `get_file`: see `_cat_file`."""
+        if os.path.isdir(lpath):  # noqa: ASYNC240, local files are short next to requests.
             return  # A directory, which fsspec's get makes itself.
-
-        f = await self.open_async(rpath, "rb", **kwargs)
-        async with f:
-            # The bytes, as fsspec's own filesystems tell them to the callback.
-            callback.set_size(f.size)
-
-            # Local writes are short next to a storage's requests, as in fsspec's
-            # own filesystems.
-            with open(lpath, "wb") as local:  # noqa: ASYNC230
-                while chunk := await f.read(self.transfer_size):
-                    local.write(chunk)
-                    callback.relative_update(len(chunk))
+        entry = self._handler.entry(rpath)
+        await self._handler.get_file(entry, lpath, callback=callback, **kwargs)
 
     async def _put_file(
         self,
@@ -303,36 +648,31 @@ class _BaseFileSystem(AsyncFileSystem, Monitored, metaclass=_AbstractFileSystemM
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
-        """Copy a local file to the storage, through a file of ``open_async``: see `_cat_file` for ``io_limit``."""
-        if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
-            return  # A directory: a storage needs none for the files put in it.
-
-        f = await self.open_async(rpath, "xb" if mode == "create" else "wb", **kwargs)
-        async with f:
-            with open(lpath, "rb") as local:  # noqa: ASYNC230
-                callback.set_size(os.fstat(local.fileno()).st_size)
-                while chunk := local.read(self.transfer_size):
-                    await f.write(chunk)
-                    callback.relative_update(len(chunk))
+        """Copy a local file to the storage, by the handler's `put_file`: see `_cat_file`."""
+        try:
+            if os.path.isdir(lpath):  # noqa: ASYNC240, local files are short next to requests.
+                return  # A directory: a storage needs none for the files put in it.
+            target = self._handler.verified(rpath)
+            await self._handler.put_file(
+                lpath, target, mode=mode, callback=callback, **kwargs
+            )
+        finally:
+            self._drop_listings()
 
     # fsspec's methods on many paths call the method on one path for each, up to
-    # batch_size at a time: here by default, io_concurrency. So they bound a
-    # subclass's _cat_file holding no permit, e.g. one download, without
-    # taking a permit around each call, which would wait for itself as
-    # _cat_file says.
+    # batch_size at a time: here by default, io_concurrency. So they bound the
+    # paths in flight, while the handler's permits bound its requests.
 
     def _io_batch_size(self, batch_size: int | None) -> int | None:
-        """The paths handled at a time: the call's, else the instance's, else ``io_concurrency``.
+        """The paths handled at a time: the call's, else ``io_concurrency``.
 
         ``io_concurrency`` given as a semaphore tells no number: fsspec's own
         default then holds, and only the permits bound the requests.
         """
         if batch_size is not None:
             return batch_size
-        if self.batch_size is not None:
-            return self.batch_size  # type: ignore[no-any-return]
-        if isinstance(self.io_concurrency, int):
-            return self.io_concurrency
+        if isinstance(self._handler.io_concurrency, int):
+            return self._handler.io_concurrency
         else:
             return None
 
@@ -528,18 +868,19 @@ def _merge_ranges(
         indices.sort(key=lambda i: (starts[i] or 0, ends[i]))
         members: list[int] = []
         low = high = 0
-        for i in [*indices, None]:
-            if i is not None:
-                start, end = starts[i] or 0, ends[i]
-                assert end is not None
-                end = max(end, start)
+        for index in [*indices, None]:
+            begin = finish = 0
+            if index is not None:
+                begin, known_end = starts[index] or 0, ends[index]
+                assert known_end is not None
+                finish = max(known_end, begin)
                 if (
                     members
-                    and start - high <= max_gap
-                    and max(end, high) - low <= max_block
+                    and begin - high <= max_gap
+                    and max(finish, high) - low <= max_block
                 ):
-                    high = max(high, end)
-                    members.append(i)
+                    high = max(high, finish)
+                    members.append(index)
                     continue
             if members:
                 for m in members:
@@ -550,44 +891,16 @@ def _merge_ranges(
                         max(ends[m] or 0, first) - first,
                     )
                 fetches.append((path, low, high))
-            if i is not None:
-                members, low, high = [i], start, end
+            if index is not None:
+                members, low, high = [index], begin, finish
 
     return fetches, plan  # type: ignore[return-value]
 
 
-def _strip_only_protocol(fs: AbstractFileSystem, path: str | Sequence[str]) -> Any:
-    """A path, or paths, of ``fs`` without its protocol, keeping a trailing "/".
-
-    The strategies take paths without a protocol. A trailing "/" means
-    something to some, e.g. a glob of directories only, or a copy into a directory.
-    """
-    if not isinstance(path, str):
-        return [_strip_only_protocol(fs, p) for p in path]
-    plain = fs._strip_protocol(path)
-    return plain + "/" if path.endswith("/") and not plain.endswith("/") else plain
-
-
-async def _skip(f: Any, start: int, chunk_size: int) -> None:
-    """Move a file just opened to ``start``: by seeking, or else by reading.
-
-    A storage SDK's handle may stream its data, unable to seek. Its bytes up
-    to ``start`` are then read and dropped, a chunk at a time, so that memory
-    stays bounded.
-    """
-    try:
-        if f.seekable():
-            f.seek(start)
-            return
-    except (io.UnsupportedOperation, OSError):
-        pass
-
-    skipped = 0
-    while skipped < start:
-        chunk = await f.read(min(chunk_size, start - skipped))
-        if not chunk:
-            return  # Past the end: the read after answers nothing.
-        skipped += len(chunk)
+def _check_mode(mode: str) -> None:
+    """Refuse a mode `StorageHandler.open_file` does not take, before the handler is asked."""
+    if mode not in ("rb", "wb", "xb"):
+        raise ValueError(f"mode must be 'rb', 'wb' or 'xb': {mode!r}")
 
 
 def _answer(entries: list[dict[str, Any]], detail: bool) -> Any:
@@ -636,3 +949,17 @@ def _failed_dir(
     if callable(on_error):
         on_error(error)
     return (directory, {}, {}) if detail else (directory, [], [])
+
+
+def _as_given(
+    handler: StorageHandler, path: str | Sequence[str]
+) -> StoragePath | list[StoragePath]:
+    """A caller's path, or paths, verified by ``handler`` with only the protocol stripped, as the strategies take them.
+
+    A pattern keeps its wildcards, and a path its trailing "/", which tell the
+    strategies how to place it.
+    """
+    if isinstance(path, str):
+        return handler.verified(path, strip_only_protocol=True)
+    else:
+        return [handler.verified(p, strip_only_protocol=True) for p in path]

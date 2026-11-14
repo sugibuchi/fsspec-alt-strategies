@@ -1,8 +1,7 @@
-"""Tests of `AsyncRoutingFileSystem`, passing each call to the filesystem of its storage."""
+"""Tests of `RoutingFileSystem`, passing each call to the filesystem of its storage."""
 
 from __future__ import annotations
 
-import asyncio
 import io
 import pickle
 from contextlib import nullcontext
@@ -14,10 +13,10 @@ from fsspec.implementations.memory import MemoryFileSystem
 from fsspec.spec import AbstractFileSystem
 
 from fsspec_alt_strategies.monitor import Monitor, monitoring
-from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.router import AsyncRoutingFileSystem
-from fsspec_alt_strategies_impl.wrapper.flat import AsyncFlatWrapper
-from fsspec_alt_strategies_impl.wrapper.tree import AsyncTreeWrapper
+from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
+from fsspec_alt_strategies_impl.router import RoutingFileSystem, RoutingHandler
+from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
+from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -86,16 +85,31 @@ class _File(io.BytesIO):
 
 
 class _Files:
-    """The file objects of the simulated storage a wrapper wraps."""
+    """The file objects of the simulated storage a handler wraps, and its closes counted, sync or async."""
 
     fs: SimulatedFileSystem
     closed = 0
 
-    async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+    async def open_async_file(
+        self, entry: dict[str, Any], mode: str = "rb", **kwargs: Any
+    ) -> Any:
+        path = entry["name"]
         return _Reader(self.fs, path) if "r" in mode else _Writer(self.fs, path)
 
-    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        return _File(self.fs, path, kwargs.get("autocommit", True))
+    def open_file(
+        self,
+        entry: dict[str, Any],
+        mode: str = "rb",
+        *,
+        loop: Any,
+        autocommit: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        return _File(self.fs, entry["name"], autocommit)
+
+    async def aclose(self) -> None:
+        _Files.closed += 1
+        await super().aclose()  # type: ignore[misc]
 
     def close(self) -> None:
         _Files.closed += 1
@@ -108,69 +122,76 @@ class _Plain(SimulatedFileSystem):
         return _Reader(self, path) if "r" in mode else _Writer(self, path)
 
 
-class _Tree(_Files, AsyncTreeWrapper):
+class _TreeHandler(_Files, FsspecTreeHandler):
     pass
 
 
-class _Flat(_Files, AsyncFlatWrapper):
-    def _ils(
-        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
+class _FlatHandler(_Files, FsspecFlatHandler):
+    def ils_recursive(  # type: ignore[override]
+        self, entry: dict[str, Any], *, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            return self.fs._list_prefix(f"{path}/{prefix}" if path else prefix)
-        else:
-            return super()._ils(path, prefix=prefix, **kwargs)
+        path = entry["name"]
+        return self.fs._list_prefix(f"{path}/{prefix}" if path else prefix)
 
 
-_OPTIONS = {"operation_concurrency": 4, "io_concurrency": 2, "asynchronous": True}
+_OPTIONS = {"operation_concurrency": 4, "io_concurrency": 2}
 
 
-class _Router(AsyncRoutingFileSystem):
-    """Paths "lake/<backend>/<path>": a tree, a flat and a plain storage."""
+class _Lake(RoutingHandler):
+    """Paths "lake/<storage>/<path>": a tree, a flat and a plain storage.
+
+    It refuses a path holding ":", and notes each path it checks.
+    """
 
     protocol = "routed"
-    root_marker = ""
-    cachable = False
 
-    def __init__(self, **kwargs: Any) -> None:
-        kwargs.setdefault("asynchronous", True)
-        super().__init__(transfer_concurrency=2, **kwargs)
+    def __init__(self) -> None:
+        super().__init__(transfer_concurrency=2)
         self.tree = SimulatedFileSystem(hierarchical=True, asynchronous=True)
         self.flat = SimulatedFileSystem(asynchronous=True)
         self.plain = _Plain(asynchronous=True)
-        self.makers = {
-            "tree": lambda: _Tree(
+        self.makers: dict[str, Any] = {
+            "tree": lambda: _TreeHandler(
                 self.tree, storage_profile=StorageProfile(), **_OPTIONS
             ),
-            "flat": lambda: _Flat(
+            "flat": lambda: _FlatHandler(
                 self.flat,
                 rm_batch_size=10,
                 storage_profile=StorageProfile(implicit_directories=True),
                 **_OPTIONS,
             ),
-            # A plain async fsspec filesystem, without strategies.
-            "plain": lambda: self.plain,
+            # A plain async fsspec filesystem, wrapped with an unknown profile.
+            "plain": lambda: FsspecTreeHandler(
+                self.plain, storage_profile=UNKNOWN, **_OPTIONS
+            ),
         }
         self.names: dict[int, str] = {}
+        self.checked: list[str] = []
 
-    def _route(self, path: str) -> tuple[AsyncFileSystem, str] | None:
+    def verify_path(self, path: str) -> None:
+        # The path as given, maybe a URL: its names are checked without the protocol.
+        path = self.strip_protocol(path)
+        self.checked.append(path)
+        if ":" in path:
+            raise ValueError(f"A name holds ':': {path!r}")
+
+    def route(self, path: str) -> tuple[Any, str] | None:
         parts = path.split("/", 2)
         if parts[0] != "lake" or len(parts) == 1:
             if parts[0] in ("", "lake"):
                 return None
             raise FileNotFoundError(path)
-        if parts[1] == "":
-            return None
         if parts[1] not in self.makers:
             raise FileNotFoundError(path)
-        fs = self._backend(parts[1], self.makers[parts[1]])
-        self.names[id(fs)] = parts[1]
-        return fs, parts[2] if len(parts) == 3 else ""
+        handler = self.inner(parts[1], self.makers[parts[1]])
+        self.names[id(handler)] = parts[1]
+        return handler, parts[2] if len(parts) == 3 else ""
 
-    def _outer(self, fs: AsyncFileSystem, path: str) -> str:
-        return f"lake/{self.names[id(fs)]}/{path}".rstrip("/")
+    def outer(self, handler: Any, path: str) -> str:
+        return f"lake/{self.names[id(handler)]}/{path}".rstrip("/")
 
-    async def _roots(self, path: str) -> list[dict[str, Any]]:
+    async def roots(self, entry: dict[str, Any]) -> list[dict[str, Any]]:
+        path = entry["name"]
         if path == "":
             names = ["lake"]
         elif path == "lake":
@@ -179,27 +200,50 @@ class _Router(AsyncRoutingFileSystem):
             raise FileNotFoundError(path)
         return [{"name": n, "size": 0, "type": "directory"} for n in names]
 
-    def backend(self, name: str) -> Any:
-        return self._route(f"lake/{name}/x")[0]  # type: ignore[index]
+
+class _Router(RoutingFileSystem):
+    """A router of a lake, made from its lake's class, as from storage options."""
+
+    protocol = _Lake.protocol
+    root_marker = _Lake.root
+    _strip_protocol = _Lake.strip_protocol
+    cachable = False  # Each test has a lake of its own.
+
+    def __init__(self, lake: type[_Lake] = _Lake, **kwargs: Any) -> None:
+        super().__init__(lake(), **kwargs)
 
 
 _FILES = ["data/a/1.txt", "data/a/2.txt", "data/b/3.txt"]
 
 
-def _router(**kwargs: Any) -> _Router:
-    router = _Router(**kwargs)
-    for sim in (router.tree, router.flat, router.plain):
-        for path in _FILES:
+def _router(
+    lake: type[_Lake] = _Lake, *, asynchronous: bool = True, filled: bool = True
+) -> Any:
+    """A router on a lake of ``lake``'s class, its three storages holding `_FILES` if ``filled``.
+
+    Its handler's storages are reached as ``router.tree``, ``router.flat`` and
+    ``router.plain`` too, for the tests.
+    """
+    router = _Router(lake, asynchronous=asynchronous)
+    for name in ("tree", "flat", "plain"):
+        sim = getattr(router.handler, name)
+        setattr(router, name, sim)
+        for path in _FILES if filled else ():
             sim.add_file(path, path.encode())
     return router
 
 
+def _backend(router: Any, name: str) -> Any:
+    """The filesystem the router made for a storage, routing to it."""
+    return router._route(f"lake/{name}/x")[0]
+
+
 @pytest.fixture
-def router() -> _Router:
+def router() -> Any:
     return _router()
 
 
-def _reset(router: _Router) -> None:
+def _reset(router: Any) -> None:
     for sim in (router.tree, router.flat, router.plain):
         sim.reset_stats()
 
@@ -235,24 +279,24 @@ async def test_above_the_storages_lists_the_roots(router: _Router) -> None:
     assert await router._exists("lake/tree")
 
 
-class _Stripping(_Router):
-    """A router whose path conversion drops a trailing "/"."""
+class _Stripping(_Lake):
+    """A lake whose path conversion drops a trailing "/"."""
 
-    def _route(self, path: str) -> tuple[AsyncFileSystem, str] | None:
-        target = super()._route(path)
+    def route(self, path: str) -> tuple[Any, str] | None:
+        target = super().route(path)
         return target and (target[0], target[1].rstrip("/"))
 
 
 def test_a_trailing_slash_is_kept_on_the_inner_path() -> None:
-    router = _Stripping()
+    router = _router(_Stripping)
     assert router._target("lake/tree/data/")[1] == "data/"  # type: ignore[index]
     assert router._target("lake/tree/data")[1] == "data"  # type: ignore[index]
     assert router._target("lake/tree/")[1] == ""  # type: ignore[index]
 
 
 async def test_a_call_passed_on_keeps_the_slash() -> None:
-    router = _Stripping()
-    tree = router.backend("tree")
+    router = _router(_Stripping)
+    tree = _backend(router, "tree")
     given: list[str] = []
 
     async def copy(path1: str, path2: str, *args: Any, **kwargs: Any) -> None:
@@ -271,7 +315,7 @@ async def test_a_file_goes_into_a_missing_dir_ending_in_a_slash(
     method: str, source: str, destination: str, form: str
 ) -> None:
     # Within a storage and across two, as fsspec's copy: never a file "new".
-    router = _Stripping()
+    router = _router(_Stripping)
     for sim in (router.tree, router.flat, router.plain):
         sim.add_file("data/a/1.txt", b"1")
     path = {
@@ -285,13 +329,13 @@ async def test_a_file_goes_into_a_missing_dir_ending_in_a_slash(
     assert "new" not in sim._file_data
 
 
-class _RootDescribing(_Router):
-    async def _root_info(self, path: str) -> dict[str, Any]:
-        return {"name": path, "size": 0, "type": "directory", "owner": "me"}
+class _RootDescribing(_Lake):
+    async def root_info(self, entry: dict[str, Any]) -> dict[str, Any]:
+        return {**entry, "size": 0, "type": "directory", "owner": "me"}
 
 
 async def test_info_above_the_storages_is_the_root_info() -> None:
-    router = _RootDescribing()
+    router = _router(_RootDescribing)
     assert (await router._info("routed://"))["owner"] == "me"
     assert (await router._info("lake"))["owner"] == "me"
     assert await router._isdir("lake")
@@ -315,10 +359,28 @@ async def test_changes_above_the_storages_are_refused(router: _Router) -> None:
         await router._makedirs("lake")
 
 
-async def test_a_sync_filesystem_is_refused(router: _Router) -> None:
-    router.makers["memory"] = MemoryFileSystem
-    with pytest.raises(TypeError, match="SyncTreeWrapper"):
+async def test_a_filesystem_routed_to_is_refused(router: _Router) -> None:
+    router.handler.makers["memory"] = MemoryFileSystem
+    with pytest.raises(TypeError, match="FsspecTreeHandler"):
         await router._info("lake/memory/x")
+
+
+async def test_each_path_is_checked_by_the_router_then_the_storage() -> None:
+    class Strict(_TreeHandler):
+        def verify_path(self, path: str) -> None:
+            if path.endswith(".tmp"):
+                raise ValueError(f"No temporary file here: {path!r}")
+
+    router = _router()
+    router.handler.makers["tree"] = lambda: Strict(
+        router.tree, storage_profile=StorageProfile(), **_OPTIONS
+    )
+    assert await router._cat_file("lake/tree/data/a/1.txt") == b"data/a/1.txt"
+    assert "lake/tree/data/a/1.txt" in router.handler.checked
+    with pytest.raises(ValueError, match="holds ':'"):
+        await router._info("lake/tree/a:b")
+    with pytest.raises(ValueError, match="temporary"):
+        await router._info("lake/tree/x.tmp")
 
 
 # The primitives, each the storage's own.
@@ -345,7 +407,7 @@ async def test_the_primitives_are_forwarded(router: _Router, tmp_path: Path) -> 
 
     # The simulated storage moves no local files: the calls are recorded.
     moved: list[tuple[str, ...]] = []
-    tree = router.backend("tree")
+    tree = _backend(router, "tree")
 
     async def get_file(rpath: str, lpath: str, **kwargs: Any) -> None:
         moved.append(("get", rpath, lpath))
@@ -367,7 +429,7 @@ async def test_the_primitives_are_forwarded(router: _Router, tmp_path: Path) -> 
 
 
 def test_the_sync_methods_fsspec_does_not_make(router: _Router) -> None:
-    sync_router = _Router(asynchronous=False)
+    sync_router = _router(asynchronous=False, filled=False)
     sync_router.tree.add_file("x/1.txt", b"1")
     sync_router.tree.add_dir("empty")
     sync_router.rmdir("lake/tree/empty")
@@ -376,7 +438,7 @@ def test_the_sync_methods_fsspec_does_not_make(router: _Router) -> None:
 
 
 def test_created_modified_and_sign_are_the_storages(router: _Router) -> None:
-    tree = router.backend("tree")
+    tree = _backend(router, "tree")
     tree.created = lambda path: ("created", path)
     tree.modified = lambda path: ("modified", path)
     tree.sign = lambda path, expiration=100: f"signed {path} {expiration}"
@@ -511,54 +573,47 @@ async def test_a_list_across_storages_goes_into_the_destination(
     assert "other/b/4.txt" in router.tree._file_data
 
 
-class _ServerCopying(_Router):
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+class _ServerCopying(_Lake):
+    def __init__(self) -> None:
+        super().__init__()
         self.server_copies: list[tuple[str, str]] = []
         # The size of each entry handed over, which a server copy may need.
         self.sizes: dict[str, int] = {}
 
-    async def _cross_fs_cp_entry(
-        self,
-        src_fs: AsyncFileSystem,
-        src_entry: dict[str, Any],
-        dest_fs: AsyncFileSystem,
-        dest_path: str,
-    ) -> None:
-        src_path = src_entry["name"]
+    async def cp_across(self, src: Any, entry: Any, dst: Any, path: Any) -> None:
+        src_path = entry["name"]
         if src_path.endswith("3.txt"):
             # e.g. not possible for this one: streamed.
-            await super()._cross_fs_cp_entry(src_fs, src_entry, dest_fs, dest_path)
+            await super().cp_across(src, entry, dst, path)
             return
-        self.server_copies.append((src_path, dest_path))
-        self.sizes[src_path] = src_entry["size"]
-        data = src_fs.fs._file_data[src_path].data  # type: ignore[attr-defined]
-        dest_fs.fs.add_file(dest_path, data)  # type: ignore[attr-defined]
+        self.server_copies.append((src_path, path))
+        self.sizes[src_path] = entry["size"]
+        dst.fs.add_file(path, src.fs._file_data[src_path].data)
 
 
 async def test_copy_across_storages_tries_the_server_first() -> None:
-    router = _ServerCopying()
+    router = _router(_ServerCopying, filled=False)
     for path in _FILES:
         router.tree.add_file(path, path.encode())
     await router._copy("lake/tree/data", "lake/flat/copied", recursive=True)
-    assert sorted(router.server_copies) == [
+    assert sorted(router.handler.server_copies) == [
         ("data/a/1.txt", "copied/a/1.txt"),
         ("data/a/2.txt", "copied/a/2.txt"),
     ]
     # Each entry as the source's listing gave it, with its size.
-    assert router.sizes == {"data/a/1.txt": 12, "data/a/2.txt": 12}
+    assert router.handler.sizes == {"data/a/1.txt": 12, "data/a/2.txt": 12}
     assert router.tree.stats.calls["read"] == 1
     assert router.flat.stats.calls["write"] == 1
     assert len(router.flat._file_data) == 3
 
 
 async def test_maxdepth_across_storages_runs_the_strategy() -> None:
-    router = _ServerCopying()
+    router = _router(_ServerCopying, filled=False)
     for path in [*_FILES, "data/top.txt"]:
         router.tree.add_file(path, path.encode())
     await router._copy("lake/tree/data", "lake/flat/copied", recursive=True, maxdepth=1)
-    # Each file by _cross_fs_cp_entry, which fsspec's own copy never calls.
-    assert router.server_copies == [("data/top.txt", "copied/top.txt")]
+    # Each file by cp_across, which fsspec's own copy never calls.
+    assert router.handler.server_copies == [("data/top.txt", "copied/top.txt")]
     assert sorted(router.flat._file_data) == ["copied/top.txt"]
 
     await router._mv("lake/tree/data", "lake/flat/moved", recursive=True, maxdepth=1)
@@ -567,7 +622,7 @@ async def test_maxdepth_across_storages_runs_the_strategy() -> None:
     assert sorted(router.tree._file_data) == sorted(_FILES)
 
 
-async def test_copy_from_a_plain_storage_is_fsspecs(router: _Router) -> None:
+async def test_copy_from_a_wrapped_storage_runs_the_tree_copy(router: _Router) -> None:
     await router._copy("lake/plain/data", "lake/tree/copied", recursive=True)
     assert router.tree._file_data["copied/a/1.txt"].data == b"data/a/1.txt"
     assert router.plain.stats.calls["read"] == 3
@@ -633,7 +688,8 @@ async def test_monitors_see_the_router_in_via(router: _Router) -> None:
         await router._copy("lake/tree/data", "lake/flat/copied", recursive=True)
     find, walk, copy = monitor.calls
     assert (find.method, find.path, find.via) == ("find", "data", (router,))
-    assert find.fs is router.tree
+    # The routed storage's filesystem, the router made on its handler.
+    assert find.fs is _backend(router, "tree")
     assert (walk.method, walk.via) == ("walk", (router,))
     # A copy across storages is the router's own call.
     assert (copy.fs, copy.method, copy.path, copy.via) == (
@@ -690,27 +746,50 @@ async def test_open_async_takes_no_part_in_the_transaction(router: _Router) -> N
 
 
 def test_close_closes_the_storages_made(router: _Router) -> None:
-    router.backend("tree")
-    router.backend("flat")
+    _backend(router, "tree")
+    _backend(router, "flat")
     before = _Files.closed
     router.close()
     assert _Files.closed == before + 2
-    assert router._backends == {}
+    assert router._storages == {}
+    # Made again by the next call.
+    assert _backend(router, "tree") is not None
 
 
-def test_pickling_keeps_the_arguments(router: _Router) -> None:
-    router.backend("tree")
+async def test_the_handlers_aclose_closes_the_storages_made(
+    router: _Router,
+) -> None:
+    _backend(router, "tree")
+    before = _Files.closed
+    await router.handler.aclose()
+    assert _Files.closed == before + 1
+
+
+def test_pickling_keeps_the_arguments() -> None:
+    # Made again from its arguments, as fsspec pickles any filesystem.
+    router = _Router(asynchronous=True)
+    _backend(router, "tree")
     copy = pickle.loads(pickle.dumps(router))
     assert type(copy) is _Router
-    assert copy._backends == {}
-    assert copy.transfer_concurrency == router.transfer_concurrency
+    assert type(copy.handler) is _Lake
+    assert copy._storages == {}
+    assert copy.handler.transfer_concurrency == router.handler.transfer_concurrency
 
 
 def test_transfer_concurrency_is_checked() -> None:
     with pytest.raises(ValueError, match="transfer_concurrency"):
-        AsyncRoutingFileSystem.__init__(  # type: ignore[misc]
-            object.__new__(_Router), transfer_concurrency=0
-        )
+        RoutingHandler.__init__(object.__new__(_Lake), transfer_concurrency=0)
+
+
+def test_a_router_needs_a_handler() -> None:
+    with pytest.raises(TypeError, match="handler"):
+        RoutingFileSystem()  # type: ignore[call-arg]
+
+
+def test_a_router_refuses_an_option_not_named() -> None:
+    # fsspec's own constructors would ignore it, silently.
+    with pytest.raises(TypeError, match="batch_size"):
+        RoutingFileSystem(_Lake(), batch_size=2)  # type: ignore[call-arg]
 
 
 # Every public method of fsspec is either passed on, or inherited on purpose.
@@ -736,7 +815,6 @@ _ROUTERS_OWN = {
     "_ls_from_cache", "_parent", "_process_limits", "_strip_protocol",
     "clear_instance_cache", "current", "end_transaction", "from_dict", "from_json",
     "get_mapper", "start_transaction", "to_dict", "to_json", "transaction_type",
-    "unstrip_protocol",
 }  # fmt: skip
 _INHERITED = _MIRRORED | _BUILT_ON_PRIMITIVES | _ROUTERS_OWN
 
@@ -747,7 +825,7 @@ def _public(cls: type) -> set[str]:
 
 def test_every_fsspec_method_is_passed_on_or_inherited_on_purpose() -> None:
     methods = _public(AbstractFileSystem) | _public(AsyncFileSystem)
-    passed_on = set(vars(AsyncRoutingFileSystem))
+    passed_on = set(vars(RoutingFileSystem))
     assert methods - passed_on - _INHERITED == set()
     assert not passed_on & _INHERITED
 
@@ -773,9 +851,9 @@ async def test_cat_ranges_gives_each_storage_its_ranges(router: _Router) -> None
         data[s:e] for s, e in zip(all_starts[:-1], all_ends[:-1], strict=True)
     ]
     assert isinstance(out[-1], FileNotFoundError)
-    # The families' filesystems merge their ten ranges; the plain one reads each.
-    assert router.tree.stats.calls == router.flat.stats.calls == {"read": 1}
-    assert router.plain.stats.calls == {"read": 10}
+    # Each storage's filesystem merges its ten ranges, the wrapped one's too.
+    for sim in (router.tree, router.flat, router.plain):
+        assert sim.stats.calls == {"read": 1}
     with pytest.raises(FileNotFoundError):
         await router._cat_ranges(paths, all_starts, all_ends, on_error="raise")
 
@@ -784,78 +862,190 @@ async def test_cat_ranges_gives_each_storage_its_ranges(router: _Router) -> None
 async def test_transfers_across_storages_load_each_sides_profile_with_its_path(
     router: _Router, move: bool
 ) -> None:
-    # The source's, for its family, and the destination's, which its jobs read.
-    loaded: list[tuple[str, Any]] = []
+    # The destination's, which its jobs read, loaded by its handler as it
+    # opens. The tree source's too, for its listing's order: its family is its
+    # handler's class's.
+    loaded: list[str] = []
     for name in ("tree", "flat"):
-        fs = router.backend(name)
-        original = fs._get_storage_profile
+        fs = _backend(router, name)._handler
+        original = fs.load_profile
 
-        async def note(path: Any, name: str = name, original: Any = original) -> Any:
-            loaded.append((name, path))
-            return await original(path)
+        async def note(name: str = name, original: Any = original) -> Any:
+            loaded.append(name)
+            return await original()
 
-        fs._get_storage_profile = note
+        fs.load_profile = note
     method = router._mv if move else router._copy
     await method("lake/tree/data", "lake/flat/moved", recursive=True)
-    assert loaded[:2] == [("tree", "data"), ("flat", "moved")]
+    assert sorted(loaded) == ["flat", "tree"]
 
 
-# What a subclass may leave out, and what it may hold.
+# What a handler may leave out, a sync router, and routers nested.
 
 
-class _EveryPathRoutes(AsyncRoutingFileSystem[SimulatedFileSystem]):
-    """Paths "<backend>/<path>", each naming its storage: none is above them."""
+class _Everywhere(RoutingHandler):
+    """Paths "<storage>/<path>", each naming its storage: none is above them."""
 
-    protocol = "everywhere"
-    root_marker = ""
-    cachable = False
+    def __init__(self, *, asynchronous: bool = True) -> None:
+        super().__init__(transfer_concurrency=2)
+        self.asynchronous = asynchronous
+        self.made: list[Any] = []
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(transfer_concurrency=2, **kwargs)
-        self.made: list[SimulatedFileSystem] = []
+    def verify_path(self, path: str) -> None:
+        """Nothing: any path names its storage."""
 
-    def _route(self, path: str) -> tuple[SimulatedFileSystem, str]:
+    def route(self, path: str) -> tuple[Any, str]:
         name, _, inner = path.partition("/")
-        return self._backend(name, self._make), inner
+        if not name:
+            raise FileNotFoundError(path)
+        return self.inner(name, self._make), inner
 
-    def _make(self) -> SimulatedFileSystem:
-        fs = SimulatedFileSystem(
-            hierarchical=True, asynchronous=self.asynchronous, loop=self.loop
-        )
-        self.made.append(fs)
-        return fs
+    def _make(self) -> FsspecTreeHandler:
+        sim = SimulatedFileSystem(hierarchical=True, asynchronous=self.asynchronous)
+        handler = FsspecTreeHandler(sim, storage_profile=UNKNOWN, **_OPTIONS)
+        self.made.append(handler)
+        return handler
 
-    def _outer(self, fs: SimulatedFileSystem, path: str) -> str:
-        return f"s{self.made.index(fs)}/{path}".rstrip("/")
+    def outer(self, handler: Any, path: str) -> str:
+        return f"s{self.made.index(handler)}/{path}".rstrip("/")
 
 
 async def test_a_router_whose_every_path_routes_needs_no_roots() -> None:
-    router = _EveryPathRoutes(asynchronous=True)
+    router = RoutingFileSystem(_Everywhere(), asynchronous=True)
     with pytest.raises(FileNotFoundError):
-        await router._roots("")
+        await router._ls("", detail=False)
     fs, _ = router._route("s0/x.txt")
-    fs.add_file("x.txt", b"x")
+    fs._handler.fs.add_file("x.txt", b"x")  # type: ignore[attr-defined]
     assert await router._cat_file("s0/x.txt") == b"x"
     assert await router._ls("s0", detail=False) == ["s0/x.txt"]
 
 
-async def test_backends_loop_of_an_async_router() -> None:
-    router = _EveryPathRoutes(asynchronous=True)
-    assert router.backends_loop is None
-    router._route("s0/x.txt")
-    # The loop running when the first inner filesystem was made.
-    assert router.backends_loop is asyncio.get_running_loop()
-    router.close()
-    assert router.backends_loop is None
-
-
-def test_backends_loop_of_a_sync_router() -> None:
-    router = _EveryPathRoutes(asynchronous=False)
-    # Made from the calling thread, e.g. by a sync open: the router's own loop.
+def test_a_sync_router_runs_its_storages_on_its_loop() -> None:
+    router = RoutingFileSystem(_Everywhere(asynchronous=False), asynchronous=False)
     fs, _ = router._route("s0/x.txt")
-    assert router.backends_loop is router.loop
-    # Made in the router's mode, its sync methods run on that loop.
-    fs.add_file("x.txt", b"x")
+    # Made in the router's mode, the storage's filesystem runs on its loop.
+    assert fs.loop is router.loop
+    fs._handler.fs.add_file("x.txt", b"x")  # type: ignore[attr-defined]
     with router.open("s0/x.txt", "rb") as f:
         assert f.read() == b"x"
     assert router.cat_file("s0/x.txt") == b"x"
+
+
+class _Region(RoutingHandler):
+    """Paths "<region>/<lake path>": each region a lake, its own router."""
+
+    def __init__(self) -> None:
+        super().__init__(transfer_concurrency=2)
+        self.checked: list[str] = []
+        self.lakes: dict[str, _Lake] = {}
+
+    def verify_path(self, path: str) -> None:
+        self.checked.append(path)
+        if path.startswith("/"):
+            raise ValueError(f"Not a region's path: {path!r}")
+
+    def route(self, path: str) -> tuple[Any, str] | None:
+        region, _, inner = path.partition("/")
+        if not region:
+            return None
+        if region not in ("eu", "us"):
+            raise FileNotFoundError(path)
+        lake = self.inner(region, _Lake)
+        self.lakes[region] = lake
+        return lake, inner
+
+    def outer(self, handler: Any, path: str) -> str:
+        region = next(r for r, lake in self.lakes.items() if lake is handler)
+        return f"{region}/{path}".rstrip("/")
+
+    async def roots(self, entry: dict[str, Any]) -> list[dict[str, Any]]:
+        if entry["name"] != "":
+            raise FileNotFoundError(entry["name"])
+        return [{"name": r, "size": 0, "type": "directory"} for r in ("eu", "us")]
+
+
+async def test_a_router_may_route_to_another() -> None:
+    router = RoutingFileSystem(_Region(), asynchronous=True)
+    assert await router._ls("", detail=False) == ["eu", "us"]
+    # Above the storages of the inner router: its roots, named by the outer's paths.
+    assert await router._ls("eu/lake", detail=False) == [
+        "eu/lake/tree",
+        "eu/lake/flat",
+        "eu/lake/plain",
+    ]
+    assert (await router._info("eu/lake/tree"))["type"] == "directory"
+
+    eu = router.handler.lakes["eu"]
+    eu.tree.add_file("data/x.txt", b"x")
+    assert await router._find("eu/lake/tree") == ["eu/lake/tree/data/x.txt"]
+    assert await router._cat_file("eu/lake/tree/data/x.txt") == b"x"
+    # Each router checks its own path: the outer one, then the inner one.
+    assert "eu/lake/tree/data/x.txt" in router.handler.checked
+    assert "lake/tree/data/x.txt" in eu.checked
+    with pytest.raises(ValueError, match="holds ':'"):
+        await router._info("eu/lake/tree/a:b")
+
+
+async def test_a_copy_between_storages_of_two_nested_routers() -> None:
+    router = RoutingFileSystem(_Region(), asynchronous=True)
+    router._route("eu/lake/tree")
+    router._route("us/lake/flat")
+    router.handler.lakes["eu"].tree.add_file("data/x.txt", b"x")
+    await router._copy("eu/lake/tree/data", "us/lake/flat/copied", recursive=True)
+    us = router.handler.lakes["us"]
+    assert us.flat._file_data["copied/x.txt"].data == b"x"
+
+
+# Patterns and measures spanning storages.
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "lake/t*/data/a/*.txt",
+        "*/f*/data/*/1.txt",
+        "lake/[tp]*/data/b/*",
+        "lake/*/data/a/",
+        "lake/*/data/**/*.txt",
+    ],
+)
+async def test_a_pattern_spanning_storages_answers_as_fsspec(
+    router: _Router, pattern: str
+) -> None:
+    expected = await AsyncFileSystem._glob(router, pattern)
+    _reset(router)
+    assert await router._glob(pattern) == expected
+
+
+async def test_a_pattern_spanning_storages_lists_only_those_it_can_match(
+    router: _Router,
+) -> None:
+    _reset(router)
+    found = await router._glob("lake/t*/data/a/*.txt")
+    assert found == ["lake/tree/data/a/1.txt", "lake/tree/data/a/2.txt"]
+    # The roots matched, then the tree's own glob: the others are never listed.
+    assert router.tree.stats.calls
+    assert not router.flat.stats.calls and not router.plain.stats.calls
+
+
+async def test_du_above_the_storages_is_each_storages_own(router: _Router) -> None:
+    expected = await AsyncFileSystem._du(router, "lake", total=False)
+    _reset(router)
+    assert await router._du("lake", total=False) == expected
+    assert await router._du("") == sum(expected.values())
+    # Each storage's du sums its listing's sizes: no request per file.
+    for sim in (router.tree, router.flat, router.plain):
+        assert "info" not in sim.stats.calls
+
+
+async def test_the_handlers_aclose_drops_the_filesystems_made_on_them(
+    router: _Router,
+) -> None:
+    _backend(router, "tree")
+    _backend(router, "flat")
+    await router.handler.aclose()
+    # Routed again: a filesystem made anew, and those made before the close dropped.
+    _backend(router, "tree")
+    assert len(router._storages) == 1
+    (storage,) = router._storages.values()
+    assert storage.closes == (router.handler.closes,)

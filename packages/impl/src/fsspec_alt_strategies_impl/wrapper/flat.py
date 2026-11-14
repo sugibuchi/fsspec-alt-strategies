@@ -1,98 +1,106 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""Existing filesystems, wrapped as a `FlatFileSystem`.
+"""Existing filesystems, wrapped as a `FlatFileOperationHandler`.
 
-`AsyncFlatWrapper` and `SyncFlatWrapper` wrap an async or a sync filesystem,
-so that its recursive methods are the flat strategies.
+`FsspecFlatHandler` wraps an fsspec filesystem, async or sync, so that a
+`FileSystemWrapper` on it answers its recursive methods by the flat
+strategies.
 
 fsspec has no listing by prefix in pages, which the flat strategies list with.
-A flat wrapper's recursive ``_ils`` lists with the wrapped filesystem's
-``find`` of the directory, which object stores answer in one paginated
-listing. That costs twice:
+The handler's ``ils_recursive`` lists with the wrapped filesystem's ``find``
+of the directory, which object stores answer in one paginated listing. That
+costs twice:
 
 - ``find`` returns the whole listing at once, so the strategies start only
   once all of it has arrived, and it is held in memory, not streamed.
 - It lists the whole directory: for "data" with the prefix "2024-", all of
   "data/", the keys not starting with the prefix then left out.
 
-A subclass overriding ``_ils`` with the storage's own listing by prefix, e.g.
-from its SDK, streams it page by page, and lists only the prefix.
+A subclass overriding ``ils_recursive`` with the storage's own listing by
+prefix, e.g. from its SDK, streams it page by page, and lists only the prefix.
 
-This module depends on `_base`, and `filesystem` of `flat`.
+This module depends on `_base`, `rm_files` of `common`, and `handler` of `flat`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from ..flat.filesystem import FlatFileSystem
-from ._base import _AsyncFileSystemWrapper, _SyncFileSystemWrapper
+from ..common.rm_files import rm_by_request
+from ..flat.handler import FlatFileOperationHandler
+from ._base import _FsspecHandler
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Mapping
 
-    from fsspec.asyn import AsyncFileSystem
-    from fsspec.spec import AbstractFileSystem
+    from fsspec import AbstractFileSystem
 
     from fsspec_alt_strategies.profile import StorageProfile
+    from fsspec_alt_strategies.states import RmState
 
-__all__ = ["AsyncFlatWrapper", "SyncFlatWrapper"]
+    from ..common.handler import Entry
+    from ..common.operation import Operation
+
+__all__ = ["FsspecFlatHandler"]
 
 
-class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
-    """An async filesystem, as a `FlatFileSystem`: its recursive methods the flat strategies.
+class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
+    """An fsspec filesystem, async or sync, as a flat handler.
 
-    Its primitives, such as ``_info``, ``_cp_file`` and ``_mv_file``, are the
-    wrapped filesystem's, awaited on its loop. So are its data methods, such
-    as ``_cat_file``, and its files. The wrapper runs on the same loop, sync or
-    not as the wrapped one is.
+    Its primitives, such as ``info``, ``cp_file`` and ``mv_file``, are the
+    wrapped filesystem's: its async methods, awaited on its loop, where its
+    ``async_impl`` says it has them, else its sync ones, each in a thread. So
+    are its data methods, such as ``cat_file``, and its files.
 
-    Its recursive ``_ils`` lists with the wrapped one's ``_find`` of the
-    directory. Its ``_rm_files`` gives a batch to the wrapped one's ``_rm``,
-    which s3fs, e.g., deletes in one request. That ``_rm`` tells no key
-    apart, so any failure but a missing key fails the whole batch.
+    Its ``ils_recursive`` lists with the wrapped one's ``find`` of the
+    directory. Its ``rm_files`` gives a batch, of ``rm_batch_size``, to the wrapped one's ``rm``,
+    which s3fs, e.g., deletes in one request. That ``rm`` tells no key apart,
+    so any failure but a missing key fails the whole batch.
 
-    It wins on object stores, as `FlatFileSystem` does. It is not cached: each
-    is new, and may be dropped once used.
+    It wins on object stores, as the flat strategies do. A
+    `FileSystemWrapper` made on it is not cached: each is new, and may be
+    dropped once used.
 
     Parameters
     ----------
-    fs : AsyncFileSystem
+    fs : AbstractFileSystem
         The filesystem to wrap.
-    rm_batch_size : int
-        The most keys the wrapped ``_rm`` deletes in one request, e.g. 1000 on
-        S3.
-    operation_concurrency : int or asyncio.Semaphore
-        The requests of the strategies at a time.
+    operation_concurrency : int or asyncio.Semaphore, optional
+        The requests of the strategies at a time: 1 by default.
         A semaphore is used as it is, shared with what else holds it.
-    io_concurrency : int or asyncio.Semaphore
-        The data methods' calls at a time, such as ``_cat_file``.
+    io_concurrency : int or asyncio.Semaphore, optional
+        The data methods' calls at a time, such as ``cat_file``: 1 by default.
         A semaphore is used as it is, shared with what else holds it.
-    storage_profile : StorageProfile
-        What the storage does. ``UNKNOWN`` if it is unknown.
-    **kwargs
-        Passed to `fsspec.asyn.AsyncFileSystem`.
+    storage_profile : StorageProfile, optional
+        What the storage does: unknown by default.
+    rm_batch_size : int, optional
+        The most keys the wrapped ``rm`` is given at once, e.g. 1000 on S3: 1
+        by default.
+    cp_batch_size, mv_batch_size : int, optional
+        The most files ``cp_files`` and ``mv_files`` take at once: 1 by
+        default, as each goes by the wrapped one's own copy or move.
 
     Raises
     ------
     ValueError
-        If a concurrency, or ``rm_batch_size``, is less than 1.
-
+        If a concurrency is less than 1. A batch size less than 1 is refused by
+        the strategy batching by it, as it starts.
     See Also
     --------
-    SyncFlatWrapper : The same, for a sync filesystem.
+    FsspecTreeHandler : The same, for storages with a hierarchical namespace.
 
     Examples
     --------
-    >>> flat = AsyncFlatWrapper(
-    ...     s3,
-    ...     rm_batch_size=1000,
-    ...     operation_concurrency=64,
-    ...     io_concurrency=8,
-    ...     storage_profile=UNKNOWN,
+    >>> flat = FileSystemWrapper(
+    ...     FsspecFlatHandler(
+    ...         s3,
+    ...         rm_batch_size=1000,
+    ...         operation_concurrency=64,
+    ...         io_concurrency=8,
+    ...         storage_profile=UNKNOWN,
+    ...     )
     ... )
     >>> with monitoring(Progress()):
     ...     flat.rm("bucket/data/2024", recursive=True)
@@ -100,150 +108,62 @@ class AsyncFlatWrapper(_AsyncFileSystemWrapper, FlatFileSystem):
 
     def __init__(
         self,
-        fs: AsyncFileSystem,
-        *,
-        rm_batch_size: int,
-        operation_concurrency: int | asyncio.Semaphore,
-        io_concurrency: int | asyncio.Semaphore,
-        storage_profile: StorageProfile,
-        **kwargs: Any,
-    ) -> None:
-        self.rm_batch_size = rm_batch_size
-
-        super().__init__(
-            fs,
-            operation_concurrency=operation_concurrency,
-            io_concurrency=io_concurrency,
-            # A wrapper is a flat filesystem, whatever it wraps.
-            storage_profile=replace(storage_profile, fs_type="flat"),
-            **kwargs,
-        )
-
-    async def _ils(
-        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            # fsspec has no listing in pages: the wrapped one's find, all at once.
-            found = await self.fs._find(path, detail=True, **kwargs)
-            listing = list(found.values())
-        else:
-            listing = await self.fs._ls(path, detail=True, **kwargs)
-        for entry in _starting(listing, path, prefix):
-            yield entry
-
-    async def _rm_files(self, paths: list[str]) -> None:
-        try:
-            await self.fs._rm(list(paths))
-        except FileNotFoundError:
-            # A key gone meanwhile: the batch again, key by key, a missing key no error.
-            await asyncio.gather(*(self._rm_if_there(p) for p in paths))
-
-    async def _rm_if_there(self, path: str) -> None:
-        with contextlib.suppress(FileNotFoundError):
-            await self.fs._rm_file(path)
-
-
-class SyncFlatWrapper(_SyncFileSystemWrapper, FlatFileSystem):
-    """A sync filesystem, as a `FlatFileSystem`: its recursive methods the flat strategies.
-
-    Its primitives, such as ``_info``, ``_cp_file`` and ``_mv_file``, call the
-    wrapped filesystem's, each in a thread, so that several run at once. Its
-    ``_mv_file`` is the wrapped one's ``mv``. Its data methods call the
-    wrapped one's too, and its files are the wrapped one's, awaited through a
-    `SyncFileAdapter`.
-
-    Its recursive ``_ils`` and its ``_rm_files`` are as `AsyncFlatWrapper`'s,
-    by the wrapped one's ``find`` and ``rm``. A filesystem unsafe to call from
-    several threads needs both concurrencies at 1. It is not cached: each is
-    new, and may be dropped once used.
-
-    Parameters
-    ----------
-    fs : AbstractFileSystem
-        The filesystem to wrap.
-    rm_batch_size : int
-        The most keys the wrapped ``rm`` is given at once.
-    operation_concurrency : int or asyncio.Semaphore
-        The requests of the strategies at a time, each in a thread.
-        A semaphore is used as it is, shared with what else holds it.
-    io_concurrency : int or asyncio.Semaphore
-        The data methods' calls at a time, such as ``_cat_file``.
-        A semaphore is used as it is, shared with what else holds it.
-    storage_profile : StorageProfile
-        What the storage does. ``UNKNOWN`` if it is unknown.
-    **kwargs
-        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
-
-    Raises
-    ------
-    ValueError
-        If a concurrency, or ``rm_batch_size``, is less than 1.
-
-    See Also
-    --------
-    AsyncFlatWrapper : The same, for an async filesystem.
-
-    Examples
-    --------
-    >>> flat = SyncFlatWrapper(
-    ...     fs,
-    ...     rm_batch_size=1000,
-    ...     operation_concurrency=8,
-    ...     io_concurrency=4,
-    ...     storage_profile=UNKNOWN,
-    ... )
-    >>> flat.find("bucket/data")
-    """
-
-    def __init__(
-        self,
         fs: AbstractFileSystem,
         *,
-        rm_batch_size: int,
-        operation_concurrency: int | asyncio.Semaphore,
-        io_concurrency: int | asyncio.Semaphore,
-        storage_profile: StorageProfile,
-        **kwargs: Any,
+        operation_concurrency: int | asyncio.Semaphore | None = None,
+        io_concurrency: int | asyncio.Semaphore | None = None,
+        storage_profile: StorageProfile | None = None,
+        rm_batch_size: int | None = None,
+        cp_batch_size: int | None = None,
+        mv_batch_size: int | None = None,
     ) -> None:
-        self.rm_batch_size = rm_batch_size
-
         super().__init__(
             fs,
             operation_concurrency=operation_concurrency,
             io_concurrency=io_concurrency,
-            # A wrapper is a flat filesystem, whatever it wraps.
-            storage_profile=replace(storage_profile, fs_type="flat"),
-            **kwargs,
+            storage_profile=storage_profile,
         )
+        # Its strategies' batches, the Strategy mixin's: the class's where left out.
+        if rm_batch_size is not None:
+            self.rm_batch_size = rm_batch_size
+        if cp_batch_size is not None:
+            self.cp_batch_size = cp_batch_size
+        if mv_batch_size is not None:
+            self.mv_batch_size = mv_batch_size
 
-    async def _ils(
-        self, path: str, recursive: bool = False, prefix: str = "", **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            # fsspec has no listing in pages: the wrapped one's find, all at once.
-            found = await self._run_in_thread(self.fs.find, path, detail=True, **kwargs)
-            listing = list(found.values())
-        else:
-            listing = await self._run_in_thread(self.fs.ls, path, detail=True, **kwargs)
-        for entry in _starting(listing, path, prefix):
-            yield entry
+    async def ils_recursive(
+        self, entry: Entry, *, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[Entry]:
+        # fsspec has no listing in pages: the wrapped one's find, all at once.
+        path = entry["name"]
+        found = await self.call("find", path, detail=True, **kwargs)
+        for listed in _starting(list(found.values()), path, prefix):
+            yield listed
 
-    async def _rm_files(self, paths: list[str]) -> None:
+    def rm_files(self, entries: list[Entry]) -> Operation[str, RmState]:
+        # A batch by one call of the wrapped one's rm: see _rm_batch.
+        return rm_by_request(self, entries, self._rm_batch)
+
+    async def _rm_batch(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
+        """Delete a batch by the wrapped one's ``rm`` of all its paths, which s3fs, e.g., sends as one request."""
+        paths = [e["name"] for e in entries]
         try:
-            await self._run_in_thread(self.fs.rm, list(paths))
+            await self.call("rm", paths)
         except FileNotFoundError:
             # A key gone meanwhile: the batch again, key by key, a missing key no error.
             await asyncio.gather(*(self._rm_if_there(p) for p in paths))
+        # fsspec's rm tells no key refused apart: a failure is the batch's.
+        return None
 
     async def _rm_if_there(self, path: str) -> None:
         with contextlib.suppress(FileNotFoundError):
-            await self._run_in_thread(self.fs.rm_file, path)
+            await self.call("rm_file", path)
 
 
 def _starting(
     listing: list[dict[str, Any]], path: str, prefix: str
 ) -> list[dict[str, Any]]:
-    """A listing's entries starting with ``path/prefix``, in name order, as ``_ils`` yields them."""
+    """A listing's entries starting with ``path/prefix``, in name order, as ``ils_recursive`` yields them."""
     if not prefix:
         return sorted(listing, key=lambda e: e["name"])
     start = f"{path}/{prefix}" if path else prefix
