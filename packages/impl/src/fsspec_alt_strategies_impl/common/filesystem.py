@@ -474,17 +474,13 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
                 return
 
             _, errors = await _collect_with_monitors(
-                self._handler.rm(self._as_given(path), maxdepth=maxdepth),
+                self._handler.rm(_as_given(self._handler, path), maxdepth=maxdepth),
                 Call(self._unwrapped(), "rm", path),
                 kwargs.get("callback"),
             )
             _raise(errors, "Deleting")
         finally:
             self._drop_listings()
-
-    def _as_given(self, path: str | list[str]) -> StoragePath | list[StoragePath]:
-        """A caller's path, or paths, as the strategies take them: by `_as_given`."""
-        return _as_given(self._handler, path)
 
     async def _copy(
         self,
@@ -518,7 +514,7 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
             _, errors = await _collect_with_monitors(
                 handler.cp(
                     handler,
-                    self._as_given(path1),
+                    _as_given(self._handler, path1),
                     handler.verified(path2, strip_only_protocol=True),
                     maxdepth=maxdepth,
                     path1_entry=entry,
@@ -563,7 +559,7 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
             _, errors = await _collect_with_monitors(
                 handler.mv(
                     handler,
-                    self._as_given(path1),
+                    _as_given(self._handler, path1),
                     handler.verified(path2, strip_only_protocol=True),
                     maxdepth=maxdepth,
                     path1_entry=entry,

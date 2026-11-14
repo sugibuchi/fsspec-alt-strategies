@@ -11,12 +11,14 @@ This module depends on `_base`, and `filesystem` of `common`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from ..common.filesystem import BaseFileSystem
 from ._base import _unwrapped
 
 if TYPE_CHECKING:
+    import asyncio
+
     from fsspec import AbstractFileSystem
 
     from ._base import _FsspecHandler
@@ -41,8 +43,8 @@ class FileSystemWrapper(BaseFileSystem):
     ----------
     handler : FsspecTreeHandler or FsspecFlatHandler
         The handler of the filesystem wrapped.
-    **kwargs
-        fsspec's own options, as `BaseFileSystem` takes them, e.g. ``asynchronous=True``.
+    asynchronous, loop, use_listings_cache, listings_expiry_time, max_paths
+        fsspec's own options, as `BaseFileSystem` takes them.
 
     Examples
     --------
@@ -56,9 +58,23 @@ class FileSystemWrapper(BaseFileSystem):
     _handler: _FsspecHandler  # type: ignore[assignment]
 
     def __init__(
-        self, handler: FsspecTreeHandler | FsspecFlatHandler, **kwargs: Any
+        self,
+        handler: FsspecTreeHandler | FsspecFlatHandler,
+        *,
+        asynchronous: bool = False,
+        loop: asyncio.AbstractEventLoop | None = None,
+        use_listings_cache: bool = True,
+        listings_expiry_time: float | None = None,
+        max_paths: int | None = None,
     ) -> None:
-        super().__init__(handler, **kwargs)
+        super().__init__(
+            handler,
+            asynchronous=asynchronous,
+            loop=loop,
+            use_listings_cache=use_listings_cache,
+            listings_expiry_time=listings_expiry_time,
+            max_paths=max_paths,
+        )
 
         # The wrapped filesystem's paths, which its handler holds.
         self.protocol = handler.protocol

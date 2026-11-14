@@ -18,6 +18,7 @@ from fsspec.implementations.memory import MemoryFileSystem
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.filesystem import (
     BaseFileSystem,
+    _as_given,
     _copy_errors,
     _failed_dir,
     _raise,
@@ -164,7 +165,7 @@ async def test_a_local_dir_is_no_transfer(tmp_path: Path) -> None:
 
 def test_paths_as_given_keep_a_trailing_slash() -> None:
     tree = _tree(MemoryFileSystem())
-    assert tree._as_given(["memory://w/a/", "w/b"]) == ["/w/a/", "/w/b"]
+    assert _as_given(tree._handler, ["memory://w/a/", "w/b"]) == ["/w/a/", "/w/b"]
     handler = tree._handler
     assert handler.verified("memory://w/a/", strip_only_protocol=True) == "/w/a/"
     assert handler.entry("w/a/", strip_only_protocol=True) == {"name": "/w/a/"}
