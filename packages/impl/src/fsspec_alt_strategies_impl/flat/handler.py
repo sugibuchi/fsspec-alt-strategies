@@ -16,9 +16,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Literal
 
-from ..common.cp_files import _cp_each_file, _mv_each_file
 from ..common.handler import FileOperationHandler
-from ..common.rm_files import _rm_each_file
 from .cp import _flat_cp
 from .du import _flat_du
 from .find import _flat_find
@@ -40,7 +38,7 @@ if TYPE_CHECKING:
         WalkState,
     )
 
-    from ..common.handler import Entry, FileTransfer, StorageHandler, StoragePath
+    from ..common.handler import Entry, StorageHandler, StoragePath
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
 
@@ -154,10 +152,6 @@ class FlatFileOperationHandler(FileOperationHandler):
         """`_flat_rm` of this handler."""
         return _flat_rm(self, path, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
 
-    def rm_files(self, entries: list[Entry]) -> Operation[str, RmState]:
-        """`rm_files._rm_each_file` of this handler: each by ``rm_file``, as many at once as the limit allows."""
-        return _rm_each_file(self, entries)
-
     def cp(
         self,
         dst: StorageHandler,
@@ -182,12 +176,6 @@ class FlatFileOperationHandler(FileOperationHandler):
             path1_entry=path1_entry,
             ils_kwargs=ils_kwargs,
         )
-
-    def cp_files(
-        self, transfers: list[FileTransfer]
-    ) -> Operation[tuple[str, str], CpState]:
-        """`cp_files._cp_each_file` of this handler: each by ``cp_file``, as many at once as the limit allows."""
-        return _cp_each_file(self, transfers)
 
     def mv(
         self,
@@ -215,9 +203,3 @@ class FlatFileOperationHandler(FileOperationHandler):
             path1_entry=path1_entry,
             ils_kwargs=ils_kwargs,
         )
-
-    def mv_files(
-        self, transfers: list[FileTransfer]
-    ) -> Operation[tuple[str, str], MvState]:
-        """`cp_files._mv_each_file` of this handler: each by ``mv_file``, as many at once as the limit allows."""
-        return _mv_each_file(self, transfers)

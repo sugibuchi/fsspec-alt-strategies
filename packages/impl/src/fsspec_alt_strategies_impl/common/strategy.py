@@ -14,13 +14,16 @@ own.
 the filesystem runs, watched by the monitors. The filesystem keeps its
 handler private, so that no caller of a filesystem gets an operation.
 
-This module depends on `handler`, `jobs` and `operation`, for their types alone.
+This module depends on `cp_files` and `rm_files`, for the batch strategies' defaults, and `handler`, `jobs` and `operation`, for their types alone.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+from .cp_files import _cp_each_file, _mv_each_file
+from .rm_files import _rm_each_file
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -49,6 +52,9 @@ class Strategy(ABC):
     without the handler it works on: the handler is ``self``. A copy or move
     takes the destination's handler, ``dst``, ``self`` again within one
     storage. Each returns an operation, not started: the filesystem runs it.
+    The batch strategies, `rm_files`, `cp_files` and `mv_files`, have
+    defaults here, a request per file, which no family changes: a storage
+    sending several by one request overrides them.
 
     Paths come as the filesystem verified them, without a protocol: each a
     `StoragePath`, a glob pattern too, by the handler's ``verified``. Each
@@ -240,7 +246,6 @@ class Strategy(ABC):
             Yielding each path deleted, or an error.
         """
 
-    @abstractmethod
     def rm_files(self, entries: list[Entry]) -> Operation[str, RmState]:
         """Delete files the caller found, e.g. a batch of a recursive ``rm``'s.
 
@@ -263,6 +268,7 @@ class Strategy(ABC):
             only an error failing all the files, e.g. a request deleting them
             all.
         """
+        return _rm_each_file(cast("StorageHandler", self), entries)
 
     @abstractmethod
     def cp(
@@ -305,7 +311,6 @@ class Strategy(ABC):
             Yielding ``(source, destination)`` per file copied, or an error.
         """
 
-    @abstractmethod
     def cp_files(
         self, transfers: list[FileTransfer]
     ) -> Operation[tuple[str, str], CpState]:
@@ -333,6 +338,7 @@ class Strategy(ABC):
             only an error failing all the files, e.g. a request copying them
             all.
         """
+        return _cp_each_file(cast("StorageHandler", self), transfers)
 
     @abstractmethod
     def mv(
@@ -378,7 +384,6 @@ class Strategy(ABC):
             Yielding ``(source, destination)`` per path moved, or an error.
         """
 
-    @abstractmethod
     def mv_files(
         self, transfers: list[FileTransfer]
     ) -> Operation[tuple[str, str], MvState]:
@@ -400,3 +405,4 @@ class Strategy(ABC):
             noting its paths, with its source's path as its ``source``
             attribute. It raises only an error failing all the files.
         """
+        return _mv_each_file(cast("StorageHandler", self), transfers)
