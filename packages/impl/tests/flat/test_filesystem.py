@@ -128,13 +128,12 @@ class _FlatHandler(FlatHandler):
     async def mv_file(self, entry: dict[str, Any], path2: Any) -> None:
         await self.inner._mv_file(entry["name"], path2)
 
-    async def open_reader(self, entry: dict[str, Any], **kwargs: Any) -> Any:
+    async def open_file(
+        self, entry: dict[str, Any], mode: str = "rb", **kwargs: Any
+    ) -> Any:
         return await _open_file(
-            self.inner, entry["name"], "rb", concurrency_limit=self.io_limit
+            self.inner, entry["name"], mode, concurrency_limit=self.io_limit
         )
-
-    async def open_writer(self, path: Any, mode: str, **kwargs: Any) -> Any:
-        return await _open_file(self.inner, path, mode, concurrency_limit=self.io_limit)
 
 
 class _Flat(FlatFileSystem):

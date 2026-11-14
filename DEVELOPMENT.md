@@ -128,7 +128,7 @@ AsyncFileSystem                    fsspec's
   the filesystem one of `io_limit` around each data call, and the adaptive files one per part.
 - **Its paths:** its `protocol`, `strip_protocol` and `unstrip_protocol`, its `root`, and the path methods below.
 - **The primitives of single paths:** `ils`, `info`, `rm_file`, `rmdir`, `makedirs`, `cp_file` and `mv_file`, and its
-  files, `open_reader` and `open_writer`.
+  files, `open_file`.
 
 Each family's handler class adds what its strategies call:
 
@@ -168,6 +168,8 @@ An item that exists is named by its entry, a dict as fsspec's `ls` with `detail`
 - The primitives take an entry for an item that exists, and a path for one to be made. A strategy passes the entries
   its listing gave, whole, so that a storage addressing items by id, or needing a size, asks nothing again. A name a
   listing gave is never verified again.
+- `open_file` takes an entry whatever its mode, so that one method opens a file to read or to write. A file to write
+  may not exist yet: its entry then holds its name alone, as `entry` makes it from a verified path.
 
 #### The filesystem
 
@@ -301,7 +303,7 @@ jobs and their `Operation` at once.
 
 A copy or move between two handlers sends each file by `common/transfer.py`, unless its caller gives another way:
 
-- It reads by the source's `open_reader` and writes by the destination's `open_writer`, a block of 8 MiB at a time.
+- It reads and writes by the source's and the destination's `open_file`, a block of 8 MiB at a time.
   So each handler keeps the primitives of its own storage only.
 - It leaves no part of a file. Where the destination's profile declares `atomic_writes`, it writes in place.
   Otherwise it writes to a temporary name beside the destination, then moves it there by `mv_file`, deleting it on a
@@ -455,8 +457,8 @@ records, as the Apache License asks that the code goes with it. It lives in its 
 `files/` holds abstract file classes, by what the storage allows:
 
 - `AdaptiveReadableFile` and `AdaptiveWritableFile` read byte ranges and write in parts. They adapt their block sizes
-  to how the file is used, sending as few requests as they can. A handler's `open_reader` and `open_writer` return
-  them, as files used sync or async.
+  to how the file is used, sending as few requests as they can. A handler's `open_file` returns them, as files used
+  sync or async.
 - Each request holds a `concurrency_limit`, whose scope the caller chooses: a file, a handler or the process.
 - A file read in many requests reads one version, and raises `ESTALE` if the file changes.
 - An `AdaptiveWritableFile` left by an exception completes nothing: a multipart upload is aborted.

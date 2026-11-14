@@ -65,8 +65,12 @@ class _Short:
 
 
 class _Shortened(TreeView):
-    async def open_reader(self, entry: dict[str, Any], **kwargs: Any) -> Any:
-        return _Short()
+    async def open_file(
+        self, entry: dict[str, Any], mode: str = "rb", **kwargs: Any
+    ) -> Any:
+        if mode == "rb":
+            return _Short()
+        return await super().open_file(entry, mode, **kwargs)
 
 
 @pytest.mark.parametrize("profile", [None, _ATOMIC])

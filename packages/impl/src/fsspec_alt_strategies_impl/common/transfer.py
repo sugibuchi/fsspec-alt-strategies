@@ -4,8 +4,7 @@
 
 `_across` is how a copy or move between two handlers sends each file, unless
 its caller gives another way, e.g. a cloud's copy from a URL. It reads by the
-source's ``open_reader``, and writes by the destination's ``open_writer``, a
-block at a time. So each handler keeps the primitives of its own storage only,
+source's ``open_file``, and writes by the destination's, a block at a time. So each handler keeps the primitives of its own storage only,
 and the transfer between two is the strategy's.
 
 A file's transfer leaves no part of a file at its destination:
@@ -101,13 +100,14 @@ async def _write(
     A size other than the source's raises OSError inside the writer, which then
     completes nothing.
     """
-    opened = await src.open_reader(entry)
+    opened = await src.open_file(entry, "rb")
     expected = getattr(opened, "size", None)
     if not isinstance(expected, int):
         expected = entry.get("size")
 
     async with _async(opened) as reader:
-        async with _async(await dst.open_writer(path, "wb")) as writer:
+        # A path the strategies placed, verified: its entry holds its name alone.
+        async with _async(await dst.open_file({"name": path}, "wb")) as writer:
             written = 0
             while block := await reader.read(_BLOCK_SIZE):
                 await writer.write(block)

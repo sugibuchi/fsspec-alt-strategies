@@ -738,11 +738,13 @@ class _Files:
     fs: Any
     io_limit: asyncio.Semaphore
 
-    async def open_reader(self, entry: dict[str, Any], **kwargs: Any) -> Any:
-        size = (await self.fs._info(entry["name"]))["size"]
-        return _Reader(self.fs, entry["name"], size, concurrency_limit=self.io_limit)
-
-    async def open_writer(self, path: StoragePath, mode: str, **kwargs: Any) -> Any:
+    async def open_file(
+        self, entry: dict[str, Any], mode: str = "rb", **kwargs: Any
+    ) -> Any:
+        path = entry["name"]
+        if mode == "rb":
+            size = (await self.fs._info(path))["size"]
+            return _Reader(self.fs, path, size, concurrency_limit=self.io_limit)
         if mode == "xb" and await self.fs._exists(path):
             raise FileExistsError(path)
         return _Writer(self.fs, path, mode=mode, concurrency_limit=self.io_limit)

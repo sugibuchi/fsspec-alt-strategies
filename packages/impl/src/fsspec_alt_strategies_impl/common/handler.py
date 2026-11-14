@@ -333,21 +333,22 @@ class StorageHandler(_PathHandler):
 
     # Files. The filesystem awaits them on its own loop, for its sync open too.
 
-    async def open_reader(self, entry: Entry, **kwargs: Any) -> Any:
-        """Open a file to read, e.g. an `AdaptiveReadableFile`: one used sync or async.
+    async def open_file(self, entry: Entry, mode: str = "rb", **kwargs: Any) -> Any:
+        """Open a file, one used sync or async: to read, mode "rb", or to write, "wb" or "xb".
 
-        Its requests hold ``io_limit``, as its concurrency limit. A missing
-        file raises FileNotFoundError, a directory IsADirectoryError.
+        It returns e.g. an `AdaptiveReadableFile` or an `AdaptiveWritableFile`,
+        whose requests hold ``io_limit``, as their concurrency limit.
+
+        It takes an entry whatever the mode, as every primitive on a file
+        does. A file to write may not exist yet: its entry may hold its name
+        alone, verified, as `entry` makes it. One a listing found may hold
+        more, e.g. an id to overwrite it by.
+
+        To read, a missing file raises FileNotFoundError, and a directory
+        IsADirectoryError. To write, "xb" raises FileExistsError where a file
+        is, as the storage tells it.
         """
-        raise NotImplementedError(f"{type(self).__name__} opens no file to read")
-
-    async def open_writer(self, path: StoragePath, mode: str, **kwargs: Any) -> Any:
-        """Open a file to write, mode "wb" or "xb", e.g. an `AdaptiveWritableFile`: one used sync or async.
-
-        Its requests hold ``io_limit``. Mode "xb" raises FileExistsError where
-        a file is at ``path``, as the storage tells it.
-        """
-        raise NotImplementedError(f"{type(self).__name__} opens no file to write")
+        raise NotImplementedError(f"{type(self).__name__} opens no file")
 
     # What fsspec leaves to each filesystem.
 

@@ -100,14 +100,12 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
     # Files, by the handler: the same file for open_async and the sync open.
 
     async def _handler_file(self, path: str, mode: str, **kwargs: Any) -> Any:
-        """The handler's file at a caller's path, verified: a reader for "rb", else a writer."""
+        """The handler's file at a caller's path, verified, by its `open_file`: "rb", "wb" or "xb"."""
+        if mode not in ("rb", "wb", "xb"):
+            raise ValueError(f"mode must be 'rb', 'wb' or 'xb': {mode!r}")
         handler = self.handler
-        plain = self._strip_protocol(path)
-        if mode == "rb":
-            return await handler.open_reader(handler.entry(plain), **kwargs)
-        if mode in ("wb", "xb"):
-            return await handler.open_writer(handler.verified(plain), mode, **kwargs)
-        raise ValueError(f"mode must be 'rb', 'wb' or 'xb': {mode!r}")
+        entry = handler.entry(self._strip_protocol(path))
+        return await handler.open_file(entry, mode, **kwargs)
 
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
         """Open a file whose methods are awaited, as fsspec's ``open_async`` does, by the handler.

@@ -127,15 +127,16 @@ class MyHandler(TreeHandler):
         ...
 
     async def info(self, entry, **kwargs): ...
-    # ... and rm_file, rmdir, makedirs, cp_file, mv_file, open_reader, open_writer.
+    # ... and rm_file, rmdir, makedirs, cp_file, mv_file, open_file.
 ```
 
-- A primitive takes an entry for an item that exists, and a path for one to be made. An entry is a dict whose
+- A primitive takes an entry for an item that exists, and a path for one to be made. `open_file` takes an entry, to
+  read or write: a file to write may not exist yet, its entry holding its name alone. An entry is a dict whose
   `"name"` alone is sure. The other keys, e.g. a size or an id, are there when a listing found them, so a primitive
   needs no request to ask them again.
 - The strategies build paths only by the handler's `join`, `join_all` and `parent`, each verified by `verify_path`.
   So a name another storage listed, e.g. one holding "..", can never leave the directory it is copied into.
-- `open_reader` and `open_writer` return files used sync or async, e.g. the adaptive files below.
+- `open_file(entry, mode)` returns a file used sync or async, mode "rb", "wb" or "xb", e.g. the adaptive files below.
 - A tree handler with a recursive listing of its own implements `ils_recursive`, and declares its order in
   `recursive_order`: "depth first" or "name". Without it, a tree is listed a directory per request, several at once.
 - A flat handler implements `ils_recursive(entry, prefix=...)`, every key below a directory starting with the prefix,
@@ -332,7 +333,7 @@ A subclass of an adaptive file implements the storage's requests, and leaves the
 - `AdaptiveWritableFile` implements `_upload_all`, for a small file, and the multipart upload's requests:
   `_start_multipart_upload`, `_upload_part`, `_complete_multipart_upload` and `_abort_multipart_upload`.
 
-A handler's `open_reader` and `open_writer` return them, with its `io_limit` as their `concurrency_limit`. An
+A handler's `open_file` returns them, with its `io_limit` as their `concurrency_limit`. An
 `AdaptiveWritableFile` opened with mode "xb" creates the file only if none is at the path. Its `exclusive` is then
 True, and the subclass checks it by the storage's conditional write where there is one.
 

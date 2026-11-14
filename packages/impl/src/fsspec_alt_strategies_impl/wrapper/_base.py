@@ -186,11 +186,8 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
     # exception may keep what was written, so the profile declares no
     # atomic_writes unless the library's writer aborts.
 
-    async def open_reader(self, entry: Entry, **kwargs: Any) -> Any:
-        return await self.open_async_file(entry["name"], "rb", **kwargs)
-
-    async def open_writer(self, path: StoragePath, mode: str, **kwargs: Any) -> Any:
-        return await self.open_async_file(path, mode, **kwargs)
+    async def open_file(self, entry: Entry, mode: str = "rb", **kwargs: Any) -> Any:
+        return await self.open_async_file(entry["name"], mode, **kwargs)
 
     # The sync methods fsspec leaves to each filesystem, the wrapped one's.
 

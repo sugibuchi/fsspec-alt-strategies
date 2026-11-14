@@ -128,13 +128,12 @@ class _TreeHandler(TreeHandler):
     async def makedirs(self, path: Any, exist_ok: bool = False) -> None:
         await self.inner._makedirs(path, exist_ok=exist_ok)
 
-    async def open_reader(self, entry: dict[str, Any], **kwargs: Any) -> Any:
+    async def open_file(
+        self, entry: dict[str, Any], mode: str = "rb", **kwargs: Any
+    ) -> Any:
         return await _open_file(
-            self.inner, entry["name"], "rb", concurrency_limit=self.io_limit
+            self.inner, entry["name"], mode, concurrency_limit=self.io_limit
         )
-
-    async def open_writer(self, path: Any, mode: str, **kwargs: Any) -> Any:
-        return await _open_file(self.inner, path, mode, concurrency_limit=self.io_limit)
 
 
 class _Tree(TreeFileSystem):
