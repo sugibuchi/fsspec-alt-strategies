@@ -167,7 +167,7 @@ class FlatFileSystemWrapper(FlatFileSystem):
     handler : FsspecFlatHandler
         The handler of the filesystem wrapped.
     **kwargs
-        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. `asynchronous=True`.
+        fsspec's own options, as `TreeFileSystem` takes them, e.g. ``asynchronous=True``.
 
     Examples
     --------

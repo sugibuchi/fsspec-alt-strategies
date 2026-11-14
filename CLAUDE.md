@@ -50,7 +50,11 @@ code: read it before adding a strategy or a handler.
   answer as fsspec's method does.
 - A filesystem copies nothing from its handler: no profile, no limit, no `rm_batch_size`. It reads them from
   `self.handler` where it uses them.
-- A storage's own class, by convention, writes its `__init__`, making its handler from its storage options. It names
+- The filesystems' and the router's `__init__` name fsspec's options, `asynchronous`, `loop` and the `dircache`'s, so
+  that any other raises TypeError. Never take `**kwargs` there, nor fsspec's `batch_size`.
+- A storage's own class, by convention, writes its `__init__`, its signature naming each of its handler's options and
+  passing fsspec's on, with no helper splitting them. Its `**` is fsspec's, or else options another library names,
+  e.g. a token credential's, the handler passing on those its constructor names. It makes its handler from them. It names
   `protocol`, `root_marker` and `_strip_protocol` as its handler class's, and overrides nothing else. There is no
   metaclass, no `__init_subclass__` and no decorator reflecting on a class.
 - `TreeFileSystemWrapper` and `FlatFileSystemWrapper` alone take their handler's paths at runtime, and alone are not

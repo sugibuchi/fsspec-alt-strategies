@@ -64,17 +64,30 @@ class TreeFileSystem(_BaseFileSystem):
     limits and its files. It takes a handler, e.g. one wrapping another
     filesystem. By convention, a storage's class below it takes its storage
     options, not a handler: its ``__init__`` makes its handler from them, so
-    that fsspec makes it from a URL or a registry. It names its
-    ``protocol``, ``root_marker`` and ``_strip_protocol`` as its handler
-    class's ``protocol``, ``root`` and ``strip_protocol``, and overrides
-    nothing else: the rest is the handler's.
+    that fsspec makes it from a URL or a registry. Its signature names each
+    of the handler's options, as the handler's does, and passes fsspec's on
+    as keywords. It names its ``protocol``, ``root_marker`` and
+    ``_strip_protocol`` as its handler class's ``protocol``, ``root`` and
+    ``strip_protocol``, and overrides nothing else: the rest is the
+    handler's.
 
     Parameters
     ----------
     handler : TreeHandler
         The storage's handler.
-    **kwargs
-        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
+    asynchronous : bool, default False
+        Whether the filesystem's caller runs an event loop, as in fsspec.
+    loop : asyncio.AbstractEventLoop, optional
+        The loop of the sync methods, as in fsspec: else fsspec's own.
+    use_listings_cache, listings_expiry_time, max_paths
+        fsspec's options of the listings ``ls`` keeps.
+
+    Raises
+    ------
+    TypeError
+        If given an option it does not name, e.g. one misspelled. fsspec's
+        own constructors ignore it. fsspec's ``batch_size`` is not taken: the
+        handler's ``io_concurrency`` bounds the paths handled at a time.
 
     See Also
     --------

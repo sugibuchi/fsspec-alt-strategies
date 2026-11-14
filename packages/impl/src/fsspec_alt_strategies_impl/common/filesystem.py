@@ -37,6 +37,7 @@ from ..files.fsspec_transaction import AdaptiveWritableTransaction, TransactionF
 from .operation import _collect_with_monitors
 
 if TYPE_CHECKING:
+    import asyncio
     from collections.abc import Callable, Sequence
 
     from fsspec import AbstractFileSystem
@@ -63,8 +64,27 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
     handler: StorageHandler
     """The storage's handler, whose primitives the filesystem calls."""
 
-    def __init__(self, handler: StorageHandler, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        handler: StorageHandler,
+        *,
+        asynchronous: bool = False,
+        loop: asyncio.AbstractEventLoop | None = None,
+        use_listings_cache: bool = True,
+        listings_expiry_time: float | None = None,
+        max_paths: int | None = None,
+    ) -> None:
+        # fsspec's own options, named: fsspec's constructors take any keyword
+        # and ignore those they do not know, so a misspelled option would
+        # change nothing, silently. fsspec's batch_size is not among them:
+        # the handler's io_concurrency bounds the paths handled at a time.
+        super().__init__(
+            asynchronous=asynchronous,
+            loop=loop,
+            use_listings_cache=use_listings_cache,
+            listings_expiry_time=listings_expiry_time,
+            max_paths=max_paths,
+        )
 
         self.handler = handler
 
@@ -480,15 +500,13 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
     # _cat_file says.
 
     def _io_batch_size(self, batch_size: int | None) -> int | None:
-        """The paths handled at a time: the call's, else the instance's, else ``io_concurrency``.
+        """The paths handled at a time: the call's, else ``io_concurrency``.
 
         ``io_concurrency`` given as a semaphore tells no number: fsspec's own
         default then holds, and only the permits bound the requests.
         """
         if batch_size is not None:
             return batch_size
-        if self.batch_size is not None:
-            return self.batch_size  # type: ignore[no-any-return]
         if isinstance(self.handler.io_concurrency, int):
             return self.handler.io_concurrency
         else:

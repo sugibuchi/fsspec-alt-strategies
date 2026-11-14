@@ -336,8 +336,13 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     ----------
     handler : RoutingHandler
         Where each path goes.
-    **kwargs
-        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
+    asynchronous, loop, use_listings_cache, listings_expiry_time, max_paths
+        fsspec's own options, as `TreeFileSystem` takes them.
+
+    Raises
+    ------
+    TypeError
+        If given an option it does not name, e.g. one misspelled.
 
     See Also
     --------
@@ -360,8 +365,24 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     handler: RoutingHandler
     """The routing handler, which says where each path goes."""
 
-    def __init__(self, handler: RoutingHandler, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        handler: RoutingHandler,
+        *,
+        asynchronous: bool = False,
+        loop: asyncio.AbstractEventLoop | None = None,
+        use_listings_cache: bool = True,
+        listings_expiry_time: float | None = None,
+        max_paths: int | None = None,
+    ) -> None:
+        # fsspec's own options, named, as `TreeFileSystem` names them.
+        super().__init__(
+            asynchronous=asynchronous,
+            loop=loop,
+            use_listings_cache=use_listings_cache,
+            listings_expiry_time=listings_expiry_time,
+            max_paths=max_paths,
+        )
 
         self.handler = handler
         # The storages routed to, by their handler's id, each kept with it.

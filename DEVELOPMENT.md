@@ -186,13 +186,23 @@ class MyFileSystem(TreeFileSystem):
     root_marker = MyHandler.root
     _strip_protocol = MyHandler.strip_protocol
 
-    def __init__(self, account, **kwargs):
-        super().__init__(MyHandler(account), **kwargs)
+    def __init__(self, account, *, io_concurrency=8, **kwargs):
+        super().__init__(MyHandler(account, io_concurrency=io_concurrency), **kwargs)
 ```
 
 It takes storage options, not a handler, so that fsspec makes it from a URL or a registry, caches it and pickles it.
 It names its paths as its handler class's, as fsspec reads them of the class before a filesystem is made. It
 overrides nothing else.
+
+Its `__init__` is what its users call, so its signature names each option, repeating its handler's:
+
+- No helper splits the options for it: a signature tells its users and their tools what it takes.
+- It passes fsspec's options on as keywords. `_BaseFileSystem` and `RoutingFileSystem` name them, so any other option
+  raises TypeError. fsspec's own constructors take any keyword, silently ignoring a misspelled one.
+- Options whose names another library decides, e.g. those of an Azure token credential, are the only catch-all. The
+  class then names fsspec's options too, so that its `**` holds those alone, and the handler passes on those that
+  the credential's constructor names.
+- fsspec's `batch_size` is not taken: the handler's `io_concurrency` bounds the paths handled at a time.
 
 `TreeFileSystemWrapper` and `FlatFileSystemWrapper` serve a wrapped fsspec filesystem's paths: as they are made, they
 take the protocol, root and stripping of the handler they are given. They are never cached, as fsspec would key them

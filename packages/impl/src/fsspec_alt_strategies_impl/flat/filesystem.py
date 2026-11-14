@@ -67,9 +67,13 @@ class FlatFileSystem(_BaseFileSystem):
     ----------
     handler : FlatHandler
         The storage's handler.
-    **kwargs
-        Passed to `fsspec.asyn.AsyncFileSystem`, e.g. ``asynchronous=True``.
+    asynchronous, loop, use_listings_cache, listings_expiry_time, max_paths
+        fsspec's own options, as `TreeFileSystem` takes them.
 
+    Raises
+    ------
+    TypeError
+        If given an option it does not name, e.g. one misspelled.
 
     See Also
     --------

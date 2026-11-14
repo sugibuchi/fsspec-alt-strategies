@@ -241,6 +241,27 @@ async def test_many_paths_go_io_concurrency_at_a_time(batch_size: int | None) ->
     assert piped == inner.stats.max_concurrency == 3
 
 
+def test_fsspecs_options_are_named() -> None:
+    fs = TreeFileSystemWrapper(
+        FsspecTreeHandler(MemoryFileSystem(), **_LIMITS),
+        use_listings_cache=False,
+        listings_expiry_time=5,
+        max_paths=3,
+        skip_instance_cache=True,  # fsspec's metaclass takes it, before __init__.
+    )
+    cache = fs.dircache
+    assert (cache.use_listings_cache, cache.listings_expiry_time) == (False, 5)
+    assert cache.max_paths == 3
+
+
+@pytest.mark.parametrize("option", ["asynchronus", "batch_size", "anon"])
+def test_an_option_not_named_is_refused(option: str) -> None:
+    # fsspec's own constructors would ignore it, silently.
+    handler = FsspecTreeHandler(MemoryFileSystem(), **_LIMITS)
+    with pytest.raises(TypeError, match=option):
+        TreeFileSystemWrapper(handler, **{option: True})
+
+
 def _ranges_fs(**kwargs: Any) -> tuple[SimulatedFileSystem, Any]:
     inner = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     for i, size in enumerate([0, 1000, 300_000, 3 * 1024 * 1024]):

@@ -772,6 +772,12 @@ def test_a_router_needs_a_handler() -> None:
         RoutingFileSystem()  # type: ignore[call-arg]
 
 
+def test_a_router_refuses_an_option_not_named() -> None:
+    # fsspec's own constructors would ignore it, silently.
+    with pytest.raises(TypeError, match="batch_size"):
+        RoutingFileSystem(_Lake(), batch_size=2)  # type: ignore[call-arg]
+
+
 # Every public method of fsspec is either passed on, or inherited on purpose.
 
 # Sync methods fsspec makes from the router's async ones, or aliases of others.

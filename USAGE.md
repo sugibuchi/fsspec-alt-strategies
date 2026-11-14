@@ -113,8 +113,8 @@ class MyHandler(TreeHandler):
     root = ""
     profile = UNKNOWN  # The default: nothing known, right on any storage.
 
-    def __init__(self, account, **kwargs):
-        super().__init__(operation_concurrency=32, io_concurrency=8)
+    def __init__(self, account, *, io_concurrency=8):
+        super().__init__(operation_concurrency=32, io_concurrency=io_concurrency)
         self.account = account
 
     def verify_path(self, path):
@@ -167,12 +167,17 @@ class MyFileSystem(TreeFileSystem):
     root_marker = MyHandler.root
     _strip_protocol = MyHandler.strip_protocol
 
-    def __init__(self, account, **kwargs):
-        super().__init__(MyHandler(account), **kwargs)
+    def __init__(self, account, *, io_concurrency=8, **kwargs):
+        super().__init__(MyHandler(account, io_concurrency=io_concurrency), **kwargs)
 ```
 
 A storage's class takes its storage options, makes its handler from them, and names its paths as its handler's. It
 overrides nothing else: what the storage does is the handler's.
+
+Its signature names each of its handler's options, and passes fsspec's on as keywords. The families' filesystems
+name fsspec's options: `asynchronous`, `loop`, `use_listings_cache`, `listings_expiry_time` and `max_paths`. Any other
+option raises TypeError, e.g. one misspelled, which fsspec's own filesystems would silently ignore. fsspec's
+`batch_size` is not taken: the handler's `io_concurrency` bounds the paths handled at a time.
 
 `ls` keeps each listing in fsspec's `dircache`, as fsspec's implementations do: pass `refresh=True` to list again, or
 `use_listings_cache=False` to keep none. Only `ls` uses it. The recursive operations always list the storage, and
@@ -429,7 +434,7 @@ fs = RoutingFileSystem(Lake(transfer_concurrency=8), asynchronous=True)
 - `route` may give another routing handler, which routes the path again. The names answered are the outermost
   router's.
 - A storage's class for the router follows the families' convention: it names its paths as its handler's, and makes
-  its handler from its storage options.
+  its handler from its storage options. `RoutingFileSystem` names fsspec's options as the families' filesystems do.
 
 `transfer_concurrency` bounds the files copied between storages at a time. Each file is streamed by default, a block
 at a time:
