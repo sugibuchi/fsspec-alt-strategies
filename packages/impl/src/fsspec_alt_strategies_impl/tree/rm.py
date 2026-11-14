@@ -69,7 +69,7 @@ def _tree_rm(
     patterns. They are matched as `_tree_glob` matches them, in one search,
     then the directories matched are walked at once.
 
-    A handler declaring ``rm_batch_size`` deletes files in batches of it, by
+    A handler declaring ``rm_batch_size``, as it is once open, deletes files in batches of it, by
     one ``rm_files`` each, as its storage deletes several files by one
     request, e.g. Azure's blob batch. The files listed join a batch, which is
     sent once full, while the walk goes on, and the last, smaller one once
@@ -133,8 +133,9 @@ class _Deletion(_TreeJobs):
         super().__init__(**kwargs)
 
         self.path = path
-        # The files deleted at once, by rm_files, or None to delete each by rm_file.
-        self.batch_size = _batch_size(self.handler)
+        # The files deleted at once, by rm_files, or None to delete each by
+        # rm_file: read as the handler opens, which may tell it.
+        self.batch_size: int | None = None
         self.batch: list[str] = []
         # Unknown until setup reads the profile.
         self.deletes_directories = False
@@ -145,6 +146,10 @@ class _Deletion(_TreeJobs):
 
     async def setup(self) -> None:
         await self.handler.open()
+        # A handler may know its batch only once open, e.g. by the account's kind.
+        self.batch_size = _batch_size(self.handler)
+        if self.batch_size is not None:
+            _check_batch_size(self.batch_size)
         profile = self.handler.profile
         # A directory deleted whole would take what is deeper than maxdepth.
         self.deletes_directories = (
