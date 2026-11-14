@@ -46,15 +46,11 @@ _HELD = 32 * _BATCH
 
 
 def _tree_ils(
-    handler: TreeFileOperationHandler,
-    path: str,
-    *,
-    entry: Entry | None = None,
-    **ils_kwargs: Any,
+    handler: TreeFileOperationHandler, entry: Entry, **ils_kwargs: Any
 ) -> _DepthFirst:
     """List all below a directory depth first, by one ``ils`` per directory.
 
-    It yields what an ``ils_recursive`` yields: each entry below ``path``, at
+    It yields what an ``ils_recursive`` yields: each entry below ``entry``, at
     any depth, depth first. A directory's entries come in the order its
     ``ils`` gives them, each subdirectory's followed by all below it. A file
     lists itself, as ``ils`` lists it. A directory listed twice, e.g. as a
@@ -71,20 +67,22 @@ def _tree_ils(
     is listed under the permit its caller holds, as for any ``ils``. So it
     needs no permit more to go on.
 
-    A directory below ``path`` that fails to list raises its error, noted with
+    A directory below ``entry`` that fails to list raises its error, noted with
     its path, and ends the listing: a recursive listing cannot go on past a
     failure. The walk under the strategies resumes it a directory per request.
-    A missing ``path`` raises FileNotFoundError, when the iteration starts, as
+    A missing ``entry`` raises FileNotFoundError, when the iteration starts, as
     its own ``ils`` raises it.
 
-    ``path`` is listed by ``entry``, its entry, where given, e.g. as its parent's
-    listing gave it, else by its path. ``ils_kwargs`` go to each ``ils``.
+    ``entry`` is the directory's entry, as its parent's listing gave it, or as
+    the handler's ``entry`` makes it from a path: it is listed by it whole, so
+    that a storage addressing items by id asks nothing again. ``ils_kwargs`` go
+    to each ``ils``.
 
     The listing is a `_DepthFirst`, so that the walk takes it as depth first
     on a handler whose profile leaves the order unknown, or declares its own
     listing parents first: this one is the library's, whatever the storage.
     """
-    return _DepthFirst(_entries(handler, path, entry, ils_kwargs))
+    return _DepthFirst(_entries(handler, entry, ils_kwargs))
 
 
 class _DepthFirst:
@@ -110,12 +108,11 @@ class _DepthFirst:
 
 async def _entries(
     handler: TreeFileOperationHandler,
-    path: str,
-    entry: Entry | None,
+    entry: Entry,
     ils_kwargs: dict[str, Any],
 ) -> AsyncGenerator[dict[str, Any]]:
     """The entries `_tree_ils` yields, as its docstring says."""
-    root = _trim(path)
+    root = _trim(entry["name"])
     ahead = _Ahead(handler, ils_kwargs)
     # The directories being yielded, the root first: each is yielding one of the next.
     stack = [ahead.take(root, entry)]

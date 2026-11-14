@@ -133,7 +133,7 @@ def _moves_of(
 
 
 class _Job(NamedTuple):
-    """A request to make: its kind, e.g. "copy", its source, and where it goes.
+    """A request to make: its kind, e.g. "file", a file's own copy or move, its source, and where it goes.
 
     ``source`` is the source's entry, as its listing gave it, so that a copy or
     a move hands it on: at least its ``"name"``, all a path known otherwise
@@ -1056,7 +1056,7 @@ class _CopyJobs(_Jobs):
     def release(self, jobs: Iterable[_Job]) -> None:
         """Queue jobs whose destination's directory is ready: a file's into the batch, when batching."""
         for job in jobs:
-            if not self.batching or job.kind != "copy":
+            if not self.batching or job.kind != "file":
                 self.waiting.append(job)
                 continue
 

@@ -558,7 +558,7 @@ def _recursive_listing(
     if own:
         return handler.ils_recursive(entry, **ils_kwargs)
     else:
-        return _tree_ils(handler, root, entry=entry, **ils_kwargs)
+        return _tree_ils(handler, entry, **ils_kwargs)
 
 
 async def _close(entries: AsyncIterator[Entry]) -> None:

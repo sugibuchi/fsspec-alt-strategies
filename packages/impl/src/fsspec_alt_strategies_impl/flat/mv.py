@@ -265,7 +265,7 @@ class _Move(_Moving, _Copy):
         self.waiting.clear()
         self.drop_transfers()
         self.copying = (
-            sum(j.kind == "copy" for j in self.running.values())
+            sum(j.kind == "file" for j in self.running.values())
             + self.transfers_running()
         )
         self.send_if_ready()
@@ -279,7 +279,7 @@ class _Move(_Moving, _Copy):
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":
             return super().done(job)
-        if job.kind == "copy":
+        if job.kind == "file":
             self.copying -= 1
             self.delete_later(job.source)
             return []
@@ -299,7 +299,7 @@ class _Move(_Moving, _Copy):
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         if job.kind == "mkdir":
             return super().failed(job, error)
-        if job.kind == "copy":
+        if job.kind == "file":
             self.copying -= 1
             self.copied.pop(job.path)
             self.send_if_ready()

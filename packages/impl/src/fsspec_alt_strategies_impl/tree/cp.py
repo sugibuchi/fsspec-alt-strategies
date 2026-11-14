@@ -288,7 +288,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         self.files_found += 1
         path = entry["name"]
         target = self.target(path)
-        job = _Job("copy", entry, target)
+        job = _Job("file", entry, target)
         self.queue(self.dst.parent(target), "", [job])
 
     def add(self, listing: _Listing) -> list[Any] | None:
@@ -342,7 +342,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
                 continue
             names.add(name)
             # The entry goes with its copy, so that cp_entry need not ask it.
-            copies.append(_Job("copy", {**entry, "name": name}, target))
+            copies.append(_Job("file", {**entry, "name": name}, target))
         return copies, refused
 
     def refuse_twice(self, path: str, target: StoragePath) -> FileExistsError:

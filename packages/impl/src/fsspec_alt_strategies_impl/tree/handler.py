@@ -111,7 +111,7 @@ class TreeFileOperationHandler(FileOperationHandler):
         whatever the profile declares, so a handler keeping it declares no
         ``recursive_order``. ``kwargs`` go to each ``ils``.
         """
-        return _tree_ils(self, entry["name"], entry=entry, **kwargs)
+        return _tree_ils(self, entry, **kwargs)
 
     async def rm_tree(self, entry: Entry) -> None:
         """Delete a directory with everything in it, in one request."""

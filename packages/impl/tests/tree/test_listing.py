@@ -19,7 +19,7 @@ def _tree(fs: SimulatedFileSystem) -> None:
 
 
 async def _names(view: TreeView, path: str) -> list[str]:
-    return [e["name"] async for e in _tree_ils(view, path)]
+    return [e["name"] async for e in _tree_ils(view, view.entry(path))]
 
 
 async def test_lists_depth_first_in_name_order(any_fs: SimulatedFileSystem) -> None:
@@ -46,7 +46,7 @@ async def test_lists_what_a_recursive_listing_lists(
     _tree(any_fs)
     any_fs.add_file("data/b/c/d/j")
     native = [e async for e in any_fs._ils_recursive("data")]
-    listed = [e async for e in _tree_ils(TreeView(any_fs), "data")]
+    listed = [e async for e in _tree_ils(TreeView(any_fs), {"name": "data"})]
     # A flat storage lists no directory recursively: the walk tells them apart.
     files = [e for e in listed if e["type"] == "file"]
     assert sorted(files, key=lambda e: e["name"]) == [
@@ -78,7 +78,7 @@ async def test_a_failed_directory_ends_the_listing() -> None:
     listed: list[str] = []
     with pytest.raises(PermissionError) as raised:
         # A loop, not a comprehension: what came before the error is kept.
-        async for entry in _tree_ils(view, "data"):
+        async for entry in _tree_ils(view, view.entry("data")):
             listed.append(entry["name"])  # noqa: PERF401
     assert raised.value.__notes__ == ["Listing 'data/a-x' failed."]
     assert listed == ["data/a", "data/a/f", "data/a-x"]
@@ -148,7 +148,7 @@ async def test_lists_nothing_ahead_while_many_entries_wait(
     for i in range(20):
         fs.add_file(f"root/{i:02}/file")
 
-    async with aclosing(_tree_ils(TreeView(fs), "root")) as it:
+    async with aclosing(_tree_ils(TreeView(fs), {"name": "root"})) as it:
         await anext(it)  # The root's 20 entries are read: 19 wait.
         await asyncio.sleep(0.05)
         # The root, and the 9 directories found before 10 entries waited.
@@ -180,7 +180,9 @@ async def test_closing_stops_the_listings_ahead() -> None:
         fs.add_file(f"root/{i}/file")
     limit = asyncio.Semaphore(4)
 
-    async with aclosing(_tree_ils(TreeView(fs, operation_limit=limit), "root")) as it:
+    async with aclosing(
+        _tree_ils(TreeView(fs, operation_limit=limit), {"name": "root"})
+    ) as it:
         await anext(it)  # The root's first entry: listings ahead are in flight.
 
     assert fs._in_flight == 0

@@ -187,7 +187,7 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
         self.files_found += 1
         target = self.target(name)
         # The entry goes with its copy, so that cp_entry need not ask it.
-        job = _Job("copy", entry, target)
+        job = _Job("file", entry, target)
         self.queue(self.dst.parent(target), [job])
 
     def queue(
