@@ -12,7 +12,12 @@ from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.mv import _tree_mv
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
-from fsspec_alt_strategies_impl.tree.walk import _tree_walk
+from fsspec_alt_strategies_impl.tree.walk import (
+    _ParentsFirst,
+    _Split,
+    _splitter,
+    _tree_walk,
+)
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 _FILES = [
@@ -131,3 +136,22 @@ async def test_a_listing_broken_off_is_resumed(cut_after: int) -> None:
     assert len(names) == len(set(names))
     fs.cut_after = None
     assert sorted(names) == await AsyncFileSystem._find(fs, "data", withdirs=True)
+
+
+@pytest.mark.parametrize("order", [None, "parents_first"])
+async def test_the_default_listing_is_split_depth_first(order: Any) -> None:
+    # The library's own listing is depth first, whatever the profile says of the
+    # storage's: a handler keeping it declares nothing, and pays no more.
+    fs = _fs()
+    view = TreeView(fs, storage_profile=StorageProfile(recursive_order=order))
+    entries = view.ils_recursive(view.entry("data"))
+    assert await _splitter(view, entries) is _Split
+    await entries.aclose()  # type: ignore[attr-defined]  # A _DepthFirst.
+
+    own = TreeView(
+        fs,
+        recursive_listing=True,
+        storage_profile=StorageProfile(recursive_order=order),
+    )
+    entries = own.ils_recursive(own.entry("data"))
+    assert await _splitter(own, entries) is _ParentsFirst

@@ -14,12 +14,13 @@ directory whole.
 
 A tree that nothing prunes is listed by one ``ils_recursive``. Its entries are
 split into the same parts. Each directory's last part comes as soon as the
-listing has passed it where the profile declares the order depth first, which
-covers name order, else once the listing ends: unknown, a listing is only taken
-to give each directory before what is below it. A listing broken off part way
-is resumed a directory per request, from the directories it was in. A handler
-with no recursive listing of its own answers it by default with a directory per
-request, several at a time.
+listing has passed it where the order is depth first, which covers name order,
+else once the listing ends: unknown, a listing is only taken to give each
+directory before what is below it. A handler with no recursive listing of its
+own answers it by default with `_tree_ils`, a directory per request, several at
+a time, which is depth first whatever the profile says. Otherwise, the profile
+declares the order. A listing broken off part way is resumed a directory per
+request, from the directories it was in.
 
 Where the walk prunes, it lists each directory it enters on its own, several at
 a time, breadth first.
@@ -44,7 +45,7 @@ from fsspec_alt_strategies.states import WalkState
 from ..common.jobs import _Queue
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
-from .listing import _tree_ils
+from .listing import _DepthFirst, _tree_ils
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -495,12 +496,13 @@ async def _produce_tree(
     """List a tree by one recursive listing, putting each directory's parts as a walk would.
 
     The listing is the handler's ``ils_recursive``, or with ``own`` False
-    `_tree_ils`, a directory per request. The entries come depth first or in
-    name order, all below a directory together, so a directory is done once
-    the listing has passed it: `_Split` puts its last part then, where the
-    profile declares the ``recursive_order`` "depth_first". Otherwise, a
-    listing is only known to give a directory before what is below it:
-    `_ParentsFirst` puts every directory's last part once the listing ends.
+    `_tree_ils`, a directory per request. Depth first or in name order, all
+    below a directory come together, so a directory is done once the listing
+    has passed it: `_Split` puts its last part then. That is `_tree_ils`'s
+    order, and a storage's own where the profile declares the
+    ``recursive_order`` "depth_first". Otherwise, a listing is only known to
+    give a directory before what is below it: `_ParentsFirst` puts every
+    directory's last part once the listing ends.
 
     A listing failing before anything came puts its error as the root's first
     and last part, raised as such for a root of the walk. One broken off later
@@ -510,16 +512,19 @@ async def _produce_tree(
     leave an arbitrary part of the tree unwalked, which fsspec's ``find`` then
     omits with no error.
     """
+    entries: AsyncIterator[Entry] | None = None
     try:
-        splitter = await _splitter(handler, own)
+        entry = listed or handler.entry(root)
+        entries = _recursive_listing(handler, own, root, entry, ils_kwargs)
+        splitter = await _splitter(handler, entries)
     except Exception as e:
-        # The profile could not be told: the listing fails as its root.
+        # Nothing was listed, or the profile could not be told: the root fails.
+        if entries is not None:
+            await _close(entries)
         await parts.put(_Listing(root, root_depth, [], e, True, True))
         return
     tree = splitter(root, root_depth, chunk_size, listed)
     try:
-        entry = listed or handler.entry(root)
-        entries = _recursive_listing(handler, own, root, entry, ils_kwargs)
         try:
             async for entry in entries:
                 for part in tree.add(entry):
@@ -527,8 +532,7 @@ async def _produce_tree(
                 if stopped():
                     return
         finally:
-            if (aclose := getattr(entries, "aclose", None)) is not None:
-                await aclose()
+            await _close(entries)
     except Exception as e:
         # What was listed first, so that only the root's own failure is a first part.
         for part in tree.flush():
@@ -557,19 +561,28 @@ def _recursive_listing(
         return _tree_ils(handler, root, entry=entry, **ils_kwargs)
 
 
-async def _splitter(
-    handler: TreeFileOperationHandler, own: bool
-) -> type[_Split | _ParentsFirst]:
-    """How a recursive listing is split: depth first only where the profile declares the handler's own so.
+async def _close(entries: AsyncIterator[Entry]) -> None:
+    """Close a listing, where it can be: an ``ils_recursive`` gives any async iterator."""
+    if (aclose := getattr(entries, "aclose", None)) is not None:
+        await aclose()
 
-    Unknown, the order is taken as parents first, which is right on any
-    storage. `_tree_ils` lists depth first, whatever the profile says. The
-    profile is read once the handler is open.
+
+async def _splitter(
+    handler: TreeFileOperationHandler, entries: AsyncIterator[Entry]
+) -> type[_Split | _ParentsFirst]:
+    """How a recursive listing is split: depth first where it is `_tree_ils`'s, or the profile declares it so.
+
+    `_tree_ils` lists depth first, whatever the profile says, so a handler
+    keeping it as its ``ils_recursive`` needs to declare nothing. A storage's
+    own listing keeps the order its profile declares. Unknown, it is taken as
+    parents first, which is right on any storage. The handler is opened either
+    way, as the walk starts: it makes the clients the listing sends by.
     """
-    if not own:
-        return _Split
     await handler.open()
-    if handler.profile.recursive_order == "depth_first":
+    if (
+        isinstance(entries, _DepthFirst)
+        or handler.profile.recursive_order == "depth_first"
+    ):
         return _Split
     else:
         return _ParentsFirst

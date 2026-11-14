@@ -436,7 +436,7 @@ The router imports no family: each storage's handler runs its own strategies. It
 ### The tree strategies
 
 The tree strategies list a directory with the handler's `ils`, its entries in any order, and a tree with its
-`ils_recursive`, in either of two orders, which the walk tells apart without being told:
+`ils_recursive`. A recursive listing keeps one of two orders, which tell the walk when a directory is done:
 
 - depth first: a directory's entry, then all below it, before any other entry. Siblings may come in any order.
 - by name: sorted by the whole name, as object stores list keys. A directory's entry may come apart from what is below
@@ -452,12 +452,16 @@ has it.
 - Parents first, `tree.walk._ParentsFirst` keeps every directory open until the listing ends, and the names of all its
   entries, to resume a break. Depth first, `_Split` closes each directory as the listing passes it.
 - "parents_first" is always right, as a depth-first listing is parents first too. It costs the streaming of each
-  directory done, and the memory of the tree's names. So a storage known to list depth first declares it, as the
-  known implementations' profiles do for the tree handlers.
+  directory done, and the memory of the tree's names. So a storage whose own listing is depth first declares it, as
+  `AdlfsHandler` does.
 
 A directory may be left out, as object stores list only files: the walk tells it from the paths below it. By default,
 `ils_recursive` is `tree/listing.py`'s `_tree_ils`, which lists depth first, a directory per request, several ahead
 at a time. The generic tree handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing.
+
+`_tree_ils`'s listing is a `_DepthFirst`, whose type tells the walk its order. So a handler keeping the default needs
+no `recursive_order`, and the walk closes each directory as it passes it. The profile declares the order of a
+storage's own listing alone. A handler falling back on `_tree_ils` gets the same, whatever its profile says.
 
 A storage may refuse a recursive listing in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`.
 Its handler's `ils_recursive` then falls back on `_tree_ils` itself.

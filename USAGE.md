@@ -152,9 +152,10 @@ class MyHandler(TreeFileOperationHandler):
 - A tree handler with a recursive listing of its own implements `ils_recursive`. Its profile's `recursive_order`
   says the listing's order: "depth_first", which covers name order, or "parents_first", which only guarantees a
   directory before what is below it. Unknown, it is taken as "parents_first", which costs the walk memory and
-  streaming: declare "depth_first" where it holds, the default listing's too.
-  Without it, a tree is listed a directory per request, several at once. One whose storage may refuse its own falls
-  back on `tree.listing._tree_ils`, the default.
+  streaming: declare "depth_first" where it holds.
+- Without its own, a tree is listed a directory per request, several at once, by `tree.listing._tree_ils`. It is
+  depth first whatever the profile says, so it needs no `recursive_order`. A handler whose storage may refuse its own
+  listing falls back on it.
 - A flat handler implements `ils_recursive(entry, prefix=...)`, every key below a directory starting with the prefix,
   in name order.
 - `rm_tree`, `mv_tree` and `cp_tree`, a storage's own operations on a whole directory, are optional. The profile

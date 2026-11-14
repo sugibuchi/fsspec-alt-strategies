@@ -7,7 +7,8 @@ in the order the profile's ``recursive_order`` declares: depth first, which
 covers name order, or parents first. A storage with a recursive listing of its
 own implements it so. One without has `_tree_ils`, its default, which lists a
 directory per request by ``ils``. One whose own may be refused, as only
-asking tells, falls back on it.
+asking tells, falls back on it. Its listing is a `_DepthFirst`, which the walk
+knows is depth first, whatever the profile declares of the storage's own.
 
 It yields the entries depth first, as a walk visits them: each directory's
 entries in the order its listing gives them, and all below a subdirectory right
@@ -29,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 from ..common.paths import _trim
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
 
     from ..common.handler import Entry, StorageHandler
     from .handler import TreeFileOperationHandler
@@ -44,13 +45,13 @@ _HELD = 32 * _BATCH
 """The entries read and not yielded, past which no listing ahead starts."""
 
 
-async def _tree_ils(
+def _tree_ils(
     handler: TreeFileOperationHandler,
     path: str,
     *,
     entry: Entry | None = None,
     **ils_kwargs: Any,
-) -> AsyncGenerator[dict[str, Any]]:
+) -> _DepthFirst:
     """List all below a directory depth first, by one ``ils`` per directory.
 
     It yields what an ``ils_recursive`` yields: each entry below ``path``, at
@@ -72,12 +73,48 @@ async def _tree_ils(
 
     A directory below ``path`` that fails to list raises its error, noted with
     its path, and ends the listing: a recursive listing cannot go on past a
-    failure. The walk under the strategies resumes it a directory per request. A missing ``path`` raises FileNotFoundError, when the iteration
-    starts, as its own ``ils`` raises it.
+    failure. The walk under the strategies resumes it a directory per request.
+    A missing ``path`` raises FileNotFoundError, when the iteration starts, as
+    its own ``ils`` raises it.
 
     ``path`` is listed by ``entry``, its entry, where given, e.g. as its parent's
     listing gave it, else by its path. ``ils_kwargs`` go to each ``ils``.
+
+    The listing is a `_DepthFirst`, so that the walk takes it as depth first
+    on a handler whose profile leaves the order unknown, or declares its own
+    listing parents first: this one is the library's, whatever the storage.
     """
+    return _DepthFirst(_entries(handler, path, entry, ils_kwargs))
+
+
+class _DepthFirst:
+    """A listing depth first by construction, `_tree_ils`'s: the walk closes each directory as it passes it.
+
+    It is the listing's own type that tells the walk, not the handler's class:
+    a handler overriding ``ils_recursive`` may still answer with `_tree_ils`,
+    e.g. where its storage refuses its own listing.
+    """
+
+    def __init__(self, entries: AsyncGenerator[dict[str, Any]]) -> None:
+        self._entries = entries
+
+    def __aiter__(self) -> _DepthFirst:
+        return self
+
+    def __anext__(self) -> Awaitable[dict[str, Any]]:
+        return self._entries.__anext__()
+
+    async def aclose(self) -> None:
+        await self._entries.aclose()
+
+
+async def _entries(
+    handler: TreeFileOperationHandler,
+    path: str,
+    entry: Entry | None,
+    ils_kwargs: dict[str, Any],
+) -> AsyncGenerator[dict[str, Any]]:
+    """The entries `_tree_ils` yields, as its docstring says."""
     root = _trim(path)
     ahead = _Ahead(handler, ils_kwargs)
     # The directories being yielded, the root first: each is yielding one of the next.

@@ -97,10 +97,11 @@ class TreeFileOperationHandler(FileOperationHandler):
         missing directory raises FileNotFoundError, when the iteration starts.
 
         Here, `listing._tree_ils` lists a directory per request by ``ils``,
-        several at a time, depth first. A storage listing a tree in one
-        request overrides it. One whose storage may refuse that listing, as
-        only asking tells, e.g. a WebDAV server refusing ``Depth: infinity``,
-        falls back on `listing._tree_ils` itself.
+        several at a time, depth first: the walk knows it, whatever the
+        profile declares, so a handler keeping it declares nothing. A storage
+        listing a tree in one request overrides it. One whose storage may
+        refuse that listing, as only asking tells, e.g. a WebDAV server
+        refusing ``Depth: infinity``, falls back on `listing._tree_ils` itself.
         """
         return _tree_ils(self, entry["name"], entry=entry, **kwargs)
 

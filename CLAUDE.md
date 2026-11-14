@@ -157,6 +157,8 @@ code: read it before adding a strategy or a handler.
   listing a tree in one request overrides it, and falls back on `_tree_ils` itself where its storage refuses. The
   profile's `recursive_order` says its order: the walk can never tell it. Unknown is taken as "parents_first",
   right on any storage; "depth_first", declared, lets the walk close each directory as the listing passes it.
+  `_tree_ils`'s listing is a `_DepthFirst`, which the walk splits depth first whatever the profile says: the profile
+  declares only a storage's own listing.
 - The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
   It yields each subdirectory once, though a storage lists one twice. Names alone are kept in two more places:

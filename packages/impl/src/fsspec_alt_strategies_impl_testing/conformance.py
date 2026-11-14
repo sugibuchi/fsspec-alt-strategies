@@ -9,7 +9,9 @@ in a handler's tests, on a dummy or a live storage.
 `check_recursive_order` checks the order of a tree handler's ``ils_recursive``
 against the profile's ``recursive_order``. Unknown, the order is taken as
 parents first, right on any storage: "depth_first" is the declaration a wrong
-listing would break, a directory then taken as done too early.
+listing would break, a directory then taken as done too early. A handler
+keeping the default listing, `_tree_ils`, needs no check: the walk takes it as
+depth first whatever the profile says.
 
 This module depends on the strategies' `handler` and `operation` of `common`,
 and `handler` of `tree`.
