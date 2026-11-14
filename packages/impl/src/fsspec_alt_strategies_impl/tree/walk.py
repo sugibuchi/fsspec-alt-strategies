@@ -358,7 +358,7 @@ async def _chunks(
     # Each directory to list by the entry its listing gave, e.g. with the
     # storage's id, else by its path: a root given as a path, verified.
     roots, listed = _roots(path)
-    plan = _Plan(visit or _Visit(), listed)
+    plan = _Plan(handler, visit or _Visit(), listed)
     done = _Subtrees(plan) if subtrees else None
     # The directories to list, each with its depth.
     directories: _Queue[tuple[str, int]] = _Queue(handler.operation_limit)
@@ -1000,15 +1000,19 @@ def _once(part: _Listing, found: dict[str, set[str]]) -> _Listing:
 
 
 class _Plan:
-    """The directories a walk lists, and how, as its visit says of each one found.
+    """The directories a walk lists, and how: which ones as its visit says, and how as its handler does.
 
     A directory whose visit takes all below it is listed whole, by one
-    ``ils_recursive``: the directories below are then in its listing, never
-    listed on their own, nor asked of. Any other is listed alone, and the visit
-    asked of each subdirectory its listing finds.
+    ``ils_recursive``, where the handler's ``lists_subtree`` agrees: the
+    directories below are then in its listing, never listed on their own, nor
+    asked of. Any other is listed alone, and the visit asked of each
+    subdirectory its listing finds.
     """
 
-    def __init__(self, visit: _Visit, listed: dict[str, Entry]) -> None:
+    def __init__(
+        self, handler: TreeFileOperationHandler, visit: _Visit, listed: dict[str, Entry]
+    ) -> None:
+        self.handler = handler
         self.visit = visit
         # The entry each directory to list is listed by: the walk's, shared.
         self.listed = listed
@@ -1020,7 +1024,7 @@ class _Plan:
         for root in sorted(roots):
             depth = self.visit.depth(root)
             entry = self.listed.get(root) or {"name": root, "type": "directory"}
-            if self.visit.root(entry, depth) == "subtree":
+            if self.whole(entry, self.visit.root(entry, depth)):
                 self.subtrees.add(root)
             directories.append((root, depth))
         return directories
@@ -1043,11 +1047,19 @@ class _Plan:
                 if need == "skip":
                     skipped.append(_Skipped({**entry, "name": name}, depth))
                     continue
-                if need == "subtree":
-                    self.subtrees.add(name)
                 self.listed[name] = {**entry, "name": name}
+                if self.whole(self.listed[name], need):
+                    self.subtrees.add(name)
                 directories.append((name, depth))
         return directories, skipped
+
+    def whole(self, entry: Entry, need: Literal["directory", "subtree"]) -> bool:
+        """Whether a directory is listed with all below it: the visit takes all, and the handler lists so.
+
+        Listed alone instead, each of its subdirectories is asked of again, and
+        the visit takes all below each.
+        """
+        return need == "subtree" and self.handler.lists_subtree(entry)
 
     def in_subtree(self, directory: str) -> bool:
         """Whether a directory is in a recursive listing: it, or a directory above it, is listed whole."""

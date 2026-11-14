@@ -389,3 +389,41 @@ async def test_a_file_root_is_yielded_as_such(any_fs: SimulatedFileSystem) -> No
     assert len(events) == 1
     assert isinstance(events[0], _FileRoot)
     assert isinstance(events[0].error, NotADirectoryError)
+
+
+class _Choosing(TreeView):
+    """A storage listing a subtree whole only from a given depth of its paths, as a handler may choose."""
+
+    def __init__(
+        self, fs: SimulatedFileSystem, below: int | None, **kwargs: Any
+    ) -> None:
+        super().__init__(fs, recursive_listing=True, **kwargs)
+        self.below = below
+
+    def lists_subtree(self, entry: dict[str, Any]) -> bool:
+        return self.below is not None and entry["name"].count("/") >= self.below
+
+
+@pytest.mark.parametrize(
+    ("below", "listings"),
+    [
+        (0, 1),  # Every subtree whole: data's one recursive listing.
+        (1, 3),  # data alone, then 2023 and 2024 whole.
+        (None, 7),  # Never: each of data's 7 directories alone.
+    ],
+)
+async def test_a_handler_chooses_how_a_subtree_is_listed(
+    hierarchical_fs: SimulatedFileSystem, below: int | None, listings: int
+) -> None:
+    _tree(hierarchical_fs)
+    view = _Choosing(
+        hierarchical_fs,
+        below,
+        storage_profile=StorageProfile(recursive_order="depth_first"),
+    )
+    found, errors = await _collect_with_errors(_tree_find(view, "data", withdirs=True))
+    assert errors == []
+    # The requests change, never the answer.
+    assert hierarchical_fs.stats.calls["list"] == listings
+    expected = await AsyncFileSystem._find(hierarchical_fs, "data", withdirs=True)
+    assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)

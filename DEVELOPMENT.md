@@ -324,6 +324,7 @@ A developer chooses, per storage:
 - a family, by the handler class a handler subclasses, whose strategy methods run the family's strategies;
 - another strategy for one method, by overriding it, e.g. `glob` with one of the storage's own;
 - a storage's recursive listing, by implementing `ils_recursive`;
+- whether a subtree an operation needs whole is listed by it, by overriding `lists_subtree`;
 - a storage's recursive delete, by implementing `rm_tree`, which `deletes_directories=True` declares;
 - a storage's rename of a directory, by implementing `mv_tree`, which `renames_directories=True` declares;
 - a storage's copy of a directory, by implementing `cp_tree`, which `copies_directories=True` declares.
@@ -486,7 +487,9 @@ A walk's plan has two sides:
 - Which directories to visit is the operation's, as its arguments say: a `maxdepth`, a glob's pattern, a
   `descend`. A `_Visit`, in `tree/_visit.py`, tells the walk of each directory it finds whether to leave it, list it
   alone, or take all below it.
-- How each is listed is the storage's. Only all below a directory may be listed by one recursive listing.
+- How each is listed is the storage's. Only all below a directory may be listed by one recursive listing, and only
+  where the tree handler's `lists_subtree` says so of it: always, by default. A handler saying no is asked again of
+  each subdirectory.
 
 Beside each directory's parts, the walk yields what its consumers would otherwise work out again:
 

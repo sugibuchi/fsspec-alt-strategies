@@ -159,6 +159,10 @@ class MyHandler(TreeFileOperationHandler):
 - Without a listing of its own, a tree is listed a directory per request, several at once, by the handler's
   `ils_by_directory`. That listing is depth first, so it needs no `recursive_order`. A handler whose storage may
   refuse its own recursive listing falls back on it: `return self.ils_by_directory(entry, **kwargs)`.
+- Where an operation needs all below a directory, e.g. a `find` without `maxdepth`, the walk lists it by one
+  `ils_recursive`. A handler overriding `lists_subtree(entry)` to return False lists that directory alone instead,
+  and is asked again of each subdirectory. It may so list a subtree whole only from a depth where it knows subtrees
+  are small, or never, where its storage's recursive listing is slow to start or billed apart.
 - A flat handler implements `ils_recursive(entry, prefix=...)`: every key below a directory starting with the prefix,
   in name order.
 - `rm_tree`, `mv_tree` and `cp_tree`, a storage's own operations on a whole directory, are optional. The profile
