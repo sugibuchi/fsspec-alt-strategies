@@ -39,6 +39,15 @@ class _Visit:
     finds it, so it never holds a directory's listing.
     """
 
+    by_path = True
+    """Whether `enter` decides by a directory's path and depth alone, as ``maxdepth`` and a glob's pattern do.
+
+    Only then may the walk list all below a directory it prunes by one
+    recursive listing, where the handler chooses so, and drop what the visit
+    leaves: within it, a subdirectory's parts may come before the entry naming
+    it, so the walk asks of it by its path.
+    """
+
     def depth(self, root: str) -> int:
         """The depth of a root of the walk: 1, as the directory walked from."""
         return 1
@@ -66,6 +75,8 @@ class _Pruned(_Visit):
       With ``maxdepth``, never: what is deeper is left.
     - ``matched`` are the roots a glob matched, one level down: depth 2, as
       fsspec's ``_expand_path`` walks them.
+    - ``by_name`` says that ``descend`` reads only an entry's name, as a glob's
+      pattern does. A caller's own ``descend`` may read any of its keys.
     """
 
     def __init__(
@@ -75,12 +86,14 @@ class _Pruned(_Visit):
         descend: Callable[[dict[str, Any]], bool] | None = None,
         whole: Callable[[dict[str, Any]], bool] | None = None,
         matched: Collection[str] = (),
+        by_name: bool = False,
     ) -> None:
         _check_maxdepth(maxdepth)
         self.maxdepth = maxdepth
         self.descend = descend
         self.whole = whole
         self.matched = matched
+        self.by_path = descend is None or by_name
 
     def depth(self, root: str) -> int:
         return 2 if root in self.matched else 1
@@ -121,6 +134,9 @@ class _TopDown(_Visit):
     A recursive listing passes a directory only after all below it, so taking
     all below one would hold the whole subtree.
     """
+
+    by_path = False
+    """A directory comes before those below it, which a recursive listing never gives."""
 
     def __init__(self, visit: _Visit) -> None:
         self.visit = visit

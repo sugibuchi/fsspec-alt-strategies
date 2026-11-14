@@ -400,7 +400,7 @@ class _Choosing(TreeView):
         super().__init__(fs, recursive_listing=True, **kwargs)
         self.below = below
 
-    def lists_subtree(self, entry: dict[str, Any]) -> bool:
+    def lists_subtree(self, entry: dict[str, Any], *, pruned: bool = False) -> bool:
         return self.below is not None and entry["name"].count("/") >= self.below
 
 
@@ -427,3 +427,98 @@ async def test_a_handler_chooses_how_a_subtree_is_listed(
     assert hierarchical_fs.stats.calls["list"] == listings
     expected = await AsyncFileSystem._find(hierarchical_fs, "data", withdirs=True)
     assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)
+
+
+class _Eager(TreeView):
+    """A storage listing every subtree whole, though the operation prunes below it: the walk drops what it leaves."""
+
+    def __init__(self, fs: SimulatedFileSystem) -> None:
+        profile = StorageProfile(recursive_order="depth_first")
+        super().__init__(fs, recursive_listing=True, storage_profile=profile)
+
+    def lists_subtree(self, entry: dict[str, Any], *, pruned: bool = False) -> bool:
+        return True
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "data/*/01/*",
+        "data/2024/*",
+        "data/*/*/part-0.parquet",
+        "*/README.md",
+        "data/2*",
+        "data/**/part-1.parquet",
+        "data/*/02/",
+    ],
+)
+async def test_a_glob_lists_a_pruned_subtree_whole_where_the_handler_chooses(
+    any_fs: SimulatedFileSystem, pattern: str
+) -> None:
+    _tree(any_fs)
+    expected = await AsyncFileSystem._glob(any_fs, pattern)
+    any_fs.stats.calls.clear()
+
+    found, errors = await _collect_with_errors(_tree_glob(_Eager(any_fs), pattern))
+
+    assert errors == []
+    assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)
+    # One listing of the pattern's root, where a directory per request lists each it can match in.
+    assert any_fs.stats.calls["list"] == 1
+
+
+@pytest.mark.parametrize("maxdepth", [1, 2, 3])
+async def test_find_and_du_within_maxdepth_by_one_listing(
+    any_fs: SimulatedFileSystem, maxdepth: int
+) -> None:
+    _tree(any_fs)
+    expected = await AsyncFileSystem._find(
+        any_fs, "data", maxdepth=maxdepth, withdirs=True
+    )
+    size = await AsyncFileSystem._du(any_fs, "data", maxdepth=maxdepth)
+    any_fs.stats.calls.clear()
+
+    found, errors = await _collect_with_errors(
+        _tree_find(_Eager(any_fs), "data", maxdepth=maxdepth, withdirs=True)
+    )
+    counted, _ = await _collect_with_errors(
+        _tree_du(_Eager(any_fs), "data", maxdepth=maxdepth)
+    )
+
+    assert errors == []
+    assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)
+    assert sum(e["size"] for e in counted) == size
+    assert any_fs.stats.calls["list"] == 2  # One for find, one for du.
+
+
+async def test_a_walk_bottom_up_within_maxdepth_by_one_listing(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    alone = await _collect_with_errors(
+        _tree_walk(TreeView(hierarchical_fs), "data", maxdepth=2, topdown=False)
+    )
+    whole = await _collect_with_errors(
+        _tree_walk(_Eager(hierarchical_fs), "data", maxdepth=2, topdown=False)
+    )
+    assert sorted(d for d, _, _ in whole[0]) == sorted(d for d, _, _ in alone[0])
+    order = [d for d, _, _ in whole[0]]
+    assert order[-1] == "data"  # Bottom up: the root after all below it.
+
+
+async def test_rm_within_maxdepth_deletes_as_listed_alone() -> None:
+    # The directories the visit leaves are told of: rm deletes those at the limit
+    # only if empty, as fsspec does, so the four months, holding files, fail.
+    results = []
+    for view in (TreeView, _Eager):
+        fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+        _tree(fs)
+        deleted, errors = await _collect_with_errors(
+            _tree_rm(view(fs), "data", maxdepth=2)
+        )
+        failed = sorted(e.filename for e in errors if isinstance(e, OSError))
+        results.append(
+            (sorted(deleted), failed, sorted(await fs._find("", withdirs=True)))
+        )
+    assert results[0] == results[1]
+    assert len(results[0][1]) == 4

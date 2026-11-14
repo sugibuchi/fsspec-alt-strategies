@@ -187,9 +187,10 @@ code: read it before adding a strategy or a handler.
 - The walk takes a `tree._visit._Visit`: which directories the operation needs, e.g. within `maxdepth`. What it found
   but did not list, it yields as events: a `_Skipped` subdirectory, a `_FileRoot`, and, when asked, a
   `_SubtreeListed`. A consumer acts on those, and never checks `maxdepth` or catches a file root again.
-- How the walk lists what the visit needs is the handler's: a subtree needed whole is listed by one `ils_recursive`
-  only where the tree handler's `lists_subtree(entry)` says so. Never decide it in a visit, nor by the storage in
-  a strategy.
+- How the walk lists what the visit needs is the handler's, by the tree handler's `lists_subtree(entry, pruned=...)`:
+  a subtree needed whole by one `ils_recursive` unless it says no, a pruned one only if it says yes. The walk then
+  keeps what the visit would list, by path: only a visit whose `by_path` holds allows it. Never decide it in a
+  visit, nor by the storage in a strategy.
 - The walk yields each subdirectory once, by `tree.walk._once`, though a storage may list one twice. Beside it, only
   two places keep names alone:
   - a copy's file names per directory, `tree.cp._CopyOrMove.names`, to refuse a second file of one name;

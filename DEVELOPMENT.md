@@ -487,9 +487,12 @@ A walk's plan has two sides:
 - Which directories to visit is the operation's, as its arguments say: a `maxdepth`, a glob's pattern, a
   `descend`. A `_Visit`, in `tree/_visit.py`, tells the walk of each directory it finds whether to leave it, list it
   alone, or take all below it.
-- How each is listed is the storage's. Only all below a directory may be listed by one recursive listing, and only
-  where the tree handler's `lists_subtree` says so of it: always, by default. A handler saying no is asked again of
-  each subdirectory.
+- How each is listed is the storage's, by the tree handler's `lists_subtree`. All below a directory the visit takes
+  whole is listed by one recursive listing, unless the handler says no: it is then asked again of each subdirectory.
+- Below a directory the visit prunes, the handler may still choose one recursive listing, with `pruned=True`. The walk
+  then keeps what the visit would list, deciding of each directory by its path, and drops the rest. So only a visit
+  deciding by path allows it, as `maxdepth` and a glob's pattern do: a caller's `descend` may read any key of an
+  entry, and a walk top down needs each directory before what is below it.
 
 Beside each directory's parts, the walk yields what its consumers would otherwise work out again:
 
@@ -503,7 +506,7 @@ Beside each directory's parts, the walk yields what its consumers would otherwis
 - A tree pruned, by `maxdepth` or a glob's pattern, is listed a directory per request, many at once. Below a glob's
   `**`, nothing is pruned, so it is listed recursively again. Pruning wins on a large tree, and loses on a small
   subtree that one recursive listing would cover. The library cannot tell which without guessing the tree's size, so
-  it always prunes.
+  it prunes, unless the handler's `lists_subtree` chooses otherwise.
 - A recursive listing broken off is resumed a directory per request. A long listing, e.g. a WebDAV body taking
   minutes, may break off anywhere. Left so, the tree would lack an arbitrary part of it, which fsspec's `find` omits
   with no error.

@@ -93,7 +93,10 @@ def _tree_glob(
     it never lists a subtree whole by itself: listing all below the
     directories of ``*/year=2024/month=03`` that way took 3.4 s against
     0.16 s. A caller who knows the subtree is small writes ``**`` there, e.g.
-    ``t007/year=2024/**/part-0.parquet``, which lists it whole.
+    ``t007/year=2024/**/part-0.parquet``, which lists it whole. A handler
+    knowing it of its storage, e.g. below a given depth of its paths, lists
+    it whole by its ``lists_subtree`` with ``pruned``: the walk then drops
+    what the pattern cannot match in.
 
     Once cancelled, it lists no new directory, and yields the matches of the
     listings in flight.
@@ -181,6 +184,7 @@ async def _walk(
             else max(d for d in depths if d is not None),
             descend=lambda e: any(s.descend(e) for s in searches),
             whole=lambda e: any(s.whole(e) for s in searches),
+            by_name=True,
         ),
         ils_kwargs=ils_kwargs,
         stopping=op.cancelling,

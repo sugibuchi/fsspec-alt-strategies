@@ -439,6 +439,8 @@ def _taken(
         part = _once(part, found)
     if part.last:
         found.pop(part.directory, None)
+    if not plan.kept(part.directory, part.depth):
+        return [], []  # Listed whole with what the visit keeps, but left by it.
 
     if part.error is None:
         listing, skipped = plan.found(part)
@@ -1007,6 +1009,11 @@ class _Plan:
     directories below are then in its listing, never listed on their own, nor
     asked of. Any other is listed alone, and the visit asked of each
     subdirectory its listing finds.
+
+    A directory the visit prunes below may be listed whole too, where the
+    visit decides by path and the handler chooses so: such a subtree is
+    "filtered". The walk then keeps of it what the visit would list, asked of
+    each directory by its path, and drops the rest.
     """
 
     def __init__(
@@ -1014,6 +1021,8 @@ class _Plan:
     ) -> None:
         self.handler = handler
         self.visit = visit
+        # The roots of the subtrees listed whole though the visit prunes below them.
+        self.filtered: set[str] = set()
         # The entry each directory to list is listed by: the walk's, shared.
         self.listed = listed
         self.subtrees: set[str] = set()
@@ -1037,7 +1046,15 @@ class _Plan:
         none: all below its root is listed.
         """
         if self.in_subtree(part.directory):
-            return [], []
+            if self._filtered_root(part.directory) is None:
+                return [], []
+            # Listed already, but what the visit leaves below is told of.
+            return [], [
+                _Skipped({**e, "name": e["name"].rstrip("/")}, part.depth + 1)
+                for e in part.entries
+                if e["type"] == "directory"
+                and self.visit.enter(e, part.depth + 1) == "skip"
+            ]
         directories, skipped = [], []
         for entry in part.entries:
             if entry["type"] == "directory":
@@ -1054,12 +1071,50 @@ class _Plan:
         return directories, skipped
 
     def whole(self, entry: Entry, need: Literal["directory", "subtree"]) -> bool:
-        """Whether a directory is listed with all below it: the visit takes all, and the handler lists so.
+        """Whether a directory is listed with all below it, as the handler chooses.
 
-        Listed alone instead, each of its subdirectories is asked of again, and
-        the visit takes all below each.
+        Where the visit takes all below it, the handler may list it alone
+        instead: each of its subdirectories is then asked of again. Where the
+        visit prunes below it, the handler may list it whole, and the walk drop
+        what the visit leaves: only for a visit deciding by path.
         """
-        return need == "subtree" and self.handler.lists_subtree(entry)
+        if need == "subtree":
+            return self.handler.lists_subtree(entry)
+        elif self.visit.by_path and self.handler.lists_subtree(entry, pruned=True):
+            self.filtered.add(entry["name"].rstrip("/"))
+            return True
+        else:
+            return False
+
+    def kept(self, directory: str, depth: int) -> bool:
+        """Whether the walk yields a directory's parts: always, but in a filtered subtree, where the visit enters each directory down to it."""
+        root = self._filtered_root(directory)
+        if root is None or directory == root:
+            return True
+        parent = directory.rpartition("/")[0]
+        entry = {"name": directory, "type": "directory"}
+        return self.kept(parent, depth - 1) and self.visit.enter(entry, depth) != "skip"
+
+    def subdirs(self, part: _Listing, listing: list[tuple[str, int]]) -> list[str]:
+        """The subdirectories of a part the walk lists: in a recursive listing those kept, else those it adds to list."""
+        if not self.in_subtree(part.directory):
+            return [name for name, _ in listing]
+        names = [
+            e["name"].rstrip("/") for e in part.entries if e["type"] == "directory"
+        ]
+        return [n for n in names if self.kept(n, part.depth + 1)]
+
+    def _filtered_root(self, directory: str) -> str | None:
+        """The root of the filtered subtree a directory is in, if any."""
+        if not self.filtered:
+            return None
+        path = directory
+        while True:
+            if path in self.filtered:
+                return path
+            if not path:
+                return None
+            path = path.rpartition("/")[0]
 
     def in_subtree(self, directory: str) -> bool:
         """Whether a directory is in a recursive listing: it, or a directory above it, is listed whole."""
@@ -1117,15 +1172,11 @@ class _Subtrees:
     ) -> list[_SubtreeListed]:
         """Note a part's subdirectories, and once it is the last, the subtrees it ends, deepest first.
 
-        A part from a recursive listing shows every subdirectory it holds, each
-        listed in the same listing. Any other shows those the walk lists.
+        A part shows the subdirectories the walk lists, as `_Plan.subdirs`
+        says: those of a recursive listing, in the same listing, that the walk
+        keeps, or those it adds to list.
         """
-        if self.plan.in_subtree(part.directory):
-            names = [
-                e["name"].rstrip("/") for e in part.entries if e["type"] == "directory"
-            ]
-        else:
-            names = [name for name, _ in listing]
+        names = self.plan.subdirs(part, listing)
         self.subdirs.setdefault(part.directory, []).extend(names)
         if not part.last:
             return []
