@@ -460,27 +460,6 @@ async def test_the_walk_goes_depth_first() -> None:
     ]
 
 
-async def test_the_directories_waiting_stay_within_the_cap() -> None:
-    # A directory of 60 subdirectories, read 4 entries at a time: its reader
-    # pauses while 5 wait, so at most a part's more ever wait.
-    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    for i in range(60):
-        fs.add_file(f"t/d{i:02}/f")
-    most = 0
-
-    class Watched(_TreeWalk):
-        def _push(self, pending: Any) -> None:
-            nonlocal most
-            super()._push(pending)
-            most = max(most, len(self.pending))
-
-    walk = Watched(TreeView(fs), "t", _Pruned(maxdepth=2), chunk_size=4, waiting=5)
-    events = [e async for e in walk.events()]
-    listed = {e.directory for e in events if isinstance(e, _Part) and e.last}
-    assert listed == {"t", *(f"t/d{i:02}" for i in range(60))}
-    assert most <= 5 + 4
-
-
 @pytest.mark.parametrize("how", ["end", "stop", "close"])
 async def test_every_permit_is_given_back(how: str) -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True, latency=0.002)

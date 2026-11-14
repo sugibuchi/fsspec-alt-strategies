@@ -12,8 +12,8 @@ what the walk asks, and nothing is buffered between the readers and the walk.
 
 The directories to list wait on a stack, so the walk goes depth first, as
 fsspec's walk does. What waits is the subdirectories along the paths the walk
-is in, not a whole level of the tree. While too many wait, a reader that would
-add more is paused until they are taken.
+is in, not a whole level of the tree: at most a directory's own subdirectories,
+along each path.
 
 A walk yields events: each directory's listing in parts, and what it found but
 did not list. The strategies act on each part as it comes, so a directory of
@@ -52,9 +52,6 @@ __all__: list[str] = []
 
 _CHUNK_SIZE = 1000
 """The most entries of one part of a listing: a directory's are never all held."""
-
-_WAITING = 32_000
-"""The directories found and not listed, past which a reader that would add more is paused."""
 
 
 # The events a walk yields.
@@ -322,7 +319,7 @@ class _SubtreeReader:
             if self.split is None or self.split.first:
                 parts.append(_Part(pending.name, pending.depth, [], e, True, True))
                 return _Read(parts)
-            return self._broken(parts)
+            return self._resume(parts)
         return _Read(self._kept(parts))
 
     def _kept(self, parts: list[_Part]) -> list[_Part]:
@@ -331,13 +328,13 @@ class _SubtreeReader:
             parts if keep is None else [p for p in parts if keep(p.directory, p.depth)]
         )
 
-    def _broken(self, parts: list[_Part]) -> _Read:
-        """The parts passed, and the directories the listing was in, to list again leaving out what it passed.
+    def _resume(self, parts: list[_Part]) -> _Read:
+        """How to go on after the listing broke off: the parts it passed, and what the walk reads next instead.
 
         The directories done have had their last part. Those the listing was
-        in are listed again by ``ils``, each on its own: the open ones, which
-        keep their names. Their subdirectories below which nothing came are
-        found anew. So each break resumes deeper in the tree, and ends.
+        in, the open ones, are read again alone, leaving out the names they
+        showed. Their subdirectories below which nothing came are read anew, as
+        the visit says. So each break resumes deeper in the tree, and ends.
         """
         assert self.split is not None
         keep = self.keep or (lambda directory, depth: True)
@@ -412,17 +409,14 @@ class _TreeWalk:
     With ``subtrees``, a `_SubtreeListed` tells when all below a directory is
     listed, as a walk bottom up needs.
 
-    Each reader holds a permit of the handler's ``operation_limit`` while it
-    is read, as a listing is one request to the strategies: the walk takes one
-    before it starts a reader, and gives it back once the reader ends, or is
-    paused. While none is free, one task waits for the next, beside the reads,
-    so that the walk takes a permit others give back as soon as they do, e.g.
-    deletions sharing the limit. So a reader started is a listing in flight.
-    The parts
-    of a directory come in order, but those of several directories mix, as
-    their reads run at once. Once ``stopping`` returns true, no new directory
-    is read, and no reader asked again: the reads in flight are yielded, and a
-    directory stopped so has no last part.
+    Each reader holds a permit of the handler's ``operation_limit`` until it
+    ends, as a listing is one request to the strategies. The walk takes one
+    before it starts a reader: while one is free, or, when none of its own
+    reads runs, by waiting for one. So a reader started is a listing in
+    flight. The parts of a directory come in order, but those of several
+    directories mix, as their reads run at once. Once ``stopping`` returns
+    true, no new directory is read, and no reader asked again: the reads in
+    flight are yielded, and a directory stopped so has no last part.
     """
 
     def __init__(
@@ -435,26 +429,20 @@ class _TreeWalk:
         stopping: Callable[[], object] | None = None,
         subtrees: bool = False,
         chunk_size: int = _CHUNK_SIZE,
-        waiting: int = _WAITING,
     ) -> None:
         self.handler = handler
         self.visit = visit or _Visit()
         self.ils_kwargs = ils_kwargs or {}
         self.stopping = stopping
         self.chunk_size = chunk_size
-        self.waiting = waiting
         self.roots = _roots(path)
         self.limit = handler.operation_limit
         # The directories to read, a stack: the deepest found are read first.
         self.pending: list[_Pending] = []
         # The reads in flight, each with its reader, in the order they started.
         self.reading: dict[asyncio.Task[_Read], _DirectoryReader | _SubtreeReader] = {}
-        # The readers holding a permit, until they end or are paused.
+        # The readers holding a permit, until they end.
         self.permits: set[_DirectoryReader | _SubtreeReader] = set()
-        # The one task waiting for a permit, while directories wait for one.
-        self.waiter: asyncio.Task[Any] | None = None
-        # Readers of a directory not done, not asked again while too many wait.
-        self.paused: list[_DirectoryReader] = []
         self.subtrees = _Subtrees() if subtrees else None
 
     async def events(self) -> AsyncGenerator[_Event]:
@@ -465,13 +453,9 @@ class _TreeWalk:
         ]
         try:
             while await self._start():
-                await asyncio.wait(
-                    [*self.reading, *([self.waiter] if self.waiter else [])],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
+                await asyncio.wait(self.reading, return_when=asyncio.FIRST_COMPLETED)
                 # One read at a time, in the order they started, those done
-                # while the caller handles the last included. The waiter's
-                # permit is taken as readers start.
+                # while the caller handles the last included.
                 while (task := self._done()) is not None:
                     reader = self.reading.pop(task)
                     events = self._take(reader, task.result())
@@ -492,61 +476,21 @@ class _TreeWalk:
         return self.stopping is not None and bool(self.stopping())
 
     async def _start(self) -> bool:
-        """Start reads while the walk gets permits: tell whether it waits for anything, a read or a permit.
+        """Start readers of the deepest directories pending while the walk gets permits: tell whether any reads.
 
-        The deepest directories pending go first, then the readers paused once
-        nothing is pending. Once stopped, nothing starts: the readers paused
-        are closed.
+        A permit free is taken at once. While none is, the walk waits for one
+        only when none of its own reads runs, as nothing else would wake it:
+        else one of them gives one back as it ends. Once stopped, nothing
+        starts.
         """
         if self._stopped():
             self.pending.clear()
-            for paused in self.paused:
-                await paused.close()
-            self.paused.clear()
-            await self._drop_waiter()
-            return bool(self.reading)
-
-        while self.pending or self.paused:
-            if not await self._permit():
-                break
-            reader: _DirectoryReader | _SubtreeReader
-            if self.pending:
-                reader = await self._reader(self.pending.pop())
-            else:
-                reader = self.paused.pop()
+        while self.pending and not (self.reading and self.limit.locked()):
+            await self.limit.acquire()
+            reader = await self._reader(self.pending.pop())
             self.permits.add(reader)
             self._read(reader)
-        if not (self.pending or self.paused):
-            await self._drop_waiter()  # Nothing left to start.
-        return bool(self.reading) or self.waiter is not None
-
-    async def _permit(self) -> bool:
-        """Take a permit for a reader, if the walk can now: else, wait for one beside the reads.
-
-        A permit free is taken at once, and so is the one the waiter got. While
-        no read of the walk's runs, the walk waits for one itself, as nothing
-        else would wake it.
-        """
-        if self.waiter is not None:
-            if not self.waiter.done():
-                return False
-            self.waiter = None  # Its permit is the walk's now.
-            return True
-        elif not self.limit.locked() or not self.reading:
-            await self.limit.acquire()
-            return True
-        else:
-            self.waiter = asyncio.ensure_future(self.limit.acquire())
-            return False
-
-    async def _drop_waiter(self) -> None:
-        """Stop waiting for a permit, giving back the one got, if any."""
-        waiter, self.waiter = self.waiter, None
-        if waiter is not None:
-            waiter.cancel()
-            await asyncio.gather(waiter, return_exceptions=True)
-            if not waiter.cancelled() and waiter.exception() is None:
-                self.limit.release()
+        return bool(self.reading)
 
     def _read(self, reader: _DirectoryReader | _SubtreeReader) -> None:
         """Start a reader's next read, under the permit it holds."""
@@ -574,13 +518,10 @@ class _TreeWalk:
             self.limit.release()
 
     async def _again(self, reader: _DirectoryReader | _SubtreeReader) -> None:
-        """Ask a reader for more, keeping its permit; pause it while too many directories wait; or close it once done."""
+        """Ask a reader for more, under the permit it holds, or close it once done."""
         if reader.ended or self._stopped():
             self._give_back(reader)
             await reader.close()
-        elif isinstance(reader, _DirectoryReader) and len(self.pending) >= self.waiting:
-            self._give_back(reader)
-            self.paused.append(reader)
         else:
             self._read(reader)
 
@@ -748,15 +689,13 @@ class _TreeWalk:
 
     async def _close(self) -> None:
         """Cancel the reads in flight, give back their permits, and close every reader."""
-        readers = [*self.reading.values(), *self.paused]
+        readers = list(self.reading.values())
         for task in self.reading:
             task.cancel()
         await asyncio.gather(*self.reading, return_exceptions=True)
-        await self._drop_waiter()
         for reader in list(self.permits):
             self._give_back(reader)
         self.reading.clear()
-        self.paused.clear()
         for reader in readers:
             await reader.close()
 

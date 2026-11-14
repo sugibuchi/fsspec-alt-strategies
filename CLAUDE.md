@@ -186,9 +186,9 @@ code: read it before adding a strategy or a handler.
 - The tree strategies walk with `tree._walker._TreeWalk`, which is private: never expose its `_Part`. It reads each
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
 - The walk asks for each part, and nothing pushes one: no queue between the readers and it, and no task listing ahead.
-  Its directories to read wait on a stack, depth first. A reader holds one permit while it is read, taken by the walk
-  before it starts and given back once it ends or pauses. Keep it so: a queue or a task per directory would list
-  beyond the walk's control, and past a cancel.
+  Its directories to read wait on a stack, depth first. A reader holds one permit until it ends, taken by the walk
+  before it starts. Keep it so: a queue or a task per directory would list beyond the walk's control, and past a
+  cancel.
 - The walk takes a `tree._visit._Visit`: which directories the operation needs, e.g. within `maxdepth`. What it found
   but did not list, it yields as events: a `_Skipped` subdirectory, a `_FileRoot`, and, when asked, a
   `_SubtreeListed`. A consumer acts on those, and never checks `maxdepth` or catches a file root again.

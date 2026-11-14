@@ -501,12 +501,10 @@ How the walk reads:
   a part per read. The walk awaits a few reads at once, takes each as it comes, and asks a reader again only when it
   wants more. So nothing is listed ahead of what the walk asks, and nothing is buffered between the readers and it.
 - **Order.** The directories to read wait on a stack, so the walk goes depth first, as fsspec's `walk` does. What waits
-  is the subdirectories along the paths the walk is in, not a whole level of the tree. While more than 32,000 wait, a
-  directory's reader that would add more is paused.
-- **Permits.** A reader holds a permit of `operation_limit` while it is read, as a listing is one request to the
-  strategies. The walk takes one before it starts a reader, and gives it back once the reader ends, or is paused.
-  While none is free, one task waits for the next beside the reads, so that the walk gets permits as others give them
-  back, e.g. deletions sharing the limit.
+  is the subdirectories along the paths the walk is in, not a whole level of the tree.
+- **Permits.** A reader holds a permit of `operation_limit` until it ends, as a listing is one request to the
+  strategies. The walk takes one before it starts a reader: while one is free, or, when none of its own reads runs, by
+  waiting for one.
 - **Stopping.** Once cancelled, no reader starts, and none is asked again. The reads in flight are yielded.
 
 Beside each directory's parts, the walk yields what its consumers would otherwise work out again:
