@@ -35,7 +35,7 @@ from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 from .strategy import Strategy
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
+    from collections.abc import AsyncIterator
     from datetime import datetime
 
     from fsspec.callbacks import Callback
@@ -399,26 +399,15 @@ class StorageHandler(_PathHandler):
         is.
         """
 
-    rm_batch_size: int | None = None
-    """The most files `rm_files` deletes at once, or None for a handler deleting none in batches: the default.
+    rm_batch_size: int = 1
+    """The most files the strategies give the handler's ``rm_files`` strategy at once: 1 by default.
 
-    A flat handler always deletes in batches, e.g. 1000 keys as S3's
-    DeleteObjects takes. A tree handler declares a size where its storage
-    deletes several files by one request, e.g. Azure's blob batch: the tree
-    strategies then delete a directory's files in batches, not one by one.
+    By default, a file is deleted as soon as it is found. A storage deleting
+    several files by one request overrides ``rm_files``, and declares its
+    most here, e.g. 1000 keys as S3's DeleteObjects takes, or 256 blobs as
+    Azure's Blob Batch: the files then wait for their batch to fill, or for
+    the listing to end.
     """
-
-    async def rm_files(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
-        """Delete files, by one request, at most ``rm_batch_size`` of them.
-
-        It returns the files it could not delete, by path, each with its
-        error, and raises only if the request failed whole. A file missing is
-        no error: it is deleted. A batch may span the storage's partitions,
-        e.g. buckets: a storage whose request takes one partition sends one
-        per partition. Here, it raises NotImplementedError: a handler
-        declaring ``rm_batch_size`` implements it.
-        """
-        raise NotImplementedError(f"{type(self).__name__} deletes no files in batches")
 
     # The primitives making an item take ``missing``: True where the caller
     # knows nothing is at the path, e.g. a copy into a directory it made

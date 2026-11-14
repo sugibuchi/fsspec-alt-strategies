@@ -209,7 +209,7 @@ async def test_gcsfs_deletes_up_to_100_per_batch_by_its_own_rm_files() -> None:
     fs = _GcsBatches({f"bkt/k{i}": 1 for i in range(150)} | {"bkt/kept": 1})
     flat = _gcsfs(fs, rm_batch_size=1000, **_LIMITS)
     paths = [f"bkt/k{i}" for i in range(150)] + ["bkt/missing"]
-    assert await flat._handler.rm_files([{"name": p} for p in paths]) == {}
+    assert await flat._handler._rm_batch([{"name": p} for p in paths]) == {}
     assert fs.calls == [("batch", 100), ("batch", 51)]
     assert list(fs.keys) == ["bkt/kept"]
 
@@ -217,7 +217,7 @@ async def test_gcsfs_deletes_up_to_100_per_batch_by_its_own_rm_files() -> None:
 async def test_gcsfs_returns_the_keys_it_refused() -> None:
     fs = _GcsBatches({"bkt/a": 1, "bkt/b": 1}, refused={"bkt/b"})
     flat = _gcsfs(fs, rm_batch_size=100, **_LIMITS)
-    refused = await flat._handler.rm_files(
+    refused = await flat._handler._rm_batch(
         [{"name": p} for p in ["bkt/a", "bkt/b", "bkt/missing"]]
     )
     assert list(refused) == ["bkt/b"]
@@ -228,7 +228,7 @@ async def test_gcsfs_off_google_deletes_as_fsspec() -> None:
     fs = _GcsBatches({"bkt/a": 1})
     fs.on_google = False  # E.g. an emulator, where gcsfs sends no batch.
     flat = _gcsfs(fs, rm_batch_size=100, **_LIMITS)
-    await flat._handler.rm_files([{"name": p} for p in ["bkt/a"]])
+    await flat._handler._rm_batch([{"name": p} for p in ["bkt/a"]])
     assert fs.calls == [("_rm", 1)]
 
 

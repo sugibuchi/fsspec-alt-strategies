@@ -375,7 +375,7 @@ async def test_cancelling_the_task_leaves_nothing_running() -> None:
     assert fs._in_flight == 0
 
 
-async def test_a_file_found_already_gone_is_not_yielded() -> None:
+async def test_a_file_found_already_gone_counts_as_deleted() -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     _tree(fs)
 
@@ -388,8 +388,9 @@ async def test_a_file_found_already_gone_is_not_yielded() -> None:
     op = _rm(fs, "data", rm_file=rm_file)
     deleted, errors = await _collect_with_errors(op)
     assert errors == []
-    assert "data/README.md" not in deleted
-    assert op.state.files_deleted == 4
+    # Gone is deleted, as rm_files takes it: no error, and yielded.
+    assert "data/README.md" in deleted
+    assert op.state.files_deleted == 5
     # Its directory goes all the same.
     assert deleted[-1] == "data"
     assert not await fs._exists("data")

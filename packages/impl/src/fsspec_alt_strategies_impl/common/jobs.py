@@ -252,14 +252,14 @@ class _Queue(Generic[_T]):
                 self.limit.release()
 
 
-def _check_batch_size(batch_size: int | None) -> None:
-    """Refuse a handler's ``rm_batch_size`` below 1, or none, where a strategy deletes in batches."""
-    if batch_size is None or batch_size < 1:
+def _check_batch_size(batch_size: int) -> None:
+    """Refuse a handler's ``rm_batch_size`` below 1, as no batch could be sent."""
+    if batch_size < 1:
         raise ValueError(f"rm_batch_size must be at least 1: {batch_size}")
 
 
-def _batch_size(handler: StorageHandler) -> int | None:
-    """The most paths a handler's ``rm_files`` takes at once, or None for a handler deleting none in batches."""
+def _batch_size(handler: StorageHandler) -> int:
+    """The most paths a handler's ``rm_files`` takes at once."""
     return handler.rm_batch_size
 
 
@@ -279,8 +279,11 @@ class _Jobs(ABC):
     that a subclass may join a family's jobs with another base, such as a
     copy's.
 
-    A batch deletion runs by `delete`, and its outcome is told by `refused`:
-    the paths ``rm_files`` could not delete, each with its error.
+    A batch deletion, queued by `send_batch`, runs the handler's ``rm_files``
+    operation, by `delete`, and its outcome is told by `deleted`: the paths it
+    deleted, and the errors of those it did not. A batch holds no permit of
+    the limit: its operation's requests take theirs, which a permit held
+    around them would wait for.
     """
 
     def __init__(
@@ -299,8 +302,12 @@ class _Jobs(ABC):
         # The options of each listing the jobs make, a pattern's glob too.
         self.ils_kwargs: dict[str, Any] = ils_kwargs or {}
 
-        # The paths each batch deleted could not delete, by the batch's paths.
-        self._refused: dict[tuple[str, ...], dict[str, Exception]] = {}
+        # Each batch's outcome, by its paths: the paths deleted, and the errors.
+        self._deleted: dict[tuple[str, ...], tuple[list[str], list[Exception]]] = {}
+
+        # The batches to delete, and those deleting, which hold no permit.
+        self.deletions: deque[_Job] = deque()
+        self.deleting: dict[asyncio.Task[Any], _Job] = {}
 
         # The entries of the paths waiting in a batch, as the listing gave them:
         # a path is deleted by its entry, never by its name verified again.
@@ -334,23 +341,36 @@ class _Jobs(ABC):
         self.batched[name] = entry
         return name
 
+    def send_batch(self, paths: tuple[str, ...]) -> None:
+        """Queue a batch of paths, each kept by `batch_entry`, to be deleted by the handler's ``rm_files``."""
+        self.deletions.append(_Job("delete", {"name": paths[-1]}, paths=paths))
+
     async def delete(self, paths: tuple[str, ...]) -> None:
-        """Delete a batch of paths by ``rm_files``, by their entries, keeping those it refused for `refused`."""
-        entries = [self.batched.pop(p, {"name": p}) for p in paths]
-        refused = await self.handler.rm_files(entries)
-        if refused:
-            self._refused[paths] = {k: e for k, e in refused.items() if k in paths}
+        """Delete a batch by the handler's ``rm_files`` operation, by the paths' entries, keeping its outcome for `deleted`.
 
-    def refused(self, paths: tuple[str, ...], note: str) -> dict[str, Exception]:
-        """The paths a batch deleted could not delete, each error noted and counted.
-
-        ``note`` tells a path's failure, its ``{key}`` the path.
+        The operation is iterated to its end, as the batch is one job. An
+        error it raises fails the batch whole.
         """
-        refused = self._refused.pop(paths, {})
-        for key, error in refused.items():
-            error.add_note(note.format(key=repr(key)))
-        self.errors += len(refused)
-        return refused
+        entries = [self.batched.pop(p, {"name": p}) for p in paths]
+        deleted: list[str] = []
+        errors: list[Exception] = []
+        async with self.handler.rm_files(entries) as operation:  # type: ignore[attr-defined]
+            async for outcome in operation:
+                if isinstance(outcome, Exception):
+                    errors.append(outcome)
+                else:
+                    deleted.append(outcome)
+        self._deleted[paths] = (deleted, errors)
+
+    def deleted(self, paths: tuple[str, ...]) -> tuple[list[str], list[Exception]]:
+        """A batch's paths deleted, and the errors of those it did not delete, counted.
+
+        A path neither deleted nor failed, e.g. dropped by a cancelled
+        operation, is in neither.
+        """
+        deleted, errors = self._deleted.pop(paths, ([], []))
+        self.errors += len(errors)
+        return deleted, errors
 
     @classmethod
     def operation(cls, **kwargs: Any) -> Operation[Any, Any]:
@@ -480,8 +500,9 @@ class _Jobs(ABC):
                         yield outcome
         except GeneratorExit:
             self.waiting.clear()
-            while self.running:
-                done, _ = await asyncio.wait(self.running)
+            self.deletions.clear()
+            while self.running or self.deleting:
+                done, _ = await asyncio.wait([*self.running, *self.deleting])
                 for task in done:
                     self.finish(task)
 
@@ -494,12 +515,24 @@ class _Jobs(ABC):
                 await asyncio.gather(self.next, return_exceptions=True)
 
             await self.jobs.close()
+            await self._cancel_batches()
             if source is not None:
                 await source.aclose()
 
+    async def _cancel_batches(self) -> None:
+        """Cancel the batches deleting: left only by an error, as the jobs are cancelled then."""
+        for task in self.deleting:
+            task.cancel()
+        await asyncio.gather(*self.deleting, return_exceptions=True)
+        self.deleting.clear()
+
     def pending(self) -> list[asyncio.Task[Any]]:
         """What to wait for: the jobs, the next item, and a permit if needed."""
-        return [*self.jobs.pending(), *([self.next] if self.next else [])]
+        return [
+            *self.jobs.pending(),
+            *self.deleting,
+            *([self.next] if self.next else []),
+        ]
 
     async def begin(
         self, roots: _Roots, source: AsyncGenerator[Any] | None
@@ -525,7 +558,7 @@ class _Jobs(ABC):
         self, task: asyncio.Task[Any], source: AsyncGenerator[Any] | None
     ) -> list[Any] | None:
         """Handle a finished task, returning its step, or None if it has none."""
-        if task in self.running:
+        if task in self.running or task in self.deleting:
             return self.finish(task)
         if task is not self.next or source is None:
             return None  # The waiter's permit, which start takes.
@@ -541,22 +574,26 @@ class _Jobs(ABC):
         return self.fed(item)
 
     def stopping(self) -> None:
-        """Drop the jobs waiting, as the operation is cancelled.
+        """Drop the jobs and batches waiting, as the operation is cancelled.
 
         A subclass may keep those finishing what was done, e.g. the deletions
         of files a move has copied.
         """
         self.waiting.clear()
+        self.deletions.clear()
 
     async def start(self) -> None:
-        """Start the jobs waiting, while permits are free, but none once cancelled."""
+        """Start the jobs waiting, while permits are free, and the batches at once, but none once cancelled."""
         if self.op.cancelling():
             self.stopping()
         await self.jobs.start(self.run)
+        while self.deletions:
+            job = self.deletions.popleft()
+            self.deleting[asyncio.ensure_future(self.run(job))] = job
 
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
         """Handle a job's task done, counting its errors, and return what to yield."""
-        job = self.running.pop(task)
+        job = self.running.pop(task, None) or self.deleting.pop(task)
         self.current = job.path or job.destination
 
         try:

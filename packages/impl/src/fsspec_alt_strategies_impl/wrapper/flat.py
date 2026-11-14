@@ -19,7 +19,7 @@ costs twice:
 A subclass overriding ``ils_recursive`` with the storage's own listing by
 prefix, e.g. from its SDK, streams it page by page, and lists only the prefix.
 
-This module depends on `_base`, and `handler` of `flat`.
+This module depends on `_base`, `rm_files` of `common`, and `handler` of `flat`.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
 
+from ..common.rm_files import _rm_by_request
 from ..flat.handler import FlatFileOperationHandler
 from ._base import _FsspecHandler
 
@@ -35,8 +36,10 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
     from fsspec_alt_strategies.profile import StorageProfile
+    from fsspec_alt_strategies.states import RmState
 
     from ..common.handler import Entry
+    from ..common.operation import Operation
 
 __all__ = ["FsspecFlatHandler"]
 
@@ -50,7 +53,7 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
     are its data methods, such as ``cat_file``, and its files.
 
     Its ``ils_recursive`` lists with the wrapped one's ``find`` of the
-    directory. Its ``rm_files`` gives a batch to the wrapped one's ``rm``,
+    directory. Its ``rm_files`` gives a batch, of ``rm_batch_size``, to the wrapped one's ``rm``,
     which s3fs, e.g., deletes in one request. That ``rm`` tells no key apart,
     so any failure but a missing key fails the whole batch.
 
@@ -125,7 +128,12 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
         for listed in _starting(list(found.values()), path, prefix):
             yield listed
 
-    async def rm_files(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
+    def rm_files(self, entries: list[Entry]) -> Operation[str, RmState]:
+        # A batch by one call of the wrapped one's rm: see _rm_batch.
+        return _rm_by_request(self, entries, self._rm_batch)
+
+    async def _rm_batch(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
+        """Delete a batch by the wrapped one's ``rm`` of all its paths, which s3fs, e.g., sends as one request."""
         paths = [e["name"] for e in entries]
         try:
             await self.call("rm", paths)

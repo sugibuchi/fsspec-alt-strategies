@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks, sync
 
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
+from fsspec_alt_strategies_impl.common.rm_files import _rm_by_request
 from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
@@ -53,9 +54,11 @@ from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
 from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 
+    from fsspec_alt_strategies.states import RmState
     from fsspec_alt_strategies_impl.common.handler import StoragePath
+    from fsspec_alt_strategies_impl.common.operation import Operation
 
 __all__ = ["CallStats", "FlatView", "SimulatedFileSystem", "TreeView", "dir_ils"]
 
@@ -795,9 +798,9 @@ class TreeView(_Files, TreeFileOperationHandler):
     instead, a page per request, in name order.
 
     It runs the tree strategies, as a `TreeFileOperationHandler`, so that a
-    filesystem may be made on it too. With ``rm_batch_size``, it deletes
-    files in batches, by the filesystem's ``_rm_files``, or ``rm_files`` if
-    given.
+    filesystem may be made on it too. It deletes files by the library's
+    ``rm_files``, each by ``rm_file``, in batches of ``rm_batch_size``, 1
+    unless given, or by ``rm_files`` if given, which takes their names.
 
     It verifies no path: the simulated storage takes any. Its
     ``operation_limit`` is 32 requests at a time unless given, and its profile
@@ -821,14 +824,14 @@ class TreeView(_Files, TreeFileOperationHandler):
         makedirs: Any = None,
         storage_profile: StorageProfile | None = None,
         operation_limit: asyncio.Semaphore | None = None,
-        rm_batch_size: int | None = None,
+        rm_batch_size: int = 1,
         rm_files: Any = None,
     ) -> None:
         super().__init__(operation_concurrency=operation_limit or 32, io_concurrency=8)
         self.fs = fs
         self.recursive_listing = recursive_listing
         self.rm_batch_size = rm_batch_size
-        self._rm_files = fs._rm_files if rm_files is None else rm_files
+        self._rm_files = rm_files
         self._dir_ils = dir_ils(fs) if ils is None else ils
         self._info = fs._info if info is None else info
         self._rm_file = fs._rm_file if rm_file is None else rm_file
@@ -866,11 +869,14 @@ class TreeView(_Files, TreeFileOperationHandler):
     async def rm_file(self, entry: dict[str, Any]) -> None:
         await self._rm_file(entry["name"])
 
-    async def rm_files(
-        self, entries: list[dict[str, Any]]
-    ) -> Mapping[str, Exception] | None:
-        # Only with rm_batch_size, as a tree handler declares it.
-        return await self._rm_files([e["name"] for e in entries])  # type: ignore[no-any-return]
+    def rm_files(self, entries: list[dict[str, Any]]) -> Operation[str, RmState]:
+        # The library's, each by rm_file, unless a test gives a request taking names.
+        if self._rm_files is None:
+            return super().rm_files(entries)
+        request = self._rm_files
+        return _rm_by_request(
+            self, entries, lambda es: request([e["name"] for e in es])
+        )
 
     async def rmdir(self, entry: dict[str, Any]) -> None:
         await self._rmdir(entry["name"])
@@ -1000,7 +1006,9 @@ class FlatView(_Files, FlatFileOperationHandler):
     ) -> None:
         await self._mv_file_entry(entry, path2)
 
-    async def rm_files(
-        self, entries: list[dict[str, Any]]
-    ) -> Mapping[str, Exception] | None:
-        return await self._rm_files([e["name"] for e in entries])  # type: ignore[no-any-return]
+    def rm_files(self, entries: list[dict[str, Any]]) -> Operation[str, RmState]:
+        # The filesystem's batch deletion, unless given, by one request per batch.
+        request = self._rm_files
+        return _rm_by_request(
+            self, entries, lambda es: request([e["name"] for e in es])
+        )

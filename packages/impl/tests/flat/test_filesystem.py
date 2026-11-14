@@ -12,6 +12,7 @@ from fsspec.callbacks import Callback
 from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
+from fsspec_alt_strategies_impl.common.rm_files import _rm_by_request
 from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
@@ -112,7 +113,11 @@ class _FlatHandler(FlatFileOperationHandler):
         for listed in await self.inner._ls(entry["name"], detail=True):
             yield listed
 
-    async def rm_files(self, entries: list[dict[str, Any]]) -> None:
+    def rm_files(self, entries: list[dict[str, Any]]) -> Any:
+        # One request per batch, as an object store deletes keys.
+        return _rm_by_request(self, entries, self._rm_batch)
+
+    async def _rm_batch(self, entries: list[dict[str, Any]]) -> None:
         await self.inner._rm_files([e["name"] for e in entries])
 
     async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
@@ -350,7 +355,7 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
     assert monitor.items == 7 + len(_FILES)
 
 
-@pytest.mark.parametrize("primitive", ["rm_files", "rmdir", "makedirs"])
+@pytest.mark.parametrize("primitive", ["rmdir", "makedirs"])
 def test_a_handler_missing_a_primitive_is_refused(primitive: str) -> None:
     # Still abstract, as if not written: fsspec's _rmdir and _makedirs would do nothing.
     incomplete = type(

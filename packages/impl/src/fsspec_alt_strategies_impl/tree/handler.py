@@ -8,7 +8,7 @@ the profile. The tree strategies take it, and it runs them as the methods of
 `Strategy`: what a filesystem takes.
 
 This module depends on `cp`, `du`, `find`, `glob`, `listing`, `mv`, `rm` and
-`walk`, and `handler` of `common`.
+`walk`, and `handler` and `rm_files` of `common`.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..common.handler import FileOperationHandler
+from ..common.rm_files import _rm_each_file
 from .cp import _tree_cp
 from .du import _tree_du
 from .find import _tree_find
@@ -187,6 +188,10 @@ class TreeFileOperationHandler(FileOperationHandler):
     ) -> Operation[str, RmState]:
         """`_tree_rm` of this handler."""
         return _tree_rm(self, path, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
+
+    def rm_files(self, entries: list[Entry]) -> Operation[str, RmState]:
+        """`rm_files._rm_each_file` of this handler: each by ``rm_file``, as many at once as the limit allows."""
+        return _rm_each_file(self, entries)
 
     def cp(
         self,

@@ -8,7 +8,7 @@ keys in batches. The flat strategies take it, and it runs them as the
 methods of `Strategy`: what a filesystem takes.
 
 This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm` and `walk`, and
-`handler` of `common`.
+`handler` and `rm_files` of `common`.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..common.handler import FileOperationHandler
+from ..common.rm_files import _rm_each_file
 from .cp import _flat_cp
 from .du import _flat_du
 from .find import _flat_find
@@ -26,7 +27,7 @@ from .rm import _flat_rm
 from .walk import _flat_walk
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+    from collections.abc import AsyncIterator, Callable, Sequence
 
     from fsspec_alt_strategies.states import (
         CpState,
@@ -55,8 +56,9 @@ class FlatFileOperationHandler(FileOperationHandler):
     key, and deletes them in batches.
 
     A subclass implements the storage's primitives, `StorageHandler`'s, and
-    ``ils_recursive``, and ``rm_files``, which deletes keys in batches of
-    ``rm_batch_size``. It may override a strategy, e.g. with one of its own.
+    ``ils_recursive``. One deleting several keys by one request, as object
+    stores do, overrides ``rm_files`` and declares ``rm_batch_size``. It may
+    override a strategy, e.g. with one of its own.
 
     Parameters
     ----------
@@ -68,13 +70,6 @@ class FlatFileOperationHandler(FileOperationHandler):
     TreeFileOperationHandler : The same, for storages with a hierarchical namespace.
     BaseFileSystem : The filesystem on it.
     """
-
-    rm_batch_size: int = 1000
-    """The most keys `rm_files` takes at once, e.g. 1000 as S3's DeleteObjects takes: a flat handler always has one."""
-
-    @abstractmethod
-    async def rm_files(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
-        """Delete keys, by one request, at most ``rm_batch_size`` of them: as `StorageHandler.rm_files`, required here."""
 
     @abstractmethod
     def ils_recursive(
@@ -157,6 +152,10 @@ class FlatFileOperationHandler(FileOperationHandler):
     ) -> Operation[str, RmState]:
         """`_flat_rm` of this handler."""
         return _flat_rm(self, path, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
+
+    def rm_files(self, entries: list[Entry]) -> Operation[str, RmState]:
+        """`rm_files._rm_each_file` of this handler: each by ``rm_file``, as many at once as the limit allows."""
+        return _rm_each_file(self, entries)
 
     def cp(
         self,

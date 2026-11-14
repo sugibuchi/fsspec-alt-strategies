@@ -220,8 +220,7 @@ class _Move(_Copy):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        # At least 1, as the strategy checked it when called.
-        self.batch_size: int = _batch_size(self.handler) or 1
+        self.batch_size = _batch_size(self.handler)
 
         # The keys to delete. Each key moving, from its listing to its
         # deletion, has where it is copied, None for a marker: listed again,
@@ -265,10 +264,8 @@ class _Move(_Copy):
 
     def stopping(self) -> None:
         # The copies not started are dropped, but the keys copied are deleted,
-        # so that none is in both places.
-        deletions = [j for j in self.waiting if j.kind == "delete"]
+        # so that none is in both places: the batches stay.
         self.waiting.clear()
-        self.waiting.extend(deletions)
         self.copying = sum(j.kind == "copy" for j in self.running.values())
         self.send_if_ready()
 
@@ -286,16 +283,17 @@ class _Move(_Copy):
             self.delete_later(job.source)
             return []
 
-        refused = self.refused(
-            job.paths, "Deleting {key} failed, once copied: it is in both places."
-        )
+        deleted, errors = self.deleted(job.paths)
+        for error in errors:
+            error.add_note("Once copied: it is in both places.")
+        gone = set(deleted)
         moved: list[Any] = []
         for path in job.paths:
             destination = self.copied.pop(path)
-            if destination is not None and path not in refused:
+            if destination is not None and path in gone:
                 self.files_done += 1
                 moved.append((path, destination))
-        return [*moved, *refused.values()]
+        return [*moved, *errors]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         if job.kind == "mkdir":
@@ -328,4 +326,4 @@ class _Move(_Copy):
         done = (self.listed or self.op.cancelling()) and self.copying == 0
         if len(self.batch) >= self.batch_size or done:
             paths, self.batch = tuple(self.batch), []
-            self.waiting.append(_Job("delete", {"name": paths[-1]}, paths=paths))
+            self.send_batch(paths)

@@ -150,12 +150,13 @@ class MyHandler(TreeFileOperationHandler):
   Without it, a tree is listed a directory per request, several at once. One whose storage may refuse its own falls
   back on `tree.listing._tree_ils`, the default.
 - A flat handler implements `ils_recursive(entry, prefix=...)`, every key below a directory starting with the prefix,
-  in name order, and `rm_files`, deleting at most `rm_batch_size` keys by one request.
+  in name order.
 - `rm_tree`, `mv_tree` and `cp_tree`, a storage's own operations on a whole directory, are optional. The profile
   declares them.
-- A tree handler whose storage deletes several files by one request declares `rm_batch_size`, and implements
-  `rm_files`, as a flat handler does: a recursive `rm` then deletes files in batches.
-- The family's strategies are its methods: `walk`, `find`, `glob`, `du`, `rm`, `cp` and `mv`. Each returns an
+- A handler whose storage deletes several files by one request, e.g. an object store, overrides the `rm_files`
+  strategy with `rm_files._rm_by_request(self, entries, request)`, and declares `rm_batch_size`: a recursive `rm` or
+  `mv` then deletes its files in batches. By default, each file is deleted by `rm_file`.
+- The family's strategies are its methods: `walk`, `find`, `glob`, `du`, `rm`, `rm_files`, `cp` and `mv`. Each returns an
   operation the filesystem runs. Override one to choose another strategy, e.g. one of your own, with the same
   arguments.
 

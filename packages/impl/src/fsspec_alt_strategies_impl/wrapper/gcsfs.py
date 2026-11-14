@@ -87,12 +87,12 @@ class GcsfsHandler(FsspecFlatHandler):
         for entry in sorted(found.values(), key=lambda e: e["name"]):
             yield entry
 
-    async def rm_files(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
+    async def _rm_batch(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
         # gcsfs batches deletions only on Google's own endpoint: elsewhere, e.g. on
         # an emulator, its _rm deletes one object per request.
         rm_files = getattr(self.fs, "_rm_files", None)
         if rm_files is None or not getattr(self.fs, "on_google", False):
-            return await super().rm_files(entries)
+            return await super()._rm_batch(entries)
 
         paths = [e["name"] for e in entries]
         refused: dict[str, Exception] = {}

@@ -101,8 +101,7 @@ class _Deletion(_FlatJobs):
         super().__init__(**kwargs)
 
         self.path = path
-        # At least 1, as the strategy checked it when called.
-        self.batch_size: int = _batch_size(self.handler) or 1
+        self.batch_size = _batch_size(self.handler)
 
         self.batch: list[str] = []
         self.files_found = 0
@@ -136,10 +135,9 @@ class _Deletion(_FlatJobs):
         return self.delete(job.paths)
 
     def done(self, job: _Job) -> list[Any]:
-        refused = self.refused(job.paths, "Deleting {key} failed.")
-        deleted = [p for p in job.paths if p not in refused]
+        deleted, errors = self.deleted(job.paths)
         self.files_deleted += len(deleted)
-        return [*deleted, *refused.values()]
+        return [*deleted, *errors]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
         # Yielded among paths, the error must tell its paths itself.
@@ -149,4 +147,4 @@ class _Deletion(_FlatJobs):
     def send(self) -> None:
         """Queue the deletion of the batch, and start another."""
         paths, self.batch = tuple(self.batch), []
-        self.waiting.append(_Job("delete", {"name": paths[-1]}, paths=paths))
+        self.send_batch(paths)

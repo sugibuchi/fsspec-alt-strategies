@@ -44,8 +44,9 @@ def _tree_rm(
     deepest go first. A directory with anything in it that failed is kept.
 
     It yields each file and directory once deleted, and the error of each
-    directory that failed to list or path that failed to be deleted. A path
-    found already gone is not yielded.
+    directory that failed to list or path that failed to be deleted. A file
+    found already gone is deleted, as ``rm_files`` takes it: it is yielded. A
+    directory found already gone is not.
 
     It wins over fsspec's ``_rm`` on storages that list one directory per
     request and have no recursive delete of their own, such as Databricks
@@ -69,13 +70,15 @@ def _tree_rm(
     patterns. They are matched as `_tree_glob` matches them, in one search,
     then the directories matched are walked at once.
 
-    A handler declaring ``rm_batch_size``, as it is once open, deletes files in batches of it, by
-    one ``rm_files`` each, as its storage deletes several files by one
-    request, e.g. Azure's blob batch. The files listed join a batch, which is
-    sent once full, while the walk goes on, and the last, smaller one once
-    the walk ends. A directory is deleted once the batches holding its files
-    are. A file its batch refused yields its error and keeps its directory. A
-    batch failing whole yields one error, noting its files.
+    Files are deleted by the handler's ``rm_files``, in batches of its
+    ``rm_batch_size``, as it is once open: by default 1, each by ``rm_file``,
+    as many at once as the limit lets them. A storage deleting several files
+    by one request declares more, e.g. Azure's Blob Batch. The files listed
+    join a batch, which is sent once full, while the walk goes on, and the
+    last, smaller one once the walk ends. A directory is deleted once the
+    batches holding its files are. A file its batch refused yields its error
+    and keeps its directory. A batch failing whole yields one error, noting
+    its files.
 
     With ``maxdepth``, it deletes what fsspec's ``_rm`` deletes with it: the
     paths at most ``maxdepth`` levels below ``path``, or below a pattern's
@@ -93,8 +96,8 @@ def _tree_rm(
 
     Requests: one ``ils_recursive`` per root, which a storage without a
     recursive listing answers with one per directory, or one ``ils`` per
-    directory with ``maxdepth``. One ``rm_file`` per file, or with
-    ``rm_batch_size``, one ``rm_files`` per batch, and one ``rm_dir`` per
+    directory with ``maxdepth``. One ``rm_files`` per batch of
+    ``rm_batch_size`` files, by default one ``rm_file`` each, and one ``rm_dir`` per
     directory. Patterns, or a list, add the requests of their `_tree_glob`.
     With ``deletes_directories``, a root costs one ``rm_tree`` instead. Each
     request holds a permit of the handler's ``operation_limit`` while it
@@ -116,26 +119,25 @@ def _tree_rm(
 
     The operation yields each path deleted, or an error, and its state is an
     `RmState`. The call raises ValueError if ``maxdepth``, or a handler's
-    ``rm_batch_size`` declared, is less than 1.
+    ``rm_batch_size``, is less than 1.
     """
     _check_maxdepth(maxdepth)
-    if _batch_size(fs) is not None:
-        _check_batch_size(_batch_size(fs))
+    _check_batch_size(_batch_size(fs))
     return _Deletion.operation(
         fs=fs, path=path, maxdepth=maxdepth, ils_kwargs=ils_kwargs
     )
 
 
 class _Deletion(_TreeJobs):
-    """The jobs of one `_tree_rm`: a deletion per file, then per directory."""
+    """The jobs of one `_tree_rm`: a deletion per batch of files, then per directory."""
 
     def __init__(self, *, path: str | Sequence[str], **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
         self.path = path
-        # The files deleted at once, by rm_files, or None to delete each by
-        # rm_file: read as the handler opens, which may tell it.
-        self.batch_size: int | None = None
+        # The files deleted at once, by rm_files: read as the handler opens,
+        # which may tell it, e.g. by the kind of account.
+        self.batch_size = 1
         self.batch: list[str] = []
         # Unknown until setup reads the profile.
         self.deletes_directories = False
@@ -148,8 +150,7 @@ class _Deletion(_TreeJobs):
         await self.handler.open()
         # A handler may know its batch only once open, e.g. by the account's kind.
         self.batch_size = _batch_size(self.handler)
-        if self.batch_size is not None:
-            _check_batch_size(self.batch_size)
+        _check_batch_size(self.batch_size)
         profile = self.handler.profile
         # A directory deleted whole would take what is deeper than maxdepth.
         self.deletes_directories = (
@@ -205,13 +206,10 @@ class _Deletion(_TreeJobs):
             self.remove(listing.directory)
 
     def queue_file(self, entry: dict[str, Any]) -> None:
-        """Queue a file's deletion: by itself, or in the batch, sent once full."""
-        if self.batch_size is None:
-            self.waiting.append(_Job("file", entry))
-        else:
-            self.batch.append(self.batch_entry(entry))
-            if len(self.batch) >= self.batch_size:
-                self.send()
+        """Queue a file's deletion in the batch, sent once full: at once, in batches of 1."""
+        self.batch.append(self.batch_entry(entry))
+        if len(self.batch) >= self.batch_size:
+            self.send()
 
     def exhausted(self) -> None:
         # The walk ended: the last, smaller batch goes.
@@ -221,38 +219,31 @@ class _Deletion(_TreeJobs):
     def send(self) -> None:
         """Queue the deletion of the batch, and start another."""
         paths, self.batch = tuple(self.batch), []
-        self.waiting.append(_Job("files", {"name": paths[-1]}, paths=paths))
+        self.send_batch(paths)
 
     def run(self, job: _Job) -> Awaitable[Any]:
-        if job.kind == "files":
+        if job.kind == "delete":
             return self.delete(job.paths)
         if job.kind == "tree":
             return self.handler.rm_tree(job.source)  # type: ignore[attr-defined, no-any-return]
-        if job.kind == "directory":
-            return self.handler.rmdir(job.source)
         else:
-            return self.handler.rm_file(job.source)
+            return self.handler.rmdir(job.source)
 
     def done(self, job: _Job) -> list[Any]:
-        if job.kind == "files":
+        if job.kind == "delete":
             # A file refused keeps its directory, as one rm_file failed would.
-            refused = self.refused(job.paths, "Deleting {key} failed.")
-            deleted = [p for p in job.paths if p not in refused]
+            deleted, errors = self.deleted(job.paths)
             self.files_deleted += len(deleted)
             for path in deleted:
                 self.after(path)
-            return [*deleted, *refused.values()]
+            return [*deleted, *errors]
 
-        if job.kind in ("directory", "tree"):
-            self.directories_deleted += 1
-        else:
-            self.files_deleted += 1
-
+        self.directories_deleted += 1
         self.after(job.path)
         return [job.path]
 
     def failed(self, job: _Job, error: Exception) -> list[Any]:
-        if job.kind == "files":
+        if job.kind == "delete":
             # The batch failed whole: its files, and the directories above, stay.
             error.add_note(f"Deleting {_keys_of(job.paths)} failed.")
             return [error]

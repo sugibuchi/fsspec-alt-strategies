@@ -68,7 +68,7 @@ async def test_an_async_filesystem_answers_as_fsspec(
 
 async def test_a_key_gone_meanwhile_is_no_error(inner: SimulatedFileSystem) -> None:
     flat = _flat(inner, **_OPTIONS)
-    await flat._handler.rm_files([{"name": p} for p in ["data/d.txt", "missing.txt"]])
+    await flat._handler._rm_batch([{"name": p} for p in ["data/d.txt", "missing.txt"]])
     assert not await inner._exists("data/d.txt")
 
 
@@ -101,7 +101,7 @@ async def test_a_key_gone_from_a_batch_deletes_the_rest(
 
     monkeypatch.setattr(inner, "_rm", refused)
     flat = _flat(inner, **_OPTIONS)
-    await flat._handler.rm_files([{"name": p} for p in ["data/d.txt", "missing.txt"]])
+    await flat._handler._rm_batch([{"name": p} for p in ["data/d.txt", "missing.txt"]])
     assert not await inner._exists("data/d.txt")
 
 
@@ -111,7 +111,7 @@ async def test_a_sync_key_gone_from_a_batch_deletes_the_rest(tmp_path: Path) -> 
     local.pipe_file(f"{root}/a.txt", b"a")
     flat = _flat(local, asynchronous=True, **_OPTIONS)
     # The local rm raises for the missing key: the rest goes one by one.
-    await flat._handler.rm_files(
+    await flat._handler._rm_batch(
         [{"name": p} for p in [f"{root}/a.txt", f"{root}/missing.txt"]]
     )
     assert not local.exists(f"{root}/a.txt")

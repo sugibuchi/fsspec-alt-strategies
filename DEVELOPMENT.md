@@ -147,8 +147,8 @@ AsyncFileSystem                        fsspec's
   awaited, for `open_async` and the strategies. Both raise NotImplementedError by default. A handler gives its files
   either API, e.g. through `AsyncFileAdapter`, and supports fsspec's transactions in `open_file`, as it chooses.
 
-`FileOperationHandler` adds the `Strategy` mixin's methods, one per strategy: `walk`, `find`, `glob`, `du`, `rm`, `cp`
-and `mv`. Each takes its strategy's arguments but the handler, which is `self`, and returns an operation, not
+`FileOperationHandler` adds the `Strategy` mixin's methods, one per strategy: `walk`, `find`, `glob`, `du`, `rm`,
+`rm_files`, `cp` and `mv`. Each takes its strategy's arguments but the handler, which is `self`, and returns an operation, not
 started, which the filesystem runs. A copy or move takes the destination's handler, `dst_fs`.
 
 Each family's handler class implements them by its strategies, and adds the primitives they call:
@@ -156,12 +156,16 @@ Each family's handler class implements them by its strategies, and adds the prim
 | Class                      | Adds                                                                                |
 |----------------------------|-------------------------------------------------------------------------------------|
 | `TreeFileOperationHandler` | `ils_recursive`, by default `_tree_ils`, and optional `rm_tree`, `mv_tree`, `cp_tree` |
-| `FlatFileOperationHandler` | Required `ils_recursive(entry, prefix=...)`, and `rm_files` of at most `rm_batch_size` keys |
+| `FlatFileOperationHandler` | Required `ils_recursive(entry, prefix=...)`                                      |
 
-`StorageHandler` declares the batch deletion, `rm_files` with its `rm_batch_size`, for both families. A flat handler
-always has it. A tree handler declares a size where its storage deletes several files by one request, e.g. Azure's
-blob batch: `_tree_rm` then deletes a directory's files in batches, not one by one. None, the default, deletes each by
-`rm_file`.
+`rm_files(entries)` is the strategy deleting files a caller found. The recursive deletions and moves of both families
+send it their files in batches of the handler's `rm_batch_size`, 1 by default. Its default, `rm_files._rm_each_file`,
+deletes each by `rm_file`, as many at once as `operation_limit` allows. A storage deleting several files by one
+request overrides it with `rm_files._rm_by_request` and that request, and declares its batch, e.g. 1000 on S3 or 256
+for Azure's Blob Batch.
+
+A batch's job holds no permit of `operation_limit`: its operation's requests take theirs, and a permit held around
+them would wait for itself once all were so held.
 
 A handler's class tells its family. A storage's handler overrides a strategy method to choose another strategy, e.g.
 its own. The filesystem calls only what `StorageHandler` declares,
@@ -448,8 +452,8 @@ methods. The two are one request with or without a delimiter, as on S3, GCS and 
   starting as its pattern does, e.g. `data` with the prefix `2024-` for `data/2024-*`.
 - Name order tells when a directory is done, so `_flat_walk` streams its directories. Each key is listed once.
 - Directories are derived from the keys, by `flat/_keys.py`. A key ending with "/" marks a directory.
-- `_flat_rm` deletes in batches of the handler's `rm_batch_size`, with `rm_files`. A batch may span buckets.
-  `rm_files` returns the keys it could not delete, each with its error, so that the others count as deleted.
+- `_flat_rm` deletes in batches of the handler's `rm_batch_size`, by its `rm_files`. A batch may span buckets.
+  `rm_files` yields each key deleted, and the error of each it could not delete, so that the others count as deleted.
 - `_flat_mv` renames with `mv_file` when the profile says the storage renames. Otherwise it copies, then deletes in
   batches.
 - A listing error ends the operation: there is no other listing to go on with.

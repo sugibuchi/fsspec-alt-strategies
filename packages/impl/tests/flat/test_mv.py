@@ -165,8 +165,10 @@ async def test_a_key_its_batch_refused_is_yielded_and_the_others_moved(
     moved, errors = await _collect_with_errors(op)
     assert sorted(m[0] for m in moved) == sorted(p for p in _FILES if p != refused)
     assert [type(e) for e in errors] == [PermissionError]
+    # The deletion's note, then the move's.
     assert errors[0].__notes__ == [
-        f"Deleting {refused!r} failed, once copied: it is in both places."
+        f"Deleting {refused!r} failed.",
+        "Once copied: it is in both places.",
     ]
     assert refused in flat_fs._file_data
     assert (op.state.files_moved, op.state.errors) == (len(_FILES) - 1, 1)

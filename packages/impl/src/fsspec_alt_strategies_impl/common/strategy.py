@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         WalkState,
     )
 
+    from .handler import Entry
     from .jobs import _Transfer
     from .operation import Operation
 
@@ -203,6 +204,30 @@ class Strategy(ABC):
         -------
         Operation
             Yielding each path deleted, or an error.
+        """
+
+    @abstractmethod
+    def rm_files(self, entries: list[Entry]) -> Operation[str, RmState]:
+        """Delete files the caller found, e.g. a batch of a recursive ``rm``'s.
+
+        The recursive deletions and moves send their files to it, in batches
+        of the handler's ``rm_batch_size``. A family's handler deletes each by
+        ``rm_file``, as many at once as ``operation_limit`` allows. A storage
+        deleting several files by one request overrides it, e.g. with
+        `rm_files._rm_by_request` and S3's DeleteObjects.
+
+        Parameters
+        ----------
+        entries : list of dict
+            The entries of the files, as a listing gave them: at most
+            ``rm_batch_size``. A missing file is deleted, as no error.
+
+        Returns
+        -------
+        Operation
+            Yielding each path deleted, or an error noting its path. It raises
+            only an error failing all the files, e.g. a request deleting them
+            all.
         """
 
     @abstractmethod
