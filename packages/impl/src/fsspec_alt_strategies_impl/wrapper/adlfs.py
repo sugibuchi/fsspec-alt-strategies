@@ -98,10 +98,11 @@ class AdlfsHandler(FsspecTreeHandler):
         path = entry["name"]
         container = self.fs.split_path(path)[0] if path.strip("/") else ""
         own = hasattr(self.fs, "service_client") and hasattr(self.fs, "_details")
-        if container and own:
+        if container and own and not kwargs:
             return self._blobs(path)
         else:
-            # The containers, or adlfs without its own: a directory per request.
+            # The containers, adlfs without its own, or a caller's options, which
+            # adlfs's ls takes: a directory per request.
             return _tree_ils(self, path, entry=entry, **kwargs)
 
     async def _blobs(self, path: str) -> AsyncIterator[Entry]:

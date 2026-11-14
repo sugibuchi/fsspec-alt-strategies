@@ -533,3 +533,45 @@ async def test_renames_by_the_mv_entry_given(flat_fs: SimulatedFileSystem) -> No
     assert errors == []
     assert sorted(renamed) == sorted(moved)
     assert len(moved) == len(_FILES)
+
+
+async def test_a_marker_moves_once_its_parent_is_made() -> None:
+    """mv_file is called only where the parent exists: a marker too, nested ones in order."""
+    keys = {"data/x/": b"", "data/x/y/": b"", "data/a.txt": b"a"}
+    events: list[str] = []
+
+    async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
+        for name in sorted(keys):
+            if name.startswith(prefix):
+                yield {"name": name, "size": len(keys[name]), "type": "file"}
+
+    async def info(path: str) -> dict[str, Any]:
+        raise FileNotFoundError(path)
+
+    async def mv_file(source: str, destination: str) -> None:
+        events.append(f"mv {destination}")
+        keys[destination] = keys.pop(source)
+
+    async def makedirs(path: str, exist_ok: bool = False) -> None:
+        events.append(f"mkdir {path}")
+
+    op = _mv(
+        None,
+        "data",
+        "moved",
+        list_prefix=list_prefix,
+        info=info,
+        mv_file=mv_file,
+        dst_info=info,
+        dst_makedirs=makedirs,
+        dst_rm_file=_nothing,
+        concurrency_limit=asyncio.Semaphore(4),
+        # Directories of their own, made before what goes in them.
+        profile=StorageProfile(implicit_directories=False),
+        **_BY_MV_FILE,
+    )
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    # Each marker after its parent made: moved/x/ after moved, moved/x/y/ after moved/x.
+    assert events.index("mv moved/x/") > events.index("mkdir moved")
+    assert events.index("mv moved/x/y/") > events.index("mkdir moved/x")

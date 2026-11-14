@@ -39,12 +39,11 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
     requests on a directory whole, each used where the profile says it is one
     request:
 
-    - ``rm_tree``, the wrapped one's ``_rm_tree``, or else its recursive
-      ``rm``, where ``deletes_directories=True``;
-    - ``mv_tree``, the wrapped one's ``_mv_tree``, or else its ``mv``, where
+    - ``rm_tree``, the wrapped one's recursive ``rm``, where
+      ``deletes_directories=True``;
+    - ``mv_tree``, its ``mv``, or async its ``_mv_file``, where
       ``renames_directories=True``;
-    - ``cp_tree``, the wrapped one's ``_cp_tree``, or else its recursive
-      ``copy``, where ``copies_directories=True``.
+    - ``cp_tree``, its recursive ``copy``, where ``copies_directories=True``.
 
     It wins on storages listing one directory per request, such as a local
     disk or SFTP, as the tree strategies do. A `FileSystemWrapper` made on it
@@ -120,8 +119,6 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
         path = entry["name"]
         if not self.asynchronous:
             await self._run_in_thread(self.fs.rm, path, recursive=True)
-        elif (rm_tree := getattr(self.fs, "_rm_tree", None)) is not None:
-            await rm_tree(path)
         else:
             await self.fs._rm(path, recursive=True)
 
@@ -132,8 +129,6 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
         path = entry["name"]
         if not self.asynchronous:
             await self._run_in_thread(self.fs.mv, path, path2)
-        elif (mv_tree := getattr(self.fs, "_mv_tree", None)) is not None:
-            await mv_tree(path, path2)
         else:
             await self.fs._mv_file(path, path2)
 
@@ -144,7 +139,5 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
         path = entry["name"]
         if not self.asynchronous:
             await self._run_in_thread(self.fs.copy, path, path2, recursive=True)
-        elif (cp_tree := getattr(self.fs, "_cp_tree", None)) is not None:
-            await cp_tree(path, path2)
         else:
             await self.fs._copy(path, path2, recursive=True)

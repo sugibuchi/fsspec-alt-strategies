@@ -93,15 +93,8 @@ def test_an_async_filesystem_on_its_own_loop() -> None:
     assert sorted(inner._file_data) == sorted("moved" + p[4:] for p in _FILES)
 
 
-class _RecursiveDelete(SimulatedFileSystem):
-    """A storage deleting a directory whole, in one request."""
-
-    async def _rm_tree(self, path: str) -> None:
-        await self._rm(path, recursive=True)
-
-
-async def test_an_async_filesystem_deletes_a_dir_by_its_rm_tree() -> None:
-    inner = _RecursiveDelete(hierarchical=True, asynchronous=True)
+async def test_an_async_filesystem_deletes_a_dir_by_its_recursive_rm() -> None:
+    inner = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     for path in _FILES:
         inner.add_file(path, path.encode())
     tree = _tree(inner, **_DELETES)
@@ -137,13 +130,13 @@ async def test_a_sync_filesystem_deletes_by_its_recursive_rm(tmp_path: Path) -> 
 
 
 class _Renaming(SimulatedFileSystem):
-    """A storage renaming a directory whole, in one request."""
+    """A storage whose move renames a directory too, in one request, as ADLS Gen2's does."""
 
-    async def _mv_tree(self, path1: str, path2: str) -> None:
+    async def _mv_file(self, path1: str, path2: str, **kwargs: Any) -> None:
         await self._rename(path1, path2)
 
 
-async def test_an_async_filesystem_moves_a_dir_by_its_mv_tree() -> None:
+async def test_an_async_filesystem_moves_a_dir_by_its_mv_file() -> None:
     inner = _Renaming(hierarchical=True, asynchronous=True)
     for path in _FILES:
         inner.add_file(path, path.encode())
@@ -159,13 +152,15 @@ async def test_an_async_filesystem_moves_a_dir_by_its_mv_tree() -> None:
 
 
 class _Copying(SimulatedFileSystem):
-    """A storage copying a directory whole, in one request."""
+    """A storage whose recursive copy copies a directory whole, in one request, as Dropbox's does."""
 
-    async def _cp_tree(self, path1: str, path2: str) -> None:
+    async def _copy(
+        self, path1: Any, path2: Any, recursive: bool = False, **kwargs: Any
+    ) -> None:
         await self._copy_tree(path1, path2)
 
 
-async def test_an_async_filesystem_copies_a_dir_by_its_cp_tree() -> None:
+async def test_an_async_filesystem_copies_a_dir_by_its_recursive_copy() -> None:
     inner = _Copying(hierarchical=True, asynchronous=True)
     for path in _FILES:
         inner.add_file(path, path.encode())
@@ -182,7 +177,7 @@ async def test_an_async_filesystem_copies_a_dir_by_its_cp_tree() -> None:
 
 
 async def test_rm_tree_is_unused_unless_declared() -> None:
-    inner = _RecursiveDelete(hierarchical=True, asynchronous=True)
+    inner = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     for path in _FILES:
         inner.add_file(path, path.encode())
     inner.reset_stats()

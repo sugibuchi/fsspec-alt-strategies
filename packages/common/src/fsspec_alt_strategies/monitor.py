@@ -11,8 +11,8 @@ caller sees of it, whatever copy it comes from, is here:
   it ended;
 - `Monitored`, the marker of a filesystem whose calls monitors watch.
 
-x
-by running an operation to its end, so their callers see only the answer. A
+A copy of the strategies answers fsspec's methods, e.g. ``copy``, by running
+an operation to its end, so their callers see only the answer. A
 `Monitor` sees the operation itself, as it runs, within a `monitoring` block.
 It is told the `Call` the operation answers, and a call it stops raises
 `CallCancelled`:

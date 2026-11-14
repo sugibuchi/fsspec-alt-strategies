@@ -90,10 +90,11 @@ class GcsfsHandler(FsspecFlatHandler):
         self, entry: Entry, *, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[Entry]:
         path = entry["name"]
-        if path and self.asynchronous and _takes_prefix(self.fs._find):
+        if path and not kwargs and self.asynchronous and _takes_prefix(self.fs._find):
             return self._objects(path, prefix)
         else:
-            # The buckets: as the generic handler lists them.
+            # The buckets, or a caller's options, which gcsfs's find takes: as the
+            # generic handler lists them.
             return super().ils_recursive(entry, prefix=prefix, **kwargs)
 
     async def _objects(self, path: str, prefix: str) -> AsyncIterator[Entry]:

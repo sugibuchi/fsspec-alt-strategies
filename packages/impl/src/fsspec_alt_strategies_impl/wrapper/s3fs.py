@@ -74,10 +74,11 @@ class S3fsHandler(FsspecFlatHandler):
         self, entry: Entry, *, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[Entry]:
         path = entry["name"]
-        if path and hasattr(self.fs, "_iterdir"):
+        if path and not kwargs and hasattr(self.fs, "_iterdir"):
             return self._keys(path, prefix)
         else:
-            # The buckets: as the generic handler lists them.
+            # The buckets, or a caller's options, which s3fs's find takes: as the
+            # generic handler lists them.
             return super().ils_recursive(entry, prefix=prefix, **kwargs)
 
     async def _keys(self, path: str, prefix: str) -> AsyncIterator[Entry]:

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec_alt_strategies.states import RmState
 
 from ..common.jobs import _Job, _keys_of, _Roots
-from ..common.paths import _check_maxdepth
+from ..common.paths import _check_maxdepth, _trim
 from ._jobs import _TreeJobs
 
 if TYPE_CHECKING:
@@ -163,7 +163,8 @@ class _Deletion(_TreeJobs):
         if not isinstance(self.path, str) or has_magic(self.path):
             roots = await self.glob_roots(self.path)
         else:
-            roots = _Roots([{"name": self.path}])
+            # A trailing "/" says a directory, not another name: rm_tree takes the path.
+            roots = _Roots([{"name": _trim(self.path)}])
 
         if not self.deletes_directories:
             return roots
@@ -231,7 +232,7 @@ class _Deletion(_TreeJobs):
             return [error]
 
         missing = isinstance(error, FileNotFoundError)
-        if missing and job.kind == "tree" and job.path == self.path:
+        if missing and job.kind == "tree" and job.path == _trim(str(self.path)):
             raise error  # The path missing, as the walk would find it.
 
         if missing:

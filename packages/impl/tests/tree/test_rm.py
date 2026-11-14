@@ -786,3 +786,23 @@ async def test_a_single_file_is_deleted_by_a_batch(
     )
     assert (deleted, errors, batches) == ([path], [], [[path]])
     assert not await hierarchical_fs._exists(path)
+
+
+async def test_a_directory_given_with_a_slash_goes_whole_by_its_name(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    seen: list[str] = []
+    profile = StorageProfile(deletes_directories=True)
+    deleted, errors = await _collect_with_errors(
+        _rm(
+            hierarchical_fs,
+            "data/",
+            rm_tree=_rm_tree(hierarchical_fs, seen),
+            profile=profile,
+        )
+    )
+    # rm_tree is given the directory's path, and it is yielded so: no "data/".
+    assert errors == []
+    assert seen == ["data"]
+    assert deleted == ["data"]

@@ -131,7 +131,7 @@ class CpState(State):
     files_copied : int
         The files copied so far.
     roots_copied : int or None
-        The directories copied whole, each by one ``_cp_tree``, what is in them
+        The directories copied whole, each by one ``cp_tree``, what is in them
         neither found nor counted. None unless the storage copies directories so.
     """
 
@@ -154,7 +154,7 @@ class MvState(State):
         The source directories deleted so far, once all in them was moved. None
         for the flat strategies, which delete no directories.
     roots_renamed : int or None
-        The directories moved whole, each by one ``_mv_tree``, what is in them
+        The directories moved whole, each by one ``mv_tree``, what is in them
         neither found nor counted. None unless the storage moves directories so.
     """
 

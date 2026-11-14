@@ -201,8 +201,10 @@ class _Rename(_CopyOrMove):
         if name.endswith("/"):
             # With maxdepth, directories stay, as fsspec's copy leaves them out.
             if self.maxdepth is None:
+                # Into its parent once made, as a key goes: mv_file is called
+                # only where the parent exists.
                 job = _Job("marker", entry, self.target(name))
-                self.waiting.append(job)
+                self.queue(self.dst.parent(self.target(name.rstrip("/"))), [job])
             return
         super().add(entry)
 
