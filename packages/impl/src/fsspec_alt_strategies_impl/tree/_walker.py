@@ -136,7 +136,7 @@ class _TreeWalk:
                     reader = self.reading.pop(task)
                     ready = self._take(reader, task.result())
                     if reader is not None:
-                        await self._again(reader)
+                        await self._continue_or_close(reader)
                     # The next listings start before yielding, so that they run
                     # while the caller handles these.
                     await self._start()
@@ -199,8 +199,8 @@ class _TreeWalk:
             self.holders.discard(holder)
             self.limit.release()
 
-    async def _again(self, reader: _SubtreeReader) -> None:
-        """Read on a recursive listing, under the permit it holds, or close it once done or stopped."""
+    async def _continue_or_close(self, reader: _SubtreeReader) -> None:
+        """After a recursive listing's read: start its next, under the permit it holds, or close it once ended or stopped."""
         if reader.ended or self._stopped():
             self._release(reader)
             await reader.close()
