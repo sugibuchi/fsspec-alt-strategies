@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NewType, TypeAlias
+from typing import TYPE_CHECKING, Any, NewType, TypeAlias
 
 from fsspec.utils import stringify_path
 
@@ -211,12 +211,6 @@ class StorageHandler(_PathHandler):
     ------
     ValueError
         If a concurrency is less than 1.
-    """
-
-    family: ClassVar[Literal["tree", "flat"] | None] = None
-    """The family of strategies taking it, which its class declares: `TreeHandler`'s or `FlatHandler`'s.
-
-    A router makes the filesystem of a storage it routes to by it.
     """
 
     profile: StorageProfile = UNKNOWN

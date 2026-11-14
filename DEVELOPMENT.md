@@ -137,7 +137,7 @@ Each family's handler class adds what its strategies call:
 | `TreeHandler` | Optional `ils_recursive` with its `recursive_order`, and `rm_tree`, `mv_tree`, `cp_tree`      |
 | `FlatHandler` | Required `ils_recursive(entry, prefix=...)`, and `rm_files` of at most `rm_batch_size` keys   |
 
-A family's `family` class attribute, "tree" or "flat", names it. A handler may also have optional extras, which the
+A handler's class tells its family, as a router reads it. A handler may also have optional extras, which the
 filesystem uses where they exist: `cat_file`, `pipe_file`, `get_file`, `put_file`, `created`, `modified`,
 `invalidate_cache`, and a wrapper's `open_async_file`, `open_sync_file` and `wrapped`.
 
@@ -324,8 +324,8 @@ its `RoutingHandler`'s, which a developer implements:
 `route` makes each handler once, by `inner(key, make)`, without a request. The routing handler's `close()` closes
 them, and `release()` releases them, as the filesystem's sync `close()` does.
 
-For each storage routed to, the router makes a `TreeFileSystem` or `FlatFileSystem`, as its handler's `family` says,
-uncached. Each path is checked twice: by the routing handler, then its path in the storage by the storage's handler.
+For each storage routed to, the router makes a `TreeFileSystem` or `FlatFileSystem`, as its handler's class is a
+`TreeHandler` or a `FlatHandler`, uncached. Each path is checked twice: by the routing handler, then its path in the storage by the storage's handler.
 
 `route` may give another routing handler, which routes the inner path again. Each level checks its own path, and the
 names answered are mapped back through each level's `outer`. The roots of a nested router are listed by it.

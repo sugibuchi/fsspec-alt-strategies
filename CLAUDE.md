@@ -105,8 +105,8 @@ code: read it before adding a strategy or a handler.
 
 - A family, such as `tree/` or `flat/`, never imports another. What two share goes in `common/`, a module per
   concern. What builds on both sits at the package's root: `wrapper/` and `router.py`. The router imports a
-  family's filesystem only when routing to a storage of it, and its strategies only when copying or moving from one,
-  as the storage handler's `family` says.
+  family's filesystem only when routing to a storage of it, and its strategies only when copying or moving from one.
+  A handler's class tells its family: a `TreeHandler` or a `FlatHandler`, never an attribute naming it.
 - A wrapper of one library, such as `wrapper/s3fs.py`, is a handler, and never imports the library: it calls the
   wrapped filesystem's methods. Write one only where the library saves requests or data beyond fsspec's API.
 - A family's modules export nothing public but its handler class, in `handler.py`, and its filesystem class, in

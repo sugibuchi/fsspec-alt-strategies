@@ -13,9 +13,10 @@ family's strategy, each file by the routing handler's ``cp_across`` or
 overridden.
 
 This module depends on `filesystem`, `handler`, `operation`, `paths` and
-`transfer` of `common`. It imports a family's filesystem only to route to a
+`transfer` of `common`, and the `handler` of each family, whose class tells
+a handler's family. It imports a family's filesystem only to route to a
 storage of it, and the family's `cp` and `mv` only to copy or move from one,
-so a router may leave out the other family.
+so a router never loads what it does not use.
 """
 
 from __future__ import annotations
@@ -44,6 +45,8 @@ from .common.handler import StorageHandler, _limit, _PathHandler
 from .common.operation import _collect_with_monitors
 from .common.paths import _trim
 from .common.transfer import _cross_cp_file
+from .flat.handler import FlatHandler
+from .tree.handler import TreeHandler
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -446,17 +449,16 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         return self._storage(handler, through).fs, inner
 
     def _storage(self, handler: StorageHandler, through: _Through) -> _Storage:
-        """The storage of a handler, its filesystem made once, by the handler's family."""
+        """The storage of a handler, its filesystem made once, by the handler's family: its class."""
         storage = self._storages.get(id(handler))
         if storage is not None and storage.handler is handler:
             return storage
 
-        # A family's filesystem is imported only when routed to, so that a
-        # router may leave out the other family.
+        # A family's filesystem is imported only when routed to.
         family: Any
-        if handler.family == "tree":
+        if isinstance(handler, TreeHandler):
             from .tree.filesystem import TreeFileSystem as family  # noqa: PLC0415
-        elif handler.family == "flat":
+        elif isinstance(handler, FlatHandler):
             from .flat.filesystem import FlatFileSystem as family  # noqa: PLC0415
         else:
             raise TypeError(
@@ -1183,9 +1185,8 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         src, dst = self._handler_of(fs1), self._handler_of(fs2)
         cp_entry = self._across(src, dst)
 
-        # A family's strategies are imported only when used, so that a copy may
-        # leave out the other family.
-        if src.family == "flat":
+        # A family's strategies are imported only when used.
+        if isinstance(src, FlatHandler):
             from .flat.cp import _flat_cp  # noqa: PLC0415
 
             return _flat_cp(
@@ -1226,9 +1227,8 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         """
         src, dst = self._handler_of(fs1), self._handler_of(fs2)
 
-        # A family's strategies are imported only when used, so that a move may
-        # leave out the other family.
-        if src.family == "flat":
+        # A family's strategies are imported only when used.
+        if isinstance(src, FlatHandler):
             from .flat.mv import _flat_mv  # noqa: PLC0415
 
             # By copies, the keys copied deleted in batches by the source's
