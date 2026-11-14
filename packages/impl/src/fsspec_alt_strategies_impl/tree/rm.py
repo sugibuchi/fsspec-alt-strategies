@@ -105,7 +105,7 @@ def _tree_rm(
     request holds a permit of the handler's ``operation_limit`` while it
     runs.
 
-    The filesystem's profile's ``implicit_directories=True`` saves the
+    The handler's profile's ``implicit_directories=True`` saves the
     ``rm_dir`` of each directory, as a directory goes with its last file. Such
     a directory is not yielded, as one found already gone is not.
 

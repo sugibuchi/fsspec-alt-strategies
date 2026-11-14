@@ -61,7 +61,7 @@ def _flat_find(
 
     Requests: the pages of one ``ils_recursive`` of ``path``, one after
     another. One ``info`` for ``path`` itself, if nothing is under it, or
-    with ``withdirs``, holding a permit of the filesystem's
+    with ``withdirs``, holding a permit of the handler's
     ``operation_limit``. The listing holds none.
 
     ``path`` is the directory searched on ``handler``. Its ``ils_recursive`` lists

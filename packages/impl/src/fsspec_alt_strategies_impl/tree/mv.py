@@ -7,7 +7,7 @@ whole tree, then deletes it, each stage listing the tree first. `_tree_mv`
 moves each directory's files as soon as the directory is listed, each by one
 ``mv_entry``, and deletes each source directory once it is empty.
 
-Where the filesystem's ``mv_tree`` moves a directory in one request, as a
+Where the handler's ``mv_tree`` moves a directory in one request, as a
 storage's rename does, the profile says so. `_tree_mv` then moves each root
 whole with it where it can, and walks only what it cannot move so.
 
@@ -101,7 +101,7 @@ def _tree_mv(
     directory, its contents merge, and its files are moved one by one. So are
     those of ``path1`` ending with "/", whose contents go onto ``path2``. A
     filesystem is one place renames work in: a storage where they stop, e.g.
-    at containers, is several filesystems under a router. A root whose move
+    at containers, is several handlers under a router. A root whose move
     fails yields the error, with its cause, and stays where it is. A root
     moved whole is yielded once, as ``(root, target)``: what is in it is
     neither listed nor yielded.

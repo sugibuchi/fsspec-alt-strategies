@@ -73,7 +73,7 @@ def _flat_glob(
     Requests: the pages of one ``ils_recursive`` per listing, one after
     another: of the prefix's directory, narrowed to the rest of the prefix.
     One ``info`` per pattern without wildcards, each holding a permit of the
-    filesystem's ``operation_limit``. The listings hold none.
+    handler's ``operation_limit``. The listings hold none.
 
     ``path`` is a pattern, or patterns, of paths on ``handler``, as its ``ils``
     takes them: a trailing "/" matches only directories. ``maxdepth`` is how

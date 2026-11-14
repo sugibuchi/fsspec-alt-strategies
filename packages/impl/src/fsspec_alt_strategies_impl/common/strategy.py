@@ -14,7 +14,7 @@ own.
 the filesystem runs, watched by the monitors. The filesystem keeps its
 handler private, so that no caller of a filesystem gets an operation.
 
-This module depends on `jobs` and `operation`, for their types alone.
+This module depends on `handler`, `jobs` and `operation`, for their types alone.
 """
 
 from __future__ import annotations
@@ -281,7 +281,7 @@ class Strategy(ABC):
 
         Parameters
         ----------
-        dst : FileOperationHandler
+        dst : StorageHandler
             The handler copied to: ``self`` within one storage.
         path1 : StoragePath or sequence of StoragePath
             A directory, a file, a glob pattern, or a list of them.
@@ -352,7 +352,7 @@ class Strategy(ABC):
 
         Parameters
         ----------
-        dst : FileOperationHandler
+        dst : StorageHandler
             The handler moved to: ``self`` within one storage.
         path1 : StoragePath or sequence of StoragePath
             A directory, a file, a glob pattern, or a list of them.

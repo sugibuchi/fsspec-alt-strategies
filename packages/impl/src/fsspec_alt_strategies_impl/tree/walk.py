@@ -12,17 +12,19 @@ yields it, so that they act on a directory of hundreds of thousands of files as
 it is listed. ``_tree_walk`` gathers the parts, as fsspec's ``walk`` gives a
 directory whole.
 
-A tree that nothing prunes is listed by one ``ils_recursive``, which gives it
-depth first or in name order. Its entries are split into the same parts, each
-directory's as soon as the listing has passed it, or once it ends, unless the
-profile declares it depth first. A listing broken off part way
-is resumed a directory per request, from the directories it was in. A handler with no recursive
-listing of its own answers it by default with a directory per request, several
-at a time.
+A tree that nothing prunes is listed by one ``ils_recursive``. Its entries are
+split into the same parts. Each directory's last part comes as soon as the
+listing has passed it where the profile declares the order depth first, which
+covers name order, else once the listing ends: unknown, a listing is only taken
+to give each directory before what is below it. A listing broken off part way
+is resumed a directory per request, from the directories it was in. A handler
+with no recursive listing of its own answers it by default with a directory per
+request, several at a time.
+
 Where the walk prunes, it lists each directory it enters on its own, several at
 a time, breadth first.
 
-The tree strategies, and the engines under them, take the filesystem they
+The tree strategies, and the engines under them, take the handler they
 work on, and call its primitives, such as ``ils``, under its
 ``operation_limit``.
 
@@ -296,16 +298,16 @@ async def _chunks(
     ``_expand_path`` walks them.
 
     The parts of a directory come in order, but those of several directories
-    mix, as the listings run at once. Each listing, by ``handler._ils`` with
+    mix, as the listings run at once. Each listing, by ``handler.ils`` with
     ``ils_kwargs``, holds a permit of ``handler.operation_limit`` while it runs.
 
     Once ``stopping`` returns true, no new listing starts, and those in flight
     stop after their current part: a directory stopped so has no last part.
 
     A tree that nothing prunes is listed whole by one ``ils_recursive``, split
-    into the same parts, as `_produce_tree` says. A failure in it is resumed
-    a directory per request, as `_resume` says. Without ``maxdepth`` and ``descend``, that
-    is each root. With ``descend``, ``whole`` tells of a directory's entry
+    into the same parts, as `_produce_tree` says. Without ``maxdepth`` and
+    ``descend``, that is each root. A failure in it is resumed a directory per
+    request, as `_resume` says. With ``descend``, ``whole`` tells of a directory's entry
     whether ``descend`` holds for every directory below it, e.g. below a glob's
     ``**``: such a directory is listed so, and the walk prunes only above it.
     With ``maxdepth``, each directory is listed on its own, so that none deeper

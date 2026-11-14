@@ -53,8 +53,9 @@ if TYPE_CHECKING:
     class _Transfer(Protocol):
         """How one file goes from its source entry to a destination path.
 
-        It is the source's ``cp_file`` or ``mv_file`` within one storage, and
-        `transfer._across`, or its caller's own, between two. The entry is the
+        It is the source's ``cp_file`` or ``mv_file`` within one storage.
+        Between two, a copy's is `transfer._across`, and a move's that copy,
+        then the source's ``rm_file``, unless the caller gives its own. The entry is the
         source's, as its listing or ``info`` gave it, its ``"name"`` the source
         path. ``missing`` says nothing is at the destination, and ``parent``
         is the destination's parent's entry, as the primitives take them: one
@@ -281,7 +282,7 @@ def _keys_of(paths: tuple[str, ...]) -> str:
 class _Jobs(ABC):
     """The jobs of one operation on ``handler``, run while what it changes is found.
 
-    Each request holds a permit of the filesystem's ``operation_limit``. The
+    Each request holds a permit of the handler's ``operation_limit``. The
     constructor takes keywords only, and passes on what it does not take, so
     that a subclass may join a family's jobs with another base, such as a
     copy's.
@@ -969,8 +970,8 @@ class _CopyJobs(_Jobs):
         """Copy a file by ``cp_entry``, replacing a file there the destination keeps.
 
         A destination refusing to overwrite, as fsspec's copy does not, costs
-        an ``_info``, an ``_rm_file`` and a copy more. A directory there is no file
-        to replace: ``_rm_file`` takes files only. The job holds its permit
+        an ``info``, an ``rm_file`` and a copy more. A directory there is no file
+        to replace: ``rm_file`` takes files only. The job holds its permit
         already. An error raised notes its paths, as it is yielded among paths.
         """
         source = entry["name"]

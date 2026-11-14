@@ -16,8 +16,8 @@ A generic handler calls the filesystem's async methods where its
 table, or a table of the caller's own.
 
 It is declared, never detected: an entry says what the developer knows of the
-storage. Each profile sets every field, None where the storage's behaviour
-varies or is unknown. A project adds its own entries, or changes
+storage. A field left out of a profile is None, unknown: a storage's behaviour
+that varies, or is not known. A project adds its own entries, or changes
 one, before wrapping.
 
 This module depends on `profile`.

@@ -5,9 +5,9 @@
 `_tree_cp` is an alternative to fsspec's recursive ``copy``. fsspec's lists the
 whole tree first, then copies each path. `_tree_cp` copies each directory's files
 as soon as the directory is listed. The destination may be another storage:
-within one, it is the same filesystem given twice.
+within one, it is the same handler given twice.
 
-Where the filesystem's ``cp_tree`` copies a directory in one request, the
+Where the handler's ``cp_tree`` copies a directory in one request, the
 profile says so. `_tree_cp` then copies each root whole with it where it can,
 and walks only what it cannot copy so.
 

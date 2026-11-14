@@ -3,8 +3,9 @@
 """A recursive listing made of one listing per directory, several at a time.
 
 A `TreeFileOperationHandler`'s ``ils_recursive`` lists all below a directory,
-depth first or in name order. A storage with a recursive listing of its own
-implements it so. One without has `_tree_ils`, its default, which lists a
+in the order the profile's ``recursive_order`` declares: depth first, which
+covers name order, or parents first. A storage with a recursive listing of its
+own implements it so. One without has `_tree_ils`, its default, which lists a
 directory per request by ``ils``. One whose own may be refused, as only
 asking tells, falls back on it.
 
@@ -12,7 +13,7 @@ It yields the entries depth first, as a walk visits them: each directory's
 entries in the order its listing gives them, and all below a subdirectory right
 after its entry. So it lists the directories in that order too, but starts the
 next ones ahead, as their entries arrive, so that their listings overlap. The
-filesystem's ``operation_limit`` bounds how many run at once, and `_HELD` how
+handler's ``operation_limit`` bounds how many run at once, and `_HELD` how
 much they read ahead.
 
 This module depends on `handler` and `paths` of `common`.

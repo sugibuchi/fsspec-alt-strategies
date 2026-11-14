@@ -74,14 +74,15 @@ def _flat_rm(
     Requests: the pages of one ``ils_recursive`` per root, one after another,
     and one ``rm_files`` per batch. One ``info`` for ``path`` if nothing is
     under it. Patterns, or a list, add the requests of their `_flat_glob`.
-    Each request but the listing holds a permit of the filesystem's
+    Each request but the listing holds a permit of the handler's
     ``operation_limit`` while it runs.
 
     ``path`` is the directory deleted from ``handler``, as its ``ils`` takes
     paths. A file is deleted alone. A glob pattern, or a list of paths and
     patterns, deletes all they match. ``maxdepth`` of 1 deletes only the keys
-    right in ``path``. The filesystem's ``rm_files`` takes a key missing as
-    no error, and returns the keys it could not delete. ``ils_kwargs`` go to
+    right in ``path``. The handler's ``rm_files`` takes a key missing as
+    deleted, and yields each key deleted or the error of each it could not
+    delete. ``ils_kwargs`` go to
     each ``ils_recursive``, a pattern's glob's too.
 
     The operation yields each key deleted, or an error, and its state is an

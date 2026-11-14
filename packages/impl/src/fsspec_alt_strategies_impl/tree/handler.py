@@ -8,7 +8,7 @@ the profile. The tree strategies take it, and it runs them as the methods of
 `Strategy`: what a filesystem takes.
 
 This module depends on `cp`, `du`, `find`, `glob`, `listing`, `mv`, `rm` and
-`walk`, and `handler` and `rm_files` of `common`.
+`walk`, and `cp_files`, `handler` and `rm_files` of `common`.
 """
 
 from __future__ import annotations

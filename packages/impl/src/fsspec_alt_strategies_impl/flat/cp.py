@@ -5,7 +5,7 @@
 `_flat_cp` is an alternative to fsspec's recursive ``copy`` for flat storages.
 fsspec's lists every key first, then copies them. `_flat_cp` copies each key
 as soon as the listing gives it. The destination may be another storage, flat
-or a tree: within one, it is the same filesystem given twice.
+or a tree: within one, it is the same handler given twice.
 
 This module depends on `_jobs`, and `jobs` and `paths` of `common`.
 """

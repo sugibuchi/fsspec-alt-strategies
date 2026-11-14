@@ -98,7 +98,7 @@ def _tree_glob(
     listings in flight.
 
     Requests: one ``ils`` per directory a pattern can match in, as the
-    filesystem's ``operation_limit`` allows. Without ``maxdepth``, a directory
+    handler's ``operation_limit`` allows. Without ``maxdepth``, a directory
     at the pattern's first ``**`` is listed by one ``ils_recursive``, with all
     below it: ``data/*/**/*.csv`` lists ``data``, then each directory in it.
     One ``info`` per pattern without wildcards, and per literal root directory
