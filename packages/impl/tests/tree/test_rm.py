@@ -358,8 +358,17 @@ async def test_cancel_after_the_listing() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
     fs.add_file("root/sub/file")
     fs.add_file("root/file")
+
+    async def ils(path: str, **kwargs: Any) -> Any:
+        # Still listing once root/file is deleted, whatever the loop's order of
+        # two requests of equal latency: its file's deletion would be in flight.
+        if path == "root/sub":
+            await asyncio.sleep(0.05)
+        for entry in await fs._ls(path, detail=True, **kwargs):
+            yield entry
+
     # With a maxdepth, each directory is listed on its own.
-    op = _rm(fs, "root", maxdepth=2, concurrency_limit=asyncio.Semaphore(10))
+    op = _rm(fs, "root", maxdepth=2, ils=ils, concurrency_limit=asyncio.Semaphore(10))
     async for path in op:
         op.cancel()
         assert path == "root/file"
