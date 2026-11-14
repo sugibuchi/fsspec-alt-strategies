@@ -76,7 +76,9 @@ class S3fsHandler(FsspecFlatHandler):
         except FileNotFoundError:
             return  # A missing bucket lists nothing, as a missing prefix does.
 
-    async def cp_file(self, entry: Entry, path2: StoragePath) -> None:
+    async def cp_file(
+        self, entry: Entry, path2: StoragePath, *, missing: bool = False
+    ) -> None:
         size = entry.get("size")
         own = hasattr(self.fs, "_copy_basic") and hasattr(self.fs, "_copy_managed")
         if size is None or not own:
@@ -86,7 +88,9 @@ class S3fsHandler(FsspecFlatHandler):
         else:
             await self.fs._copy_managed(entry["name"], path2, size)
 
-    async def mv_file(self, entry: Entry, path2: StoragePath) -> None:
+    async def mv_file(
+        self, entry: Entry, path2: StoragePath, *, missing: bool = False
+    ) -> None:
         # S3 renames nothing: a copy by the listed size, then a delete.
         await self.cp_file(entry, path2)
         await self.fs._rm_file(entry["name"])

@@ -50,11 +50,11 @@ def _across(
     copy failed is kept.
     """
 
-    async def transfer(entry: Entry, path2: str) -> None:
+    async def transfer(entry: Entry, path2: str, *, missing: bool = False) -> None:
         # The strategies place each file by the destination's path methods: its
         # path is verified already.
         destination: StoragePath = path2  # type: ignore[assignment]
-        await _cross_cp_file(src, entry, dst, destination)
+        await _cross_cp_file(src, entry, dst, destination, missing=missing)
         if move:
             await src.rm_file(entry)
 
@@ -62,9 +62,18 @@ def _across(
 
 
 async def _cross_cp_file(
-    src: StorageHandler, entry: Entry, dst: StorageHandler, path: StoragePath
+    src: StorageHandler,
+    entry: Entry,
+    dst: StorageHandler,
+    path: StoragePath,
+    *,
+    missing: bool = False,
 ) -> None:
-    """Copy the file of ``entry``, of ``src``, to ``path`` of ``dst``, leaving no part of a file."""
+    """Copy the file of ``entry``, of ``src``, to ``path`` of ``dst``, leaving no part of a file.
+
+    ``missing`` is the destination's `StorageHandler.cp_file`'s: it goes to the
+    move of the temporary file into place.
+    """
     await dst.open()
     if dst.profile.atomic_writes:
         await _write(src, entry, dst, path)
@@ -75,7 +84,9 @@ async def _cross_cp_file(
     )
     try:
         size = await _write(src, entry, dst, temporary)
-        await dst.mv_file({"name": temporary, "type": "file", "size": size}, path)
+        await dst.mv_file(
+            {"name": temporary, "type": "file", "size": size}, path, missing=missing
+        )
     except BaseException as e:
         try:
             await dst.rm_file({"name": temporary, "type": "file"})
@@ -104,8 +115,12 @@ async def _write(
         expected = entry.get("size")
 
     async with opened as reader:
-        # A path the strategies placed, verified: its entry holds its name alone.
-        async with await dst.open_async_file({"name": path}, "wb") as writer:
+        # A path the strategies placed, verified, with the size it will have,
+        # where known, as the writer may need it up front.
+        target: Entry = {"name": path}
+        if isinstance(expected, int):
+            target["size"] = expected
+        async with await dst.open_async_file(target, "wb") as writer:
             written = 0
             while block := await reader.read(_BLOCK_SIZE):
                 await writer.write(block)

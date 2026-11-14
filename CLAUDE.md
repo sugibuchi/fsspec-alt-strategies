@@ -87,6 +87,9 @@ code: read it before adding a strategy or a handler.
   `common.jobs._Transfer` taking the source's entry. Between two storages, `cp_entry` defaults to
   `common.transfer._across`, which streams the data and leaves no part of a file. A move's `mv_entry` defaults to
   `cp_entry`, then the source's `rm_file`. The router passes its routing handler's `cp_across` and `mv_across` so.
+- A copy or move tells `makedirs`, `cp_file`, `mv_file` and its `cp_entry` or `mv_entry` `missing=True` where
+  `_CopyJobs.known_missing` holds: the destination, or a directory above it, was found missing. A write's entry holds
+  its final `"size"` where the caller knows it. Every override of those primitives takes `missing`, used or not.
 - A strategy calls only a handler's primitives, such as `ils`, `info` and `rm_file`, never a filesystem's method: the
   filesystem is the caller's.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.

@@ -175,7 +175,9 @@ async def test_a_key_its_batch_refused_is_yielded_and_the_others_moved(
 async def test_a_failed_copy_keeps_its_source(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any], destination: str, *, missing: bool = False
+    ) -> None:
         source = entry["name"]
         if source == "data/README.md":
             raise PermissionError(source)
@@ -198,7 +200,9 @@ async def test_cancel_still_deletes_the_keys_copied() -> None:
     _tree(fs)
     copied = []
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any], destination: str, *, missing: bool = False
+    ) -> None:
         source = entry["name"]
         await fs._cp_file(source, destination)
         copied.append(source)
@@ -307,7 +311,9 @@ async def test_batches_delete_markers_without_copying_them() -> None:
     async def info(path: str) -> dict[str, Any]:
         raise FileNotFoundError(path)
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any], destination: str, *, missing: bool = False
+    ) -> None:
         source = entry["name"]
         copied.append(source)
         keys[destination] = keys[source]
@@ -352,7 +358,9 @@ async def test_batches_move_a_key_listed_twice_once() -> None:
     async def info(path: str) -> dict[str, Any]:
         raise FileNotFoundError(path)
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any], destination: str, *, missing: bool = False
+    ) -> None:
         source = entry["name"]
         copied.append(source)
         keys[destination] = keys[source]
@@ -391,7 +399,9 @@ async def test_moves_to_another_storage(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any], destination: str, *, missing: bool = False
+    ) -> None:
         source = entry["name"]
         await dst._pipe_file(destination, flat_fs._file_data[source].data)
 
@@ -480,7 +490,9 @@ async def test_renames_by_the_mv_entry_given(flat_fs: SimulatedFileSystem) -> No
     _tree(flat_fs)
     renamed: list[tuple[str, str]] = []
 
-    async def mv_entry(entry: dict[str, Any], destination: str) -> None:
+    async def mv_entry(
+        entry: dict[str, Any], destination: str, *, missing: bool = False
+    ) -> None:
         renamed.append((entry["name"], destination))
         await flat_fs._mv_file(entry["name"], destination)
 

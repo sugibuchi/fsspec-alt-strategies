@@ -258,7 +258,9 @@ async def test_a_storage_whose_copies_need_parents_where_its_writes_do_not() -> 
     assert errors == []
     assert await fs._exists("copied/2023/01/part-0.parquet")
 
-    async def write(entry: dict[str, Any], destination: str) -> None:
+    async def write(
+        entry: dict[str, Any], destination: str, *, missing: bool = False
+    ) -> None:
         await fs._pipe_file(destination, await fs._cat_file(entry["name"]))
 
     # A copy from another storage writes, as a router's does: no mkdir.

@@ -399,34 +399,54 @@ class StorageHandler(_PathHandler):
         is.
         """
 
-    @abstractmethod
-    async def makedirs(self, path: StoragePath, exist_ok: bool = False) -> None:
-        """Make a directory and its parents, raising FileExistsError unless ``exist_ok``."""
+    # The primitives making an item take ``missing``: True where the caller
+    # knows nothing is at the path, e.g. a copy into a directory it made
+    # itself, unless another client put something there since. A storage whose
+    # creation never conflicts, e.g. Google Drive's, which would make a second
+    # item of the name, then skips asking what is there first. Any other
+    # storage may ignore it: False is always right.
 
     @abstractmethod
-    async def cp_file(self, entry: Entry, path2: StoragePath) -> None:
+    async def makedirs(
+        self, path: StoragePath, exist_ok: bool = False, *, missing: bool = False
+    ) -> None:
+        """Make a directory and its parents, raising FileExistsError unless ``exist_ok``.
+
+        ``missing`` says nothing is at ``path``, as the comment above says.
+        """
+
+    @abstractmethod
+    async def cp_file(
+        self, entry: Entry, path2: StoragePath, *, missing: bool = False
+    ) -> None:
         """Copy a file within the storage, to ``path2``.
 
         The entry's keys, e.g. its size, may save a request. They may be
         stale: a copy must still succeed, or fail as the storage says, if the
         file changed since. A directory at ``path2`` is never replaced: it
-        raises IsADirectoryError, or FileExistsError.
+        raises IsADirectoryError, or FileExistsError. ``missing`` says nothing
+        is at ``path2``, as the comment above says.
         """
 
     @abstractmethod
-    async def mv_file(self, entry: Entry, path2: StoragePath) -> None:
+    async def mv_file(
+        self, entry: Entry, path2: StoragePath, *, missing: bool = False
+    ) -> None:
         """Move a file within the storage, to ``path2``, as `cp_file` copies one.
 
         A storage renaming a file in one request renames it. One with no rename
         copies, then deletes the source. The strategies call it only where
-        ``path2``'s parent exists.
+        ``path2``'s parent exists. ``missing`` is `cp_file`'s.
         """
 
     # Files: to read, mode "rb", or to write, "wb" or "xb". Each takes an entry
     # whatever the mode: a file to write may not exist yet, its entry then
-    # holding its name alone, as `entry` makes it. To read, a missing file
-    # raises FileNotFoundError, and a directory IsADirectoryError. To write,
-    # "xb" raises FileExistsError where a file is, as the storage tells it.
+    # holding its name, and its final size as "size" where the caller knows
+    # it, e.g. `pipe_file`'s default, so that a storage needing it up front,
+    # e.g. for an upload session, need not hold the whole file first. To
+    # read, a missing file raises FileNotFoundError, and a directory
+    # IsADirectoryError. To write, "xb" raises FileExistsError where a file
+    # is, as the storage tells it.
 
     def open_file(
         self,
@@ -545,7 +565,8 @@ class StorageHandler(_PathHandler):
 
         Mode "create" writes it only if none is there, by `open_async_file`'s "xb".
         """
-        entry = {"name": path}
+        # The size goes with the name, as the writer may need it up front.
+        entry = {"name": path, "size": len(value)}
         async with await self.open_async_file(entry, _write_mode(mode), **kwargs) as f:
             await f.write(value)
 
@@ -577,10 +598,14 @@ class StorageHandler(_PathHandler):
         **kwargs: Any,
     ) -> None:
         """Copy a local file to the storage, as fsspec's ``put_file`` does: by default through `open_async_file`."""
-        entry = {"name": path}
-        async with await self.open_async_file(entry, _write_mode(mode), **kwargs) as f:
-            with open(lpath, "rb") as local:  # noqa: ASYNC230
-                callback.set_size(os.fstat(local.fileno()).st_size)
+        with open(lpath, "rb") as local:  # noqa: ASYNC230
+            size = os.fstat(local.fileno()).st_size
+            callback.set_size(size)
+            # The size goes with the name, as the writer may need it up front.
+            entry = {"name": path, "size": size}
+            async with await self.open_async_file(
+                entry, _write_mode(mode), **kwargs
+            ) as f:
                 while chunk := local.read(self.transfer_size):
                     await f.write(chunk)
                     callback.relative_update(len(chunk))

@@ -133,10 +133,12 @@ class MyHandler(TreeFileOperationHandler):
 ```
 
 - A primitive takes an entry for an item that exists, and a path for one to be made. `open_file` and
-  `open_async_file` take an entry, to read or write: a file to write may not exist yet, its entry holding its name
-  alone. An entry is a dict whose
+  `open_async_file` take an entry, to read or write: a file to write may not exist yet, its entry holding its name,
+  and its final `"size"` where the caller knows it. An entry is a dict whose
   `"name"` alone is sure. The other keys, e.g. a size or an id, are there when a listing found them, so a primitive
   needs no request to ask them again.
+- `makedirs`, `cp_file` and `mv_file` take `missing=True` where nothing is at the path, as a copy into a destination it
+  found missing knows. A storage asking before each creation, as one never refusing a duplicate must, skips that.
 - The strategies build paths only by the handler's `join` and `parent`, each verified by `verify_path`. `join` takes
   several paths, as `os.path.join` does, and refuses a segment such as "..".
   So a name another storage listed, e.g. one holding "..", can never leave the directory it is copied into.

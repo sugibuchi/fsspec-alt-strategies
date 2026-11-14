@@ -45,18 +45,24 @@ if TYPE_CHECKING:
         Callable,
         Sequence,
     )
-    from typing import TypeAlias
+    from typing import Protocol
 
     from .handler import StorageHandler
 
-    _Transfer: TypeAlias = Callable[[dict[str, Any], str], Awaitable[None]]
-    """How one file goes from its source entry to a destination path.
+    class _Transfer(Protocol):
+        """How one file goes from its source entry to a destination path.
 
-    It is the source's ``cp_file`` or ``mv_file`` within one storage, and
-    `transfer._across`, or its caller's own, between two. The entry is the
-    source's, as its listing or ``info`` gave it, its ``"name"`` the source
-    path.
-    """
+        It is the source's ``cp_file`` or ``mv_file`` within one storage, and
+        `transfer._across`, or its caller's own, between two. The entry is the
+        source's, as its listing or ``info`` gave it, its ``"name"`` the source
+        path. ``missing`` says nothing is at the destination, as the
+        primitives take it: one ignoring it is right all the same.
+        """
+
+        def __call__(
+            self, entry: dict[str, Any], path2: str, *, missing: bool = False
+        ) -> Awaitable[None]: ...
+
 
 _T = TypeVar("_T")
 
@@ -102,8 +108,10 @@ def _moves_of(
         else:
             copy = cp_entry
 
-            async def move(entry: dict[str, Any], path2: str) -> None:
-                await copy(entry, path2)
+            async def move(
+                entry: dict[str, Any], path2: str, *, missing: bool = False
+            ) -> None:
+                await copy(entry, path2, missing=missing)
                 await src_fs.rm_file(entry)
 
             mv_entry = move
@@ -753,6 +761,21 @@ class _CopyJobs(_Jobs):
         else:
             return target
 
+    def known_missing(self, target: str) -> bool:
+        """Whether nothing is at a destination, as the operation knows: it, or a directory above it, was found missing.
+
+        All below a destination found missing is missing too, unless another
+        client puts something there meanwhile: the primitives making it are
+        told so, by ``missing=True``, and a storage whose creation never
+        conflicts asks nothing first.
+        """
+        path = target.rstrip("/")
+        while path:
+            if path in self.missing:
+                return True
+            path = path.rpartition("/")[0]
+        return False
+
     def refuse_name(self, path: str, error: ValueError) -> ValueError:
         """A path whose name the destination refuses, as its ``target`` raised: counted, noted, to yield.
 
@@ -777,7 +800,9 @@ class _CopyJobs(_Jobs):
         source = entry["name"]
         try:
             try:
-                await cp_entry(entry, destination)
+                await cp_entry(
+                    entry, destination, missing=self.known_missing(destination)
+                )
             except FileExistsError:
                 found = await self.dst.info(self.dst.entry(destination))
                 if found["type"] == "directory":

@@ -207,8 +207,13 @@ An item that exists is named by its entry, a dict as fsspec's `ls` with `detail`
   its listing gave, whole, so that a storage addressing items by id, or needing a size, asks nothing again. A name a
   listing gave is never verified again.
 - `open_file` and `open_async_file` take an entry whatever the mode, so that one method opens a file to read or to
-  write. A file to write may not exist yet: its entry then holds its name alone, as `entry` makes it from a verified
-  path.
+  write. A file to write may not exist yet: its entry then holds its name, as `entry` makes it from a verified path,
+  and its final `"size"` where the caller knows it: `pipe_file`'s and `put_file`'s defaults, and a copy between
+  storages, put it there. A storage needing the size up front, e.g. for an upload session, need not hold the file.
+- `makedirs`, `cp_file` and `mv_file` take `missing`: True where the caller knows nothing is at the path. A copy or
+  move says so below a destination it found missing, as nothing is there unless another client puts it. A storage
+  whose creation never conflicts, e.g. Google Drive, which makes a second item of the name, skips its lookup. Any
+  other may ignore it.
 
 #### The filesystem
 

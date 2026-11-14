@@ -190,7 +190,9 @@ async def test_markers_are_not_copied() -> None:
     async def info(path: str) -> dict[str, Any]:
         raise FileNotFoundError(path)
 
-    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+    async def cp_entry(
+        entry: dict[str, Any], destination: str, *, missing: bool = False
+    ) -> None:
         source = entry["name"]
         copied.append((source, destination))
 
