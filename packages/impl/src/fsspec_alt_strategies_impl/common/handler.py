@@ -436,11 +436,49 @@ class StorageHandler(_PathHandler):
         """
         raise NotImplementedError(f"{type(self).__name__} opens no async file")
 
-    # Data moved whole: by default through `open_async_file`. A handler sending a
-    # request of its own instead, e.g. one download, overrides one, and holds a
-    # permit of io_limit around each request it sends, as the files do. The
-    # defaults hold none: the files take their own, and held around them, a
-    # permit would wait for itself.
+    # What a filesystem on the handler keeps.
+
+    def invalidate_cache(self, path: str | None = None) -> None:
+        """Drop what the handler keeps of the storage's listings, for a filesystem's ``invalidate_cache``: here, nothing.
+
+        A handler keeping ids by path, or a wrapper whose filesystem keeps its
+        own listings, drops them here.
+        """
+
+    async def sign(self, entry: Entry, expiration: int = 100, **kwargs: Any) -> str:
+        """A URL of a file, signed to be read without the storage's credential, for ``expiration`` seconds.
+
+        The filesystem's ``sign`` answers it, as fsspec's ``sign`` does. It is
+        awaited, as signing may ask the storage first, e.g. for a key to sign
+        with. A storage signing no URL raises NotImplementedError, as fsspec's
+        ``sign`` does.
+        """
+        raise NotImplementedError(f"{type(self).__name__} signs no URL")
+
+    async def created(self, entry: Entry) -> datetime:
+        """When an item was created, as fsspec's ``created`` answers.
+
+        A storage telling no creation time raises NotImplementedError, as
+        fsspec's ``created`` does.
+        """
+        raise NotImplementedError(f"{type(self).__name__} tells no creation time")
+
+    async def modified(self, entry: Entry) -> datetime:
+        """When an item was last modified, as fsspec's ``modified`` answers.
+
+        A storage telling no modification time raises NotImplementedError, as
+        fsspec's ``modified`` does.
+        """
+        raise NotImplementedError(f"{type(self).__name__} tells no modification time")
+
+    # Data moved at once: `cat_file`, `pipe_file`, `get_file` and `put_file`
+    # move a file's data whole, or `cat_file` a range of it. Their defaults
+    # stream it through an async file opened by `open_async_file`. A handler
+    # may override one with requests of its own, which know the range to move
+    # in advance: e.g. one ranged download in place of a seek and a read. Such
+    # an override holds a permit of io_limit around each request it sends, as
+    # the files do. The defaults hold none: the files take their own, and a
+    # permit held around them would wait for itself.
 
     transfer_size: int = 8 * _MiB
     """The bytes read or written at a time by the defaults of `get_file` and `put_file`."""
@@ -516,43 +554,6 @@ class StorageHandler(_PathHandler):
                 while chunk := local.read(self.transfer_size):
                     await f.write(chunk)
                     callback.relative_update(len(chunk))
-
-    # What a filesystem on the handler keeps.
-
-    def invalidate_cache(self, path: str | None = None) -> None:
-        """Drop what the handler keeps of the storage's listings, for a filesystem's ``invalidate_cache``: here, nothing.
-
-        A handler keeping ids by path, or a wrapper whose filesystem keeps its
-        own listings, drops them here.
-        """
-
-    # What fsspec leaves to each filesystem.
-
-    async def sign(self, entry: Entry, expiration: int = 100, **kwargs: Any) -> str:
-        """A URL of a file, signed to be read without the storage's credential, for ``expiration`` seconds.
-
-        The filesystem's ``sign`` answers it, as fsspec's ``sign`` does. It is
-        awaited, as signing may ask the storage first, e.g. for a key to sign
-        with. A storage signing no URL raises NotImplementedError, as fsspec's
-        ``sign`` does.
-        """
-        raise NotImplementedError(f"{type(self).__name__} signs no URL")
-
-    async def created(self, entry: Entry) -> datetime:
-        """When an item was created, as fsspec's ``created`` answers.
-
-        A storage telling no creation time raises NotImplementedError, as
-        fsspec's ``created`` does.
-        """
-        raise NotImplementedError(f"{type(self).__name__} tells no creation time")
-
-    async def modified(self, entry: Entry) -> datetime:
-        """When an item was last modified, as fsspec's ``modified`` answers.
-
-        A storage telling no modification time raises NotImplementedError, as
-        fsspec's ``modified`` does.
-        """
-        raise NotImplementedError(f"{type(self).__name__} tells no modification time")
 
 
 def _write_mode(mode: str) -> str:

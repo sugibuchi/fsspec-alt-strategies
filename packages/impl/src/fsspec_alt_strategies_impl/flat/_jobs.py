@@ -56,7 +56,7 @@ class _FlatJobs(_Jobs):
     """The jobs of one operation, run while the keys under its roots are listed.
 
     ``fs`` is the handler listed, by its ``ils_recursive`` and ``info``.
-    With ``maxdepth``, the keys deeper than it are listed, as a prefix lists
+    ``ils_kwargs`` go to each ``ils_recursive``, a pattern's glob's too. With ``maxdepth``, the keys deeper than it are listed, as a prefix lists
     every key under it, but left out, as fsspec's ``_expand_path`` finds paths.
 
     A batch deletion runs by `delete`, and its outcome is told by `refused`:
@@ -98,7 +98,9 @@ class _FlatJobs(_Jobs):
         return refused
 
     def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
-        return _flat_glob(self.handler, pattern, maxdepth=self.maxdepth)
+        return _flat_glob(
+            self.handler, pattern, maxdepth=self.maxdepth, ils_kwargs=self.ils_kwargs
+        )
 
     @abstractmethod
     def add(self, entry: dict[str, Any]) -> None:
@@ -142,7 +144,7 @@ class _FlatJobs(_Jobs):
 
             under = False
             prefix = f"{directory}/" if directory else ""
-            entries = _listing(self.handler, prefix, root)
+            entries = _listing(self.handler, prefix, root, self.ils_kwargs)
             try:
                 async for entry in entries:
                     under = True

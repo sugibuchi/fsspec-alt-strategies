@@ -14,7 +14,7 @@ This module depends on `_keys`, and `handler`, `operation` and `paths` of `commo
 from __future__ import annotations
 
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fsspec_alt_strategies.states import WalkState
 
@@ -35,6 +35,8 @@ def _flat_walk(
     maxdepth: int | None = None,
     topdown: bool = True,
     descend: Callable[[dict[str, Any]], bool] | None = None,
+    on_error: Literal["omit", "raise"] | Callable[[Exception], object] | None = None,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
     """Walk the keys under a prefix, from one listing streamed as it comes.
 
@@ -61,12 +63,18 @@ def _flat_walk(
     directory. It loses on storages with a hierarchical namespace, whose empty
     directories a listing by prefix does not see: `_tree_walk` suits those.
 
+    A failure of the listing ends the walk, as there is no other listing to go
+    on with. It yields its error as ``path``'s, after the directories done,
+    and leaves out those not done. The error names ``path`` in its note, and
+    as its ``directory`` attribute. ``on_error``, below, may handle it
+    instead, as with fsspec's ``walk``.
+
     Once cancelled, it takes nothing more from the listing. Iterating it raises
     these errors, which end it:
 
     - FileNotFoundError, if ``path`` does not exist;
     - NotADirectoryError, if ``path`` is a file;
-    - the error of the listing, as there is no other to go on with.
+    - with ``on_error="raise"``, the error of the listing.
 
     Requests: the pages of one ``ils_recursive`` of ``path``, one after
     another. One ``info`` for ``path``, if nothing is under it, holding a
@@ -77,30 +85,50 @@ def _flat_walk(
     as an object store lists them. ``maxdepth`` of 1 yields only ``path``.
     ``topdown`` puts a directory before those below it. ``descend``, called with
     the entry of each subdirectory found, lets the walk enter it only if it
-    returns True.
+    returns True. ``ils_kwargs`` go to the ``ils_recursive``, as fsspec's
+    ``walk`` passes its own on.
 
-    The operation yields ``(path, dirs, files)`` for each directory walked, and
-    its state is a `WalkState`. The call raises ValueError if ``maxdepth`` is
-    less than 1.
+    ``on_error`` says what becomes of the error of the listing:
+
+    - None yields it, as every strategy does;
+    - "omit" leaves it out;
+    - "raise" raises it;
+    - a callable is called with it, and it is left out.
+
+    The operation yields ``(path, dirs, files)`` for each directory walked, or
+    the listing's error, and its state is a `WalkState`. The call raises
+    ValueError if ``maxdepth`` is less than 1, or ``on_error`` is none of the
+    above.
     """
     _check_maxdepth(maxdepth)
+    if not (on_error in (None, "omit", "raise") or callable(on_error)):
+        raise ValueError(f"on_error must be 'omit', 'raise' or callable: {on_error!r}")
 
     async def run(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
-    ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]]]:
+    ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
         directories = _dirs_done(
             fs,
             path,
             maxdepth=maxdepth,
             descend=descend,
+            ils_kwargs=ils_kwargs,
             stopping=op.cancelling,
         )
 
         # Top down, the directories done, held until the listing ends.
         held: list[tuple[str, list[dict[str, Any]]]] = []
 
+        # The listing's error, yielded after the directories done.
+        failed: Exception | None = None
+
         async with aclosing(directories):
-            async for directory, entries in directories:
+            async for item in directories:
+                if isinstance(item, Exception):
+                    failed = item
+                    break
+
+                directory, entries = item
                 if topdown:
                     held.append((directory, entries))
                     continue
@@ -110,10 +138,20 @@ def _flat_walk(
                 )
                 yield _triples(directory, entries, detail=True)
 
+        if failed is not None and on_error == "raise":
+            raise failed
+
         # By name, so that each directory comes before those below it.
         for directory, entries in sorted(held):
             op.state = WalkState(current=directory, found=op.state.found + len(entries))
             yield _triples(directory, entries, detail=True)
+
+        if failed is None or on_error == "omit":
+            return
+        elif callable(on_error):
+            on_error(failed)
+        else:
+            yield failed
 
     return Operation(run, WalkState())
 
@@ -124,14 +162,18 @@ async def _dirs_done(
     *,
     maxdepth: int | None,
     descend: Callable[[dict[str, Any]], bool] | None,
+    ils_kwargs: dict[str, Any] | None,
     stopping: Callable[[], object],
-) -> AsyncGenerator[tuple[str, list[dict[str, Any]]]]:
+) -> AsyncGenerator[tuple[str, list[dict[str, Any]]] | Exception]:
     """Each directory walked with its entries, as soon as it is done: bottom up.
 
     The directories open, those the listing is in, are ``path`` and its
     subdirectories down to the key listed last. A key not under the deepest one closes it: the
     keys come in order, so none under it comes later. A walk stopped leaves
     out the directories still open.
+
+    A failure of the listing comes last, its error noted with ``path``, the
+    directories still open left out.
     """
     root = _trim(path)
     prefix = f"{root}/" if root else ""
@@ -140,9 +182,21 @@ async def _dirs_done(
     # The directories open, the root first, each with its entries so far.
     open_: list[tuple[str, list[dict[str, Any]]]] = [(root, [])]
 
-    keys = _listing(fs, prefix)
+    keys = _listing(fs, prefix, ils_kwargs=ils_kwargs)
     try:
-        async for key in keys:
+        while True:
+            # Only the listing's own error is the walk's to handle: the
+            # others, e.g. of a descend, end it.
+            try:
+                key = await anext(keys)
+            except StopAsyncIteration:
+                break
+            except Exception as e:
+                e.add_note(f"Listing {root!r} failed.")
+                e.directory = root  # type: ignore[attr-defined]
+                yield e
+                return
+
             under = True
             name = key["name"]
             while len(open_) > 1 and not name.startswith(open_[-1][0] + "/"):

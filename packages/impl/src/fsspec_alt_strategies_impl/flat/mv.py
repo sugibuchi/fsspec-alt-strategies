@@ -5,7 +5,7 @@
 `_flat_mv` is an alternative to fsspec's recursive ``mv`` for flat storages.
 fsspec's copies every key, then deletes them all, each stage listing the
 prefix first. `_flat_mv` moves each key as soon as the listing gives it: by
-one ``mv_file``, or by a copy, deleting the copied keys in batches while
+one rename, or by a copy, deleting the copied keys in batches while
 the listing goes on.
 
 This module depends on `_jobs`, `cp`, and `handler`, `jobs`, `operation` and `paths` of
@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
-from ..common.jobs import _Job, _transfer_of
+from ..common.jobs import _Job, _moves_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
 from ._jobs import _batch_size, _check_batch_size, _keys_of
@@ -41,9 +41,11 @@ def _flat_mv(
     path2: str,
     *,
     cp_entry: _Transfer | None = None,
+    mv_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
     root_entry: dict[str, Any] | None = None,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], MvState]:
     """Move the keys under a prefix, each as soon as it is listed.
 
@@ -52,9 +54,9 @@ def _flat_mv(
 
     It moves each key in one of two ways, by the destination's profile:
 
-    - by the source's ``mv_file``: each key is moved by one as soon as
-      the listing gives it, and yielded once moved. It wins on storages
-      renaming a key in one request, which copies no data.
+    - by renames: each key is moved by one ``mv_entry`` as soon as the
+      listing gives it, and yielded once moved. It wins on storages renaming
+      a key in one request, which copies no data.
     - by copies: each key is copied by one ``cp_entry`` as soon as the listing
       gives it. The keys copied are deleted in batches of the source's
       ``rm_batch_size``, each by one of its ``rm_files``, and the last,
@@ -62,8 +64,8 @@ def _flat_mv(
       batch is deleted. It wins on object stores, which rename nothing, but
       delete many keys in one request.
 
-    It moves by ``mv_file`` only within one storage whose profile's
-    ``renames_files`` is True. Unknown, it copies and deletes in batches,
+    It renames only within one storage whose profile's ``renames_files`` is
+    True. Unknown, it copies and deletes in batches,
     which is right on any storage: about one request per key either way, but
     a rename copies no data.
 
@@ -96,7 +98,7 @@ def _flat_mv(
     FileNotFoundError if ``path1`` does not exist, or matches nothing, and
     ValueError if ``path2`` is inside it within one storage.
 
-    Requests: as `_flat_cp`, with one ``mv_file`` per key instead of its
+    Requests: as `_flat_cp`, with one ``mv_entry`` per key instead of its
     ``cp_entry``, or with one ``rm_files`` more per batch.
 
     ``src_fs`` is the handler moved from, and ``dst_fs`` the one moved to,
@@ -105,17 +107,23 @@ def _flat_mv(
     ``path2`` places them as `_flat_cp` does. ``cp_entry(entry, destination)``
     copies a file by its source entry when the move copies: by default, the
     source's ``cp_file`` within one storage, and `transfer._across` between
-    two. ``same_storage`` is
-    whether ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 moves
+    two. ``mv_entry(entry, destination)`` moves one when the move renames: by
+    default, the source's ``mv_file``. Between two storages, nothing is
+    renamed, and ``mv_entry`` is not used: the copies' sources are deleted in
+    batches instead. ``same_storage`` is whether ``dst_fs`` is ``src_fs``,
+    unless given. ``maxdepth`` of 1 moves
     only the keys right in ``path1``. ``root_entry`` is as `_flat_cp` takes it.
+    ``ils_kwargs`` go to each of the source's ``ils_recursive``, a pattern's
+    glob's too.
 
     The operation yields ``(source, destination)`` for each key moved, or an
     error, and its state is an `MvState`. The call raises ValueError if the
     source's ``rm_batch_size`` or ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
-    if same_storage is None:
-        same_storage = src_fs is dst_fs
+    cp_entry, mv_entry, same_storage = _moves_of(
+        src_fs, dst_fs, cp_entry, mv_entry, same_storage
+    )
     options = {
         "fs": src_fs,
         "dst_fs": dst_fs,
@@ -124,10 +132,10 @@ def _flat_mv(
         "same_storage": same_storage,
         "maxdepth": maxdepth,
         "root_entry": root_entry,
+        "ils_kwargs": ils_kwargs,
     }
 
     _check_batch_size(_batch_size(src_fs))
-    cp_entry, _ = _transfer_of(src_fs, dst_fs, cp_entry, same_storage, "cp_entry")
 
     async def run(op: Operation[Any, MvState]) -> AsyncGenerator[Any]:
         # A rename wins only where the storage is known to rename: the profile,
@@ -135,7 +143,7 @@ def _flat_mv(
         await dst_fs.open()
         renames = same_storage and dst_fs.profile.renames_files is True
         jobs: _CopyOrMove = (
-            _Rename(op=op, **options)
+            _Rename(op=op, mv_entry=mv_entry, **options)
             if renames
             else _Move(op=op, cp_entry=cp_entry, **options)
         )
@@ -147,14 +155,18 @@ def _flat_mv(
 
 
 class _Rename(_CopyOrMove):
-    """The jobs of one `_flat_mv` by ``mv_file``: one move per key.
+    """The jobs of one `_flat_mv` by renames: one ``mv_entry`` per key.
 
-    The source's ``mv_file`` moves each key where a copy would put it. A
-    directory's marker is moved too, but not yielded.
+    ``mv_entry`` moves each key where a copy would put it. A directory's
+    marker is moved too, but not yielded.
     """
 
     verb = "move"
     doing = "Moving"
+
+    def __init__(self, *, mv_entry: _Transfer, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.mv_entry = mv_entry
 
     async def setup(self) -> None:
         await super().setup()
@@ -167,7 +179,7 @@ class _Rename(_CopyOrMove):
         self, entry: dict[str, Any], destination: StoragePath
     ) -> None:
         try:
-            await self.handler.mv_file(entry, destination)
+            await self.mv_entry(entry, destination)
         except Exception as e:
             # Yielded among paths, the error must tell its paths itself.
             e.add_note(f"{self.doing} {entry['name']!r} to {destination!r} failed.")

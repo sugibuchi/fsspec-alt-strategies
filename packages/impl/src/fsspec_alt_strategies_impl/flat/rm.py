@@ -34,6 +34,7 @@ def _flat_rm(
     path: str | Sequence[str],
     *,
     maxdepth: int | None = None,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[str, RmState]:
     """Delete the keys under a prefix, in batches sent as the listing goes on.
 
@@ -78,7 +79,8 @@ def _flat_rm(
     paths. A file is deleted alone. A glob pattern, or a list of paths and
     patterns, deletes all they match. ``maxdepth`` of 1 deletes only the keys
     right in ``path``. The filesystem's ``rm_files`` takes a key missing as
-    no error, and returns the keys it could not delete.
+    no error, and returns the keys it could not delete. ``ils_kwargs`` go to
+    each ``ils_recursive``, a pattern's glob's too.
 
     The operation yields each key deleted, or an error, and its state is an
     `RmState`. The call raises ValueError if ``rm_batch_size`` or ``maxdepth``
@@ -87,7 +89,9 @@ def _flat_rm(
     _check_batch_size(_batch_size(fs))
     _check_maxdepth(maxdepth)
 
-    return _Deletion.operation(fs=fs, path=path, maxdepth=maxdepth)
+    return _Deletion.operation(
+        fs=fs, path=path, maxdepth=maxdepth, ils_kwargs=ils_kwargs
+    )
 
 
 class _Deletion(_FlatJobs):

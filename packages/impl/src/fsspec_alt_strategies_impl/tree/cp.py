@@ -47,6 +47,7 @@ def _tree_cp(
     same_storage: bool | None = None,
     maxdepth: int | None = None,
     root_entry: dict[str, Any] | None = None,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], CpState]:
     """Copy a directory and everything in it, copying while the tree is walked.
 
@@ -162,16 +163,15 @@ def _tree_cp(
     ``cp_entry(entry, destination)`` copies a file: by default, the source's
     ``cp_file`` within one storage, and `transfer._across` between two. ``same_storage`` is
     whether ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 copies
-    only the files in ``path1``.
+    only the files in ``path1``. ``ils_kwargs`` go to each of the source's
+    ``ils``, a pattern's glob's too.
 
     The operation yields ``(source, destination)`` for each file copied, or an
     error, and its state is a `CpState`. The call raises ValueError if
     ``maxdepth`` is less than 1. `_tree_mv` does the same, deleting the source as it goes.
     """
     _check_maxdepth(maxdepth)
-    cp_entry, same_storage = _transfer_of(
-        src_fs, dst_fs, cp_entry, same_storage, "cp_entry"
-    )
+    cp_entry, same_storage = _transfer_of(src_fs, dst_fs, cp_entry, same_storage)
     return _Copy.operation(
         fs=src_fs,
         dst_fs=dst_fs,
@@ -181,6 +181,7 @@ def _tree_cp(
         maxdepth=maxdepth,
         cp_entry=cp_entry,
         root_entry=root_entry,
+        ils_kwargs=ils_kwargs,
     )
 
 

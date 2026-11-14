@@ -25,7 +25,10 @@ if TYPE_CHECKING:
 
 
 def _listing(
-    fs: Any, prefix: str, root: dict[str, Any] | None = None
+    fs: Any,
+    prefix: str,
+    root: dict[str, Any] | None = None,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Every key starting with ``prefix``, raw text, in name order.
 
@@ -34,12 +37,14 @@ def _listing(
     all of "data".
 
     The prefix's directory is listed by ``root``, its entry, where given, e.g.
-    as a glob found it, else by its path.
+    as a glob found it, else by its path. ``ils_kwargs`` go to the
+    ``ils_recursive``, but its ``prefix``, which is the listing's own.
     """
     path, _, name = prefix.rpartition("/")
     handler = fs
     entry = root if root is not None and root["name"] == path else handler.entry(path)
-    return handler.ils_recursive(entry, prefix=name)  # type: ignore[attr-defined, no-any-return]
+    kwargs = {k: v for k, v in (ils_kwargs or {}).items() if k != "prefix"}
+    return handler.ils_recursive(entry, prefix=name, **kwargs)  # type: ignore[attr-defined, no-any-return]
 
 
 def _dir(name: str) -> dict[str, Any]:

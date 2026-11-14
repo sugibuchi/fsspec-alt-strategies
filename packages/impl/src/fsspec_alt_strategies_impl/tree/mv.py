@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
-from ..common.jobs import _Job, _Roots, _transfer_of
+from ..common.jobs import _Job, _moves_of, _Roots
 from ..common.paths import _check_maxdepth
 from .cp import _CopyOrMove
 
@@ -41,10 +41,12 @@ def _tree_mv(
     path1: str | Sequence[str],
     path2: str,
     *,
+    cp_entry: _Transfer | None = None,
     mv_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
     root_entry: dict[str, Any] | None = None,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], MvState]:
     """Move a directory and everything in it, moving while the tree is walked.
 
@@ -75,8 +77,9 @@ def _tree_mv(
     The destination is described by ``dst_fs`` and its ``profile``,
     unknown if it has none. Within one storage, ``dst_fs`` is ``src_fs``, and
     ``same_storage`` is True. Between two, ``mv_entry`` copies a file to the
-    other storage, then deletes it: by default `transfer._across`. A
-    path may then go to the same path, or under it, and nothing is moved whole.
+    other storage, then deletes it: by default ``cp_entry``, then the source's
+    ``rm_file``. A path may then go to the same path, or under it, and nothing
+    is moved whole.
 
     Unlike fsspec's ``mv``, it keeps going past a failure, and reports each. A
     file that failed to move stays where it was, and so do the directories above
@@ -149,22 +152,26 @@ def _tree_mv(
     ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
     glob pattern, or a list of them, as the source's ``ils`` takes paths.
     ``mv_entry(entry, destination)`` moves a file by its source entry, as its
-    listing gave it: by default, the source's ``mv_file`` within one storage,
-    and `transfer._across` between two. A storage renaming a file in one
-    request implements ``mv_file`` so.
-    ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given.
+    listing gave it: by default, the source's ``mv_file`` within one storage.
+    A storage renaming a file in one request implements ``mv_file`` so.
+    Between two, it defaults to ``cp_entry(entry, destination)``, then the
+    source's ``rm_file``. ``cp_entry`` copies a file, as `_tree_cp` takes it:
+    by default `transfer._across`. Given ``mv_entry``, a move uses no
+    ``cp_entry``. ``same_storage`` is whether ``dst_fs`` is ``src_fs``,
+    unless given.
     ``maxdepth`` of 1 moves only the files in ``path1``. ``root_entry`` is as
     `_tree_cp` takes it: a single file moved so costs the ``dst_info`` of
     ``path2``, a ``dst_makedirs`` unless its parent is known to exist, and its
-    ``mv_entry``.
+    ``mv_entry``. ``ils_kwargs`` go to each of the source's ``ils``, a
+    pattern's glob's too.
 
     The operation yields ``(source, destination)`` for each file and directory
     moved, or an error, and its state is an `MvState`. The call raises
     ValueError if ``maxdepth`` is less than 1. `_tree_cp` does the same, keeping the source.
     """
     _check_maxdepth(maxdepth)
-    mv_entry, same_storage = _transfer_of(
-        src_fs, dst_fs, mv_entry, same_storage, "mv_entry"
+    _, mv_entry, same_storage = _moves_of(
+        src_fs, dst_fs, cp_entry, mv_entry, same_storage
     )
     return _Move.operation(
         fs=src_fs,
@@ -175,6 +182,7 @@ def _tree_mv(
         maxdepth=maxdepth,
         mv_entry=mv_entry,
         root_entry=root_entry,
+        ils_kwargs=ils_kwargs,
     )
 
 

@@ -64,27 +64,51 @@ _T = TypeVar("_T")
 def _transfer_of(
     src_fs: Any,
     dst_fs: Any,
-    transfer: _Transfer | None,
+    cp_entry: _Transfer | None,
     same_storage: bool | None,
-    name: str,
 ) -> tuple[_Transfer, bool]:
-    """How a copy or move sends each file, and whether it stays in one storage.
+    """How a copy sends each file, and whether it stays in one storage.
 
-    ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given. Within
-    one storage, a file goes by the source's own ``cp_file`` or ``mv_file``,
-    as ``name``, "cp_entry" or "mv_entry", says, unless
-    ``transfer`` is given. Between two, it goes by `transfer._across`, its
-    data through the caller, unless ``transfer`` is given.
+    ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given. Unless
+    ``cp_entry`` is given, a file goes by the source's own ``cp_file`` within
+    one storage, and by `transfer._across` between two, its data through the
+    caller.
     """
-    src, dst = src_fs, dst_fs
     if same_storage is None:
-        same_storage = src is dst
-    if transfer is None:
+        same_storage = src_fs is dst_fs
+    if cp_entry is None:
+        cp_entry = src_fs.cp_file if same_storage else _across(src_fs, dst_fs)
+    return cp_entry, same_storage
+
+
+def _moves_of(
+    src_fs: Any,
+    dst_fs: Any,
+    cp_entry: _Transfer | None,
+    mv_entry: _Transfer | None,
+    same_storage: bool | None,
+) -> tuple[_Transfer, _Transfer, bool]:
+    """How a move sends each file, by copy and by move, and whether it stays in one storage.
+
+    ``cp_entry`` is as `_transfer_of` makes it. ``mv_entry``, unless given, is
+    the source's ``mv_file`` within one storage. Between two, it is
+    ``cp_entry``, then the source's ``rm_file``: a file whose copy failed is
+    kept. So a caller's copy, e.g. a cloud's copy from a URL, moves too.
+    """
+    cp_entry, same_storage = _transfer_of(src_fs, dst_fs, cp_entry, same_storage)
+    if mv_entry is None:
         if same_storage:
-            transfer = getattr(src, f"{name.removesuffix('_entry')}_file")
+            mv_entry = src_fs.mv_file
         else:
-            transfer = _across(src, dst, move=name == "mv_entry")
-    return transfer, same_storage
+            copy = cp_entry
+
+            async def move(entry: dict[str, Any], path2: str) -> None:
+                await copy(entry, path2)
+                await src_fs.rm_file(entry)
+
+            mv_entry = move
+
+    return cp_entry, mv_entry, same_storage
 
 
 class _Job(NamedTuple):
@@ -235,11 +259,15 @@ class _Jobs(ABC):
         fs: Any,
         op: Operation[Any, Any],
         maxdepth: int | None = None,
+        ils_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.handler: StorageHandler = fs
         self.maxdepth = maxdepth
+
+        # The options of each listing the jobs make, a pattern's glob too.
+        self.ils_kwargs: dict[str, Any] = ils_kwargs or {}
 
         # The directory roots a pattern matched: fsspec walks them one level less
         # deep than a path named, as its glob counted that level already.

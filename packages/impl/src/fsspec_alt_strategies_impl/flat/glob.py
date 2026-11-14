@@ -39,6 +39,7 @@ def _flat_glob(
     *,
     maxdepth: int | None = None,
     withdirs: bool = True,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[dict[str, Any], GlobState]:
     """Find the paths matching glob patterns, listing only the keys they can match.
 
@@ -75,6 +76,8 @@ def _flat_glob(
     takes them: a trailing "/" matches only directories. ``maxdepth`` is how
     deep a ``**`` goes, and ``withdirs`` whether directories can match, as with
     fsspec's ``_glob``. The listing still lists every key under the prefix.
+    ``ils_kwargs`` go to each ``ils_recursive``, as fsspec's ``_glob`` passes
+    its own on.
 
     The operation yields the entry of each path matched, and its state is a
     `GlobState`. The call raises ValueError if ``maxdepth`` is less than 1,
@@ -103,7 +106,7 @@ def _flat_glob(
         for prefix, group in _listings(searches):
             if op.cancelling():
                 return
-            async for match in _matches(fs, prefix, group, op, found):
+            async for match in _matches(fs, prefix, group, op, found, ils_kwargs):
                 yield match
 
     return Operation(run, GlobState())
@@ -128,12 +131,13 @@ async def _matches(
     searches: list[_Search],
     op: Operation[dict[str, Any], GlobState],
     found: set[str],
+    ils_kwargs: dict[str, Any] | None,
 ) -> AsyncGenerator[dict[str, Any]]:
     """The matches of patterns in one listing, noted in ``found``."""
     # The directories of the key listed last.
     before: list[str] = []
 
-    entries = _listing(fs, prefix)
+    entries = _listing(fs, prefix, ils_kwargs=ils_kwargs)
     try:
         async for entry in entries:
             name = entry["name"]

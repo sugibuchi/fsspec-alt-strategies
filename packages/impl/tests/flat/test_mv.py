@@ -474,3 +474,23 @@ async def test_mv_entry_is_given_the_listings_entries(
     assert sorted((e["name"], e["size"]) for e in flat_fs.entries) == [
         (p, len(p)) for p in _FILES
     ]
+
+
+async def test_renames_by_the_mv_entry_given(flat_fs: SimulatedFileSystem) -> None:
+    _tree(flat_fs)
+    renamed: list[tuple[str, str]] = []
+
+    async def mv_entry(entry: dict[str, Any], destination: str) -> None:
+        renamed.append((entry["name"], destination))
+        await flat_fs._mv_file(entry["name"], destination)
+
+    view = FlatView(
+        flat_fs,
+        storage_profile=StorageProfile(implicit_directories=True, renames_files=True),
+    )
+    moved, errors = await _collect_with_errors(
+        _flat_mv(view, view, "data", "moved", mv_entry=mv_entry)
+    )
+    assert errors == []
+    assert sorted(renamed) == sorted(moved)
+    assert len(moved) == len(_FILES)

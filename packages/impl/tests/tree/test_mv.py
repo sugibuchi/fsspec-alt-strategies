@@ -705,6 +705,34 @@ async def test_moves_to_another_storage(hierarchical_fs: SimulatedFileSystem) ->
     assert op.state.roots_renamed is None
 
 
+async def test_moves_to_another_storage_by_cp_entry_then_rm_file(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+
+    async def cp_entry(entry: dict[str, Any], destination: str) -> None:
+        await dst._pipe_file(
+            destination, hierarchical_fs._file_data[entry["name"]].data
+        )
+
+    source = TreeView(hierarchical_fs)
+    op = _tree_mv(
+        source,
+        TreeView(dst),
+        "data",
+        "moved",
+        cp_entry=cp_entry,
+        same_storage=False,
+    )
+    _, errors = await _collect_with_errors(op)
+    assert errors == []
+    assert sorted(dst._file_data) == sorted("moved" + p[len("data") :] for p in _FILES)
+    assert not await hierarchical_fs._exists("data")
+    # Each file copied by cp_entry, then deleted by the source's rm_file.
+    assert hierarchical_fs.stats.calls["delete"] >= len(_FILES)
+
+
 def _shallow(fs: SimulatedFileSystem) -> None:
     """A tree with files at each level, so that fsspec places by the root."""
     for path in ["a.txt", "b.txt", "2023/x.txt", "2023/01/y.txt"]:

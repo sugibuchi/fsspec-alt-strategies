@@ -73,9 +73,10 @@ code: read it before adding a strategy or a handler.
 
 - A strategy takes the handler it works on, never its methods as functions: `_tree_rm(handler, path, maxdepth=...)`.
   A copy or move takes `src_fs` and `dst_fs`, handlers, the same within one storage.
-- The only function a strategy takes is a copy's or a move's `cp_entry` or `mv_entry`, a `common.jobs._Transfer`,
-  taking the source's entry. Between two storages it defaults to `common.transfer._across`, which streams the data
-  and leaves no part of a file. The router passes its routing handler's `cp_across` or `mv_across` so.
+- The only functions a strategy takes are a copy's `cp_entry`, and a move's `cp_entry` and `mv_entry`, each a
+  `common.jobs._Transfer` taking the source's entry. Between two storages, `cp_entry` defaults to
+  `common.transfer._across`, which streams the data and leaves no part of a file. A move's `mv_entry` defaults to
+  `cp_entry`, then the source's `rm_file`. The router passes its routing handler's `cp_across` and `mv_across` so.
 - A strategy calls only a handler's primitives, such as `ils`, `info` and `rm_file`, never a filesystem's method: the
   filesystem is the caller's.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.

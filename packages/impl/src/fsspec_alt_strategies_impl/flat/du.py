@@ -31,6 +31,7 @@ def _flat_du(
     path: str,
     *,
     maxdepth: int | None = None,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[dict[str, Any], DuState]:
     """Measure the files under a prefix, from one listing streamed as it comes.
 
@@ -56,7 +57,8 @@ def _flat_du(
     ``path`` is the directory measured on ``fs``. Its ``ils_recursive`` lists
     every key below a directory, in name order, each key once. ``maxdepth`` of
     1 counts only the files in ``path``, though the listing still lists every
-    key under it.
+    key under it. ``ils_kwargs`` go to the ``ils_recursive``, as fsspec's
+    ``_du`` passes its own on.
 
     The operation yields the entry of each file counted, and its state is a
     `DuState`. The call raises ValueError if ``maxdepth`` is less than 1.
@@ -66,7 +68,13 @@ def _flat_du(
     async def run(
         op: Operation[dict[str, Any], DuState],
     ) -> AsyncGenerator[dict[str, Any]]:
-        steps = _find_entries(fs, path, maxdepth=maxdepth, stopping=op.cancelling)
+        steps = _find_entries(
+            fs,
+            path,
+            maxdepth=maxdepth,
+            ils_kwargs=ils_kwargs,
+            stopping=op.cancelling,
+        )
 
         async with aclosing(steps):
             async for entry in steps:

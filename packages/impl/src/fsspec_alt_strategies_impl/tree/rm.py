@@ -34,6 +34,7 @@ def _tree_rm(
     path: str | Sequence[str],
     *,
     maxdepth: int | None = None,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[str, RmState]:
     """Delete a directory and everything in it, deleting while the tree is walked.
 
@@ -101,13 +102,16 @@ def _tree_rm(
     ``path`` is the directory deleted from ``fs``, as its ``ils`` takes it. A
     file is deleted alone. A glob pattern, or a list of paths and patterns,
     deletes all they match. ``maxdepth`` of 1 deletes only what is in
-    ``path``, and ``path`` if it is then empty.
+    ``path``, and ``path`` if it is then empty. ``ils_kwargs`` go to each
+    ``ils``, a pattern's glob's too.
 
     The operation yields each path deleted, or an error, and its state is an
     `RmState`. The call raises ValueError if ``maxdepth`` is less than 1.
     """
     _check_maxdepth(maxdepth)
-    return _Deletion.operation(fs=fs, path=path, maxdepth=maxdepth)
+    return _Deletion.operation(
+        fs=fs, path=path, maxdepth=maxdepth, ils_kwargs=ils_kwargs
+    )
 
 
 class _Deletion(_TreeJobs):

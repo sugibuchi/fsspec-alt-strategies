@@ -212,13 +212,26 @@ class FlatFileSystem(_BaseFileSystem):
     ) -> AsyncGenerator[tuple[str, Any, Any]]:
         detail = kwargs.pop("detail", False)
         root = self.handler.verified(path)
-        walk = _flat_walk(self.handler, root, maxdepth=maxdepth, topdown=topdown)
+        walk = _flat_walk(
+            self.handler,
+            root,
+            maxdepth=maxdepth,
+            topdown=topdown,
+            # The listing's error, which fsspec's on_error then handles as a
+            # failure to list the root: its "omit" still yields the root empty.
+            on_error="raise" if on_error == "raise" else None,
+            ils_kwargs=kwargs,
+        )
 
         async with aclosing(
             _with_monitors(walk, Call(self._unwrapped(), "walk", path))
         ) as directories:
             try:
                 async for item in directories:
+                    if isinstance(item, Exception):
+                        yield _failed_dir(item.directory, item, on_error, detail)  # type: ignore[attr-defined]
+                        continue
+
                     directory, dirs, files = item
                     if not detail:
                         dirs, files = list(dirs), list(files)
@@ -228,8 +241,8 @@ class FlatFileSystem(_BaseFileSystem):
                 entry = await self._info(root)
                 yield (root, {}, {"": entry}) if detail else (root, [], [""])
             except OSError as e:
-                # The listing's error ends the walk: fsspec's on_error handles
-                # it as a failure to list the root.
+                # A missing root, or the listing's error raised: fsspec's
+                # on_error handles it as a failure to list the root.
                 yield _failed_dir(root, e, on_error, detail)
 
     async def _find(
@@ -246,6 +259,7 @@ class FlatFileSystem(_BaseFileSystem):
                 self.handler.verified(path),
                 maxdepth=maxdepth,
                 withdirs=withdirs,
+                ils_kwargs=kwargs,
             ),
             Call(self._unwrapped(), "find", path),
         )
@@ -259,7 +273,12 @@ class FlatFileSystem(_BaseFileSystem):
                 path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
             )
 
-        op = _flat_du(self.handler, self.handler.verified(path), maxdepth=maxdepth)
+        op = _flat_du(
+            self.handler,
+            self.handler.verified(path),
+            maxdepth=maxdepth,
+            ils_kwargs=kwargs,
+        )
 
         entries, _ = await _collect_with_monitors(
             op, Call(self._unwrapped(), "du", path)
@@ -268,12 +287,14 @@ class FlatFileSystem(_BaseFileSystem):
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
         detail = kwargs.pop("detail", False)
+        withdirs = kwargs.pop("withdirs", True)
         entries, _ = await _collect_with_monitors(
             _flat_glob(
                 self.handler,
                 self.handler.verified(path, strip_only_protocol=True),
                 maxdepth=maxdepth,
-                withdirs=kwargs.pop("withdirs", True),
+                withdirs=withdirs,
+                ils_kwargs=kwargs,
             ),
             Call(self._unwrapped(), "glob", path),
         )

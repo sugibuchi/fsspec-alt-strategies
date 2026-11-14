@@ -1231,22 +1231,24 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
 
         As `_cross_fs_cp`, each file by the routing handler's ``mv_across``. A
         flat source copies each key by ``cp_across`` instead, and deletes the
-        keys copied in batches, by its handler's ``rm_files``.
+        keys copied in batches, by its handler's ``rm_files``: two storages
+        never rename.
         """
         src, dst = self._handler_of(fs1), self._handler_of(fs2)
+        cp_entry = self._across(src, dst)
+        mv_entry = self._across(src, dst, move=True)
 
         # A family's strategies are imported only when used.
         if isinstance(src, FlatHandler):
             from .flat.mv import _flat_mv  # noqa: PLC0415
 
-            # By copies, the keys copied deleted in batches by the source's
-            # rm_files: two storages never rename.
             return _flat_mv(
                 src,
                 dst,
                 path1,
                 path2,
-                cp_entry=self._across(src, dst),
+                cp_entry=cp_entry,
+                mv_entry=mv_entry,
                 same_storage=False,
                 maxdepth=maxdepth,
             )
@@ -1258,7 +1260,8 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
                 dst,
                 path1,
                 path2,
-                mv_entry=self._across(src, dst, move=True),
+                cp_entry=cp_entry,
+                mv_entry=mv_entry,
                 same_storage=False,
                 maxdepth=maxdepth,
             )

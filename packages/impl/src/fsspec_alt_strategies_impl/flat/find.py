@@ -32,6 +32,7 @@ def _flat_find(
     *,
     maxdepth: int | None = None,
     withdirs: bool = False,
+    ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[dict[str, Any], FindState]:
     """Find the files under a prefix, from one listing streamed as it comes.
 
@@ -64,6 +65,8 @@ def _flat_find(
     every key below a directory, in name order, each key once. ``maxdepth`` of
     1 finds only the files in ``path``, though the listing still lists every
     key under it. ``withdirs`` finds directories too, ``path`` included.
+    ``ils_kwargs`` go to the ``ils_recursive``, as fsspec's ``_find`` passes
+    its own on.
 
     The operation yields the entry of each path found, and its state is a
     `FindState`. The call raises ValueError if ``maxdepth`` is less than 1.
@@ -78,6 +81,7 @@ def _flat_find(
             path,
             maxdepth=maxdepth,
             withdirs=withdirs,
+            ils_kwargs=ils_kwargs,
             stopping=op.cancelling,
         )
 
@@ -95,6 +99,7 @@ async def _find_entries(
     *,
     maxdepth: int | None = None,
     withdirs: bool = False,
+    ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
 ) -> AsyncGenerator[dict[str, Any]]:
     """The entries under ``path``, as fsspec's ``_find`` finds them.
@@ -118,7 +123,7 @@ async def _find_entries(
     # The directories of the key listed last.
     before: list[str] = []
 
-    entries = _listing(fs, prefix)
+    entries = _listing(fs, prefix, ils_kwargs=ils_kwargs)
     try:
         async for entry in entries:
             under = True
