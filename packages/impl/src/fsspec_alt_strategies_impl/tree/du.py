@@ -6,7 +6,7 @@
 each file's size with a request of its own. `_tree_du` adds up the sizes the
 listings already give.
 
-This module depends on `find`, and `operation` and `paths` of `common`.
+This module depends on `_visit` and `find`, and `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from fsspec_alt_strategies.states import DuState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
+from ._visit import _Pruned
 from .find import _find_listings, _listed
 
 if TYPE_CHECKING:
@@ -76,7 +77,7 @@ def _tree_du(
         steps = _find_listings(
             handler,
             path,
-            maxdepth=maxdepth,
+            _Pruned(maxdepth=maxdepth),
             ils_kwargs=ils_kwargs,
             stopping=op.cancelling,
             file_root=True,

@@ -11,7 +11,7 @@ runs, and what its outcome is.
 A glob pattern is expanded first, as fsspec's ``_expand_path`` expands it:
 its matching directories are then walked at once.
 
-This module depends on `glob`, `walk`, and `jobs` of `common`.
+This module depends on `_visit`, `glob` and `walk`, and `jobs` of `common`.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _Jobs
+from ._visit import _Pruned
 from .glob import _tree_glob
 from .walk import _chunks
 
@@ -90,8 +91,7 @@ class _TreeJobs(_Jobs):
             return _chunks(
                 self.handler,
                 directories,
-                maxdepth=self.maxdepth,
-                matched=self.matched,
+                _Pruned(maxdepth=self.maxdepth, matched=self.matched),
                 ils_kwargs=self.ils_kwargs,
                 stopping=self.op.cancelling,
             )

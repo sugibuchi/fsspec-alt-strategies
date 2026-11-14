@@ -29,8 +29,8 @@ The tree strategies, and the engines under them, take the handler they
 work on, and call its primitives, such as ``ils``, under its
 ``operation_limit``.
 
-This module depends on `listing`, and `handler`, `jobs`, `operation` and `paths` of
-`common`.
+This module depends on `_visit` and `listing`, and `handler`, `jobs`, `operation`
+and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ from fsspec_alt_strategies.states import WalkState
 from ..common.jobs import _Queue
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
+from ._visit import _Pruned, _TopDown, _Visit
 from .listing import _DepthFirst, _tree_ils
 
 if TYPE_CHECKING:
@@ -53,7 +54,6 @@ if TYPE_CHECKING:
         AsyncIterator,
         Callable,
         Collection,
-        Iterable,
     )
 
     from ..common.handler import Entry, StorageHandler, StoragePath
@@ -129,8 +129,9 @@ def _tree_walk(
     if not (on_error in (None, "omit", "raise") or callable(on_error)):
         raise ValueError(f"on_error must be 'omit', 'raise' or callable: {on_error!r}")
 
-    # Top down, a directory on its own: a descend makes the walk list so.
-    walked = descend if descend is not None or not topdown else _every
+    visit: _Visit = _Pruned(maxdepth=maxdepth, descend=descend)
+    if topdown:
+        visit = _TopDown(visit)
 
     async def run(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
@@ -140,12 +141,7 @@ def _tree_walk(
         held: dict[str, list[dict[str, Any]]] = {}
         bottom_up = None if topdown else _BottomUp()
         chunks = _chunks(
-            handler,
-            path,
-            maxdepth=maxdepth,
-            descend=walked,
-            ils_kwargs=ils_kwargs,
-            stopping=op.cancelling,
+            handler, path, visit, ils_kwargs=ils_kwargs, stopping=op.cancelling
         )
 
         async with aclosing(chunks):
@@ -157,7 +153,7 @@ def _tree_walk(
 
                 ready = [listing]
                 if bottom_up is not None:
-                    subdirs = _walked_subdirs(listing, maxdepth, walked)
+                    subdirs = _walked_subdirs(listing, visit)
                     ready = bottom_up.add(listing, subdirs)
 
                 for listing in ready:
@@ -207,35 +203,19 @@ def _walk_state(state: WalkState, listing: _Listing) -> WalkState:
     )
 
 
-def _walked_subdirs(
-    listing: _Listing,
-    maxdepth: int | None,
-    descend: Callable[[dict[str, Any]], bool] | None,
-) -> list[str]:
+def _walked_subdirs(listing: _Listing, visit: _Visit) -> list[str]:
     """The subdirectories of a whole listing that the walk lists too, each once."""
-    if listing.error is not None or (
-        maxdepth is not None and listing.depth >= maxdepth
-    ):
+    if listing.error is not None:
         return []
     else:
-        return list(dict.fromkeys(_subdirs(listing.entries, descend)))
-
-
-def _subdirs(
-    entries: list[dict[str, Any]],
-    descend: Callable[[dict[str, Any]], bool] | None,
-) -> list[str]:
-    """The subdirectories among entries to list next."""
-    return [
-        e["name"].rstrip("/")
-        for e in entries
-        if e["type"] == "directory" and (descend is None or descend(e))
-    ]
-
-
-def _every(entry: dict[str, Any]) -> bool:
-    """A ``descend`` entering every directory, which lists each on its own."""
-    return True
+        return list(
+            dict.fromkeys(
+                e["name"].rstrip("/")
+                for e in listing.entries
+                if e["type"] == "directory"
+                and visit.enter(e, listing.depth + 1) != "skip"
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,11 +251,8 @@ _CHUNK_SIZE = 1000
 async def _chunks(
     handler: TreeFileOperationHandler,
     path: str | Entry | Collection[str | Entry],
+    visit: _Visit | None = None,
     *,
-    maxdepth: int | None = None,
-    matched: Collection[str] = (),
-    descend: Callable[[dict[str, Any]], bool] | None = None,
-    whole: Callable[[dict[str, Any]], bool] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
     chunk_size: int = _CHUNK_SIZE,
@@ -294,9 +271,9 @@ async def _chunks(
     listing is yielded as its last part, with its error, and its subdirectories
     not listed yet are not walked.
 
-    The roots in ``matched`` start one level down, at depth 2: a pattern's
-    matches are walked one level less deep than ``maxdepth``, as fsspec's
-    ``_expand_path`` walks them.
+    ``visit`` says which directories the walk lists: by default all below
+    each root. A root starts at the depth it says, e.g. a glob's match one
+    level down.
 
     The parts of a directory come in order, but those of several directories
     mix, as the listings run at once. Each listing, by ``handler.ils`` with
@@ -305,21 +282,16 @@ async def _chunks(
     Once ``stopping`` returns true, no new listing starts, and those in flight
     stop after their current part: a directory stopped so has no last part.
 
-    A tree that nothing prunes is listed whole by one ``ils_recursive``, split
-    into the same parts, as `_produce_tree` says. Without ``maxdepth`` and
-    ``descend``, that is each root. A failure in it is resumed a directory per
-    request, as `_resume` says. With ``descend``, ``whole`` tells of a directory's entry
-    whether ``descend`` holds for every directory below it, e.g. below a glob's
-    ``**``: such a directory is listed so, and the walk prunes only above it.
-    With ``maxdepth``, each directory is listed on its own, so that none deeper
-    is.
+    A directory whose visit takes all below it is listed whole by one
+    ``ils_recursive``, split into the same parts, as `_produce_tree` says. A
+    failure in it is resumed a directory per request, as `_resume` says. Any
+    other directory is listed on its own, and the visit asked of each
+    subdirectory its listing finds.
     """
-    _check_maxdepth(maxdepth)
-
     # Each directory to list by the entry its listing gave, e.g. with the
     # storage's id, else by its path: a root given as a path, verified.
     roots, listed = _roots(path)
-    trees = _Trees(maxdepth, descend, whole)
+    plan = _Plan(visit or _Visit(), listed)
     # The directories to list, each with its depth.
     directories: _Queue[tuple[str, int]] = _Queue(handler.operation_limit)
     # The parts listed, a few at a time: a listing waits while they are full.
@@ -345,7 +317,7 @@ async def _chunks(
                     chunk_size,
                     stopped,
                 )
-                if item[0] in trees.roots
+                if item[0] in plan.subtrees
                 else _produce(
                     handler,
                     ils_kwargs or {},
@@ -359,10 +331,7 @@ async def _chunks(
             )
         )
 
-    trees.add(roots)
-    directories.waiting.extend(
-        (root, 2 if root in matched else 1) for root in sorted(roots)
-    )
+    directories.waiting.extend(plan.start(roots))
     await start()
 
     try:
@@ -378,14 +347,8 @@ async def _chunks(
                 _note(part.error, part.directory)
             else:
                 part = _once(part, found)
-            if part.error is None and (
-                not trees.listed(part.directory)
-                and (maxdepth is None or part.depth < maxdepth)
-            ):
-                subdirs = _new_subdirs(part, descend)
-                trees.add(name for name, _, _ in subdirs)
-                directories.waiting.extend((name, depth) for name, depth, _ in subdirs)
-                listed.update((name, entry) for name, _, entry in subdirs)
+            if part.error is None:
+                directories.waiting.extend(plan.found(part))
 
             if part.last:
                 found.pop(part.directory, None)
@@ -941,62 +904,60 @@ def _once(part: _Listing, found: dict[str, set[str]]) -> _Listing:
     return part if len(kept) == len(part.entries) else replace(part, entries=kept)
 
 
-def _new_subdirs(
-    part: _Listing,
-    descend: Callable[[dict[str, Any]], bool] | None,
-) -> list[tuple[str, int, Entry]]:
-    """The subdirectories a part adds to list, each with its depth and its entry, as `_once` left them.
+class _Plan:
+    """The directories a walk lists, and how, as its visit says of each one found.
 
-    Its entry, as the listing gave it, is what it is listed by, e.g. with the
-    storage's id.
-    """
-    return [
-        (name, part.depth + 1, {**entry, "name": name})
-        for entry in part.entries
-        if entry["type"] == "directory" and (descend is None or descend(entry))
-        for name in [entry["name"].rstrip("/")]
-    ]
-
-
-class _Trees:
-    """The directories a walk lists whole, by one ``ils_recursive`` each.
-
-    A directory is so listed when the walk prunes nothing below it: it has no
-    ``maxdepth``, and no ``descend``, or ``whole`` holds for it. The directories
-    below are then in its listing, never listed on their own.
+    A directory whose visit takes all below it is listed whole, by one
+    ``ils_recursive``: the directories below are then in its listing, never
+    listed on their own, nor asked of. Any other is listed alone, and the visit
+    asked of each subdirectory its listing finds.
     """
 
-    def __init__(
-        self,
-        maxdepth: int | None,
-        descend: Callable[[dict[str, Any]], bool] | None,
-        whole: Callable[[dict[str, Any]], bool] | None,
-    ) -> None:
-        self.maxdepth = maxdepth
-        self.descend = descend
-        self.whole = whole
-        self.roots: set[str] = set()
+    def __init__(self, visit: _Visit, listed: dict[str, Entry]) -> None:
+        self.visit = visit
+        # The entry each directory to list is listed by: the walk's, shared.
+        self.listed = listed
+        self.subtrees: set[str] = set()
 
-    def add(self, directories: Iterable[str]) -> None:
-        """Note those of the directories to list that are listed whole."""
-        if self.maxdepth is None:
-            self.roots.update(d for d in directories if self._whole(d))
+    def start(self, roots: Collection[str]) -> list[tuple[str, int]]:
+        """The roots to list, each with its depth: a root is never left."""
+        directories = []
+        for root in sorted(roots):
+            depth = self.visit.depth(root)
+            entry = self.listed.get(root) or {"name": root, "type": "directory"}
+            if self.visit.root(entry, depth) == "subtree":
+                self.subtrees.add(root)
+            directories.append((root, depth))
+        return directories
 
-    def _whole(self, directory: str) -> bool:
-        if self.descend is None:
-            return True
-        else:
-            return self.whole is not None and self.whole(
-                {"name": directory, "type": "directory"}
-            )
+    def found(self, part: _Listing) -> list[tuple[str, int]]:
+        """The subdirectories a part adds to list, as `_once` left them, each with its depth.
 
-    def listed(self, directory: str) -> bool:
-        """Whether the directory's subdirectories are in a recursive listing: it, or a directory above it, is a root."""
-        if "" in self.roots:
+        Each is listed by its entry, as the part gave it, e.g. with the
+        storage's id. Those the visit leaves are not among them, nor any of a
+        part from a recursive listing.
+        """
+        if self.in_subtree(part.directory):
+            return []
+        directories = []
+        for entry in part.entries:
+            if entry["type"] == "directory":
+                need = self.visit.enter(entry, part.depth + 1)
+                if need != "skip":
+                    name = entry["name"].rstrip("/")
+                    if need == "subtree":
+                        self.subtrees.add(name)
+                    self.listed[name] = {**entry, "name": name}
+                    directories.append((name, part.depth + 1))
+        return directories
+
+    def in_subtree(self, directory: str) -> bool:
+        """Whether a directory is in a recursive listing: it, or a directory above it, is listed whole."""
+        if "" in self.subtrees:
             return True
         path = directory
         while path:
-            if path in self.roots:
+            if path in self.subtrees:
                 return True
             path = path.rpartition("/")[0]
         return False

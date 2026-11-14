@@ -7,7 +7,7 @@ fsspec's walks a tree one directory at a time, unless the filesystem lists
 whole trees. `_tree_find` lists the tree as `_tree_walk` does: by one recursive
 ``ils``, or a directory per request, several at a time.
 
-This module depends on `walk`, and `handler`, `operation` and `paths` of `common`.
+This module depends on `_visit` and `walk`, and `handler`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -20,12 +20,14 @@ from fsspec_alt_strategies.states import DuState, FindState, GlobState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
+from ._visit import _Pruned
 from .walk import _chunks, _Listing
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
     from ..common.handler import StorageHandler, StoragePath
+    from ._visit import _Visit
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
@@ -82,7 +84,7 @@ def _tree_find(
         steps = _find_listings(
             handler,
             root,
-            maxdepth=maxdepth,
+            _Pruned(maxdepth=maxdepth),
             ils_kwargs=ils_kwargs,
             stopping=op.cancelling,
             file_root=True,
@@ -129,10 +131,8 @@ def _listed(state: _S, listing: _Listing, **counts: int) -> _S:
 async def _find_listings(
     handler: TreeFileOperationHandler,
     path: str,
+    visit: _Visit,
     *,
-    maxdepth: int | None = None,
-    descend: Callable[[dict[str, Any]], bool] | None = None,
-    whole: Callable[[dict[str, Any]], bool] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
     file_root: bool = False,
@@ -154,15 +154,7 @@ async def _find_listings(
     listed for it.
     """
     root = _trim(path)
-    listings = _chunks(
-        handler,
-        root,
-        maxdepth=maxdepth,
-        descend=descend,
-        whole=whole,
-        ils_kwargs=ils_kwargs,
-        stopping=stopping,
-    )
+    listings = _chunks(handler, root, visit, ils_kwargs=ils_kwargs, stopping=stopping)
 
     async with aclosing(listings):
         try:

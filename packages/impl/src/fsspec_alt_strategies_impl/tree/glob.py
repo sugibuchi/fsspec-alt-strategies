@@ -20,7 +20,7 @@ nothing, e.g. ``data`` for ``data/**/*.csv``, is listed by one recursive
 Several patterns are matched in one walk per tree: a directory is listed once if
 any of them can match in it, and each path is matched with all of them.
 
-This module depends on `find`, and `operation`, `paths` and `patterns` of
+This module depends on `_visit` and `find`, and `operation`, `paths` and `patterns` of
 `common`.
 """
 
@@ -35,6 +35,7 @@ from fsspec_alt_strategies.states import GlobState
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _inside, _Search
+from ._visit import _Pruned
 from .find import _find_listings, _listed
 
 if TYPE_CHECKING:
@@ -174,9 +175,13 @@ async def _walk(
     steps = _find_listings(
         handler,
         root,
-        maxdepth=None if None in depths else max(d for d in depths if d is not None),
-        descend=lambda e: any(s.descend(e) for s in searches),
-        whole=lambda e: any(s.whole(e) for s in searches),
+        _Pruned(
+            maxdepth=None
+            if None in depths
+            else max(d for d in depths if d is not None),
+            descend=lambda e: any(s.descend(e) for s in searches),
+            whole=lambda e: any(s.whole(e) for s in searches),
+        ),
         ils_kwargs=ils_kwargs,
         stopping=op.cancelling,
         dir_root=bool(root)

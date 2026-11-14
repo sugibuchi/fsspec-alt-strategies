@@ -10,6 +10,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.tree._visit import _Pruned
 from fsspec_alt_strategies_impl.tree.walk import (
     WalkState,
     _chunks,
@@ -355,7 +356,7 @@ async def test_chunks_stream_a_dir_in_parts() -> None:
         TreeView(fs, ils=_streamed(fs, listed), operation_limit=asyncio.Semaphore(4)),
         "data",
         # Each directory listed on its own: a descend prunes.
-        descend=lambda _: True,
+        _Pruned(descend=lambda _: True),
         chunk_size=2,
     )
     async with aclosing(chunks):
