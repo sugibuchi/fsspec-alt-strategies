@@ -242,3 +242,15 @@ def test_a_storages_class_names_its_handlers_paths() -> None:
     # A URL is the handler's.
     assert fs.unstrip_protocol("a/b") == "bkt://a/b"
     assert fs.unstrip_protocol("bucket://a/b") == "bucket://a/b"
+
+
+def test_paths_of_a_storage_rooted_at_slash_are_absolute() -> None:
+    class Drive(_Account):
+        protocol = "drive"
+        root = "/"
+
+    assert Drive.strip_protocol("drive://a/b/") == "/a/b"
+    assert Drive.strip_protocol("drive:///a/b") == "/a/b"
+    assert Drive.strip_protocol("a") == "/a"
+    assert Drive.strip_protocol("drive://") == "/"
+    assert Drive.strip_protocol("/") == "/"

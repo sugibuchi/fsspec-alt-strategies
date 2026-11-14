@@ -66,10 +66,12 @@ class _PathHandler(ABC):
         """A URL or path as the storage's path, as fsspec's ``_strip_protocol`` gives it.
 
         Any of ``protocol`` is removed, with "://" or "::", and a trailing "/":
-        an empty path is the ``root``. A list gives a list. It is a class
-        method, so that a filesystem's class strips URLs before it is made, as
-        fsspec does. A handler serving another filesystem's paths, as a
-        wrapper does, overrides it with the other's.
+        an empty path is the ``root``. Where the root is "/", the paths are
+        absolute: one given without it gains it, so that ``proto://a/b`` is
+        ``/a/b``. A list gives a list. It is a class method, so that a
+        filesystem's class strips URLs before it is made, as fsspec does. A
+        handler serving another filesystem's paths, as a wrapper does,
+        overrides it with the other's, as does one whose URLs name a host.
         """
         if isinstance(path, list):
             return [cls.strip_protocol(p) for p in path]
@@ -80,7 +82,11 @@ class _PathHandler(ABC):
                 path = path[len(protocol) + 3 :]
             elif path.startswith(f"{protocol}::"):
                 path = path[len(protocol) + 2 :]
-        return path.rstrip("/") or cls.root
+        path = path.rstrip("/") or cls.root
+        if cls.root == "/" and not path.startswith("/"):
+            return "/" + path
+        else:
+            return path
 
     def unstrip_protocol(self, name: str) -> str:
         """A path of the storage as a URL, with the first ``protocol``, as fsspec's ``unstrip_protocol``."""
