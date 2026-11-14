@@ -12,8 +12,7 @@ its path. An entry is a dict whose ``"name"`` alone is sure: a path given by a
 caller comes as `StorageHandler.entry`'s ``{"name": path}``, and a listing's
 entries come whole.
 
-This module depends on `_async_file`, `fsspec_async` and `fsspec_transaction`
-of `files`, whose files its defaults move data through.
+This module depends on nothing else in the package.
 """
 
 from __future__ import annotations
@@ -24,15 +23,10 @@ import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, NewType, TypeAlias
 
-from fsspec.asyn import sync
 from fsspec.callbacks import DEFAULT_CALLBACK
 from fsspec.utils import stringify_path
 
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
-
-from ..files._async_file import _AsyncFile, _MiB
-from ..files.fsspec_async import AsyncFileAdapter
-from ..files.fsspec_transaction import AdaptiveWritableTransaction, TransactionFile
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -41,6 +35,8 @@ if TYPE_CHECKING:
     from fsspec.callbacks import Callback
 
 __all__ = ["Entry", "StorageHandler", "StoragePath"]
+
+_MiB = 1024 * 1024
 
 
 StoragePath = NewType("StoragePath", str)
@@ -381,54 +377,51 @@ class StorageHandler(_PathHandler):
         ``path2``'s parent exists.
         """
 
-    # Files. The filesystem awaits them on its own loop, for its sync open too.
+    # Files: to read, mode "rb", or to write, "wb" or "xb". Each takes an entry
+    # whatever the mode: a file to write may not exist yet, its entry then
+    # holding its name alone, as `entry` makes it. To read, a missing file
+    # raises FileNotFoundError, and a directory IsADirectoryError. To write,
+    # "xb" raises FileExistsError where a file is, as the storage tells it.
 
-    async def open_file(self, entry: Entry, mode: str = "rb", **kwargs: Any) -> Any:
-        """Open a file, one used sync or async: to read, mode "rb", or to write, "wb" or "xb".
+    def open_file(
+        self,
+        entry: Entry,
+        mode: str = "rb",
+        *,
+        loop: asyncio.AbstractEventLoop | None,
+        autocommit: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """Open a file-like object with Python's sync API, for fsspec's sync ``open``.
 
-        It returns e.g. an `AdaptiveReadableFile` or an `AdaptiveWritableFile`,
-        whose requests hold ``io_limit``, as their concurrency limit.
+        The filesystem returns the file as it is, e.g. an
+        `AdaptiveReadableFile` or an `AdaptiveWritableFile`. ``loop`` is the
+        filesystem's, which its sync methods run on: a file whose requests
+        are awaited runs them there, and a request opening it is awaited
+        there by fsspec's ``sync``. It is None for a filesystem made with
+        ``asynchronous=True``. Its requests hold ``io_limit``.
 
-        It takes an entry whatever the mode, as every primitive on a file
-        does. A file to write may not exist yet: its entry may hold its name
-        alone, verified, as `entry` makes it. One a listing found may hold
-        more, e.g. an id to overwrite it by.
-
-        To read, a missing file raises FileNotFoundError, and a directory
-        IsADirectoryError. To write, "xb" raises FileExistsError where a file
-        is, as the storage tells it.
+        Within fsspec's transaction, ``autocommit`` is False: a handler
+        supporting it returns a file committed with the transaction, e.g. a
+        `TransactionFile`. One that does not writes as it would without.
+        ``block_size`` and ``cache_options``, fsspec's, come in ``kwargs``.
         """
         raise NotImplementedError(f"{type(self).__name__} opens no file")
 
-    def open_sync_file(
-        self,
-        entry: Entry,
-        mode: str,
-        *,
-        loop: asyncio.AbstractEventLoop,
-        autocommit: bool = True,
-        block_size: int | None = None,
-        cache_options: dict[str, Any] | None = None,
-        **kwargs: Any,
+    async def open_async_file(
+        self, entry: Entry, mode: str = "rb", **kwargs: Any
     ) -> Any:
-        """Open a file for fsspec's sync ``open``: by default `open_file`'s, awaited on ``loop``, the filesystem's.
+        """Open a file with the API of fsspec's ``open_async`` files: its methods awaited.
 
-        Within a transaction, ``autocommit=False``, a file written is a
-        `TransactionFile` on an `AdaptiveWritableTransaction`: no reader sees
-        it before the transaction commits. ``block_size`` and
-        ``cache_options``, fsspec's, are left to the file's own sizes.
-
-        A handler whose storage gives sync files of its own, e.g. a wrapped
-        filesystem's or an SDK's handle, overrides it. Its files join fsspec's
-        transactions by a `TransactionFile` of its own.
+        The filesystem's ``open_async``, the strategies' copies between
+        storages, and the defaults of `cat_file`, `pipe_file`, `get_file`
+        and `put_file` use it. A handler gives its own files that API, e.g.
+        an adaptive file through `AsyncFileAdapter`, or an SDK's handle
+        through `SyncFileAdapter`. Its requests hold ``io_limit``.
         """
-        file = sync(loop, self.open_file, entry, mode, **kwargs)
-        if autocommit or mode == "rb":
-            return file
-        else:
-            return TransactionFile(AdaptiveWritableTransaction(file))
+        raise NotImplementedError(f"{type(self).__name__} opens no async file")
 
-    # Data moved whole: by default through `open_file`. A handler sending a
+    # Data moved whole: by default through `open_async_file`. A handler sending a
     # request of its own instead, e.g. one download, overrides one, and holds a
     # permit of io_limit around each request it sends, as the files do. The
     # defaults hold none: the files take their own, and held around them, a
@@ -444,12 +437,12 @@ class StorageHandler(_PathHandler):
         end: int | None = None,
         **kwargs: Any,
     ) -> bytes:
-        """Read a file, or a range of it, as fsspec's ``cat_file`` does: by default through `open_file`.
+        """Read a file, or a range of it, as fsspec's ``cat_file`` does: by default through `open_async_file`.
 
         A file that cannot seek, e.g. a stream of an SDK, is read up to
         ``start`` and the bytes dropped, a ``transfer_size`` at a time.
         """
-        async with _awaited(await self.open_file(entry, "rb", **kwargs)) as f:
+        async with await self.open_async_file(entry, "rb", **kwargs) as f:
             position = 0
             if start is not None:
                 position = start if start >= 0 else max(0, f.size + start)
@@ -465,12 +458,12 @@ class StorageHandler(_PathHandler):
     async def pipe_file(
         self, path: StoragePath, value: bytes, mode: str = "overwrite", **kwargs: Any
     ) -> None:
-        """Write a file whole, as fsspec's ``pipe_file`` does: by default through `open_file`.
+        """Write a file whole, as fsspec's ``pipe_file`` does: by default through `open_async_file`.
 
-        Mode "create" writes it only if none is there, by `open_file`'s "xb".
+        Mode "create" writes it only if none is there, by `open_async_file`'s "xb".
         """
-        opened = await self.open_file({"name": path}, _write_mode(mode), **kwargs)
-        async with _awaited(opened) as f:
+        entry = {"name": path}
+        async with await self.open_async_file(entry, _write_mode(mode), **kwargs) as f:
             await f.write(value)
 
     async def get_file(
@@ -480,8 +473,8 @@ class StorageHandler(_PathHandler):
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
-        """Copy a file to a local path, as fsspec's ``get_file`` does: by default through `open_file`."""
-        async with _awaited(await self.open_file(entry, "rb", **kwargs)) as f:
+        """Copy a file to a local path, as fsspec's ``get_file`` does: by default through `open_async_file`."""
+        async with await self.open_async_file(entry, "rb", **kwargs) as f:
             # The bytes, as fsspec's own filesystems tell them to the callback.
             callback.set_size(f.size)
 
@@ -500,9 +493,9 @@ class StorageHandler(_PathHandler):
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
-        """Copy a local file to the storage, as fsspec's ``put_file`` does: by default through `open_file`."""
-        opened = await self.open_file({"name": path}, _write_mode(mode), **kwargs)
-        async with _awaited(opened) as f:
+        """Copy a local file to the storage, as fsspec's ``put_file`` does: by default through `open_async_file`."""
+        entry = {"name": path}
+        async with await self.open_async_file(entry, _write_mode(mode), **kwargs) as f:
             with open(lpath, "rb") as local:  # noqa: ASYNC230
                 callback.set_size(os.fstat(local.fileno()).st_size)
                 while chunk := local.read(self.transfer_size):
@@ -552,17 +545,8 @@ class StorageHandler(_PathHandler):
         raise NotImplementedError(f"{type(self).__name__} tells no modification time")
 
 
-def _awaited(file: Any) -> Any:
-    """A handler's file, its methods awaited: an `_AsyncFile` through `AsyncFileAdapter`, any other as it is.
-
-    The other is a file whose methods are awaited already, e.g. a wrapped
-    filesystem's of ``open_async``.
-    """
-    return AsyncFileAdapter(file) if isinstance(file, _AsyncFile) else file
-
-
 def _write_mode(mode: str) -> str:
-    """`open_file`'s mode for fsspec's ``pipe_file`` and ``put_file`` mode: "xb" to create, else "wb"."""
+    """`open_async_file`'s mode for fsspec's ``pipe_file`` and ``put_file`` mode: "xb" to create, else "wb"."""
     return "xb" if mode == "create" else "wb"
 
 

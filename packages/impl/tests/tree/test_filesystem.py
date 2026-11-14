@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from fsspec.asyn import AsyncFileSystem
+from fsspec.asyn import AsyncFileSystem, sync
 from fsspec.callbacks import Callback
 
 from fsspec_alt_strategies.monitor import (
@@ -19,6 +19,11 @@ from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
+)
+from fsspec_alt_strategies_impl.files.fsspec_async import AsyncFileAdapter
+from fsspec_alt_strategies_impl.files.fsspec_transaction import (
+    AdaptiveWritableTransaction,
+    TransactionFile,
 )
 from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
 from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
@@ -128,11 +133,35 @@ class _TreeHandler(TreeHandler):
     async def makedirs(self, path: Any, exist_ok: bool = False) -> None:
         await self.inner._makedirs(path, exist_ok=exist_ok)
 
-    async def open_file(
+    def open_file(
+        self,
+        entry: dict[str, Any],
+        mode: str = "rb",
+        *,
+        loop: Any,
+        autocommit: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        file = sync(
+            loop,
+            _open_file,
+            self.inner,
+            entry["name"],
+            mode,
+            concurrency_limit=self.io_limit,
+        )
+        if autocommit or mode == "rb":
+            return file
+        else:
+            return TransactionFile(AdaptiveWritableTransaction(file))
+
+    async def open_async_file(
         self, entry: dict[str, Any], mode: str = "rb", **kwargs: Any
     ) -> Any:
-        return await _open_file(
-            self.inner, entry["name"], mode, concurrency_limit=self.io_limit
+        return AsyncFileAdapter(
+            await _open_file(
+                self.inner, entry["name"], mode, concurrency_limit=self.io_limit
+            )
         )
 
 

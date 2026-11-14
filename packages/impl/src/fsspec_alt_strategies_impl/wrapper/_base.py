@@ -199,32 +199,26 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
     # wrapped one's do: one left by an exception may keep what was written, so
     # the profile declares no atomic_writes unless the library's writer aborts.
 
-    async def open_file(self, entry: Entry, mode: str = "rb", **kwargs: Any) -> Any:
+    def open_file(
+        self,
+        entry: Entry,
+        mode: str = "rb",
+        *,
+        loop: asyncio.AbstractEventLoop | None,
+        autocommit: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        # The wrapped filesystem's sync file, on its own loop, with its own transactions.
+        return self.fs._open(entry["name"], mode=mode, autocommit=autocommit, **kwargs)
+
+    async def open_async_file(
+        self, entry: Entry, mode: str = "rb", **kwargs: Any
+    ) -> Any:
         path = entry["name"]
         if self.asynchronous:
             return await self.fs.open_async(path, mode, **kwargs)
         file = await self._run_in_thread(self.fs.open, path, mode, **kwargs)
         return SyncFileAdapter(file)
-
-    def open_sync_file(
-        self,
-        entry: Entry,
-        mode: str,
-        *,
-        loop: asyncio.AbstractEventLoop,
-        autocommit: bool = True,
-        block_size: int | None = None,
-        cache_options: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        return self.fs._open(
-            entry["name"],
-            mode=mode,
-            autocommit=autocommit,
-            block_size=block_size,
-            cache_options=cache_options,
-            **kwargs,
-        )
 
     # The sync methods fsspec leaves to each filesystem, the wrapped one's. They
     # are sync, also of an async filesystem: each runs in a thread, as fsspec's

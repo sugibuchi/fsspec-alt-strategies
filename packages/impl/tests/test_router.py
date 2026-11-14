@@ -90,17 +90,18 @@ class _Files:
     fs: SimulatedFileSystem
     closed = 0
 
-    async def open_file(
+    async def open_async_file(
         self, entry: dict[str, Any], mode: str = "rb", **kwargs: Any
     ) -> Any:
         path = entry["name"]
         return _Reader(self.fs, path) if "r" in mode else _Writer(self.fs, path)
 
-    def open_sync_file(
+    def open_file(
         self,
         entry: dict[str, Any],
-        mode: str,
+        mode: str = "rb",
         *,
+        loop: Any,
         autocommit: bool = True,
         **kwargs: Any,
     ) -> Any:

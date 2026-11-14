@@ -102,8 +102,8 @@ class StorageProfile:
     atomic_writes : bool, optional
         Whether a file written is seen only once complete, and a write failed
         leaves the file that was there, as an upload to S3, Google Cloud
-        Storage or Azure does. It tells of a file the handler's ``open_file``
-        opened to write, left by an exception. A copy from another storage then writes in
+        Storage or Azure does. It tells of a file the handler opened to
+        write, left by an exception. A copy from another storage then writes in
         place. Unknown by default, taken as False: it writes to a temporary
         name beside the destination, then moves it there, so that no reader
         sees part of a file.

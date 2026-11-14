@@ -59,8 +59,10 @@ code: read it before adding a strategy or a handler.
   metaclass, no `__init_subclass__` and no decorator reflecting on a class.
 - `TreeFileSystemWrapper` and `FlatFileSystemWrapper` alone take their handler's paths at runtime, and alone are not
   cached: they serve a wrapped filesystem.
-- A primitive takes an entry for an item that exists, and a `StoragePath` for one to be made. `open_file` alone takes
-  an entry whatever its mode, holding only the name of a file to write. Build paths only by the
+- A primitive takes an entry for an item that exists, and a `StoragePath` for one to be made. `open_file` and
+  `open_async_file` take an entry whatever the mode, holding only the name of a file to write. `open_file` gives
+  Python's sync API, and `open_async_file` fsspec's async one: the strategies use only the latter. Async adapters
+  and transactions are each handler's to choose. Build paths only by the
   handler's `verified`, `entry`, `join` and `parent`, which verify them. Never concatenate strings.
 - A filesystem passes its caller's paths to `verified` or `entry` as given, never stripped first: `verify_path` sees
   a URL whole, e.g. abfs's account, and `verified` strips it.
@@ -96,7 +98,7 @@ code: read it before adding a strategy or a handler.
   under a router. Never add a hook taking a path to tell them apart.
 - The callers hold the limits' permits, never the primitives: the strategies hold `operation_limit` around each
   primitive. Data holds `io_limit` where its requests are sent: the files per part, and a handler's own `cat_file`,
-  `pipe_file`, `get_file` or `put_file` per request. Their defaults, through `open_file`, hold none.
+  `pipe_file`, `get_file` or `put_file` per request. Their defaults, through `open_async_file`, hold none.
 - The filesystem calls only what `StorageHandler` declares. Never find a handler's method by `getattr`: declare it
   on `StorageHandler`, with a default that works.
 - The library never chooses a strategy for the developer. Each docstring says what the strategy assumes of the

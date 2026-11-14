@@ -139,7 +139,7 @@ class _Streaming(FsspecTreeHandler):
         self.data = b"0123456789"
         self.opened: list[_Unseekable] = []
 
-    async def open_file(
+    async def open_async_file(
         self, entry: dict[str, Any], mode: str = "rb", **kwargs: Any
     ) -> Any:
         self.opened.append(_Unseekable(self.data))

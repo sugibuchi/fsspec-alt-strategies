@@ -30,7 +30,6 @@ from fsspec.callbacks import DEFAULT_CALLBACK
 
 from fsspec_alt_strategies.monitor import Call, Monitored
 
-from .handler import _awaited
 from .operation import _collect_with_monitors
 
 if TYPE_CHECKING:
@@ -89,23 +88,23 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         wrapped = self.handler.wrapped
         return wrapped if wrapped is not None else self
 
-    # Files, by the handler's open_file: the same file for open_async and the sync open.
+    # Files, the handler's as they are: open_async_file's for open_async, and
+    # open_file's for the sync open.
 
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        """Open a file whose methods are awaited, as fsspec's ``open_async`` does, by the handler's `open_file`.
+        """Open a file whose methods are awaited, as fsspec's ``open_async`` does: the handler's `open_async_file`.
 
-        A file of the package's is given fsspec's async API by an
-        `AsyncFileAdapter`. One whose methods are awaited already, e.g. a
-        wrapped filesystem's, is returned as it is. A file opened to write
-        drops the listings kept, as it opens: the file knows no filesystem.
+        A file opened to write drops the listings kept, as it opens: the file
+        knows no filesystem.
         """
+        # The path first: one the handler refuses fails before anything is done.
+        entry = self.handler.entry(path)
         if kwargs.pop("compression", None):
             raise ValueError("Compression is not supported by open_async")
         _check_mode(mode)
         if mode != "rb":
             self._drop_listings()
-        entry = self.handler.entry(path)
-        return _awaited(await self.handler.open_file(entry, mode, **kwargs))
+        return await self.handler.open_async_file(entry, mode, **kwargs)
 
     def _open(
         self,
@@ -116,23 +115,24 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         cache_options: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        """Open a file for the sync ``open``, by the handler's `open_sync_file`, on the filesystem's loop.
+        """Open a file for the sync ``open``: the handler's `open_file`, given the filesystem's loop.
 
-        Within a transaction, a file written is committed with it: no reader
-        sees it before. A file opened to write drops the listings kept, as
-        `open_async` does.
+        ``autocommit`` is passed on: within a transaction, the handler's file
+        joins it, if the handler supports transactions. ``block_size`` and
+        ``cache_options`` are passed on where given. A file opened to write
+        drops the listings kept, as `open_async` does.
         """
+        # The path first: one the handler refuses fails before anything is done.
+        entry = self.handler.entry(path)
         _check_mode(mode)
         if mode != "rb":
             self._drop_listings()
-        return self.handler.open_sync_file(
-            self.handler.entry(path),
-            mode,
-            loop=self.loop,
-            autocommit=autocommit,
-            block_size=block_size,
-            cache_options=cache_options,
-            **kwargs,
+        if block_size is not None:
+            kwargs["block_size"] = block_size
+        if cache_options is not None:
+            kwargs["cache_options"] = cache_options
+        return self.handler.open_file(
+            entry, mode, loop=self.loop, autocommit=autocommit, **kwargs
         )
 
     # fsspec's dircache: listings kept by _ls, for fsspec's own methods and callers.

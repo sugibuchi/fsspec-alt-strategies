@@ -127,17 +127,21 @@ class MyHandler(TreeHandler):
         ...
 
     async def info(self, entry, **kwargs): ...
-    # ... and rm_file, rmdir, makedirs, cp_file, mv_file, open_file.
+    # ... and rm_file, rmdir, makedirs, cp_file, mv_file, open_file, open_async_file.
 ```
 
-- A primitive takes an entry for an item that exists, and a path for one to be made. `open_file` takes an entry, to
-  read or write: a file to write may not exist yet, its entry holding its name alone. An entry is a dict whose
+- A primitive takes an entry for an item that exists, and a path for one to be made. `open_file` and
+  `open_async_file` take an entry, to read or write: a file to write may not exist yet, its entry holding its name
+  alone. An entry is a dict whose
   `"name"` alone is sure. The other keys, e.g. a size or an id, are there when a listing found them, so a primitive
   needs no request to ask them again.
 - The strategies build paths only by the handler's `join` and `parent`, each verified by `verify_path`. `join` takes
   several paths, as `os.path.join` does, and refuses a segment such as "..".
   So a name another storage listed, e.g. one holding "..", can never leave the directory it is copied into.
-- `open_file(entry, mode)` returns a file used sync or async, mode "rb", "wb" or "xb", e.g. the adaptive files below.
+- `open_file(entry, mode, *, loop, autocommit)` returns a file with Python's sync API, for fsspec's sync `open`, and
+  `open_async_file(entry, mode)` one whose methods are awaited, for `open_async` and the strategies. Mode is "rb",
+  "wb" or "xb". Both raise NotImplementedError by default: a handler implements what it supports, e.g. with the
+  adaptive files below.
 - A tree handler with a recursive listing of its own implements `ils_recursive`, and declares its order in
   `recursive_order`: "depth first" or "name". Without it, a tree is listed a directory per request, several at once.
 - A flat handler implements `ils_recursive(entry, prefix=...)`, every key below a directory starting with the prefix,
@@ -334,7 +338,24 @@ A subclass of an adaptive file implements the storage's requests, and leaves the
 - `AdaptiveWritableFile` implements `_upload_all`, for a small file, and the multipart upload's requests:
   `_start_multipart_upload`, `_upload_part`, `_complete_multipart_upload` and `_abort_multipart_upload`.
 
-A handler's `open_file` returns them, with its `io_limit` as their `concurrency_limit`. An
+A handler's `open_file` returns them as they are, made on its `loop`, and its `open_async_file` through
+`AsyncFileAdapter`, with its `io_limit` as their `concurrency_limit`:
+
+```python
+from fsspec.asyn import sync
+
+from fsspec_alt_strategies_impl.files.fsspec_async import AsyncFileAdapter
+
+
+def open_file(self, entry, mode="rb", *, loop, autocommit=True, **kwargs):
+    return sync(loop, self._adaptive, entry, mode)
+
+
+async def open_async_file(self, entry, mode="rb", **kwargs):
+    return AsyncFileAdapter(await self._adaptive(entry, mode))
+```
+
+An
 `AdaptiveWritableFile` opened with mode "xb" creates the file only if none is at the path. Its `exclusive` is then
 True, and the subclass checks it by the storage's conditional write where there is one.
 
@@ -346,18 +367,20 @@ The file decides which requests to send, and when. Whether a write is atomic is 
 
 #### Async file support
 
-A handler whose storage gives files of its own, e.g. an SDK's sync handle, returns them from `open_file` with the API
-of `open_async`'s files, through `SyncFileAdapter`:
+A handler whose storage gives sync files of its own, e.g. an SDK's handle, returns them from `open_file` as they are,
+and from `open_async_file` through `SyncFileAdapter`, which runs their blocking calls in a thread:
 
 ```python
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
 
 
-async def open_file(self, entry, mode="rb", **kwargs):
+def open_file(self, entry, mode="rb", *, loop, autocommit=True, **kwargs):
+    return self.client.open(entry["name"], mode)
+
+
+async def open_async_file(self, entry, mode="rb", **kwargs):
     return SyncFileAdapter(self.client.open(entry["name"], mode))
 ```
-
-Its sync `open` then needs the SDK's sync handle itself, by `open_sync_file`, as the next section shows.
 
 A handler reading or writing a file by one request, e.g. one download, overrides `cat_file`, `pipe_file`, `get_file`
 or `put_file`, holding a permit of its `io_limit` around the request:
@@ -387,16 +410,17 @@ strategy of file-level transactions. The package provides these:
 
 A storage with a way of its own, such as a staged upload, subclasses `FileTransaction`.
 
-A handler's default `open_sync_file` wraps its adaptive writer so when fsspec asks for no autocommit. A handler
-opening sync files of its own overrides it, returning a `TransactionFile` itself:
+Transactions are the handler's: its `open_file` is given `autocommit=False` within one. A handler supporting them
+returns a `TransactionFile` then, e.g. on an `AdaptiveWritableTransaction` for an adaptive writer, or on another
+strategy for files of its own. One ignoring `autocommit` writes as it would outside a transaction:
 
 ```python
 from fsspec_alt_strategies_impl.files.fsspec_transaction import LocalBufferTransaction, TransactionFile
 
 
-def open_sync_file(self, entry, mode, *, loop, autocommit=True, **kwargs):
+def open_file(self, entry, mode="rb", *, loop, autocommit=True, **kwargs):
     path = entry["name"]
-    if autocommit:
+    if autocommit or mode == "rb":
         return MyFile(self, path, mode)
     return TransactionFile(LocalBufferTransaction(path, lambda p: MyFile(self, p, mode)))
 ```

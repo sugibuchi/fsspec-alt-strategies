@@ -37,12 +37,17 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks
+from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks, sync
 
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
+)
+from fsspec_alt_strategies_impl.files.fsspec_async import AsyncFileAdapter
+from fsspec_alt_strategies_impl.files.fsspec_transaction import (
+    AdaptiveWritableTransaction,
+    TransactionFile,
 )
 from fsspec_alt_strategies_impl.flat.handler import FlatHandler
 from fsspec_alt_strategies_impl.tree.handler import TreeHandler
@@ -738,10 +743,29 @@ class _Files:
     fs: Any
     io_limit: asyncio.Semaphore
 
-    async def open_file(
+    def open_file(
+        self,
+        entry: dict[str, Any],
+        mode: str = "rb",
+        *,
+        loop: asyncio.AbstractEventLoop | None,
+        autocommit: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        # Adaptive files, their requests on the filesystem's loop; in a
+        # transaction, a writer joins it by holding back its last request.
+        file = sync(loop, self._adaptive_file, entry["name"], mode)
+        if autocommit or mode == "rb":
+            return file
+        else:
+            return TransactionFile(AdaptiveWritableTransaction(file))
+
+    async def open_async_file(
         self, entry: dict[str, Any], mode: str = "rb", **kwargs: Any
     ) -> Any:
-        path = entry["name"]
+        return AsyncFileAdapter(await self._adaptive_file(entry["name"], mode))
+
+    async def _adaptive_file(self, path: str, mode: str) -> Any:
         if mode == "rb":
             size = (await self.fs._info(path))["size"]
             return _Reader(self.fs, path, size, concurrency_limit=self.io_limit)

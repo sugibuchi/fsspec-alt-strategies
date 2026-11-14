@@ -129,7 +129,9 @@ AsyncFileSystem                    fsspec's
   `pipe_file`, `get_file` or `put_file` one per request it sends.
 - **Its paths:** its `protocol`, `strip_protocol` and `unstrip_protocol`, its `root`, and the path methods below.
 - **The primitives of single paths:** `ils`, `info`, `rm_file`, `rmdir`, `makedirs`, `cp_file` and `mv_file`, and its
-  files, `open_file`.
+  files: `open_file`, with Python's sync API, for fsspec's sync `open`, and `open_async_file`, whose methods are
+  awaited, for `open_async` and the strategies. Both raise NotImplementedError by default. A handler gives its files
+  either API, e.g. through `AsyncFileAdapter`, and supports fsspec's transactions in `open_file`, as it chooses.
 
 Each family's handler class adds what its strategies call:
 
@@ -141,11 +143,9 @@ Each family's handler class adds what its strategies call:
 A handler's class tells its family, as a router reads it. The filesystem calls only what `StorageHandler` declares,
 never finding a method by `getattr`. Beside the primitives, it declares methods with defaults a handler may override:
 
-- `cat_file`, `pipe_file`, `get_file` and `put_file` move data whole, by default through `open_file`. A handler
-  sending a request of its own instead, e.g. one download, holds a permit of `io_limit` around it, as the files do.
-  The defaults hold none: the files take their own.
-- `open_sync_file` opens a file for fsspec's sync `open`, by default `open_file`'s on the filesystem's loop, in a
-  transaction wrapped in a `TransactionFile`. A handler with sync files of its own, e.g. a wrapper's, overrides it.
+- `cat_file`, `pipe_file`, `get_file` and `put_file` move data whole, by default through `open_async_file`. A
+  handler sending a request of its own instead, e.g. one download, holds a permit of `io_limit` around it, as the
+  files do. The defaults hold none: the files take their own.
 - `invalidate_cache` drops what the handler keeps of listings, by default nothing, and `wrapped` is the filesystem a
   wrapper wraps, which monitors name, by default None.
 
@@ -181,8 +181,9 @@ An item that exists is named by its entry, a dict as fsspec's `ls` with `detail`
 - The primitives take an entry for an item that exists, and a path for one to be made. A strategy passes the entries
   its listing gave, whole, so that a storage addressing items by id, or needing a size, asks nothing again. A name a
   listing gave is never verified again.
-- `open_file` takes an entry whatever its mode, so that one method opens a file to read or to write. A file to write
-  may not exist yet: its entry then holds its name alone, as `entry` makes it from a verified path.
+- `open_file` and `open_async_file` take an entry whatever the mode, so that one method opens a file to read or to
+  write. A file to write may not exist yet: its entry then holds its name alone, as `entry` makes it from a verified
+  path.
 
 #### The filesystem
 
@@ -316,7 +317,7 @@ jobs and their `Operation` at once.
 
 A copy or move between two handlers sends each file by `common/transfer.py`, unless its caller gives another way:
 
-- It reads and writes by the source's and the destination's `open_file`, a block of 8 MiB at a time.
+- It reads and writes by the source's and the destination's `open_async_file`, a block of 8 MiB at a time.
   So each handler keeps the primitives of its own storage only.
 - It leaves no part of a file. Where the destination's profile declares `atomic_writes`, it writes in place.
   Otherwise it writes to a temporary name beside the destination, then moves it there by `mv_file`, deleting it on a
@@ -470,8 +471,8 @@ records, as the Apache License asks that the code goes with it. It lives in its 
 `files/` holds abstract file classes, by what the storage allows:
 
 - `AdaptiveReadableFile` and `AdaptiveWritableFile` read byte ranges and write in parts. They adapt their block sizes
-  to how the file is used, sending as few requests as they can. A handler's `open_file` returns them, as files used
-  sync or async.
+  to how the file is used, sending as few requests as they can. A handler's `open_file` returns them as they are,
+  and its `open_async_file` through `AsyncFileAdapter`.
 - Each request holds a `concurrency_limit`, whose scope the caller chooses: a file, a handler or the process.
 - A file read in many requests reads one version, and raises `ESTALE` if the file changes.
 - An `AdaptiveWritableFile` left by an exception completes nothing: a multipart upload is aborted.
