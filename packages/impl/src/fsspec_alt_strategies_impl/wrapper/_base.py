@@ -58,7 +58,7 @@ def _async_impl(fs: AbstractFileSystem) -> bool:
 
 
 def _batch_size(size: int, name: str) -> int:
-    """A batch size given, refused below 1, as no batch could be sent."""
+    """A batch size given to a generic handler's strategies, refused below 1, as no batch could be sent."""
     if size < 1:
         raise ValueError(f"{name} must be at least 1: {size}")
     return size
@@ -75,9 +75,10 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
     call from several threads needs both at 1. `close` and `aclose` shut them down.
 
     Each option left out is the class's: a generic handler's is the one right
-    on any storage, an unknown profile, one request at a time, and batches of
-    1. A dedicated handler, e.g. `S3fsHandler`, declares its own as class
-    attributes, as the storage it wraps is known.
+    on any storage, an unknown profile and one request at a time. A dedicated
+    handler, e.g. `S3fsHandler`, declares its own as class attributes, as the
+    storage it wraps is known. The batch sizes are the strategies', so the
+    generic handlers, which mix in `Strategy`, take them.
     """
 
     operation_concurrency: int | asyncio.Semaphore = 1
@@ -93,9 +94,6 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
         operation_concurrency: int | asyncio.Semaphore | None = None,
         io_concurrency: int | asyncio.Semaphore | None = None,
         storage_profile: StorageProfile | None = None,
-        rm_batch_size: int | None = None,
-        cp_batch_size: int | None = None,
-        mv_batch_size: int | None = None,
     ) -> None:
         super().__init__(
             operation_concurrency=(
@@ -110,12 +108,6 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
         self.fs = fs
         if storage_profile is not None:
             self.profile = storage_profile
-        if rm_batch_size is not None:
-            self.rm_batch_size = _batch_size(rm_batch_size, "rm_batch_size")
-        if cp_batch_size is not None:
-            self.cp_batch_size = _batch_size(cp_batch_size, "cp_batch_size")
-        if mv_batch_size is not None:
-            self.mv_batch_size = _batch_size(mv_batch_size, "mv_batch_size")
         # The wrapped one's paths: its protocol, its root and its stripping.
         self.protocol = fs.protocol
         self.root = getattr(fs, "root_marker", "")

@@ -30,11 +30,14 @@ from typing import TYPE_CHECKING, Any
 
 from ..common.rm_files import _rm_by_request
 from ..flat.handler import FlatFileOperationHandler
-from ._base import _FsspecHandler
+from ._base import _batch_size, _FsspecHandler
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
+    from fsspec import AbstractFileSystem
+
+    from fsspec_alt_strategies.profile import StorageProfile
     from fsspec_alt_strategies.states import RmState
 
     from ..common.handler import Entry
@@ -101,6 +104,31 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
     >>> with monitoring(Progress()):
     ...     flat.rm("bucket/data/2024", recursive=True)
     """
+
+    def __init__(
+        self,
+        fs: AbstractFileSystem,
+        *,
+        operation_concurrency: int | asyncio.Semaphore | None = None,
+        io_concurrency: int | asyncio.Semaphore | None = None,
+        storage_profile: StorageProfile | None = None,
+        rm_batch_size: int | None = None,
+        cp_batch_size: int | None = None,
+        mv_batch_size: int | None = None,
+    ) -> None:
+        super().__init__(
+            fs,
+            operation_concurrency=operation_concurrency,
+            io_concurrency=io_concurrency,
+            storage_profile=storage_profile,
+        )
+        # Its strategies' batches, the Strategy mixin's: the class's where left out.
+        if rm_batch_size is not None:
+            self.rm_batch_size = _batch_size(rm_batch_size, "rm_batch_size")
+        if cp_batch_size is not None:
+            self.cp_batch_size = _batch_size(cp_batch_size, "cp_batch_size")
+        if mv_batch_size is not None:
+            self.mv_batch_size = _batch_size(mv_batch_size, "mv_batch_size")
 
     async def ils_recursive(  # type: ignore[override]
         self, entry: Entry, *, prefix: str = "", **kwargs: Any

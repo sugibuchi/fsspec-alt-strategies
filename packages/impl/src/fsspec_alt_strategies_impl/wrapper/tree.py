@@ -15,9 +15,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..tree.handler import TreeFileOperationHandler
-from ._base import _FsspecHandler
+from ._base import _batch_size, _FsspecHandler
 
 if TYPE_CHECKING:
+    import asyncio
+
+    from fsspec import AbstractFileSystem
+
+    from fsspec_alt_strategies.profile import StorageProfile
+
     from ..common.handler import Entry, StoragePath
 
 __all__ = ["FsspecTreeHandler"]
@@ -82,6 +88,31 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
     ... )
     >>> tree.mv("data/2024", "archive/2024", recursive=True)
     """
+
+    def __init__(
+        self,
+        fs: AbstractFileSystem,
+        *,
+        operation_concurrency: int | asyncio.Semaphore | None = None,
+        io_concurrency: int | asyncio.Semaphore | None = None,
+        storage_profile: StorageProfile | None = None,
+        rm_batch_size: int | None = None,
+        cp_batch_size: int | None = None,
+        mv_batch_size: int | None = None,
+    ) -> None:
+        super().__init__(
+            fs,
+            operation_concurrency=operation_concurrency,
+            io_concurrency=io_concurrency,
+            storage_profile=storage_profile,
+        )
+        # Its strategies' batches, the Strategy mixin's: the class's where left out.
+        if rm_batch_size is not None:
+            self.rm_batch_size = _batch_size(rm_batch_size, "rm_batch_size")
+        if cp_batch_size is not None:
+            self.cp_batch_size = _batch_size(cp_batch_size, "cp_batch_size")
+        if mv_batch_size is not None:
+            self.mv_batch_size = _batch_size(mv_batch_size, "mv_batch_size")
 
     async def rm_tree(self, entry: Entry) -> None:
         # The wrapped one's own recursive delete, as deletes_directories declares.
