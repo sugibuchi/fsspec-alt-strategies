@@ -407,8 +407,8 @@ class _NotingFlat(_Noting, FsspecFlatHandler):
         # A copy or a move reads the destination's: here, the same.
         (lambda fs: fs._copy("data", "copied", recursive=True), 1),
         (lambda fs: fs._mv("data", "moved", recursive=True), 1),
-        # A strategy reading no profile loads none.
-        (lambda fs: fs._find("data"), 0),
+        # A tree find reads its storage's, for its listing's order; a flat one none.
+        (lambda fs: fs._find("data"), {"tree": 1, "flat": 0}),
     ],
 )
 async def test_strategies_load_the_profile_once(

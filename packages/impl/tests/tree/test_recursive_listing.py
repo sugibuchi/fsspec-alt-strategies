@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl.tree.du import _tree_du
@@ -24,6 +25,8 @@ from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 
 def _view(fs: SimulatedFileSystem, **kwargs: Any) -> TreeView:
+    # The simulated listing comes by name, declared depth first, which covers it.
+    kwargs.setdefault("storage_profile", StorageProfile(recursive_order="depth_first"))
     return TreeView(fs, recursive_listing=True, **kwargs)
 
 

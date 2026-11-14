@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.states import FindState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.find import _tree_find
@@ -190,7 +191,8 @@ async def test_a_resumed_listing_lists_only_what_it_had_not_passed() -> None:
     fs = _BreakingOff(hierarchical=True, asynchronous=True)
     fs.cut_after = 4
     _tree(fs)
-    view = TreeView(fs, recursive_listing=True)
+    profile = StorageProfile(recursive_order="depth_first")
+    view = TreeView(fs, recursive_listing=True, storage_profile=profile)
     await _collect_with_errors(_tree_find(view, "data"))
     # In name order, the break comes after data/2023/02's entry, nothing below it
     # yet. The directories open, data and data/2023, are listed again. Then

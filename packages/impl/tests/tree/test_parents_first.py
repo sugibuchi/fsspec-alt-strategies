@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.mv import _tree_mv
@@ -42,9 +43,9 @@ class _BreadthFirst(SimulatedFileSystem):
 
 
 def _view(fs: SimulatedFileSystem) -> TreeView:
-    view = TreeView(fs, recursive_listing=True)
-    view.recursive_order = "parents_first"
-    return view
+    # Declared parents first; left unknown, the order is taken so too.
+    profile = StorageProfile(recursive_order="parents_first")
+    return TreeView(fs, recursive_listing=True, storage_profile=profile)
 
 
 def _fs(hierarchical: bool = True) -> _BreadthFirst:
@@ -74,7 +75,8 @@ async def test_a_parents_first_listing_declared_depth_first_goes_wrong() -> None
     # Why the declaration: taken as depth first, a directory is done as soon as
     # the listing passes to another, though more of it comes later.
     fs = _fs()
-    view = TreeView(fs, recursive_listing=True)
+    profile = StorageProfile(recursive_order="depth_first")
+    view = TreeView(fs, recursive_listing=True, storage_profile=profile)
     walked, _ = await _collect_with_errors(_tree_walk(view, "data", topdown=False))
     assert [d for d, _, _ in walked].count("data/a") > 1
     _, errors = await _collect_with_errors(_tree_rm(view, "data"))

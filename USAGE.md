@@ -146,9 +146,10 @@ class MyHandler(TreeFileOperationHandler):
   `open_async_file(entry, mode)` one whose methods are awaited, for `open_async` and the strategies. Mode is "rb",
   "wb" or "xb". Both raise NotImplementedError by default: a handler implements what it supports, e.g. with the
   adaptive files below.
-- A tree handler with a recursive listing of its own implements `ils_recursive`, depth first or in name order. A
-  listing guaranteeing only that a directory comes before what is below it, e.g. breadth first, is declared by
-  `recursive_order = "parents_first"`.
+- A tree handler with a recursive listing of its own implements `ils_recursive`. Its profile's `recursive_order`
+  says the listing's order: "depth_first", which covers name order, or "parents_first", which only guarantees a
+  directory before what is below it. Unknown, it is taken as "parents_first", which costs the walk memory and
+  streaming: declare "depth_first" where it holds, the default listing's too.
   Without it, a tree is listed a directory per request, several at once. One whose storage may refuse its own falls
   back on `tree.listing._tree_ils`, the default.
 - A flat handler implements `ils_recursive(entry, prefix=...)`, every key below a directory starting with the prefix,

@@ -863,7 +863,8 @@ async def test_transfers_across_storages_load_each_sides_profile_with_its_path(
     router: _Router, move: bool
 ) -> None:
     # The destination's, which its jobs read, loaded by its handler as it
-    # opens. The source's family is its handler's class's.
+    # opens. The tree source's too, for its listing's order: its family is its
+    # handler's class's.
     loaded: list[str] = []
     for name in ("tree", "flat"):
         fs = _backend(router, name)._handler
@@ -876,7 +877,7 @@ async def test_transfers_across_storages_load_each_sides_profile_with_its_path(
         fs.load_profile = note
     method = router._mv if move else router._copy
     await method("lake/tree/data", "lake/flat/moved", recursive=True)
-    assert loaded == ["flat"]
+    assert sorted(loaded) == ["flat", "tree"]
 
 
 # What a handler may leave out, a sync router, and routers nested.

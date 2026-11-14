@@ -26,6 +26,7 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 __all__ = ["UNKNOWN", "StorageProfile"]
 
@@ -98,6 +99,20 @@ class StorageProfile:
         place. Unknown by default, taken as False: it writes to a temporary
         name beside the destination, then moves it there, so that no reader
         sees part of a file.
+    recursive_order : {"depth_first", "parents_first"}, optional
+        The order of the handler's ``ils_recursive``, a tree handler's
+        listing of all below a directory. "depth_first" gives a directory's
+        entry, then all below it, before any other entry, and covers name
+        order too, as object stores list keys: the strategies take a
+        directory as done once the listing has passed it, and act on it at
+        once, e.g. delete it once emptied. "parents_first" gives a
+        directory's entry before what is below it, and nothing more, e.g.
+        breadth first, as Dropbox's listing documents. Unknown by default,
+        taken as "parents_first", which a depth-first listing is too: the
+        strategies take every directory as done only once the listing ends,
+        and keep the names of all its entries, to resume it if it breaks off.
+        The default listing, a directory per request, is depth first.
+
     Raises
     ------
     ValueError
@@ -120,6 +135,7 @@ class StorageProfile:
     copies_directories: bool | None = None
     case_sensitive: bool | None = None
     atomic_writes: bool | None = None
+    recursive_order: Literal["depth_first", "parents_first"] | None = None
 
     def __post_init__(self) -> None:
         for name in ("parents_required", "copy_parents_required"):

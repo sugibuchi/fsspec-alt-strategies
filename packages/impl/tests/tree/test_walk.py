@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.tree.walk import (
     WalkState,
     _chunks,
@@ -184,6 +185,8 @@ async def test_on_error_raise_stops_at_once(topdown: bool) -> None:
                 topdown=topdown,
                 on_error="raise",
                 concurrency_limit=asyncio.Semaphore(1),
+                # Its default listing, a directory per request, is depth first.
+                profile=StorageProfile(recursive_order="depth_first"),
             )
         )
     if topdown:

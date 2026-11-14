@@ -59,7 +59,7 @@ class TreeFileOperationHandler(FileOperationHandler):
     implement too:
 
     - ``ils_recursive``, all below a directory in one listing, depth first or
-      by name, or parents first as ``recursive_order`` declares. By default,
+      by name, or parents first, as the profile's ``recursive_order`` says. By default,
       a directory per request, several at a time;
     - ``rm_tree``, a storage's recursive delete, declared by the profile's
       ``deletes_directories=True``;
@@ -83,33 +83,16 @@ class TreeFileOperationHandler(FileOperationHandler):
     BaseFileSystem : The filesystem on it.
     """
 
-    recursive_order: Literal["depth_first", "parents_first"] = "depth_first"
-    """The order of this handler's ``ils_recursive``, as its storage lists: "depth_first" by default.
-
-    - "depth_first" covers name order too. The strategies take a directory as
-      done once the listing has passed it, and act on it at once, e.g. delete
-      it once emptied.
-    - "parents_first" is any order giving a directory's entry before what is
-      below it, the directories' contents interleaved, e.g. breadth first.
-      Dropbox's recursive listing documents no other. The strategies then
-      take every directory as done only once the listing ends, and keep the
-      names of all its entries, to resume it if it breaks off.
-
-    A depth-first listing is parents first too, so "parents_first" is always
-    right, at that cost. It describes this handler's listing, not its
-    storage: it is no `StorageProfile` field.
-    """
-
     def ils_recursive(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
-        """List all below a directory, at any depth, in the handler's ``recursive_order``.
+        """List all below a directory, at any depth, in the order the profile's ``recursive_order`` says.
 
         - Depth first: a directory's entry, then all below it, before any
           other entry. Its entries among themselves may come in any order.
         - By name: sorted by the whole name, as object stores list keys. A
           directory's entry may then come apart from what is below it, as
           "a/b-x" comes between "a/b" and "a/b/c". It counts as depth first.
-        - Parents first, if the handler declares it: a directory's entry
-          before what is below it, in any order otherwise.
+        - Parents first, unless the profile declares one of the above: a
+          directory's entry before what is below it, in any order otherwise.
 
         A directory may be left out, as object stores list only files: the
         strategies tell it from the paths below it. A file lists itself. A

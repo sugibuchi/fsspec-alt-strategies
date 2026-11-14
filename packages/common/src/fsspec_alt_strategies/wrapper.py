@@ -74,6 +74,7 @@ known_implementations: dict[str, KnownImplementation] = {
             deletes_directories=True,
             copies_directories=False,
             case_sensitive=None,
+            recursive_order="depth_first",
         ),
         "operation_concurrency": 8,
         "io_concurrency": 4,
@@ -124,7 +125,8 @@ known_implementations: dict[str, KnownImplementation] = {
         # one, prefixes without, and one class serves both: unknown. It has no
         # move of its own, so its mv is fsspec's copy, then a delete, even with
         # a hierarchical namespace. Its handler lists a tree by one listing
-        # without a delimiter.
+        # without a delimiter: by name without a hierarchical namespace, depth
+        # first with one.
         "handler": "AdlfsHandler",
         "storage_profile": StorageProfile(
             parents_required=False,
@@ -135,6 +137,7 @@ known_implementations: dict[str, KnownImplementation] = {
             deletes_directories=False,
             copies_directories=False,
             case_sensitive=True,
+            recursive_order="depth_first",
         ),
         "operation_concurrency": 32,
         "io_concurrency": 8,
@@ -152,6 +155,7 @@ known_implementations: dict[str, KnownImplementation] = {
             deletes_directories=False,
             copies_directories=False,
             case_sensitive=True,
+            recursive_order="depth_first",
         ),
         "operation_concurrency": 4,
         "io_concurrency": 4,
@@ -170,6 +174,7 @@ known_implementations: dict[str, KnownImplementation] = {
             deletes_directories=False,
             copies_directories=False,
             case_sensitive=None,
+            recursive_order="depth_first",
         ),
         # One SSH channel, which paramiko does not share between threads.
         "operation_concurrency": 1,
@@ -188,6 +193,7 @@ known_implementations: dict[str, KnownImplementation] = {
             deletes_directories=True,
             copies_directories=False,
             case_sensitive=True,
+            recursive_order="depth_first",
         ),
         "operation_concurrency": 8,
         "io_concurrency": 4,
