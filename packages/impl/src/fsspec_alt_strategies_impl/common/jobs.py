@@ -207,6 +207,13 @@ class _Queue(Generic[_T]):
     `pending`, along with the owner's requests, it picks up the permits that
     others sharing the limit give back. The owner takes each finished
     request's item back with `pop`.
+
+    A request's permit is given back once, by whichever comes first: `pop`,
+    or the task's done callback. The callback alone would be late: it runs a
+    turn of the loop after the task ends, and `asyncio.wait` reports a task
+    done before that. An operation ending on it would then end holding a
+    permit. The callback still gives back that of a task nobody pops, e.g.
+    one cancelled before it ran.
     """
 
     def __init__(self, limit: asyncio.Semaphore) -> None:
@@ -214,14 +221,23 @@ class _Queue(Generic[_T]):
         self.waiting: deque[_T] = deque()
         self.running: dict[asyncio.Task[Any], _T] = {}
         self.waiter: asyncio.Task[bool] | None = None
+        # The requests whose permit is not given back yet.
+        self.holding: set[asyncio.Task[Any]] = set()
 
     async def start(self, run: Callable[[_T], Awaitable[Any]]) -> None:
         """Start the request of each item waiting, while permits are free."""
         while self.waiting and await self._take():
             item = self.waiting.popleft()
             task = asyncio.ensure_future(run(item))
-            task.add_done_callback(lambda _: self.limit.release())
+            self.holding.add(task)
+            task.add_done_callback(self._give_back)
             self.running[task] = item
+
+    def _give_back(self, task: asyncio.Task[Any]) -> None:
+        """Give back a request's permit, unless it was already."""
+        if task in self.holding:
+            self.holding.remove(task)
+            self.limit.release()
 
     async def _take(self) -> bool:
         """Take a permit if one is free now, or got by the waiter."""
@@ -246,7 +262,8 @@ class _Queue(Generic[_T]):
         return pending
 
     def pop(self, task: asyncio.Task[Any]) -> _T | None:
-        """The item of a request done, or None for the waiter, whose permit `start` takes."""
+        """The item of a request done, its permit given back, or None for the waiter, whose permit `start` takes."""
+        self._give_back(task)
         return self.running.pop(task, None)
 
     async def close(self) -> None:
@@ -255,6 +272,8 @@ class _Queue(Generic[_T]):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        for task in tasks:
+            self._give_back(task)
         self.running.clear()
 
         waiter, self.waiter = self.waiter, None
@@ -635,7 +654,7 @@ class _Jobs(ABC):
 
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
         """Handle a job's task done, counting its errors, and return what to yield."""
-        job = self.running.pop(task, None) or self.batches_running.pop(task)
+        job = self.jobs.pop(task) or self.batches_running.pop(task)
         self.current = job.path or job.destination
 
         try:
