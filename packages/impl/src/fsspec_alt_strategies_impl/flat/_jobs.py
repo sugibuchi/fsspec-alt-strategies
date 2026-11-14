@@ -67,11 +67,7 @@ class _FlatJobs(_Jobs):
 
     def fed(self, item: dict[str, Any]) -> list[Any]:
         self.current = item["name"]
-        try:
-            self.add(item)
-        except ValueError as e:
-            # A copy's or move's key whose name the destination refuses, e.g. "..".
-            return [self.refuse_name(item["name"], e)]  # type: ignore[attr-defined]
+        self.add(item)
         return []
 
     async def _keys(

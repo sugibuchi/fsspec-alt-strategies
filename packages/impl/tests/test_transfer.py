@@ -7,7 +7,8 @@ from typing import Any, Self
 import pytest
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.common.transfer import _across, _cross_cp_file
+from fsspec_alt_strategies_impl.common.jobs import _moves_of
+from fsspec_alt_strategies_impl.common.transfer import _cross_cp_file
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 _ATOMIC = StorageProfile(atomic_writes=True)
@@ -117,9 +118,15 @@ async def test_a_missing_source_writes_nothing() -> None:
     assert _files(dst) == {"out/old": b"old"}
 
 
+def _move(src: TreeView, dst: TreeView) -> Any:
+    """A move between two storages, as the strategies make it: a copy, then the source's rm_file."""
+    _, mv_entry, _ = _moves_of(src, dst, None, None, False)
+    return mv_entry
+
+
 async def test_a_move_deletes_the_source_once_copied() -> None:
     src, dst = _storages()
-    move = _across(TreeView(src), TreeView(dst, storage_profile=_ATOMIC), move=True)
+    move = _move(TreeView(src), TreeView(dst, storage_profile=_ATOMIC))
     await move({"name": "data/x"}, "out/x")
     assert _files(src) == {}
     assert _files(dst) == {"out/old": b"old", "out/x": b"xx"}
@@ -127,7 +134,7 @@ async def test_a_move_deletes_the_source_once_copied() -> None:
 
 async def test_a_move_keeps_a_source_whose_copy_failed() -> None:
     src, dst = _storages()
-    move = _across(_Shortened(src), TreeView(dst), move=True)
+    move = _move(_Shortened(src), TreeView(dst))
     with pytest.raises(OSError, match="read 2 bytes"):
         await move({"name": "data/x", "size": 5}, "out/x")
     assert _files(src) == {"data/x": b"xx"}

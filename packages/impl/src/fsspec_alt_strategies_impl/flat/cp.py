@@ -168,6 +168,13 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
     remembered, and each is made once. A subclass says how a key goes, in `transfer_file`.
     """
 
+    def fed(self, item: dict[str, Any]) -> list[Any]:
+        try:
+            return super().fed(item)
+        except ValueError as e:
+            # A key whose name the destination refuses, e.g. "..": its own error.
+            return [self.refuse_name(item["name"], e)]
+
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
         if name.endswith("/"):

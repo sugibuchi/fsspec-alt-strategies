@@ -41,13 +41,10 @@ _BLOCK_SIZE = 8 * _MiB
 """The bytes read, then written, at a time: a transfer holds one block in memory."""
 
 
-def _across(
-    src: StorageHandler, dst: StorageHandler, *, move: bool = False
-) -> _Transfer:
-    """How a copy, or a move, between two handlers sends each file.
+def _across(src: StorageHandler, dst: StorageHandler) -> _Transfer:
+    """How a copy between two handlers sends each file: streamed, leaving no part of a file.
 
-    A move copies, then deletes the source by its ``rm_file``: a file whose
-    copy failed is kept.
+    A move between two copies by it, then deletes the source, as `jobs._moves_of` makes it.
     """
 
     async def transfer(
@@ -63,8 +60,6 @@ def _across(
         await _cross_cp_file(
             src, entry, dst, destination, missing=missing, parent=parent
         )
-        if move:
-            await src.rm_file(entry)
 
     return transfer
 
