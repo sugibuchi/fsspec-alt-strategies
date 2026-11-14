@@ -395,6 +395,10 @@ A subclass of an adaptive file implements the storage's requests, and leaves the
 - `AdaptiveReadableFile` implements `_fetch_range`, which reads a byte range;
 - `AdaptiveWritableFile` implements `_upload_all`, for a small file, and the multipart upload's requests:
   `_start_multipart_upload`, `_upload_part`, `_complete_multipart_upload` and `_abort_multipart_upload`.
+- A storage choosing the part size as the upload starts, e.g. a Box upload session, has the writer's
+  `_start_multipart_upload` set `part_size`: every part but the last then has that size, the last the rest.
+- A storage needing the bytes in order, e.g. for the whole file's SHA-1, reads them in `_written`, called with each
+  write: the parts may be uploaded out of order.
 
 A handler's `open_file` returns them as they are, made on its `loop`, and its `open_async_file` through
 `AsyncFileAdapter`, with its `io_limit` as their `concurrency_limit`:

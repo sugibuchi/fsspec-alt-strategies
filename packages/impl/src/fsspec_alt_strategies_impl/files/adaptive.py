@@ -588,6 +588,18 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
       for every part, as no part is sent before the upload starts.
     - Every part but the last has the size ``_block_size`` returns. A subclass
       overrides it to keep parts a multiple of 256 KiB, or any other rule.
+
+    Some storages choose the part size as the upload starts, e.g. Box's upload
+    sessions, where every part but the last has exactly that size:
+
+    - A subclass sets ``part_size`` in ``_start_multipart_upload``. Every part
+      but the last then has that size, and the last the rest, at most that
+      size. The parts are sized only once the upload has started.
+    - ``max_request_size`` does not cap them: the storage chose their size.
+
+    A storage needing what is written in order, e.g. the SHA-1 of the whole
+    file, as Box's commit does, gets it by ``_written``: parts may be uploaded
+    out of order.
     - The last part is the one given ``last``: with the file's size, as its
       ``end``. A storage where it makes the file visible completes nothing.
       The last part's error is then the completion's, and raised as it is,
@@ -667,6 +679,13 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
 
     max_request_size: int | None = None
     """The most bytes a request may upload, if the storage limits it."""
+
+    part_size: int | None = None
+    """The size of every part but the last, where the storage chooses it as the upload starts, e.g. a Box session's.
+
+    A subclass sets it in ``_start_multipart_upload``. None, the writer sizes
+    its parts as its writes show.
+    """
 
     last_part_completes: bool = False
     """Whether the last part's upload makes the file visible, e.g. a resumable upload's last request.
@@ -759,7 +778,9 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         self._check_not_forced()
         self._raise_failed_upload()
 
-        size = len(memoryview(data).cast("B"))
+        with memoryview(data).cast("B") as written:
+            size = len(written)
+            self._written(written)
         self._buffer += data
         self._pos += size
         await self._upload_buffer(closing=False)
@@ -768,6 +789,14 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     def tell(self) -> int:
         self._check_open()
         return self._pos
+
+    def _written(self, data: memoryview) -> None:
+        """See the bytes of each write, in the order written, e.g. to hash the whole file: nothing by default.
+
+        It is called before the bytes are buffered, so it sees each byte once,
+        whatever part it goes in. Parts may be uploaded out of order: what
+        needs the file in order reads it here.
+        """
 
     # What a subclass implements: the storage's requests.
 
@@ -924,24 +953,14 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         try:
             while taken < len(buffer):
                 remaining = len(buffer) - taken
-                if remaining - block >= self.min_block_size:
-                    size = block
-                elif closing:
-                    # The last part takes the rest, which would be too small
-                    # alone. Beyond the cap, a part of it is split off first:
-                    # the rest is then less than min_block_size, so within it.
-                    size = min(remaining, cap)
-                else:
+                if (size := self._part(remaining, block, cap, closing)) is None:
                     break
 
                 if not self._multipart:
-                    try:
-                        await self._start_multipart_upload()
-                    except BaseException as error:
-                        # It may have started a session on the storage first.
-                        await self._cancel_multipart_upload(error)
-                        raise
-                    self._multipart = True
+                    await self._start()
+                    # The storage may have chosen the parts' size as it started.
+                    if (size := self._part(remaining, block, cap, closing)) is None:
+                        break
                 elif self.sequential:
                     # Waiting holds no permit: files sharing the limit go on.
                     await asyncio.wait([self._requests.queue[-1].task])
@@ -969,3 +988,31 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
         finally:
             # Even if cancelled between parts: the parts sent are never sent again.
             del buffer[:taken]
+
+    async def _start(self) -> None:
+        """Start the multipart upload, cancelling what it may have started on the storage if it fails."""
+        try:
+            await self._start_multipart_upload()
+        except BaseException as error:
+            await self._cancel_multipart_upload(error)
+            raise
+        self._multipart = True
+
+    def _part(self, remaining: int, block: int, cap: int, closing: bool) -> int | None:
+        """The size of the next part, of ``remaining`` bytes buffered, or None to wait for more.
+
+        With ``part_size``, every part but the last has that size, and the last
+        the rest. Else a part has ``block`` bytes while at least
+        ``min_block_size`` would be left, and closing, the last takes the rest,
+        which would be too small alone. Beyond the cap, a part of it is split
+        off first: the rest is then less than ``min_block_size``, so within it.
+        """
+        if (fixed := self.part_size) is not None:
+            if remaining > fixed:
+                return fixed
+            return remaining if closing else None
+        if remaining - block >= self.min_block_size:
+            return block
+        if closing:
+            return min(remaining, cap)
+        return None
