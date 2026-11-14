@@ -40,7 +40,6 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import Callable, Sequence
 
-    from fsspec import AbstractFileSystem
     from fsspec.callbacks import Callback
 
     from .handler import StorageHandler
@@ -104,7 +103,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         if mode not in ("rb", "wb", "xb"):
             raise ValueError(f"mode must be 'rb', 'wb' or 'xb': {mode!r}")
         handler = self.handler
-        entry = handler.entry(self._strip_protocol(path))
+        entry = handler.entry(path)
         return await handler.open_file(entry, mode, **kwargs)
 
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
@@ -219,7 +218,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
 
     def sign(self, path: str, expiration: int = 100, **kwargs: Any) -> str:
         """A signed URL of a file, as fsspec's ``sign`` answers: the handler's `sign`, on the filesystem's loop."""
-        entry = self.handler.entry(self._strip_protocol(path))
+        entry = self.handler.entry(path)
         return sync(self.loop, self.handler.sign, entry, expiration, **kwargs)  # type: ignore[no-any-return]
 
     def _handler_method(self, name: str) -> Callable[..., Any]:
@@ -249,7 +248,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
             return None
 
         try:
-            entry = await self._info(self._strip_protocol(path))
+            entry = await self._info(path)
         except FileNotFoundError:
             return None
 
@@ -365,8 +364,8 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         them.
         """
         try:
-            entry = self.handler.entry(self._strip_protocol(path1))
-            await self._cp_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
+            entry = self.handler.entry(path1)
+            await self._cp_file_entry(entry, path2, **kwargs)  # type: ignore[attr-defined]
         finally:
             self._drop_listings()
 
@@ -376,8 +375,8 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         As `_cp_file`, for a move.
         """
         try:
-            entry = self.handler.entry(self._strip_protocol(path1))
-            await self._mv_file_entry(entry, self._strip_protocol(path2), **kwargs)  # type: ignore[attr-defined]
+            entry = self.handler.entry(path1)
+            await self._mv_file_entry(entry, path2, **kwargs)  # type: ignore[attr-defined]
         finally:
             self._drop_listings()
 
@@ -397,7 +396,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         it, under a permit of ``io_limit``.
         """
         if (own := getattr(self.handler, "cat_file", None)) is not None:
-            entry = self.handler.entry(self._strip_protocol(path))
+            entry = self.handler.entry(path)
             async with self.handler.io_limit:
                 return await own(entry, start=start, end=end, **kwargs)  # type: ignore[no-any-return]
         f = await self.open_async(path, "rb", **kwargs)
@@ -420,7 +419,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         """Write a file whole, through a file of ``open_async``, or the handler's own ``pipe_file``: see `_cat_file`."""
         try:
             if (own := getattr(self.handler, "pipe_file", None)) is not None:
-                target = self.handler.verified(self._strip_protocol(path))
+                target = self.handler.verified(path)
                 async with self.handler.io_limit:
                     await own(target, value, mode=mode, **kwargs)
                 return
@@ -443,7 +442,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
             return  # A directory, which fsspec's get makes itself.
         if (own := getattr(self.handler, "get_file", None)) is not None:
-            entry = self.handler.entry(self._strip_protocol(rpath))
+            entry = self.handler.entry(rpath)
             async with self.handler.io_limit:
                 await own(entry, lpath, callback=callback, **kwargs)
             return
@@ -473,7 +472,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
             if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
                 return  # A directory: a storage needs none for the files put in it.
             if (own := getattr(self.handler, "put_file", None)) is not None:
-                target = self.handler.verified(self._strip_protocol(rpath))
+                target = self.handler.verified(rpath)
                 async with self.handler.io_limit:
                     await own(lpath, target, mode=mode, callback=callback, **kwargs)
                 return
@@ -730,15 +729,20 @@ def _merge_ranges(
     return fetches, plan  # type: ignore[return-value]
 
 
-def _strip_only_protocol(fs: AbstractFileSystem, path: str | Sequence[str]) -> Any:
+def _strip_only_protocol(fs: Any, path: str | Sequence[str]) -> Any:
     """A path, or paths, of ``fs`` without its protocol, keeping a trailing "/".
 
     The strategies take paths without a protocol. A trailing "/" means
     something to some, e.g. a glob of directories only, or a copy into a directory.
+
+    A path with no pattern is verified by ``fs``'s handler as given, so that
+    what a URL names beyond the path, e.g. an account, is checked before it
+    is stripped. A pattern is stripped only: no handler verifies a pattern,
+    and the strategy verifies the directory it starts from.
     """
     if not isinstance(path, str):
         return [_strip_only_protocol(fs, p) for p in path]
-    plain = fs._strip_protocol(path)
+    plain = fs._strip_protocol(path) if has_magic(path) else fs.handler.verified(path)
     return plain + "/" if path.endswith("/") and not plain.endswith("/") else plain
 
 

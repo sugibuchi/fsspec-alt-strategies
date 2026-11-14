@@ -62,6 +62,8 @@ code: read it before adding a strategy or a handler.
 - A primitive takes an entry for an item that exists, and a `StoragePath` for one to be made. `open_file` alone takes
   an entry whatever its mode, holding only the name of a file to write. Build paths only by the
   handler's `verified`, `entry`, `join` and `parent`, which verify them. Never concatenate strings.
+- A filesystem passes its caller's paths to `verified` or `entry` as given, never stripped first: `verify_path` sees
+  a URL whole, e.g. abfs's account, and `verified` strips it.
 - A name a listing gave is never verified again. Pass a listing's entries on whole, never wrapped again from their
   names: a storage may need their size or id.
 

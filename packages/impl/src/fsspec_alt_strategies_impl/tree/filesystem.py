@@ -120,7 +120,7 @@ class TreeFileSystem(_BaseFileSystem):
         request.
         """
         handler = self.handler
-        entry = handler.entry(self._strip_protocol(path))
+        entry = handler.entry(path)
         if recursive:
             return _recursive(handler, entry, **kwargs)
         else:
@@ -129,13 +129,13 @@ class TreeFileSystem(_BaseFileSystem):
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Describe a path, raising FileNotFoundError if there is none."""
         handler = self.handler
-        return await handler.info(handler.entry(self._strip_protocol(path)), **kwargs)
+        return await handler.info(handler.entry(path), **kwargs)
 
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         """Delete a file."""
         try:
             handler = self.handler
-            await handler.rm_file(handler.entry(self._strip_protocol(path)))
+            await handler.rm_file(handler.entry(path))
         finally:
             self._drop_listings()
 
@@ -143,7 +143,7 @@ class TreeFileSystem(_BaseFileSystem):
         """Delete an empty directory."""
         try:
             handler = self.handler
-            await handler.rmdir(handler.entry(self._strip_protocol(path)))
+            await handler.rmdir(handler.entry(path))
         finally:
             self._drop_listings()
 
@@ -151,7 +151,7 @@ class TreeFileSystem(_BaseFileSystem):
         """Delete a directory with everything in it, in one request, by the handler's ``rm_tree``."""
         try:
             handler = self.handler
-            await handler.rm_tree(handler.entry(self._strip_protocol(path)))  # type: ignore[attr-defined]
+            await handler.rm_tree(handler.entry(path))  # type: ignore[attr-defined]
         finally:
             self._drop_listings()
 
@@ -161,7 +161,7 @@ class TreeFileSystem(_BaseFileSystem):
         """Copy a file within the storage, by its entry, to ``path2``."""
         try:
             handler = self.handler
-            await handler.cp_file(entry, handler.verified(self._strip_protocol(path2)))
+            await handler.cp_file(entry, handler.verified(path2))
         finally:
             self._drop_listings()
 
@@ -171,7 +171,7 @@ class TreeFileSystem(_BaseFileSystem):
         """Move a file within the storage, by its entry, to ``path2``."""
         try:
             handler = self.handler
-            await handler.mv_file(entry, handler.verified(self._strip_protocol(path2)))
+            await handler.mv_file(entry, handler.verified(path2))
         finally:
             self._drop_listings()
 
@@ -179,8 +179,8 @@ class TreeFileSystem(_BaseFileSystem):
         """Move a directory with everything in it, in one request, by the handler's ``mv_tree``."""
         try:
             handler = self.handler
-            entry = handler.entry(self._strip_protocol(path1))
-            await handler.mv_tree(entry, handler.verified(self._strip_protocol(path2)))  # type: ignore[attr-defined]
+            entry = handler.entry(path1)
+            await handler.mv_tree(entry, handler.verified(path2))  # type: ignore[attr-defined]
         finally:
             self._drop_listings()
 
@@ -188,8 +188,8 @@ class TreeFileSystem(_BaseFileSystem):
         """Copy a directory with everything in it, in one request, by the handler's ``cp_tree``."""
         try:
             handler = self.handler
-            entry = handler.entry(self._strip_protocol(path1))
-            await handler.cp_tree(entry, handler.verified(self._strip_protocol(path2)))  # type: ignore[attr-defined]
+            entry = handler.entry(path1)
+            await handler.cp_tree(entry, handler.verified(path2))  # type: ignore[attr-defined]
         finally:
             self._drop_listings()
 
@@ -197,9 +197,7 @@ class TreeFileSystem(_BaseFileSystem):
         """Create a directory and its parents, raising FileExistsError unless ``exist_ok``."""
         try:
             handler = self.handler
-            await handler.makedirs(
-                handler.verified(self._strip_protocol(path)), exist_ok
-            )
+            await handler.makedirs(handler.verified(path), exist_ok)
         finally:
             self._drop_listings()
 
@@ -214,7 +212,7 @@ class TreeFileSystem(_BaseFileSystem):
         makes the parents, and answers for a file among them.
         """
         try:
-            path = self._strip_protocol(path)
+            path = self.handler.verified(path)
             if await self._exists(path):
                 raise FileExistsError(path)
             parent = self._parent(path)
@@ -240,7 +238,7 @@ class TreeFileSystem(_BaseFileSystem):
         **kwargs: Any,
     ) -> AsyncGenerator[tuple[str, Any, Any]]:
         detail = kwargs.pop("detail", False)
-        root = self._strip_protocol(path)
+        root = self.handler.verified(path)
         walk = _tree_walk(
             self.handler,
             root,
@@ -294,7 +292,7 @@ class TreeFileSystem(_BaseFileSystem):
         entries, _ = await _collect_with_monitors(
             _tree_find(
                 self.handler,
-                self._strip_protocol(path),
+                self.handler.verified(path),
                 maxdepth=maxdepth,
                 withdirs=withdirs,
                 ils_kwargs=kwargs,
@@ -314,7 +312,7 @@ class TreeFileSystem(_BaseFileSystem):
 
         op = _tree_du(
             self.handler,
-            self._strip_protocol(path),
+            self.handler.verified(path),
             maxdepth=maxdepth,
             ils_kwargs=kwargs,
         )

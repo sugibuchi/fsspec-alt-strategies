@@ -106,11 +106,17 @@ class _PathHandler(ABC):
     def verify_path(self, path: str) -> None:
         """Raise ValueError if ``path`` is no path of this storage.
 
-        The path has no protocol. A handler refuses what its storage would, or
-        what it does not serve, e.g. a path of another storage account than its
-        own, a bucket name the storage refuses, or a name too long. It sends no
-        request: it checks the path alone. The handler's ``root`` is a path it
-        accepts, as the parent of the paths at the root.
+        The path is as its caller gave it: a URL, or a path already without
+        its protocol. A URL may name more than the path, e.g.
+        ``abfs://container@account.dfs.core.windows.net/path``, whose account
+        is checked here, as `strip_protocol` then drops it. A handler checking
+        the path's names strips it first, by `strip_protocol`.
+
+        A handler refuses what its storage would, or what it does not serve,
+        e.g. a path of another storage account than its own, a bucket name the
+        storage refuses, or a name too long. It sends no request: it checks
+        the path alone. The handler's ``root`` is a path it accepts, as the
+        parent of the paths at the root.
 
         The filesystem verifies each path a caller gives before it calls a
         strategy or a primitive. The paths `join` and `parent` build, and
@@ -119,13 +125,17 @@ class _PathHandler(ABC):
         """
 
     def verified(self, path: str) -> StoragePath:
-        """A caller's path as a `StoragePath`, once `verify_path` accepts it, else ValueError.
+        """A caller's path, a URL or not, as a `StoragePath`, once `verify_path` accepts it, else ValueError.
+
+        `verify_path` sees the path as given, then `strip_protocol` drops the
+        protocol and a trailing "/". So a filesystem passes its caller's paths
+        on as they come: this is where they lose their protocol.
 
         It and `entry` are the only ways a string becomes a path. A strategy
         builds the others by `join` and `parent`, which verify too.
         """
         self.verify_path(path)
-        return StoragePath(path)
+        return StoragePath(self.strip_protocol(path))
 
     def entry(self, path: str) -> Entry:
         """The entry of a path alone, verified: for a primitive taking an item its caller knows only by its path.

@@ -110,6 +110,20 @@ def test_a_storage_overrides_its_delimiter_split_and_segments() -> None:
         handler.join("acct", "a:~b")
 
 
+async def test_verify_path_sees_the_callers_url_and_verified_strips_it() -> None:
+    class Hosted(_Any):
+        protocol = "acct"
+
+    handler = Hosted()
+    assert handler.verified("acct://acct/c/") == "acct/c"
+    # What a URL names beyond the path is the handler's to check, before it goes.
+    assert handler.checked == ["acct://acct/c/"]
+
+    handler.checked.clear()
+    await TreeFileSystem(handler, skip_instance_cache=True)._info("acct://acct/c")
+    assert handler.checked == ["acct://acct/c"]
+
+
 def test_verified_is_a_callers_path_once_verified() -> None:
     handler = _Account()
     assert handler.verified("acct/c/x") == "acct/c/x"
@@ -154,8 +168,8 @@ class _Any(_Account):
     ],
 )
 def test_parent_and_name(root: str, path: str, parent: str, name: str) -> None:
-    handler = _Any()
-    handler.root = root
+    # The root is the class's, as strip_protocol, a class method, reads it.
+    handler = type("Rooted", (_Any,), {"root": root})()
     assert (handler.parent(path), handler.name(path)) == (parent, name)
     assert handler.checked == [parent]
 

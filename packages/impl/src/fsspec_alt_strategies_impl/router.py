@@ -120,7 +120,7 @@ class RoutingHandler(_PathHandler):
     ...     protocol = "lake"
     ...
     ...     def verify_path(self, path):
-    ...         if path.startswith("/"):
+    ...         if self.strip_protocol(path).startswith("/"):
     ...             raise ValueError(f"Not a path of the lake: {path!r}")
     ...
     ...     def route(self, path):

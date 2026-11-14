@@ -158,6 +158,8 @@ class _Lake(RoutingHandler):
         self.checked: list[str] = []
 
     def verify_path(self, path: str) -> None:
+        # The path as given, maybe a URL: its names are checked without the protocol.
+        path = self.strip_protocol(path)
         self.checked.append(path)
         if ":" in path:
             raise ValueError(f"A name holds ':': {path!r}")

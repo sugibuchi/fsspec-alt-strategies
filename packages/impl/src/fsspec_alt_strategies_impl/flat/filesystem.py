@@ -105,7 +105,7 @@ class FlatFileSystem(_BaseFileSystem):
         order.
         """
         handler = self.handler
-        entry = handler.entry(self._strip_protocol(path))
+        entry = handler.entry(path)
         if recursive:
             return handler.ils_recursive(entry, prefix=prefix, **kwargs)  # type: ignore[attr-defined, no-any-return]
         else:
@@ -115,7 +115,7 @@ class FlatFileSystem(_BaseFileSystem):
         """Delete several files in one request, by the handler's ``rm_files``."""
         try:
             handler = self.handler
-            entries = [handler.entry(self._strip_protocol(p)) for p in paths]
+            entries = [handler.entry(p) for p in paths]
             return await handler.rm_files(entries)  # type: ignore[attr-defined, no-any-return]
         finally:
             self._drop_listings()
@@ -124,7 +124,7 @@ class FlatFileSystem(_BaseFileSystem):
         """Delete an empty directory: on an object store, a bucket."""
         try:
             handler = self.handler
-            await handler.rmdir(handler.entry(self._strip_protocol(path)))
+            await handler.rmdir(handler.entry(path))
         finally:
             self._drop_listings()
 
@@ -132,9 +132,7 @@ class FlatFileSystem(_BaseFileSystem):
         """Create a directory and its parents: on an object store, a bucket, if missing."""
         try:
             handler = self.handler
-            await handler.makedirs(
-                handler.verified(self._strip_protocol(path)), exist_ok
-            )
+            await handler.makedirs(handler.verified(path), exist_ok)
         finally:
             self._drop_listings()
 
@@ -151,7 +149,7 @@ class FlatFileSystem(_BaseFileSystem):
         """
         try:
             handler = self.handler
-            target = handler.verified(self._strip_protocol(path))
+            target = handler.verified(path)
             if not create_parents and target != handler.root:
                 parent = handler.parent(target)
                 if parent != handler.root:
@@ -168,13 +166,13 @@ class FlatFileSystem(_BaseFileSystem):
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Describe a path, raising FileNotFoundError if there is none."""
         handler = self.handler
-        return await handler.info(handler.entry(self._strip_protocol(path)), **kwargs)
+        return await handler.info(handler.entry(path), **kwargs)
 
     async def _rm_file(self, path: str, **kwargs: Any) -> None:
         """Delete a file, as fsspec's ``_rm`` does when not recursive."""
         try:
             handler = self.handler
-            await handler.rm_file(handler.entry(self._strip_protocol(path)))
+            await handler.rm_file(handler.entry(path))
         finally:
             self._drop_listings()
 
@@ -184,7 +182,7 @@ class FlatFileSystem(_BaseFileSystem):
         """Copy a key within the storage, by its entry, to ``path2``."""
         try:
             handler = self.handler
-            await handler.cp_file(entry, handler.verified(self._strip_protocol(path2)))
+            await handler.cp_file(entry, handler.verified(path2))
         finally:
             self._drop_listings()
 
@@ -194,7 +192,7 @@ class FlatFileSystem(_BaseFileSystem):
         """Move a key within the storage, by its entry, to ``path2``."""
         try:
             handler = self.handler
-            await handler.mv_file(entry, handler.verified(self._strip_protocol(path2)))
+            await handler.mv_file(entry, handler.verified(path2))
         finally:
             self._drop_listings()
 
@@ -209,7 +207,7 @@ class FlatFileSystem(_BaseFileSystem):
         **kwargs: Any,
     ) -> AsyncGenerator[tuple[str, Any, Any]]:
         detail = kwargs.pop("detail", False)
-        root = self._strip_protocol(path)
+        root = self.handler.verified(path)
         walk = _flat_walk(self.handler, root, maxdepth=maxdepth, topdown=topdown)
 
         async with aclosing(
@@ -241,7 +239,7 @@ class FlatFileSystem(_BaseFileSystem):
         entries, _ = await _collect_with_monitors(
             _flat_find(
                 self.handler,
-                self._strip_protocol(path),
+                self.handler.verified(path),
                 maxdepth=maxdepth,
                 withdirs=withdirs,
             ),
@@ -257,7 +255,7 @@ class FlatFileSystem(_BaseFileSystem):
                 path, total=total, maxdepth=maxdepth, withdirs=True, **kwargs
             )
 
-        op = _flat_du(self.handler, self._strip_protocol(path), maxdepth=maxdepth)
+        op = _flat_du(self.handler, self.handler.verified(path), maxdepth=maxdepth)
 
         entries, _ = await _collect_with_monitors(
             op, Call(self._unwrapped(), "du", path)
