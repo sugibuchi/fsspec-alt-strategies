@@ -336,6 +336,23 @@ def test_buckets_are_made_and_deleted_by_the_subclass() -> None:
     assert not inner.exists("bucket")
 
 
+def test_mkdir_without_parents_needs_the_parent() -> None:
+    inner = SimulatedFileSystem(hierarchical=True)
+    fs = _Flat(inner)
+    with pytest.raises(FileNotFoundError):
+        fs.mkdir("bucket/d", create_parents=False)
+    assert not inner.exists("bucket")
+
+    fs.mkdir("bucket/d")
+    assert inner.isdir("bucket/d")
+    fs.mkdir("bucket/e", create_parents=False)
+    assert inner.isdir("bucket/e")
+
+    inner.pipe_file("bucket/f", b"f")
+    with pytest.raises(NotADirectoryError):
+        fs.mkdir("bucket/f/g", create_parents=False)
+
+
 async def test_what_the_strategies_leave_to_fsspec(
     fs: _Flat, inner: SimulatedFileSystem
 ) -> None:

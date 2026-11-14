@@ -137,9 +137,27 @@ class FlatFileSystem(_BaseFileSystem):
     async def _mkdir(
         self, path: str, create_parents: bool = True, **kwargs: Any
     ) -> None:
-        """Create a directory, as fsspec's ``_mkdir`` does: by ``_makedirs``."""
+        """Create a directory, as fsspec's local ``mkdir`` does, by the handler's ``makedirs``.
+
+        What exists is the handler's to tell: an existing bucket raises
+        FileExistsError, as s3fs's does, while a prefix within one needs
+        nothing made. Without ``create_parents``, a missing parent raises
+        FileNotFoundError, and one that is a file NotADirectoryError, as
+        `TreeFileSystem`'s ``_mkdir`` does: no bucket is made for a prefix.
+        """
         try:
-            await self._makedirs(path, exist_ok=False)
+            handler = self.handler
+            target = handler.verified(self._strip_protocol(path))
+            if not create_parents and target != handler.root:
+                parent = handler.parent(target)
+                if parent != handler.root:
+                    try:
+                        kind = (await handler.info(handler.entry(parent)))["type"]
+                    except FileNotFoundError:
+                        raise FileNotFoundError(parent) from None
+                    if kind != "directory":
+                        raise NotADirectoryError(parent)
+            await handler.makedirs(target, exist_ok=False)
         finally:
             self._drop_listings()
 
