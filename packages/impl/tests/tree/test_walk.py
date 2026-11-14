@@ -10,14 +10,10 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree._visit import _Pruned
-from fsspec_alt_strategies_impl.tree.walk import (
-    WalkState,
-    _chunks,
-    _Listing,
-    _SubtreeListed,
-    _tree_walk,
-)
+from fsspec_alt_strategies_impl.tree._walker import _Part, _SubtreeListed, _TreeWalk
+from fsspec_alt_strategies_impl.tree.walk import WalkState, _tree_walk
 from fsspec_alt_strategies_impl_testing import (
     SimulatedFileSystem,
     TreeView,
@@ -25,6 +21,11 @@ from fsspec_alt_strategies_impl_testing import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+
+def _events(handler: Any, path: Any, visit: Any = None, **kwargs: Any) -> Any:
+    """The events of a walk of ``path`` on ``handler``."""
+    return _TreeWalk(handler, path, visit, **kwargs).events()
 
 
 _PRIMITIVES = {"ils", "info", "rm_file", "rm_dir", "rm_tree", "cp_file", "mv_file"}
@@ -192,15 +193,9 @@ async def test_on_error_raise_stops_at_once(topdown: bool) -> None:
                 profile=StorageProfile(recursive_order="depth_first"),
             )
         )
-    if topdown:
-        # data/2023 fails, and data/2024, queued behind it, is never listed.
-        assert fs.requested == ["data", "data/2023"]
-    else:
-        # The recursive listing breaks at data/2023, and its resume lists data
-        # again, then data/2023, which fails as its own: the walk raises that.
-        # The resume, in flight, may send a request more before it is stopped.
-        assert fs.requested[:4] == ["data", "data/2023", "data", "data/2023"]
-        assert len(fs.requested) <= 6
+    # The default listing is read a directory at a time, depth first, either
+    # way: data/2023 fails, and data/2024, waiting behind it, is never listed.
+    assert fs.requested == ["data", "data/2023"]
     assert fs._in_flight == 0
 
 
@@ -320,7 +315,7 @@ async def test_parts_carry_dir_and_depth(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     # A trailing "/" is trimmed, as fsspec's _strip_protocol does.
     depths = {
-        part.directory: part.depth async for part in _chunks(TreeView(any_fs), "data/")
+        part.directory: part.depth async for part in _events(TreeView(any_fs), "data/")
     }
     assert depths["data"] == 1
     assert list(depths.values()).count(3) == 4
@@ -354,7 +349,7 @@ async def test_chunks_stream_a_dir_in_parts() -> None:
         fs.add_file(f"data/file-{i}")
     fs.add_file("data/sub/inner")
     listed: list[str] = []
-    chunks = _chunks(
+    chunks = _events(
         TreeView(fs, ils=_streamed(fs, listed), operation_limit=asyncio.Semaphore(4)),
         "data",
         # Each directory listed on its own: a descend prunes.
@@ -383,7 +378,7 @@ async def test_chunks_stream_a_dir_in_parts() -> None:
 async def test_chunks_of_an_empty_dir_are_one_part() -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     fs.add_dir("data")
-    chunks = _chunks(TreeView(fs, operation_limit=asyncio.Semaphore(4)), "data")
+    chunks = _events(TreeView(fs, operation_limit=asyncio.Semaphore(4)), "data")
     async with aclosing(chunks):
         parts = [part async for part in chunks]
     assert [(p.entries, p.first, p.last) for p in parts] == [([], True, True)]
@@ -398,12 +393,10 @@ async def test_each_subtree_is_told_listed_once_after_all_below_it(
     view = TreeView(any_fs, recursive_listing=maxdepth is None)
     events = [
         e
-        async for e in _chunks(view, "data", _Pruned(maxdepth=maxdepth), subtrees=True)
+        async for e in _events(view, "data", _Pruned(maxdepth=maxdepth), subtrees=True)
     ]
     last = {
-        e.directory: i
-        for i, e in enumerate(events)
-        if isinstance(e, _Listing) and e.last
+        e.directory: i for i, e in enumerate(events) if isinstance(e, _Part) and e.last
     }
     told = [e.directory for e in events if isinstance(e, _SubtreeListed)]
     assert sorted(told) == sorted(last)
@@ -417,3 +410,94 @@ async def test_each_subtree_is_told_listed_once_after_all_below_it(
         assert index > last[directory]
         below = [d for d in at if d.startswith(directory + "/")]
         assert all(at[d] < index for d in below)
+
+
+def _streamed_pages(fs: SimulatedFileSystem, page: int) -> Any:
+    """A directory's listing a page per request, each yielded as it arrives, as real storages stream them."""
+
+    async def ils(path: str, **kwargs: Any) -> Any:
+        entries = await fs._ls(path, detail=True)
+        for start in range(0, len(entries), page):
+            await asyncio.sleep(0.005)
+            for entry in entries[start : start + page]:
+                yield entry
+
+    return ils
+
+
+async def test_top_down_a_directory_comes_before_those_below_it_while_it_streams() -> (
+    None
+):
+    # big/a is found in big's first part, and listed while big's goes on:
+    # its listing ends first, but it waits for big's.
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    fs.add_file("big/a/x")
+    fs.add_file("big/a/b/y")
+    for i in range(3000):
+        fs.add_file(f"big/f{i:04}")
+    view = TreeView(fs, ils=_streamed_pages(fs, 500))
+    walked, errors = await _collect_with_errors(_tree_walk(view, "big", topdown=True))
+    assert errors == []
+    assert [d for d, _, _ in walked] == ["big", "big/a", "big/a/b"]
+
+
+async def test_the_walk_goes_depth_first() -> None:
+    # One listing at a time: each subtree is done before its next sibling starts.
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    for top in ("a", "b"):
+        for sub in ("x", "y"):
+            fs.add_file(f"t/{top}/{sub}/f")
+    view = TreeView(fs, operation_limit=asyncio.Semaphore(1))
+    walked, _ = await _collect_with_errors(_tree_walk(view, "t", topdown=True))
+    assert [d for d, _, _ in walked] == [
+        "t",
+        "t/a",
+        "t/a/x",
+        "t/a/y",
+        "t/b",
+        "t/b/x",
+        "t/b/y",
+    ]
+
+
+async def test_the_directories_waiting_stay_within_the_cap() -> None:
+    # A directory of 60 subdirectories, read 4 entries at a time: its reader
+    # pauses while 5 wait, so at most a part's more ever wait.
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    for i in range(60):
+        fs.add_file(f"t/d{i:02}/f")
+    most = 0
+
+    class Watched(_TreeWalk):
+        def _push(self, pending: Any) -> None:
+            nonlocal most
+            super()._push(pending)
+            most = max(most, len(self.pending))
+
+    walk = Watched(TreeView(fs), "t", _Pruned(maxdepth=2), chunk_size=4, waiting=5)
+    events = [e async for e in walk.events()]
+    listed = {e.directory for e in events if isinstance(e, _Part) and e.last}
+    assert listed == {"t", *(f"t/d{i:02}" for i in range(60))}
+    assert most <= 5 + 4
+
+
+@pytest.mark.parametrize("how", ["end", "stop", "close"])
+async def test_every_permit_is_given_back(how: str) -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True, latency=0.002)
+    _tree(fs)
+    limit = asyncio.Semaphore(3)
+    stopped = False
+    walk = _TreeWalk(
+        TreeView(fs, operation_limit=limit),
+        "data",
+        _Pruned(maxdepth=4),
+        stopping=lambda: stopped,
+    )
+    events = walk.events()
+    async for _ in events:
+        if how == "stop":
+            stopped = True
+        elif how == "close":
+            break
+    await events.aclose()
+    assert limit._value == 3

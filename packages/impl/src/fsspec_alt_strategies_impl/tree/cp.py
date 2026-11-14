@@ -33,8 +33,8 @@ if TYPE_CHECKING:
     from ..common.handler import Entry, StorageHandler, StoragePath
     from ..common.jobs import _Roots, _Transfer
     from ..common.operation import Operation
+    from ._walker import _Part
     from .handler import TreeFileOperationHandler
-    from .walk import _Listing
 
 __all__: list[str] = []
 
@@ -291,7 +291,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         job = _Job("file", entry, target)
         self.queue(self.dst.parent(target), "", [job])
 
-    def add(self, listing: _Listing) -> list[Any] | None:
+    def add(self, listing: _Part) -> list[Any] | None:
         try:
             directory = self.target(listing.directory)
         except ValueError as e:
@@ -318,7 +318,7 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             self.names.pop(listing.directory, None)
         return refused or None
 
-    def copies(self, listing: _Listing) -> tuple[list[_Job], list[Exception]]:
+    def copies(self, listing: _Part) -> tuple[list[_Job], list[Exception]]:
         """The jobs of the files in a part of a listing, and the errors of those refused.
 
         A file is refused if the destination takes no such name, or if another

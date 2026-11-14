@@ -30,8 +30,8 @@ if TYPE_CHECKING:
     from ..common.handler import Entry, StorageHandler, StoragePath
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
+    from ._walker import _Part
     from .handler import TreeFileOperationHandler
-    from .walk import _Listing
 
 __all__: list[str] = []
 
@@ -250,7 +250,7 @@ class _Move(_CopyOrMove):
         # A directory root, as mv_tree takes a file too.
         return _Roots([self.path1_entry or {"name": root}])
 
-    def add(self, listing: _Listing) -> list[Any] | None:
+    def add(self, listing: _Part) -> list[Any] | None:
         self.track(listing)
         # The files refused, e.g. a name the destination takes not: yielded.
         refused = super().add(listing) or []

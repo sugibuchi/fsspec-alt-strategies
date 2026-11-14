@@ -14,13 +14,19 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
+from fsspec_alt_strategies_impl.tree._walker import _FileRoot, _TreeWalk
 from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl.tree.du import _tree_du
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.glob import _tree_glob
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
-from fsspec_alt_strategies_impl.tree.walk import _chunks, _FileRoot, _tree_walk
+from fsspec_alt_strategies_impl.tree.walk import _tree_walk
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
+
+
+def _events(handler: Any, path: Any, visit: Any = None, **kwargs: Any) -> Any:
+    """The events of a walk of ``path`` on ``handler``."""
+    return _TreeWalk(handler, path, visit, **kwargs).events()
 
 
 def _view(fs: SimulatedFileSystem, **kwargs: Any) -> TreeView:
@@ -264,7 +270,7 @@ async def test_a_directory_comes_before_its_own_parts(
     seen: set[str] = {"data"}
     last: list[str] = []
 
-    async for part in _chunks(_view(flat_fs), "data", chunk_size=1):
+    async for part in _events(_view(flat_fs), "data", chunk_size=1):
         assert part.directory in seen
         seen.update(
             e["name"].rstrip("/") for e in part.entries if e["type"] == "directory"
@@ -293,7 +299,7 @@ async def test_entries_apart_from_their_directory_in_name_order(
     hierarchical_fs.add_dir("data/a/empty")
     hierarchical_fs.add_dir("data/a-empty")
 
-    parts = [p async for p in _chunks(_view(hierarchical_fs), "data")]
+    parts = [p async for p in _events(_view(hierarchical_fs), "data")]
 
     entries: dict[str, list[str]] = {}
     for part in parts:
@@ -326,6 +332,18 @@ def _reversed_ils(fs: SimulatedFileSystem) -> Any:
     return ils
 
 
+class _OwnDepthFirst(TreeView):
+    """A storage whose own recursive listing is depth first: the default one, as the walk does not tell it apart."""
+
+    def __init__(self, fs: SimulatedFileSystem, **kwargs: Any) -> None:
+        profile = StorageProfile(recursive_order="depth_first")
+        super().__init__(fs, storage_profile=profile, **kwargs)
+
+    async def ils_recursive(self, entry: dict[str, Any], **kwargs: Any) -> Any:
+        async for found in self.ils_by_directory(entry, **kwargs):
+            yield found
+
+
 async def test_depth_first_with_siblings_in_any_order(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
@@ -333,9 +351,9 @@ async def test_depth_first_with_siblings_in_any_order(
         hierarchical_fs.add_file(path)
     hierarchical_fs.add_dir("data/a/empty")
     hierarchical_fs.add_dir("data/a-empty")
-    view = TreeView(hierarchical_fs, ils=_reversed_ils(hierarchical_fs))
+    view = _OwnDepthFirst(hierarchical_fs, ils=_reversed_ils(hierarchical_fs))
 
-    parts = [p async for p in _chunks(view, "data")]
+    parts = [p async for p in _events(view, "data")]
 
     entries: dict[str, list[str]] = {}
     for part in parts:
@@ -367,7 +385,7 @@ async def test_a_directory_ends_before_the_listing_does(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)
-    parts = [p async for p in _chunks(_view(flat_fs), "data")]
+    parts = [p async for p in _events(_view(flat_fs), "data")]
 
     # Its last part comes as the listing passes it, before data/2024's entries.
     ended = next(
@@ -379,13 +397,13 @@ async def test_a_directory_ends_before_the_listing_does(
 
 async def test_a_missing_root_raises(any_fs: SimulatedFileSystem) -> None:
     with pytest.raises(FileNotFoundError):
-        async for _ in _chunks(_view(any_fs), "missing"):
+        async for _ in _events(_view(any_fs), "missing"):
             pass
 
 
 async def test_a_file_root_is_yielded_as_such(any_fs: SimulatedFileSystem) -> None:
     any_fs.add_file("a/x")
-    events = [e async for e in _chunks(_view(any_fs), "a/x")]
+    events = [e async for e in _events(_view(any_fs), "a/x")]
     assert len(events) == 1
     assert isinstance(events[0], _FileRoot)
     assert isinstance(events[0].error, NotADirectoryError)

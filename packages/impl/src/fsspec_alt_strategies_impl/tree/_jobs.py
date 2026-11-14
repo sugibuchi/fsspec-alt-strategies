@@ -4,14 +4,14 @@
 
 They walk the tree as _tree_walk does, and start their jobs, e.g. deleting a
 file, as each part of a directory's listing arrives. `_TreeJobs` feeds
-`common`'s `_Jobs` with the parts of `_chunks`, so that a directory of many
+`common`'s `_Jobs` with the parts of a `_TreeWalk`, so that a directory of many
 files is never held whole. A subclass says what a listing queues, how a job
 runs, and what its outcome is.
 
 A glob pattern is expanded first, as fsspec's ``_expand_path`` expands it:
 its matching directories are then walked at once.
 
-This module depends on `_visit`, `glob` and `walk`, and `jobs` of `common`.
+This module depends on `_visit`, `_walker` and `glob`, and `jobs` of `common`.
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _Jobs
 from ._visit import _Pruned
+from ._walker import _FileRoot, _Part, _Skipped, _TreeWalk
 from .glob import _tree_glob
-from .walk import _chunks, _FileRoot, _Listing, _Skipped
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
@@ -30,8 +30,8 @@ if TYPE_CHECKING:
     from ..common.handler import StoragePath
     from ..common.jobs import _Roots
     from ..common.operation import Operation
+    from ._walker import _Event
     from .handler import TreeFileOperationHandler
-    from .walk import _Event
 
 
 class _TreeJobs(_Jobs):
@@ -66,7 +66,7 @@ class _TreeJobs(_Jobs):
         self.listing: set[str] = set()
 
     @abstractmethod
-    def add(self, listing: _Listing) -> list[Any] | None:
+    def add(self, listing: _Part) -> list[Any] | None:
         """Queue the jobs for a part of a directory's listing, listed without error.
 
         It returns what is done at once, if anything, e.g. a directory found gone.
@@ -88,13 +88,13 @@ class _TreeJobs(_Jobs):
         if not directories:
             return None
         else:
-            return _chunks(
+            return _TreeWalk(
                 self.handler,
                 directories,
                 _Pruned(maxdepth=self.maxdepth, matched=self.matched),
                 ils_kwargs=self.ils_kwargs,
                 stopping=self.op.cancelling,
-            )
+            ).events()
 
     async def begin(
         self, roots: _Roots, source: AsyncGenerator[_Event] | None
@@ -118,7 +118,7 @@ class _TreeJobs(_Jobs):
             # Deeper than maxdepth: fsspec finds it, but nothing in it.
             self.at_limit(item.entry["name"])
             return []
-        elif not isinstance(item, _Listing):
+        elif not isinstance(item, _Part):
             # A subtree listed, which the jobs never ask the walk for: they
             # count their own jobs done in each directory.
             return []
@@ -133,7 +133,7 @@ class _TreeJobs(_Jobs):
     def at_limit(self, directory: str) -> None:
         """Queue the jobs for a directory at the depth limit, found but not listed."""
 
-    def track(self, listing: _Listing) -> None:
+    def track(self, listing: _Part) -> None:
         """Count the paths in a part of a directory's listing, for `child_done`.
 
         The walk yields each subdirectory once, though a storage may list one

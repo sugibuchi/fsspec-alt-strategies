@@ -181,9 +181,14 @@ code: read it before adding a strategy or a handler.
 - The profile's `recursive_order` says the order of a storage's own listing: the walk can never tell it.
   - Unknown is taken as "parents_first", right on any storage.
   - "depth_first", declared, covers name order too. It lets the walk close each directory as the listing passes it.
-  - `_tree_ils`'s listing is a `_DepthFirst`, which the walk splits depth first whatever the profile says.
-- The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
+  - `_tree_ils`'s listing is a `_DepthFirst`, which the walk reads a directory at a time itself, whatever the profile
+    says.
+- The tree strategies walk with `tree._walker._TreeWalk`, which is private: never expose its `_Part`. It reads each
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
+- The walk asks for each part, and nothing pushes one: no queue between the readers and it, and no task listing ahead.
+  Its directories to read wait on a stack, depth first. A reader holds one permit while it is read, taken by the walk
+  before it starts and given back once it ends or pauses. Keep it so: a queue or a task per directory would list
+  beyond the walk's control, and past a cancel.
 - The walk takes a `tree._visit._Visit`: which directories the operation needs, e.g. within `maxdepth`. What it found
   but did not list, it yields as events: a `_Skipped` subdirectory, a `_FileRoot`, and, when asked, a
   `_SubtreeListed`. A consumer acts on those, and never checks `maxdepth` or catches a file root again.
@@ -191,11 +196,12 @@ code: read it before adding a strategy or a handler.
   a subtree needed whole by one `ils_recursive` unless it says no, a pruned one only if it says yes. The walk then
   keeps what the visit would list, by path: only a visit whose `by_path` holds allows it. Never decide it in a
   visit, nor by the storage in a strategy.
-- The walk yields each subdirectory once, by `tree.walk._once`, though a storage may list one twice. Beside it, only
+- Each reader drops a subdirectory its directory listed before, though a storage may list one twice. Beside them, only
   two places keep names alone:
   - a copy's file names per directory, `tree.cp._CopyOrMove.names`, to refuse a second file of one name;
-  - a recursive listing's, `tree.walk._Open.seen`, to resume a break: see `tree.walk._resume`. Depth first, it keeps
-    those of the directories the listing is in. Parents first, it keeps all until the listing ends.
+  - a recursive listing's, `tree._walker._OpenDirectory.seen`, to resume a break, as the directories it was in are read
+    again. Depth first, it keeps those of the directories the listing is in. Parents first, it keeps all until the
+    listing ends.
 - Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
 

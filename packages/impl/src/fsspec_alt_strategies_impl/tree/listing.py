@@ -8,7 +8,8 @@ covers name order, or parents first. A storage with a recursive listing of its
 own implements it so. One without has `_tree_ils`, its default, which lists a
 directory per request by ``ils``. One whose own may be refused, as only
 asking tells, falls back on it. Its listing is a `_DepthFirst`, which the walk
-knows is depth first, whatever the profile declares of the storage's own.
+recognises: it then reads the subtree a directory at a time itself, under its
+own control, and `_tree_ils` serves the callers that list otherwise.
 
 It yields the entries depth first, as a walk visits them: each directory's
 entries in the order its listing gives them, and all below a subdirectory right
@@ -78,15 +79,15 @@ def _tree_ils(
     that a storage addressing items by id asks nothing again. ``ils_kwargs`` go
     to each ``ils``.
 
-    The listing is a `_DepthFirst`, so that the walk takes it as depth first
-    on a handler whose profile leaves the order unknown, or declares its own
-    listing parents first: this one is the library's, whatever the storage.
+    The listing is a `_DepthFirst`, so that the walk recognises it: it reads
+    such a subtree a directory at a time itself, as this would, but without a
+    look-ahead of its own beyond the walk's control.
     """
     return _DepthFirst(_entries(handler, entry, ils_kwargs))
 
 
 class _DepthFirst:
-    """A listing depth first by construction, `_tree_ils`'s: the walk closes each directory as it passes it.
+    """A listing depth first by construction, `_tree_ils`'s: the walk reads such a subtree a directory at a time itself.
 
     It is the listing's own type that tells the walk, not the handler's class:
     a handler overriding ``ils_recursive`` may still answer with `_tree_ils`,

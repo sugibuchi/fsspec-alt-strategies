@@ -42,8 +42,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.handler import StoragePath
+    from ._walker import _Part
     from .handler import TreeFileOperationHandler
-    from .walk import _Listing
 
 __all__: list[str] = []
 
@@ -199,7 +199,7 @@ async def _walk(
 
 
 def _matches_in(
-    listing: _Listing,
+    listing: _Part,
     searches: list[_Search],
     op: Operation[dict[str, Any], GlobState],
     found: set[str],

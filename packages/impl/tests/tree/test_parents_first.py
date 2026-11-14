@@ -9,15 +9,15 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
+from fsspec_alt_strategies_impl.tree._walker import (
+    _DepthFirstSplit,
+    _ParentsFirstSplit,
+    _split_of,
+)
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.mv import _tree_mv
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
-from fsspec_alt_strategies_impl.tree.walk import (
-    _ParentsFirst,
-    _Split,
-    _splitter,
-    _tree_walk,
-)
+from fsspec_alt_strategies_impl.tree.walk import _tree_walk
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 _FILES = [
@@ -145,7 +145,8 @@ async def test_the_default_listing_is_split_depth_first(order: Any) -> None:
     fs = _fs()
     view = TreeView(fs, storage_profile=StorageProfile(recursive_order=order))
     entries = view.ils_recursive(view.entry("data"))
-    assert await _splitter(view, entries) is _Split
+    await view.open()
+    assert _split_of(entries, view.profile) is _DepthFirstSplit
     await entries.aclose()  # type: ignore[attr-defined]  # A _DepthFirst.
 
     own = TreeView(
@@ -154,4 +155,5 @@ async def test_the_default_listing_is_split_depth_first(order: Any) -> None:
         storage_profile=StorageProfile(recursive_order=order),
     )
     entries = own.ils_recursive(own.entry("data"))
-    assert await _splitter(own, entries) is _ParentsFirst
+    await own.open()
+    assert _split_of(entries, own.profile) is _ParentsFirstSplit

@@ -7,7 +7,7 @@ fsspec's walks a tree one directory at a time, unless the filesystem lists
 whole trees. `_tree_find` lists the tree as `_tree_walk` does: by one recursive
 ``ils``, or a directory per request, several at a time.
 
-This module depends on `_visit` and `walk`, and `handler`, `operation` and `paths` of `common`.
+This module depends on `_visit` and `_walker`, and `handler`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -21,15 +21,15 @@ from fsspec_alt_strategies.states import DuState, FindState, GlobState
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ._visit import _Pruned
-from .walk import _chunks, _FileRoot, _Listing
+from ._walker import _FileRoot, _Part, _TreeWalk
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
     from ..common.handler import StorageHandler, StoragePath
     from ._visit import _Visit
+    from ._walker import _Event
     from .handler import TreeFileOperationHandler
-    from .walk import _Event
 
 __all__: list[str] = []
 
@@ -114,7 +114,7 @@ def _tree_find(
 _S = TypeVar("_S", FindState, DuState, GlobState)
 
 
-def _listed(state: _S, listing: _Listing, **counts: int) -> _S:
+def _listed(state: _S, listing: _Part, **counts: int) -> _S:
     """A state once a part of a listing is out, with ``counts`` its own: its error, and its directory once its last part comes.
 
     Depth 0 is the root's own entry, which is no directory listed.
@@ -138,10 +138,10 @@ async def _find_listings(
     stopping: Callable[[], object] | None = None,
     file_root: bool = False,
     dir_root: bool = False,
-) -> AsyncGenerator[_Listing]:
+) -> AsyncGenerator[_Part]:
     """Walk as the strategies that only read do, such as find, du and glob.
 
-    It yields each directory's listing in parts, as ``_chunks`` does, but
+    It yields each directory's listing in parts, as `_TreeWalk` does, but
     treats ``path`` itself as fsspec's ``_find`` and ``_glob`` do:
 
     - missing, it yields nothing;
@@ -150,12 +150,14 @@ async def _find_listings(
     - a directory, it yields the directory's own ``info`` entry after its
       listing's last part, if ``dir_root`` and the walk is not stopping.
 
-    The root's own entry comes as a `_Listing` of depth 0, which is no listing.
+    The root's own entry comes as a `_Part` of depth 0, which is no listing.
     So the strategies filter and count it as any entry, but count no directory
     listed for it.
     """
     root = _trim(path)
-    listings = _chunks(handler, root, visit, ils_kwargs=ils_kwargs, stopping=stopping)
+    listings = _TreeWalk(
+        handler, root, visit, ils_kwargs=ils_kwargs, stopping=stopping
+    ).events()
 
     async with aclosing(listings):
         try:
@@ -171,7 +173,7 @@ async def _find_listings(
             return
 
         async for event in _then(first, listings):
-            if isinstance(event, _Listing):
+            if isinstance(event, _Part):
                 yield event
                 if event.directory == root and event.last:
                     async for own in _root_entry(handler, root, dir_root, stopping):
@@ -185,13 +187,13 @@ async def _then(first: _Event, rest: AsyncIterator[_Event]) -> AsyncGenerator[_E
         yield event
 
 
-async def _file_entry(handler: StorageHandler, root: str, file: _FileRoot) -> _Listing:
+async def _file_entry(handler: StorageHandler, root: str, file: _FileRoot) -> _Part:
     """A root that is a file, as a listing of depth 0: its entry as its listing gave it, else asked."""
     entry = getattr(file.error, "entry", None)
     if entry is None:
         async with handler.operation_limit:
             entry = await handler.info(handler.entry(root))
-    return _Listing(root, 0, [entry])
+    return _Part(root, 0, [entry])
 
 
 async def _root_entry(
@@ -199,9 +201,9 @@ async def _root_entry(
     root: str,
     dir_root: bool,
     stopping: Callable[[], object] | None,
-) -> AsyncGenerator[_Listing]:
+) -> AsyncGenerator[_Part]:
     """The root directory's own ``info`` entry, as a listing of depth 0, if asked."""
     if dir_root and not (stopping and stopping()):
         async with handler.operation_limit:
             entry = await handler.info(handler.entry(root))
-        yield _Listing(root, 0, [entry])
+        yield _Part(root, 0, [entry])

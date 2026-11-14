@@ -11,7 +11,7 @@ against the profile's ``recursive_order``. Unknown, the order is taken as
 parents first, right on any storage: "depth_first" is the declaration a wrong
 listing would break, a directory then taken as done too early. A handler
 keeping the default listing, ``ils_by_directory``, needs no check: the walk
-takes it as depth first whatever the profile says.
+reads such a subtree a directory at a time itself.
 
 This module depends on the strategies' `handler` and `operation` of `common`,
 and `handler` of `tree`.

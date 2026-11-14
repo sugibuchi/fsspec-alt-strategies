@@ -142,9 +142,9 @@ class TreeFileOperationHandler(FileOperationHandler):
         """List all below a directory depth first, a directory per request by ``ils``, several at a time.
 
         It is the default ``ils_recursive``, and the fallback of one whose
-        storage refuses its own listing. The walk knows it is depth first,
-        whatever the profile declares, so a handler keeping it declares no
-        ``recursive_order``. ``kwargs`` go to each ``ils``.
+        storage refuses its own listing. The walk recognises it, and reads such
+        a subtree a directory at a time itself, so a handler keeping it
+        declares no ``recursive_order``. ``kwargs`` go to each ``ils``.
         """
         return _tree_ils(self, entry, **kwargs)
 

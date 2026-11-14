@@ -453,13 +453,13 @@ The tree strategies list a directory with the handler's `ils`, its entries in an
 `ils_recursive`. A recursive listing may leave a directory out, as object stores list only files: the walk tells it
 from the paths below it.
 
-By default, `ils_recursive` is `ils_by_directory`, which runs `tree/listing.py`'s `_tree_ils`. It lists depth first,
-a directory per request, several ahead at a time. The generic tree handler lists so, but `AdlfsHandler` lists by
-Azure's own recursive listing.
+By default, `ils_recursive` is `ils_by_directory`, which runs `tree/listing.py`'s `_tree_ils`: depth first, a directory
+per request. The walk recognises that listing, a `_DepthFirst`, and reads such a subtree a directory at a time itself,
+under its own control. The generic tree handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing.
 A storage may refuse a recursive listing in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`.
 Its handler's `ils_recursive` then falls back on `ils_by_directory` itself.
 
-A recursive listing keeps one of two orders, which tell the walk when a directory is done:
+A storage's own recursive listing keeps one of two orders, which tell the walk when a directory is done:
 
 - depth first: a directory's entry, then all below it, before any other entry. Siblings may come in any order.
 - by name: sorted by the whole name, as object stores list keys. A directory's entry may come apart from what is below
@@ -467,19 +467,20 @@ A recursive listing keeps one of two orders, which tell the walk when a director
 
 The profile's `recursive_order` declares which order a storage's own listing keeps:
 
-- "depth_first" covers both of the above. `tree.walk._Split` then closes each directory as the listing passes it.
+- "depth_first" covers both of the above. `_DepthFirstSplit` then closes each directory as the listing passes it.
 - "parents_first" covers a directory's entry before what is below it, and nothing more, e.g. breadth first, as
-  Dropbox's recursive listing documents no more. `tree.walk._ParentsFirst` then keeps every directory open until the
+  Dropbox's recursive listing documents no more. `_ParentsFirstSplit` then keeps every directory open until the
   listing ends, and the names of all its entries, to resume a break.
 - Unknown, the order is taken as "parents_first". The walk cannot tell that order from a depth-first one: by the time
   an entry comes under a directory taken as done, that directory's last part has gone, and a move may have deleted it.
 
 "parents_first" is always right, as a depth-first listing is parents first too. It costs the streaming of each
 directory done, and the memory of the tree's names. So a storage whose own listing is depth first declares it, as
-`AdlfsHandler` does. `_tree_ils`'s listing is a `_DepthFirst`, whose type tells the walk its order. So a handler
-keeping the default, or falling back on it, needs no `recursive_order`.
+`AdlfsHandler` does. A handler keeping the default listing declares nothing: the walk reads it by directory.
 
-The strategies walk with a private engine, `tree.walk._chunks`. It streams each directory in parts of at most 1000
+#### The walk
+
+The strategies walk with a private engine, `tree._walker._TreeWalk`. It reads each directory in parts of at most 1000
 entries. A huge directory is never held whole, except by `_tree_walk`, which answers as fsspec's `walk` does.
 
 A walk's plan has two sides:
@@ -494,11 +495,27 @@ A walk's plan has two sides:
   deciding by path allows it, as `maxdepth` and a glob's pattern do: a caller's `descend` may read any key of an
   entry, and a walk top down needs each directory before what is below it.
 
+How the walk reads:
+
+- **Readers.** A directory listed alone is read by a `_DirectoryReader`, a subtree listed whole by a `_SubtreeReader`,
+  a part per read. The walk awaits a few reads at once, takes each as it comes, and asks a reader again only when it
+  wants more. So nothing is listed ahead of what the walk asks, and nothing is buffered between the readers and it.
+- **Order.** The directories to read wait on a stack, so the walk goes depth first, as fsspec's `walk` does. What waits
+  is the subdirectories along the paths the walk is in, not a whole level of the tree. While more than 32,000 wait, a
+  directory's reader that would add more is paused.
+- **Permits.** A reader holds a permit of `operation_limit` while it is read, as a listing is one request to the
+  strategies. The walk takes one before it starts a reader, and gives it back once the reader ends, or is paused.
+  While none is free, one task waits for the next beside the reads, so that the walk gets permits as others give them
+  back, e.g. deletions sharing the limit.
+- **Stopping.** Once cancelled, no reader starts, and none is asked again. The reads in flight are yielded.
+
 Beside each directory's parts, the walk yields what its consumers would otherwise work out again:
 
 - `_Skipped`, a subdirectory the visit leaves, e.g. deeper than `maxdepth`, before the part that found it;
 - `_FileRoot`, a root that is a file, with its entry as its listing gave it;
 - with `subtrees=True`, `_SubtreeListed`, once all below a directory is listed, as a walk bottom up needs.
+
+What it lists, and when:
 
 - A tree that nothing prunes is listed by one recursive listing per root. Its order tells when each directory is
   done. Where the storage has a recursive listing, that is one paginated request, which usually beats a directory per
@@ -510,24 +527,22 @@ Beside each directory's parts, the walk yields what its consumers would otherwis
 - A recursive listing broken off is resumed a directory per request. A long listing, e.g. a WebDAV body taking
   minutes, may break off anywhere. Left so, the tree would lack an arbitrary part of it, which fsspec's `find` omits
   with no error.
-- The resume lists again each directory the listing was in, leaving out the entries already passed. So it holds those
-  directories' names, from the root down to the break. It lists the subtrees nothing came from whole, by `_tree_ils`.
-- A directory failing again yields its own error, and the rest of the tree goes on, as when listed a directory per
-  request.
-- `_tree_walk` top down lists a directory per request: a recursive listing ends a directory after all below it, so the
-  whole tree would be held.
+- The resume reads again each directory the listing was in, alone, leaving out the entries already passed. Their
+  subdirectories below which nothing came are read anew, as the visit says, never by a recursive listing again. A
+  directory failing again yields its own error, and the rest of the tree goes on.
+- `_tree_walk` top down lists a directory per request, as a recursive listing ends a directory after all below it. A
+  subdirectory whose listing ends before its parent's waits for it.
 
 The walk keeps sets of names alone, never entries, where nothing else is right:
 
-- `_chunks` yields each subdirectory once, as a storage may list a directory twice, e.g. as a prefix and as its marker
-  object. It keeps the names of those found in each directory being listed.
+- Each reader drops a subdirectory its directory listed before, as a storage may list one twice, e.g. as a prefix and
+  as its marker object: a `_DirectoryReader` by the names it showed, a split by those of each directory open.
 - A copy or move keeps the names of the files found in each directory being listed, by `_CopyOrMove.names`. Two files
   of one name, e.g. on Google Drive, would go to one place: the second is refused.
-- A recursive listing keeps names to resume a break, by `_Open.seen`, as above. Parents first, that is every name
-  listed until the listing ends.
+- A recursive listing keeps names to resume a break, by `_OpenDirectory.seen`, as above. Parents first, that is every
+  name listed until the listing ends.
 
 The first two are dropped once their directory is listed to its last part.
-
 The tree strategies come in two layers:
 
 | Strategies                             | They send                         | They build on    |
