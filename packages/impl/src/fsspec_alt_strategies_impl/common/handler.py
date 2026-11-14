@@ -32,7 +32,12 @@ __all__ = ["Entry", "StorageHandler", "StoragePath"]
 
 
 StoragePath = NewType("StoragePath", str)
-"""A path of a storage, without its protocol or a trailing "/", as its handler checked it."""
+"""A path of a storage, without its protocol or a trailing "/", as its handler checked it.
+
+Never make one directly, as ``StoragePath(path)``: that skips the check. Get
+one from the handler: `StorageHandler.verified` for a caller's path, or its
+``join``, ``join_all`` and ``parent`` for one built from another.
+"""
 
 
 Entry: TypeAlias = dict[str, Any]
