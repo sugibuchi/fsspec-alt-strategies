@@ -112,8 +112,9 @@ async def test_a_failed_listing_is_yielded_and_the_rest_counted() -> None:
     assert [type(e) for e in errors] == [PermissionError]
     assert (op.state.errors, op.state.size) == (1, 201)
 
-    # Without, the tree's one listing ends: what came before the failure is counted.
+    # Without, the tree's one listing breaks there, and is resumed a directory
+    # per request: data/2023 fails again, and the rest is counted all the same.
     op = _du(fs, "data", ils=dir_ils(ls))
     _, errors = await _collect_with_errors(op)
     assert [type(e) for e in errors] == [PermissionError]
-    assert (op.state.errors, op.state.size) == (1, 0)
+    assert (op.state.errors, op.state.size) == (1, 201)

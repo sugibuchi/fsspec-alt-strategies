@@ -148,15 +148,19 @@ async def test_failed_listing_is_yielded_and_the_walk_goes_on() -> None:
     assert {"data", "data/2024", "data/2024/02"} <= paths
 
 
-async def test_bottom_up_a_failed_listing_ends_the_walk() -> None:
+async def test_bottom_up_a_failed_listing_is_resumed_past() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
     items = await _all(_walk(fs, "data", topdown=False))
-    # One recursive listing, which fails at data/2023, first depth first: the
-    # error is the root's, and no directory was done before it.
-    assert [type(i) for i in items] == [PermissionError]
-    assert items[0].directory == "data"
-    assert "Listing 'data/2023' failed." in items[0].__notes__
+    # One recursive listing, which breaks at data/2023, first depth first. It
+    # is resumed a directory per request: data/2023 fails again, as its own.
+    errors = [i for i in items if isinstance(i, Exception)]
+    assert [type(e) for e in errors] == [PermissionError]
+    assert errors[0].directory == "data/2023"
+    assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
+    paths = [i[0] for i in items if not isinstance(i, Exception)]
+    assert sorted(paths) == ["data", "data/2024", "data/2024/01", "data/2024/02"]
+    assert paths[-1] == "data"
 
 
 class _Recording(_Forbidding):
@@ -182,8 +186,15 @@ async def test_on_error_raise_stops_at_once(topdown: bool) -> None:
                 concurrency_limit=asyncio.Semaphore(1),
             )
         )
-    # data/2023 fails, and data/2024, queued behind it, is never listed.
-    assert fs.requested == ["data", "data/2023"]
+    if topdown:
+        # data/2023 fails, and data/2024, queued behind it, is never listed.
+        assert fs.requested == ["data", "data/2023"]
+    else:
+        # The recursive listing breaks at data/2023, and its resume lists data
+        # again, then data/2023, which fails as its own: the walk raises that.
+        # The resume, in flight, may send a request more before it is stopped.
+        assert fs.requested[:4] == ["data", "data/2023", "data", "data/2023"]
+        assert len(fs.requested) <= 6
     assert fs._in_flight == 0
 
 

@@ -142,6 +142,7 @@ code: read it before adding a strategy or a handler.
   listing a tree in one request overrides it, and falls back on `_tree_ils` itself where its storage refuses.
 - The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
+  A recursive listing keeps only the names of the directories it is in, to resume a break: see `tree.walk._resume`.
 - Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
 - The flat strategies list with `flat._keys._listing(handler, prefix)`, the handler's `ils_recursive` of the prefix's

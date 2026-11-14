@@ -71,7 +71,7 @@ async def _tree_ils(
 
     A directory below ``path`` that fails to list raises its error, noted with
     its path, and ends the listing: a recursive listing cannot go on past a
-    failure. A missing ``path`` raises FileNotFoundError, when the iteration
+    failure. The walk under the strategies resumes it a directory per request. A missing ``path`` raises FileNotFoundError, when the iteration
     starts, as its own ``ils`` raises it.
 
     ``path`` is listed by ``entry``, its entry, where given, e.g. as its parent's

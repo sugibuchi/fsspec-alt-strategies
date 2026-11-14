@@ -427,8 +427,13 @@ entries. A huge directory is never held whole, except by `_tree_walk`, which ans
   `**`, nothing is pruned, so it is listed recursively again. Pruning wins on a large tree, and loses on a small
   subtree that one recursive listing would cover. The library cannot tell which without guessing the tree's size, so
   it always prunes.
-- A failure ends a recursive listing, as there is no way past it. The root's error is yielded, noting the directory that
-  failed. Listed a directory per request, the rest of the tree goes on.
+- A recursive listing broken off is resumed a directory per request. A long listing, e.g. a WebDAV body taking
+  minutes, may break off anywhere. Left so, the tree would lack an arbitrary part of it, which fsspec's `find` omits
+  with no error.
+- The resume lists again each directory the listing was in, leaving out the entries already passed. So it holds those
+  directories' names, from the root down to the break. It lists the subtrees nothing came from whole, by `_tree_ils`.
+- A directory failing again yields its own error, and the rest of the tree goes on, as when listed a directory per
+  request.
 - `_tree_walk` top down lists a directory per request: a recursive listing ends a directory after all below it, so the
   whole tree would be held.
 

@@ -240,17 +240,49 @@ async def test_a_failed_listing_keeps_its_dirs_and_the_rest_goes() -> None:
     assert not await fs._exists("data/2024")
 
 
-async def test_a_failed_listing_ends_the_recursive_listing() -> None:
+async def test_a_failed_listing_in_the_recursive_listing_is_resumed_past() -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
     op = _rm(fs, "data")
     deleted, errors = await _collect_with_errors(op)
+    # The listing breaks at data/2023, and is resumed a directory per request:
+    # data/2023 fails again, and the rest is deleted, as with a maxdepth.
     assert [type(e) for e in errors] == [PermissionError]
-    assert "Listing 'data/2023' failed." in errors[0].__notes__
-    # data/2023 comes first, depth first: nothing was found to delete before it.
-    assert deleted == []
-    assert fs.stats.calls["delete"] == 0
-    assert await fs._exists("data/2024/01/part-0.parquet")
+    assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
+    assert not any(p.startswith("data/2023") for p in deleted)
+    assert await fs._exists("data/2023/01/part-0.parquet")
+    assert not await fs._exists("data/2024")
+    assert not await fs._exists("data/README.md")
+
+
+class _BreakingOff(SimulatedFileSystem):
+    """Breaks its recursive listing off after ``cut_after`` entries, as a dropped connection does."""
+
+    cut_after = 0
+
+    async def _ils_recursive(self, path: str) -> Any:
+        count = 0
+        async for entry in super()._ils_recursive(path):
+            if count == self.cut_after:
+                raise ConnectionResetError(path)
+            count += 1
+            yield entry
+
+
+@pytest.mark.parametrize("cut_after", [1, 2, 3, 5, 8])
+async def test_a_recursive_listing_broken_off_deletes_the_whole_tree(
+    any_fs: SimulatedFileSystem, cut_after: int
+) -> None:
+    fs = _BreakingOff(hierarchical=any_fs.hierarchical, asynchronous=True)
+    fs.cut_after = cut_after
+    _tree(fs)
+    view = TreeView(fs, recursive_listing=True)
+    deleted, errors = await _collect_with_errors(_tree_rm(view, "data"))
+    # Each directory is deleted once all in it is, as without the break.
+    assert errors == []
+    assert deleted[-1] == "data"
+    assert not await fs._exists("data")
+    assert await fs._exists("other/kept")
 
 
 class _Doubling(SimulatedFileSystem):
