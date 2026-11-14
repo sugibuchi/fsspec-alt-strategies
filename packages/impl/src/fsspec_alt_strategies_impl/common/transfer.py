@@ -35,11 +35,6 @@ if TYPE_CHECKING:
 
 __all__: list[str] = []
 
-_MiB = 1024 * 1024
-
-_BLOCK_SIZE = 8 * _MiB
-"""The bytes read, then written, at a time: a transfer holds one block in memory."""
-
 
 def _across(src: StorageHandler, dst: StorageHandler) -> _Transfer:
     """How a copy between two handlers sends each file: streamed, leaving no part of a file.
@@ -139,7 +134,7 @@ async def _write(
             target["parent"] = parent
         async with await dst.open_async_file(target, "wb") as writer:
             written = 0
-            while block := await reader.read(_BLOCK_SIZE):
+            while block := await reader.read(src.transfer_size):
                 await writer.write(block)
                 written += len(block)
             if isinstance(expected, int) and written != expected:

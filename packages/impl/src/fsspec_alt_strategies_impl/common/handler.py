@@ -590,7 +590,7 @@ class StorageHandler(_PathHandler):
     # permit held around them would wait for itself.
 
     transfer_size: int = 8 * _MiB
-    """The bytes read or written at a time by the defaults of `get_file` and `put_file`."""
+    """The bytes read or written at a time by the defaults of `get_file` and `put_file`, and read by a copy from this storage to another."""
 
     async def cat_file(
         self,

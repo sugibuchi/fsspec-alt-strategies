@@ -161,15 +161,28 @@ def _flat_mv(
     return Operation(run, MvState())
 
 
-class _Rename(_CopyOrMove):
+class _Moving(_CopyOrMove):
+    """What both kinds of flat move share: their words, and their state."""
+
+    verb = "move"
+    doing = "Moving"
+
+    def state(self) -> MvState:
+        return MvState(
+            errors=self.errors,
+            current=self.current,
+            files_found=self.files_found,
+            files_moved=self.files_done,
+        )
+
+
+class _Rename(_Moving):
     """The jobs of one `_flat_mv` by renames: one ``mv_entry`` per key.
 
     ``mv_entry`` moves each key where a copy would put it. A directory's
     marker is moved too, but not yielded.
     """
 
-    verb = "move"
-    doing = "Moving"
     transfers = "move"
 
     def __init__(self, *, mv_entry: _Transfer, **kwargs: Any) -> None:
@@ -187,14 +200,6 @@ class _Rename(_CopyOrMove):
         self, entry: dict[str, Any], destination: StoragePath
     ) -> None:
         await self.move_file(self.mv_entry, entry, destination)
-
-    def state(self) -> MvState:
-        return MvState(
-            errors=self.errors,
-            current=self.current,
-            files_found=self.files_found,
-            files_moved=self.files_done,
-        )
 
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
@@ -215,11 +220,8 @@ class _Rename(_CopyOrMove):
             return super().done(job)
 
 
-class _Move(_Copy):
+class _Move(_Moving, _Copy):
     """The jobs of one `_flat_mv` by copies: a copy per key, then a deletion per batch."""
-
-    verb = "move"
-    doing = "Moving"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -232,14 +234,6 @@ class _Move(_Copy):
         # last batch goes once both say all is copied.
         self.copying = 0
         self.listed = False
-
-    def state(self) -> MvState:
-        return MvState(
-            errors=self.errors,
-            current=self.current,
-            files_found=self.files_found,
-            files_moved=self.files_done,
-        )
 
     def add(self, entry: dict[str, Any]) -> None:
         name = entry["name"]
