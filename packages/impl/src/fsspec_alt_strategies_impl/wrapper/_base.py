@@ -200,8 +200,12 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
     def modified(self, path: str) -> Any:
         return self.fs.modified(path)
 
-    def sign(self, path: str, expiration: int = 100, **kwargs: Any) -> str:
-        return self.fs.sign(path, expiration=expiration, **kwargs)  # type: ignore[no-any-return]
+    async def sign(self, entry: Entry, expiration: int = 100, **kwargs: Any) -> str:
+        # fsspec's sign is sync, also of an async filesystem: in a thread, as
+        # its sync() refuses the loop running this.
+        sign = self.fs.sign
+        name = entry["name"]
+        return await self._run_in_thread(sign, name, expiration=expiration, **kwargs)  # type: ignore[no-any-return]
 
     def invalidate_cache(self, path: str | None = None) -> None:
         self.fs.invalidate_cache(path)

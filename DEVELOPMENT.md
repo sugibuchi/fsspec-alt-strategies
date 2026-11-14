@@ -138,8 +138,12 @@ Each family's handler class adds what its strategies call:
 | `FlatHandler` | Required `ils_recursive(entry, prefix=...)`, and `rm_files` of at most `rm_batch_size` keys   |
 
 A family's `family` class attribute, "tree" or "flat", names it. A handler may also have optional extras, which the
-filesystem uses where they exist: `cat_file`, `pipe_file`, `get_file`, `put_file`, `created`, `modified`, `sign`,
+filesystem uses where they exist: `cat_file`, `pipe_file`, `get_file`, `put_file`, `created`, `modified`,
 `invalidate_cache`, and a wrapper's `open_async_file`, `open_sync_file` and `wrapped`.
+
+`StorageHandler.sign(entry, expiration)` signs a URL of a file, for fsspec's `sign`. It is async, as signing may ask
+the storage first, e.g. Azure's user delegation key. A handler signing no URL keeps the default, which raises
+NotImplementedError, as fsspec's does.
 
 #### Paths and entries
 

@@ -222,8 +222,9 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         return self._handler_method("modified")(self._strip_protocol(path))
 
     def sign(self, path: str, expiration: int = 100, **kwargs: Any) -> str:
-        sign = self._handler_method("sign")
-        return sign(self._strip_protocol(path), expiration=expiration, **kwargs)  # type: ignore[no-any-return]
+        """A signed URL of a file, as fsspec's ``sign`` answers: the handler's `sign`, on the filesystem's loop."""
+        entry = self.handler.entry(self._strip_protocol(path))
+        return sync(self.loop, self.handler.sign, entry, expiration, **kwargs)  # type: ignore[no-any-return]
 
     def _handler_method(self, name: str) -> Callable[..., Any]:
         """The handler's method of that name, else NotImplementedError, as fsspec's own raises."""

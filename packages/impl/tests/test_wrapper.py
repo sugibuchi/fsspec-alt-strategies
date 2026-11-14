@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from fsspec.asyn import sync
 from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
@@ -75,6 +76,23 @@ async def test_a_sync_filesystem_makes_a_dir_and_dates_a_file(
     local.pipe_file(f"{root}/f.txt", b"f")
     assert tree.created(f"{root}/f.txt") == local.created(f"{root}/f.txt")
     assert tree.modified(f"{root}/f.txt") == local.modified(f"{root}/f.txt")
+
+
+class _Signing(SimulatedFileSystem):
+    """An async filesystem whose sync sign runs on its loop, as s3fs's runs."""
+
+    async def _sign(self, path: str, expiration: int = 100) -> str:
+        return f"signed {path} {expiration}"
+
+    def sign(self, path: str, expiration: int = 100, **kwargs: Any) -> str:
+        return sync(self.loop, self._sign, path, expiration)  # type: ignore[no-any-return]
+
+
+def test_sign_is_the_wrapped_filesystems() -> None:
+    # The wrapped filesystem's loop is fsspec's, which runs the handler's sign too.
+    tree = _tree(_Signing(hierarchical=True, skip_instance_cache=True))
+    assert tree.loop is tree.handler.fs.loop  # type: ignore[attr-defined]
+    assert tree.sign("a/b", expiration=5) == "signed a/b 5"
 
 
 async def test_a_sync_filesystem_of_an_async_class_is_wrapped_as_sync(

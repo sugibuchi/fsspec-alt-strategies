@@ -349,6 +349,18 @@ class StorageHandler(_PathHandler):
         """
         raise NotImplementedError(f"{type(self).__name__} opens no file to write")
 
+    # What fsspec leaves to each filesystem.
+
+    async def sign(self, entry: Entry, expiration: int = 100, **kwargs: Any) -> str:
+        """A URL of a file, signed to be read without the storage's credential, for ``expiration`` seconds.
+
+        The filesystem's ``sign`` answers it, as fsspec's ``sign`` does. It is
+        awaited, as signing may ask the storage first, e.g. for a key to sign
+        with. A storage signing no URL raises NotImplementedError, as fsspec's
+        ``sign`` does.
+        """
+        raise NotImplementedError(f"{type(self).__name__} signs no URL")
+
 
 def _joined(directory: str, name: str) -> StoragePath:
     """The path of a single name in a directory, raising ValueError for a name that is no single name."""
