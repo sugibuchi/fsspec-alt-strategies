@@ -64,6 +64,35 @@ async def test_find_lists_once(any_fs: SimulatedFileSystem) -> None:
     assert any_fs.stats.calls["list"] == 1
 
 
+class _Refusing(TreeView):
+    """A storage refusing its recursive listing, as only asking tells: once, then never asked again."""
+
+    refused = 0
+
+    async def ils_recursive(self, entry: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+        self.refused += 1
+        self.recursive_order = None
+        raise NotImplementedError("refused")
+        yield  # An async generator, raising as its iteration starts.
+
+
+async def test_a_refused_recursive_listing_lists_each_directory(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    expected = await AsyncFileSystem._find(any_fs, "data", withdirs=True)
+    handler = _Refusing(any_fs, recursive_listing=True)
+
+    for _ in range(2):
+        found, errors = await _collect_with_errors(
+            _tree_find(handler, "data", withdirs=True)
+        )
+        assert errors == []
+        assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)
+    # Asked once: the handler declared no recursive listing after it.
+    assert handler.refused == 1
+
+
 async def test_find_lists_a_page_per_request(any_fs: SimulatedFileSystem) -> None:
     any_fs.page_size = 3
     _tree(any_fs)

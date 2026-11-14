@@ -339,6 +339,10 @@ with no `recursive_order` has no recursive listing: `tree/listing.py`'s `_tree_i
 request, several ahead at a time. The generic tree handler lists so, but `AdlfsHandler` lists by Azure's own recursive
 listing.
 
+A storage may refuse a recursive listing in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`.
+Its `ils_recursive` then raises NotImplementedError before its first entry, and the strategies list by `_tree_ils`
+instead.
+
 The strategies walk with a private engine, `tree.walk._chunks`. It streams each directory in parts of at most 1000
 entries. A huge directory is never held whole, except by `_tree_walk`, which answers as fsspec's `walk` does.
 

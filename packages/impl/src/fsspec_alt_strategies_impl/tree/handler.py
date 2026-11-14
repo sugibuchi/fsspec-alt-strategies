@@ -61,6 +61,11 @@ class TreeHandler(StorageHandler):
         A directory may be left out, as object stores list only files: the
         strategies tell it from the paths below it. A file lists itself. A
         missing directory raises FileNotFoundError, when the iteration starts.
+
+        A storage refusing the listing, as only asking tells, raises
+        NotImplementedError before its first entry: the strategies then list
+        the tree a directory per request, by ``ils``. A handler may then set
+        its ``recursive_order`` to None, so that later listings ask no more.
         """
         raise NotImplementedError(f"{type(self).__name__} lists no tree at once")
 

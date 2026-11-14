@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import heapq
 from collections import deque
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _trim
@@ -107,18 +108,44 @@ async def _tree_ils(
         await ahead.close(stack)
 
 
-def _recursive(
+async def _recursive(
     handler: StorageHandler, entry: Entry, **ils_kwargs: Any
-) -> AsyncIterator[Entry]:
+) -> AsyncGenerator[Entry]:
     """All below a directory: by the handler's recursive listing, or else by `_tree_ils`.
 
     A handler declaring no ``recursive_order`` has no recursive listing of its
-    own: the tree is listed a directory per request, several at a time.
+    own: the tree is listed a directory per request, several at a time. One
+    whose ``ils_recursive`` raises NotImplementedError before its first entry
+    is listed so too: its storage refused the recursive listing, e.g. a WebDAV
+    server refusing ``Depth: infinity``, as it can tell only by asking. Its
+    order is depth first, which the strategies take as they take any.
     """
-    if getattr(handler, "recursive_order", None) is not None:
-        return handler.ils_recursive(entry, **ils_kwargs)  # type: ignore[attr-defined, no-any-return]
-    else:
-        return _tree_ils(handler, entry["name"], entry=entry, **ils_kwargs)  # type: ignore[return-value]
+    if getattr(handler, "recursive_order", None) is None:
+        async with aclosing(
+            _tree_ils(handler, entry["name"], entry=entry, **ils_kwargs)
+        ) as entries:
+            async for found in entries:
+                yield found
+        return
+
+    listing = handler.ils_recursive(entry, **ils_kwargs)  # type: ignore[attr-defined]
+    try:
+        try:
+            first = await anext(listing)
+        except StopAsyncIteration:
+            return
+        except NotImplementedError:
+            fallback = _tree_ils(handler, entry["name"], entry=entry, **ils_kwargs)
+            async with aclosing(fallback):
+                async for found in fallback:
+                    yield found
+            return
+        yield first
+        async for found in listing:
+            yield found
+    finally:
+        if (aclose := getattr(listing, "aclose", None)) is not None:
+            await aclose()
 
 
 class _Ahead:
