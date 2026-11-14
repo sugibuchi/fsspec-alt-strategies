@@ -19,13 +19,13 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
-from ..common.jobs import _check_batch_size, _Job, _keys_of, _moves_of
+from ..common.jobs import _Job, _keys_of, _moves_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
 from .cp import _Copy, _CopyOrMove
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Sequence
+    from collections.abc import AsyncGenerator, Sequence
 
     from ..common.handler import StorageHandler, StoragePath
     from ..common.jobs import _Transfer
@@ -139,8 +139,6 @@ def _flat_mv(
         "ils_kwargs": ils_kwargs,
     }
 
-    _check_batch_size(src.rm_batch_size)
-
     async def run(op: Operation[Any, MvState]) -> AsyncGenerator[Any]:
         # A rename wins only where the storage is known to rename: the profile,
         # awaited, chooses the jobs.
@@ -224,12 +222,8 @@ class _Move(_Copy):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        self.batch_size = self.handler.rm_batch_size
-
-        # The keys to delete. Each key moving, from its listing to its
-        # deletion, has where it is copied, None for a marker: listed again,
-        # it is skipped.
-        self.batch: list[dict[str, Any]] = []
+        # Each key moving, from its listing to its deletion, has where it is
+        # copied, None for a marker: listed again, it is skipped.
         self.copied: dict[str, str | None] = {}
 
         # The copies queued or running, and whether the listing has ended: the
@@ -252,10 +246,12 @@ class _Move(_Copy):
         if name.endswith("/"):
             if self.maxdepth is not None:
                 return  # Directories stay, as fsspec's copy leaves them out.
-            # A directory's marker: deleted, its directory made as _flat_cp makes it.
+            # A directory's marker: its directory made as _flat_cp makes it, then
+            # the marker deleted. A name the destination refuses raises first:
+            # the marker stays.
+            super().add(entry)
             self.copied[name] = None
             self.delete_later(entry)
-            super().add(entry)
             return
 
         self.copied[name] = self.target(name)
@@ -283,12 +279,6 @@ class _Move(_Copy):
         self.copying -= 1
         self.copied.pop(job.path)
         self.send_if_ready()
-
-    def run(self, job: _Job) -> Awaitable[Any]:
-        if job.kind == "delete":
-            return self.delete(job)
-        else:
-            return super().run(job)
 
     def done(self, job: _Job) -> list[Any]:
         if job.kind == "mkdir":
@@ -329,16 +319,12 @@ class _Move(_Copy):
         return [error]
 
     def delete_later(self, source: dict[str, Any]) -> None:
-        """Add a key to the batch to delete, and send the batch if it is ready."""
-        self.batch.append(source)
+        """Add a key copied to the batch to delete, and send the batch if it is ready."""
+        self.to_delete.append(source)
         self.send_if_ready()
 
     def send_if_ready(self) -> None:
-        """Send the batch if full, or if nothing more can join it."""
-        if not self.batch:
-            return
-
+        """Send the batch if full, or if nothing more can join it: the listing ended, or cancelled, and no copy left."""
         done = (self.listed or self.op.cancelling()) and self.copying == 0
-        if len(self.batch) >= self.batch_size or done:
-            entries, self.batch = self.batch, []
-            self.send_batch(entries)
+        if len(self.to_delete) >= self.rm_batch_size or done:
+            self.flush_deletions()

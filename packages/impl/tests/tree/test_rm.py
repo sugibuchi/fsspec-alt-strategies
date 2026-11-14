@@ -742,9 +742,12 @@ async def test_a_batch_failing_whole_keeps_its_files_and_directories(
     assert all([await hierarchical_fs._exists(p) for p in _FILES])
 
 
-def test_a_batch_size_below_1_is_refused(hierarchical_fs: SimulatedFileSystem) -> None:
+async def test_a_batch_size_below_1_is_refused(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    # Read once the handler is open, as the operation starts.
     with pytest.raises(ValueError, match="rm_batch_size"):
-        _tree_rm(_batching(hierarchical_fs, 0), "data")
+        await _collect_with_errors(_tree_rm(_batching(hierarchical_fs, 0), "data"))
 
 
 async def test_files_matched_or_listed_are_batched_too(

@@ -31,6 +31,10 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 
+async def _opened() -> None:
+    """A handler's open, which the jobs await as they set up: nothing to open here."""
+
+
 class _Toy(_Jobs):
     """Jobs of one item each, fed by a source of item lists, e.g. listings.
 
@@ -45,7 +49,8 @@ class _Toy(_Jobs):
         failing: frozenset[str] = frozenset(),
         delay: float = 0.01,
     ) -> None:
-        super().__init__(handler=SimpleNamespace(operation_limit=limit), op=op)
+        handler = SimpleNamespace(operation_limit=limit, open=_opened, rm_batch_size=1)
+        super().__init__(handler=handler, op=op)
         self.batches = batches
         self.failing = failing
         self.delay = delay

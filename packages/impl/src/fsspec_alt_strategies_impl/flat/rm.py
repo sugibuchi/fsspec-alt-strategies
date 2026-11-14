@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import RmState
 
-from ..common.jobs import _check_batch_size, _Job, _keys_of, _Roots
+from ..common.jobs import _Job, _keys_of, _Roots
 from ..common.paths import _check_maxdepth, _trim
 from ._jobs import _FlatJobs
 
@@ -85,10 +85,9 @@ def _flat_rm(
     each ``ils_recursive``, a pattern's glob's too.
 
     The operation yields each key deleted, or an error, and its state is an
-    `RmState`. The call raises ValueError if ``rm_batch_size`` or ``maxdepth``
-    is less than 1.
+    `RmState`. The call raises ValueError if ``maxdepth`` is less than 1, and
+    iterating it if the handler's ``rm_batch_size`` is, read once it is open.
     """
-    _check_batch_size(handler.rm_batch_size)
     _check_maxdepth(maxdepth)
 
     return _Deletion.operation(
@@ -105,9 +104,6 @@ class _Deletion(_FlatJobs):
         super().__init__(**kwargs)
 
         self.path = path
-        self.batch_size = self.handler.rm_batch_size
-
-        self.batch: list[dict[str, Any]] = []
         self.files_found = 0
         self.files_deleted = 0
 
@@ -127,16 +123,13 @@ class _Deletion(_FlatJobs):
 
     def add(self, entry: dict[str, Any]) -> None:
         self.files_found += 1
-        self.batch.append(entry)
-        if len(self.batch) >= self.batch_size:
-            self.send()
+        self.queue_deletion(entry)
 
     def exhausted(self) -> None:
-        if self.batch:
-            self.send()
+        self.flush_deletions()
 
     def run(self, job: _Job) -> Awaitable[Any]:
-        return self.delete(job)
+        raise AssertionError(f"Only batches of deletions run: {job.kind}")
 
     def done(self, job: _Job) -> list[Any]:
         deleted, errors = self.deleted(job)
@@ -147,8 +140,3 @@ class _Deletion(_FlatJobs):
         # Yielded among paths, the error must tell its paths itself.
         error.add_note(f"Deleting {_keys_of(job.paths)} failed.")
         return [error]
-
-    def send(self) -> None:
-        """Queue the deletion of the batch, and start another."""
-        entries, self.batch = self.batch, []
-        self.send_batch(entries)

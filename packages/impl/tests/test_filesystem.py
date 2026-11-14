@@ -402,8 +402,8 @@ class _NotingFlat(_Noting, FsspecFlatHandler):
 @pytest.mark.parametrize(
     ("call", "loads"),
     [
-        # A tree deletion reads its storage's profile; a flat one none.
-        (lambda fs: fs._rm("data", recursive=True), {"tree": 1, "flat": 0}),
+        # A deletion opens its handler, for its batch size, and so loads its profile.
+        (lambda fs: fs._rm("data", recursive=True), 1),
         # A copy or a move reads the destination's: here, the same.
         (lambda fs: fs._copy("data", "copied", recursive=True), 1),
         (lambda fs: fs._mv("data", "moved", recursive=True), 1),

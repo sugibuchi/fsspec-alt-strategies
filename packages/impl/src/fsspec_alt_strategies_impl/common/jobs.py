@@ -264,7 +264,7 @@ class _Queue(Generic[_T]):
                 self.limit.release()
 
 
-def _check_batch_size(batch_size: int, name: str = "rm_batch_size") -> None:
+def _check_batch_size(batch_size: int, name: str) -> None:
     """Refuse a handler's batch size below 1, e.g. its ``rm_batch_size``, as no batch could be sent."""
     if batch_size < 1:
         raise ValueError(f"{name} must be at least 1: {batch_size}")
@@ -322,6 +322,12 @@ class _Jobs(ABC):
         self.batched: dict[int, list[Entry]] = {}
         self.batches_sent = 0
 
+        # The files to delete, gathered into a batch of the handler's
+        # rm_batch_size, read by setup once the handler is open, as a handler may
+        # know it only then, e.g. by the kind of account.
+        self.to_delete: list[Entry] = []
+        self.rm_batch_size = 1
+
         # The directory roots a pattern matched: fsspec walks them one level less
         # deep than a path named, as its glob counted that level already.
         self.matched: set[str] = set()
@@ -343,6 +349,18 @@ class _Jobs(ABC):
 
         # The source's next item, awaited along with the jobs.
         self.next: asyncio.Task[Any] | None = None
+
+    def queue_deletion(self, entry: Entry) -> None:
+        """Add a file to the batch to delete, sent once full: at once, in batches of 1."""
+        self.to_delete.append(entry)
+        if len(self.to_delete) >= self.rm_batch_size:
+            self.flush_deletions()
+
+    def flush_deletions(self) -> None:
+        """Send the batch to delete, if any, e.g. its last, smaller one once the walk has ended."""
+        if self.to_delete:
+            entries, self.to_delete = self.to_delete, []
+            self.send_batch(entries)
 
     def send_batch(self, entries: list[Entry]) -> None:
         """Queue a batch of files, by their entries as the listing gave them, to be deleted by the handler's ``rm_files``.
@@ -401,9 +419,15 @@ class _Jobs(ABC):
         op.state = jobs.state()
         return op
 
-    # A hook, not abstract: only the jobs reading a profile await it.
-    async def setup(self) -> None:  # noqa: B027
-        """Read what the jobs need of the storage before preparing, e.g. its profile."""
+    async def setup(self) -> None:
+        """Read what the jobs need of the storage before preparing: here the handler's ``rm_batch_size``, once open.
+
+        A subclass reading more, e.g. the profile, calls it first. A batch size
+        below 1 raises ValueError, as no batch could be sent.
+        """
+        await self.handler.open()
+        self.rm_batch_size = self.handler.rm_batch_size
+        _check_batch_size(self.rm_batch_size, "rm_batch_size")
 
     @abstractmethod
     async def prepare(self) -> _Roots | None:
@@ -605,8 +629,8 @@ class _Jobs(ABC):
             self.batches_running[asyncio.ensure_future(self.run_batch(job))] = job
 
     def run_batch(self, job: _Job) -> Awaitable[Any]:
-        """The coroutine sending a batch, e.g. a deletion by ``rm_files``: by `run` unless a subclass runs its own."""
-        return self.run(job)
+        """The coroutine sending a batch: here a deletion, by ``rm_files``. A subclass sending batches of its own runs them."""
+        return self.delete(job)
 
     def finish(self, task: asyncio.Task[Any]) -> list[Any]:
         """Handle a job's task done, counting its errors, and return what to yield."""
@@ -724,6 +748,7 @@ class _CopyJobs(_Jobs):
         self.files_done = 0
 
     async def setup(self) -> None:
+        await super().setup()
         # The destination's profile, loaded once as its handler opens. A plain
         # fsspec filesystem a router copies to has an unknown one.
         await self.dst.open()

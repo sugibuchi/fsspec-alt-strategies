@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import RmState
 
-from ..common.jobs import _check_batch_size, _Job, _keys_of, _Roots
+from ..common.jobs import _Job, _keys_of, _Roots
 from ..common.paths import _check_maxdepth
 from ._jobs import _TreeJobs
 
@@ -120,11 +120,10 @@ def _tree_rm(
     ``ils``, a pattern's glob's too.
 
     The operation yields each path deleted, or an error, and its state is an
-    `RmState`. The call raises ValueError if ``maxdepth``, or a handler's
-    ``rm_batch_size``, is less than 1.
+    `RmState`. The call raises ValueError if ``maxdepth`` is less than 1, and
+    iterating it if the handler's ``rm_batch_size`` is, read once it is open.
     """
     _check_maxdepth(maxdepth)
-    _check_batch_size(handler.rm_batch_size)
     return _Deletion.operation(
         handler=handler, path=path, maxdepth=maxdepth, ils_kwargs=ils_kwargs
     )
@@ -139,10 +138,6 @@ class _Deletion(_TreeJobs):
         super().__init__(**kwargs)
 
         self.path = path
-        # The files deleted at once, by rm_files: read as the handler opens,
-        # which may tell it, e.g. by the kind of account.
-        self.batch_size = 1
-        self.batch: list[dict[str, Any]] = []
         # Unknown until setup reads the profile.
         self.deletes_directories = False
         self.implicit_directories = False
@@ -151,10 +146,7 @@ class _Deletion(_TreeJobs):
         self.directories_deleted = 0
 
     async def setup(self) -> None:
-        await self.handler.open()
-        # A handler may know its batch only once open, e.g. by the account's kind.
-        self.batch_size = self.handler.rm_batch_size
-        _check_batch_size(self.batch_size)
+        await super().setup()
         profile = self.handler.profile
         # A directory deleted whole would take what is deeper than maxdepth.
         self.deletes_directories = (
@@ -189,7 +181,7 @@ class _Deletion(_TreeJobs):
 
     def file_root(self, entry: dict[str, Any]) -> None:
         self.files_found += 1
-        self.queue_file(entry)
+        self.queue_deletion(entry)
 
     def at_limit(self, directory: str) -> None:
         # Deleted only if empty: one that is not fails, as fsspec's deletion
@@ -203,31 +195,17 @@ class _Deletion(_TreeJobs):
         for entry in listing.entries:
             if entry["type"] != "directory":
                 self.files_found += 1
-                self.queue_file({**entry, "name": entry["name"].rstrip("/")})
+                self.queue_deletion({**entry, "name": entry["name"].rstrip("/")})
 
         # Empty, or all in it deleted before its last part came.
         if listing.last and self.finished(listing.directory):
             self.remove(listing.directory)
 
-    def queue_file(self, entry: dict[str, Any]) -> None:
-        """Queue a file's deletion in the batch, sent once full: at once, in batches of 1."""
-        self.batch.append(entry)
-        if len(self.batch) >= self.batch_size:
-            self.send()
-
     def exhausted(self) -> None:
         # The walk ended: the last, smaller batch goes.
-        if self.batch:
-            self.send()
-
-    def send(self) -> None:
-        """Queue the deletion of the batch, and start another."""
-        entries, self.batch = self.batch, []
-        self.send_batch(entries)
+        self.flush_deletions()
 
     def run(self, job: _Job) -> Awaitable[Any]:
-        if job.kind == "delete":
-            return self.delete(job)
         if job.kind == "tree":
             return self.handler.rm_tree(job.source)
         else:

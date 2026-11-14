@@ -228,9 +228,10 @@ async def test_cancel_still_deletes_the_keys_copied() -> None:
         assert source not in fs._file_data
 
 
-def test_batch_size_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
+async def test_batch_size_must_be_positive(flat_fs: SimulatedFileSystem) -> None:
+    # Read once the handler is open, as the operation starts.
     with pytest.raises(ValueError, match="batch_size"):
-        _mv(flat_fs, "data", "moved", batch_size=0)
+        await _collect_with_errors(_mv(flat_fs, "data", "moved", batch_size=0))
 
 
 _BY_MV_FILE = {"cp_entry": None, "rm_files": None, "batch_size": None}
