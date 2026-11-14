@@ -378,9 +378,9 @@ async def _chunks(
                 maxdepth is None or part.depth < maxdepth
             ):
                 subdirs = _new_subdirs(part, descend, found)
-                trees.add(s for s, _ in subdirs)
-                directories.waiting.extend(subdirs)
-                listed.update(_entries_of(part, {s for s, _ in subdirs}))
+                trees.add(name for name, _, _ in subdirs)
+                directories.waiting.extend((name, depth) for name, depth, _ in subdirs)
+                listed.update((name, entry) for name, _, entry in subdirs)
 
             if part.last:
                 found.pop(part.directory, None)
@@ -407,15 +407,6 @@ def _roots(
             name = _trim(root)
         roots.add(name)
     return roots, listed
-
-
-def _entries_of(part: _Listing, subdirs: set[str]) -> dict[str, Entry]:
-    """The entries of the subdirectories a part found, by path, each to be listed by it."""
-    found: dict[str, Entry] = {}
-    for entry in part.entries:
-        if (name := entry["name"].rstrip("/")) in subdirs:
-            found[name] = {**entry, "name": name}
-    return found
 
 
 async def _next_part(
@@ -917,16 +908,23 @@ def _new_subdirs(
     part: _Listing,
     descend: Callable[[dict[str, Any]], bool] | None,
     found: dict[str, set[str]],
-) -> list[tuple[str, int]]:
-    """The subdirectories a part adds to list, with their depth, those found before left out.
+) -> list[tuple[str, int, Entry]]:
+    """The subdirectories a part adds to list, each with its depth and its entry, those found before left out.
 
     Each comes once, though a storage may list a directory twice, e.g. with and
-    without its marker object, in two parts.
+    without its marker object, in two parts. Its entry, as the listing gave it,
+    is what it is listed by, e.g. with the storage's id.
     """
     seen = found.setdefault(part.directory, set())
-    new = [s for s in dict.fromkeys(_subdirs(part.entries, descend)) if s not in seen]
-    seen.update(new)
-    return [(s, part.depth + 1) for s in new]
+    new: list[tuple[str, int, Entry]] = []
+    for entry in part.entries:
+        if entry["type"] != "directory" or (descend is not None and not descend(entry)):
+            continue
+        name = entry["name"].rstrip("/")
+        if name not in seen:
+            seen.add(name)
+            new.append((name, part.depth + 1, {**entry, "name": name}))
+    return new
 
 
 class _Trees:
