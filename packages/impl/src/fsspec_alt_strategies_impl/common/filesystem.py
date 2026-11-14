@@ -373,8 +373,8 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
     ) -> None:
         """Write a file whole, by the handler's `pipe_file`: see `_cat_file`."""
         try:
-            target = self.handler.verified(path)
-            await self.handler.pipe_file(target, value, mode=mode, **kwargs)
+            entry = self.handler.entry(path)
+            await self.handler.pipe_file(entry, value, mode=mode, **kwargs)
         finally:
             self._drop_listings()
 
@@ -403,9 +403,9 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         try:
             if os.path.isdir(lpath):  # noqa: ASYNC240, local files are short next to requests.
                 return  # A directory: a storage needs none for the files put in it.
-            target = self.handler.verified(rpath)
+            entry = self.handler.entry(rpath)
             await self.handler.put_file(
-                lpath, target, mode=mode, callback=callback, **kwargs
+                lpath, entry, mode=mode, callback=callback, **kwargs
             )
         finally:
             self._drop_listings()

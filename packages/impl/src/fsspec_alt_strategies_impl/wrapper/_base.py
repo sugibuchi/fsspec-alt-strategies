@@ -164,10 +164,10 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
             )
 
     async def pipe_file(
-        self, path: StoragePath, value: bytes, mode: str = "overwrite", **kwargs: Any
+        self, entry: Entry, value: bytes, mode: str = "overwrite", **kwargs: Any
     ) -> None:
         async with self.io_limit:
-            await self.call("pipe_file", path, value, mode=mode, **kwargs)
+            await self.call("pipe_file", entry["name"], value, mode=mode, **kwargs)
 
     async def get_file(
         self,
@@ -184,14 +184,14 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
     async def put_file(
         self,
         lpath: str,
-        path: StoragePath,
+        entry: Entry,
         mode: str = "overwrite",
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
         async with self.io_limit:
             await self.call(
-                "put_file", lpath, path, mode=mode, callback=callback, **kwargs
+                "put_file", lpath, entry["name"], mode=mode, callback=callback, **kwargs
             )
 
     # The files, the wrapped filesystem's own: its async ones awaited, and its

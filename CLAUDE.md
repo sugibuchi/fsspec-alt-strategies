@@ -59,8 +59,8 @@ code: read it before adding a strategy or a handler.
   metaclass, no `__init_subclass__` and no decorator reflecting on a class.
 - `TreeFileSystemWrapper` and `FlatFileSystemWrapper` alone take their handler's paths at runtime, and alone are not
   cached: they serve a wrapped filesystem.
-- A primitive takes an entry for an item that exists, and a `StoragePath` for one to be made. `open_file` alone takes
-  an entry whatever its mode, holding only the name of a file to write. Build paths only by the
+- A primitive takes an entry for an item that exists, and a `StoragePath` for one to be made. `open_file`, `pipe_file`
+  and `put_file` take an entry for a file to write too, holding only its name where it does not exist. Build paths only by the
   handler's `verified`, `entry`, `join` and `parent`, which verify them. Never concatenate strings.
 - A filesystem passes its caller's paths to `verified` or `entry` as given, never stripped first: `verify_path` sees
   a URL whole, e.g. abfs's account, and `verified` strips it.

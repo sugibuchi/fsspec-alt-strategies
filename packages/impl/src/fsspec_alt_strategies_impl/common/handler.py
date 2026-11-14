@@ -463,13 +463,15 @@ class StorageHandler(_PathHandler):
                 return await f.read()  # type: ignore[no-any-return]
 
     async def pipe_file(
-        self, path: StoragePath, value: bytes, mode: str = "overwrite", **kwargs: Any
+        self, entry: Entry, value: bytes, mode: str = "overwrite", **kwargs: Any
     ) -> None:
         """Write a file whole, as fsspec's ``pipe_file`` does: by default through `open_file`.
 
-        Mode "create" writes it only if none is there, by `open_file`'s "xb".
+        It takes an entry, as `open_file` does: one of a file not there yet
+        holds its name alone. Mode "create" writes it only if none is there,
+        by `open_file`'s "xb".
         """
-        opened = await self.open_file({"name": path}, _write_mode(mode), **kwargs)
+        opened = await self.open_file(entry, _write_mode(mode), **kwargs)
         async with _awaited(opened) as f:
             await f.write(value)
 
@@ -495,13 +497,16 @@ class StorageHandler(_PathHandler):
     async def put_file(
         self,
         lpath: str,
-        path: StoragePath,
+        entry: Entry,
         mode: str = "overwrite",
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
-        """Copy a local file to the storage, as fsspec's ``put_file`` does: by default through `open_file`."""
-        opened = await self.open_file({"name": path}, _write_mode(mode), **kwargs)
+        """Copy a local file to the storage, as fsspec's ``put_file`` does: by default through `open_file`.
+
+        It takes the entry of the file to write, as `pipe_file` does.
+        """
+        opened = await self.open_file(entry, _write_mode(mode), **kwargs)
         async with _awaited(opened) as f:
             with open(lpath, "rb") as local:  # noqa: ASYNC230
                 callback.set_size(os.fstat(local.fileno()).st_size)
