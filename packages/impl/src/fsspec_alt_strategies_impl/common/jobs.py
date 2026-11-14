@@ -625,7 +625,7 @@ class _CopyJobs(_Jobs):
     it, as that is another storage's. The paths are compared folded on a storage
     whose names are not case-sensitive, as its profile says.
 
-    ``root_entry`` is the entry of ``path1``, a single path, if the caller
+    ``path1_entry`` is the entry of ``path1``, a single path, if the caller
     found it already, e.g. to tell a file. A file's is then a root known to be
     a file, not listed to find what it is.
 
@@ -653,7 +653,7 @@ class _CopyJobs(_Jobs):
         path2: StoragePath,
         dst: StorageHandler,
         same_storage: bool,
-        root_entry: dict[str, Any] | None = None,
+        path1_entry: dict[str, Any] | None = None,
         batching: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -679,7 +679,7 @@ class _CopyJobs(_Jobs):
         self.path1 = path1
         self.path2 = path2
         self.same_storage = same_storage
-        self.root_entry = root_entry
+        self.path1_entry = path1_entry
 
         # The profile is the destination's, as what a copy saves depends on
         # where it writes. Within one storage, it is the source's too. Unknown
@@ -841,7 +841,7 @@ class _CopyJobs(_Jobs):
             # The root's parent exists: e.g. a file renamed in its directory needs no mkdir.
             self.made.add(root.rpartition("/")[0])
 
-        entry = self.root_entry
+        entry = self.path1_entry
         if entry is not None and entry["type"] != "directory":
             return _Roots([], [{**entry, "name": root}])
         else:

@@ -158,18 +158,6 @@ class FlatFileOperationHandler(FileOperationHandler):
         """`rm_files._rm_each_file` of this handler: each by ``rm_file``, as many at once as the limit allows."""
         return _rm_each_file(self, entries)
 
-    def cp_files(
-        self, transfers: list[FileTransfer]
-    ) -> Operation[tuple[str, str], CpState]:
-        """`cp_files._cp_each_file` of this handler: each by ``cp_file``, as many at once as the limit allows."""
-        return _cp_each_file(self, transfers)
-
-    def mv_files(
-        self, transfers: list[FileTransfer]
-    ) -> Operation[tuple[str, str], MvState]:
-        """`cp_files._mv_each_file` of this handler: each by ``mv_file``, as many at once as the limit allows."""
-        return _mv_each_file(self, transfers)
-
     def cp(
         self,
         dst: StorageHandler,
@@ -179,7 +167,7 @@ class FlatFileOperationHandler(FileOperationHandler):
         cp_entry: _Transfer | None = None,
         same_storage: bool | None = None,
         maxdepth: int | None = None,
-        root_entry: dict[str, Any] | None = None,
+        path1_entry: dict[str, Any] | None = None,
         ils_kwargs: dict[str, Any] | None = None,
     ) -> Operation[tuple[str, str], CpState]:
         """`_flat_cp` from this handler."""
@@ -191,9 +179,15 @@ class FlatFileOperationHandler(FileOperationHandler):
             cp_entry=cp_entry,
             same_storage=same_storage,
             maxdepth=maxdepth,
-            root_entry=root_entry,
+            path1_entry=path1_entry,
             ils_kwargs=ils_kwargs,
         )
+
+    def cp_files(
+        self, transfers: list[FileTransfer]
+    ) -> Operation[tuple[str, str], CpState]:
+        """`cp_files._cp_each_file` of this handler: each by ``cp_file``, as many at once as the limit allows."""
+        return _cp_each_file(self, transfers)
 
     def mv(
         self,
@@ -205,7 +199,7 @@ class FlatFileOperationHandler(FileOperationHandler):
         mv_entry: _Transfer | None = None,
         same_storage: bool | None = None,
         maxdepth: int | None = None,
-        root_entry: dict[str, Any] | None = None,
+        path1_entry: dict[str, Any] | None = None,
         ils_kwargs: dict[str, Any] | None = None,
     ) -> Operation[tuple[str, str], MvState]:
         """`_flat_mv` from this handler."""
@@ -218,6 +212,12 @@ class FlatFileOperationHandler(FileOperationHandler):
             mv_entry=mv_entry,
             same_storage=same_storage,
             maxdepth=maxdepth,
-            root_entry=root_entry,
+            path1_entry=path1_entry,
             ils_kwargs=ils_kwargs,
         )
+
+    def mv_files(
+        self, transfers: list[FileTransfer]
+    ) -> Operation[tuple[str, str], MvState]:
+        """`cp_files._mv_each_file` of this handler: each by ``mv_file``, as many at once as the limit allows."""
+        return _mv_each_file(self, transfers)

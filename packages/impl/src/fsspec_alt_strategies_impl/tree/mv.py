@@ -46,7 +46,7 @@ def _tree_mv(
     mv_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
-    root_entry: dict[str, Any] | None = None,
+    path1_entry: dict[str, Any] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], MvState]:
     """Move a directory and everything in it, moving while the tree is walked.
@@ -163,7 +163,7 @@ def _tree_mv(
     by default `transfer._across`. Given ``mv_entry``, a move uses no
     ``cp_entry``. ``same_storage`` is whether ``dst`` is ``src``,
     unless given.
-    ``maxdepth`` of 1 moves only the files in ``path1``. ``root_entry`` is as
+    ``maxdepth`` of 1 moves only the files in ``path1``. ``path1_entry`` is as
     `_tree_cp` takes it: a single file moved so costs the ``dst_info`` of
     ``path2``, a ``dst_makedirs`` unless its parent is known to exist, and its
     ``mv_entry``. ``ils_kwargs`` go to each of the source's ``ils``, a
@@ -185,7 +185,7 @@ def _tree_mv(
         same_storage=same_storage,
         maxdepth=maxdepth,
         mv_entry=mv_entry,
-        root_entry=root_entry,
+        path1_entry=path1_entry,
         ils_kwargs=ils_kwargs,
     )
 
@@ -248,7 +248,7 @@ class _Move(_CopyOrMove):
         self.missing.add(destination)
         self.made.add(self.handler.parent(root))
         # A directory root, as mv_tree takes a file too.
-        return _Roots([self.root_entry or {"name": root}])
+        return _Roots([self.path1_entry or {"name": root}])
 
     def add(self, listing: _Listing) -> list[Any] | None:
         self.track(listing)

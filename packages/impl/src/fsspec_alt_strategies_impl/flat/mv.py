@@ -44,7 +44,7 @@ def _flat_mv(
     mv_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
-    root_entry: dict[str, Any] | None = None,
+    path1_entry: dict[str, Any] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], MvState]:
     """Move the keys under a prefix, each as soon as it is listed.
@@ -115,7 +115,7 @@ def _flat_mv(
     renamed, and ``mv_entry`` is not used: the copies' sources are deleted in
     batches instead. ``same_storage`` is whether ``dst`` is ``src``,
     unless given. ``maxdepth`` of 1 moves
-    only the keys right in ``path1``. ``root_entry`` is as `_flat_cp` takes it.
+    only the keys right in ``path1``. ``path1_entry`` is as `_flat_cp` takes it.
     ``ils_kwargs`` go to each of the source's ``ils_recursive``, a pattern's
     glob's too.
 
@@ -135,7 +135,7 @@ def _flat_mv(
         "path2": path2,
         "same_storage": same_storage,
         "maxdepth": maxdepth,
-        "root_entry": root_entry,
+        "path1_entry": path1_entry,
         "ils_kwargs": ils_kwargs,
     }
 

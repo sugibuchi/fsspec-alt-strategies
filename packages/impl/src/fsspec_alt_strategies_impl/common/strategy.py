@@ -232,6 +232,47 @@ class Strategy(ABC):
         """
 
     @abstractmethod
+    def cp(
+        self,
+        dst: StorageHandler,
+        path1: StoragePath | Sequence[StoragePath],
+        path2: StoragePath,
+        *,
+        cp_entry: _Transfer | None = None,
+        same_storage: bool | None = None,
+        maxdepth: int | None = None,
+        path1_entry: dict[str, Any] | None = None,
+        ils_kwargs: dict[str, Any] | None = None,
+    ) -> Operation[tuple[str, str], CpState]:
+        """Copy a directory and everything in it, as fsspec's ``copy`` does when recursive.
+
+        Parameters
+        ----------
+        dst : FileOperationHandler
+            The handler copied to: ``self`` within one storage.
+        path1 : StoragePath or sequence of StoragePath
+            A directory, a file, a glob pattern, or a list of them.
+        path2 : StoragePath
+            Where they go, placed as fsspec's ``copy`` places them.
+        cp_entry : callable, optional
+            Copies a file by its source entry: by default the source's
+            ``cp_file`` within one storage, else a stream between the two.
+        same_storage : bool, optional
+            Whether ``dst`` is ``self``, unless given.
+        maxdepth : int, optional
+            The levels copied below each path.
+        path1_entry : dict, optional
+            The entry of ``path1``, as the caller found it.
+        ils_kwargs : dict, optional
+            The options of each of the source's listings.
+
+        Returns
+        -------
+        Operation
+            Yielding ``(source, destination)`` per file copied, or an error.
+        """
+
+    @abstractmethod
     def cp_files(
         self, transfers: list[FileTransfer]
     ) -> Operation[tuple[str, str], CpState]:
@@ -261,70 +302,6 @@ class Strategy(ABC):
         """
 
     @abstractmethod
-    def mv_files(
-        self, transfers: list[FileTransfer]
-    ) -> Operation[tuple[str, str], MvState]:
-        """Move files within this storage, e.g. a batch of a recursive ``mv``'s.
-
-        As `cp_files`, for the files a move renames, in batches of the
-        handler's ``mv_batch_size``: each by ``mv_file`` by default. A file
-        it could not move stays where it was.
-
-        Parameters
-        ----------
-        transfers : list of FileTransfer
-            The files, each with where it goes: at most ``mv_batch_size``.
-
-        Returns
-        -------
-        Operation
-            Yielding ``(source, destination)`` per file moved, or an error
-            noting its paths, with its source's path as its ``source``
-            attribute. It raises only an error failing all the files.
-        """
-
-    @abstractmethod
-    def cp(
-        self,
-        dst: StorageHandler,
-        path1: StoragePath | Sequence[StoragePath],
-        path2: StoragePath,
-        *,
-        cp_entry: _Transfer | None = None,
-        same_storage: bool | None = None,
-        maxdepth: int | None = None,
-        root_entry: dict[str, Any] | None = None,
-        ils_kwargs: dict[str, Any] | None = None,
-    ) -> Operation[tuple[str, str], CpState]:
-        """Copy a directory and everything in it, as fsspec's ``copy`` does when recursive.
-
-        Parameters
-        ----------
-        dst : FileOperationHandler
-            The handler copied to: ``self`` within one storage.
-        path1 : StoragePath or sequence of StoragePath
-            A directory, a file, a glob pattern, or a list of them.
-        path2 : StoragePath
-            Where they go, placed as fsspec's ``copy`` places them.
-        cp_entry : callable, optional
-            Copies a file by its source entry: by default the source's
-            ``cp_file`` within one storage, else a stream between the two.
-        same_storage : bool, optional
-            Whether ``dst`` is ``self``, unless given.
-        maxdepth : int, optional
-            The levels copied below each path.
-        root_entry : dict, optional
-            The entry of ``path1``, as the caller found it.
-        ils_kwargs : dict, optional
-            The options of each of the source's listings.
-
-        Returns
-        -------
-        Operation
-            Yielding ``(source, destination)`` per file copied, or an error.
-        """
-
-    @abstractmethod
     def mv(
         self,
         dst: StorageHandler,
@@ -335,7 +312,7 @@ class Strategy(ABC):
         mv_entry: _Transfer | None = None,
         same_storage: bool | None = None,
         maxdepth: int | None = None,
-        root_entry: dict[str, Any] | None = None,
+        path1_entry: dict[str, Any] | None = None,
         ils_kwargs: dict[str, Any] | None = None,
     ) -> Operation[tuple[str, str], MvState]:
         """Move a directory and everything in it, as fsspec's ``mv`` does when recursive.
@@ -357,7 +334,7 @@ class Strategy(ABC):
             Whether ``dst`` is ``self``, unless given.
         maxdepth : int, optional
             The levels moved below each path.
-        root_entry : dict, optional
+        path1_entry : dict, optional
             The entry of ``path1``, as the caller found it.
         ils_kwargs : dict, optional
             The options of each of the source's listings.
@@ -366,4 +343,27 @@ class Strategy(ABC):
         -------
         Operation
             Yielding ``(source, destination)`` per path moved, or an error.
+        """
+
+    @abstractmethod
+    def mv_files(
+        self, transfers: list[FileTransfer]
+    ) -> Operation[tuple[str, str], MvState]:
+        """Move files within this storage, e.g. a batch of a recursive ``mv``'s.
+
+        As `cp_files`, for the files a move renames, in batches of the
+        handler's ``mv_batch_size``: each by ``mv_file`` by default. A file
+        it could not move stays where it was.
+
+        Parameters
+        ----------
+        transfers : list of FileTransfer
+            The files, each with where it goes: at most ``mv_batch_size``.
+
+        Returns
+        -------
+        Operation
+            Yielding ``(source, destination)`` per file moved, or an error
+            noting its paths, with its source's path as its ``source``
+            attribute. It raises only an error failing all the files.
         """

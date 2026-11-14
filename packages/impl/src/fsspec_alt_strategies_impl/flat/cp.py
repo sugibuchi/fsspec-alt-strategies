@@ -41,7 +41,7 @@ def _flat_cp(
     cp_entry: _Transfer | None = None,
     same_storage: bool | None = None,
     maxdepth: int | None = None,
-    root_entry: dict[str, Any] | None = None,
+    path1_entry: dict[str, Any] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, str], CpState]:
     """Copy the keys under a prefix, copying as the listing goes on.
@@ -115,7 +115,7 @@ def _flat_cp(
     ``dst_info`` of ``path2`` shows it or its parent, and within one storage,
     ``path1``'s parent exists.
 
-    ``root_entry``, the entry of ``path1`` as the caller found it, saves the
+    ``path1_entry``, the entry of ``path1`` as the caller found it, saves the
     listing of a single file: it is copied as the entry says.
 
     The primitives are named above as the handlers' own: ``ils`` is the
@@ -154,7 +154,7 @@ def _flat_cp(
         same_storage=same_storage,
         maxdepth=maxdepth,
         cp_entry=cp_entry,
-        root_entry=root_entry,
+        path1_entry=path1_entry,
         ils_kwargs=ils_kwargs,
     )
 
