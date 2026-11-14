@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from ..common.jobs import _Jobs
 from ._visit import _Pruned
 from .glob import _tree_glob
-from .walk import _chunks
+from .walk import _chunks, _FileRoot, _Skipped
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from ..common.jobs import _Roots
     from ..common.operation import Operation
     from .handler import TreeFileOperationHandler
-    from .walk import _Listing
+    from .walk import _Event, _Listing
 
 
 class _TreeJobs(_Jobs):
@@ -81,7 +81,7 @@ class _TreeJobs(_Jobs):
         """Whether a root directory is at the depth limit already: a match, at 1."""
         return self.maxdepth == 1 and directory in self.matched
 
-    def source(self, roots: _Roots) -> AsyncGenerator[_Listing] | None:
+    def source(self, roots: _Roots) -> AsyncGenerator[_Event] | None:
         """The listings of the root directories, if any, walked at once."""
         # Their entries, e.g. as a glob found them, so that each is listed by it.
         directories = [d for d in roots.directories if not self.unlisted(d["name"])]
@@ -97,39 +97,32 @@ class _TreeJobs(_Jobs):
             )
 
     async def begin(
-        self, roots: _Roots, source: AsyncGenerator[_Listing] | None
+        self, roots: _Roots, source: AsyncGenerator[_Event] | None
     ) -> list[Any]:
         """Queue the files' jobs, and list the directories: the first step.
 
         A single root of unknown kind is among the directories: if it is a file,
-        its listing says so, and its jobs are queued instead.
+        the walk says so, and its jobs are queued instead.
         """
         for directory in roots.directories:
             if self.unlisted(directory["name"]):
                 self.at_limit(directory["name"])
+        return await super().begin(roots, source)
 
-        try:
-            return await super().begin(roots, source)
-        except NotADirectoryError as e:
-            # The root is a file: its listing's entry, which the walk noted. The
-            # walk has ended, as it would have once listed.
-            self.file_root(getattr(e, "entry", None) or {"name": e.args[0]})
-            self.exhausted()
+    def fed(self, item: _Event) -> list[Any]:
+        if isinstance(item, _FileRoot):
+            # Its listing's entry, which the walk noted, so that nothing is asked.
+            self.file_root(getattr(item.error, "entry", None) or {"name": item.root})
+            return []
+        elif isinstance(item, _Skipped):
+            # Deeper than maxdepth: fsspec finds it, but nothing in it.
+            self.at_limit(item.entry["name"])
             return []
 
-    def fed(self, item: _Listing) -> list[Any]:
         self.current = item.directory
         if item.error is not None:
             self.errors += 1
             return [item.error]
-
-        if self.maxdepth is not None and item.depth >= self.maxdepth:
-            # The walk lists none of these subdirectories: fsspec finds them, but
-            # nothing in them.
-            for entry in item.entries:
-                if entry["type"] == "directory":
-                    self.at_limit(entry["name"].rstrip("/"))
-
         return self.add(item) or []
 
     # A hook, not abstract: only a deletion acts on a directory it does not list.

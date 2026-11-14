@@ -140,8 +140,8 @@ def _tree_walk(
         # directory whole. Bottom up, a directory then waits for those below it.
         held: dict[str, list[dict[str, Any]]] = {}
         bottom_up = None if topdown else _BottomUp()
-        chunks = _chunks(
-            handler, path, visit, ils_kwargs=ils_kwargs, stopping=op.cancelling
+        chunks = _parts(
+            _chunks(handler, path, visit, ils_kwargs=ils_kwargs, stopping=op.cancelling)
         )
 
         async with aclosing(chunks):
@@ -162,6 +162,16 @@ def _tree_walk(
                         yield item
 
     return Operation(run, WalkState(directories_listed=0))
+
+
+async def _parts(events: AsyncGenerator[_Event]) -> AsyncGenerator[_Listing]:
+    """A walk's parts, as fsspec's walk takes them: a root that is a file raises, and what is left is not walked."""
+    async with aclosing(events):
+        async for event in events:
+            if isinstance(event, _FileRoot):
+                raise event.error
+            elif isinstance(event, _Listing):
+                yield event
 
 
 def _whole(part: _Listing, held: dict[str, list[dict[str, Any]]]) -> _Listing | None:
@@ -244,6 +254,35 @@ class _Listing:
     last: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class _Skipped:
+    """A subdirectory a listing found that the walk leaves, as its visit says: e.g. one deeper than ``maxdepth``.
+
+    It comes before the part that found it. ``entry`` is as that part gave it,
+    its name without a trailing "/".
+    """
+
+    entry: Entry
+    depth: int
+
+
+@dataclass(frozen=True, slots=True)
+class _FileRoot:
+    """A root of the walk that is a file: nothing is listed of it.
+
+    ``error`` is the NotADirectoryError its listing raised. Its ``entry``
+    attribute, where set, is the file's entry as the listing gave it, so that
+    a caller asks nothing again.
+    """
+
+    root: str
+    error: NotADirectoryError
+
+
+_Event = _Listing | _Skipped | _FileRoot
+"""What a walk yields: the parts of each directory's listing, and what it found but did not list."""
+
+
 _CHUNK_SIZE = 1000
 """The most entries of one part of a listing: a directory's are never all held."""
 
@@ -256,7 +295,7 @@ async def _chunks(
     ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
     chunk_size: int = _CHUNK_SIZE,
-) -> AsyncGenerator[_Listing]:
+) -> AsyncGenerator[_Event]:
     """Walk a directory tree, yielding each directory's listing in parts, as they come.
 
     It is the walk under the strategies acting on what they find, such as rm
@@ -267,9 +306,11 @@ async def _chunks(
     ``path`` may be several directories, e.g. a glob's matches, walked at once,
     each as a root. None may be inside another. A root's listing failing before
     its first part raises, as fsspec's walk does, since nothing has been done
-    yet: FileNotFoundError, or NotADirectoryError for a file. Any other failed
-    listing is yielded as its last part, with its error, and its subdirectories
-    not listed yet are not walked.
+    yet, e.g. FileNotFoundError. A root that is a file is yielded as a
+    `_FileRoot`, and the other roots walked. Any other failed listing is
+    yielded as its last part, with its error, and its subdirectories not
+    listed yet are not walked. A subdirectory the visit leaves is yielded as a
+    `_Skipped`, before the part that found it.
 
     ``visit`` says which directories the walk lists: by default all below
     each root. A root starts at the depth it says, e.g. a glob's match one
@@ -340,25 +381,43 @@ async def _chunks(
                 await start()  # A listing ended, or a permit came: start more.
                 continue
 
-            if part.error is not None:
-                # Raised here, it stops the walk before another listing starts.
-                if part.directory in roots and part.first:
-                    raise part.error
-                _note(part.error, part.directory)
-            else:
-                part = _once(part, found)
-            if part.error is None:
-                directories.waiting.extend(plan.found(part))
-
-            if part.last:
-                found.pop(part.directory, None)
+            # A root's failure is raised here, before another listing starts.
+            events, listing = _taken(part, roots, plan, found)
+            directories.waiting.extend(listing)
 
             # Start the next listings before yielding, so that they run while
             # the caller handles this part.
             await start()
-            yield part
+            for event in events:
+                yield event
     finally:
         await directories.close()
+
+
+def _taken(
+    part: _Listing, roots: set[str], plan: _Plan, found: dict[str, set[str]]
+) -> tuple[list[_Event], list[tuple[str, int]]]:
+    """What the walk yields of a part, and the subdirectories it adds to list.
+
+    A root's failure before its first part raises, as nothing has been done
+    yet, but a file's, which is a `_FileRoot`. Any other failure is the part's,
+    noted with its directory.
+    """
+    if part.error is None:
+        part = _once(part, found)
+    if part.last:
+        found.pop(part.directory, None)
+
+    if part.error is None:
+        listing, skipped = plan.found(part)
+        return [*skipped, part], listing
+    elif part.directory in roots and part.first:
+        if not isinstance(part.error, NotADirectoryError):
+            raise part.error
+        return [_FileRoot(part.directory, part.error)], []
+    else:
+        _note(part.error, part.directory)
+        return [part], []
 
 
 def _roots(
@@ -930,26 +989,29 @@ class _Plan:
             directories.append((root, depth))
         return directories
 
-    def found(self, part: _Listing) -> list[tuple[str, int]]:
-        """The subdirectories a part adds to list, as `_once` left them, each with its depth.
+    def found(self, part: _Listing) -> tuple[list[tuple[str, int]], list[_Skipped]]:
+        """The subdirectories a part adds to list, as `_once` left them, each with its depth, and those the visit leaves.
 
         Each is listed by its entry, as the part gave it, e.g. with the
-        storage's id. Those the visit leaves are not among them, nor any of a
-        part from a recursive listing.
+        storage's id. A part from a recursive listing adds none, and leaves
+        none: all below its root is listed.
         """
         if self.in_subtree(part.directory):
-            return []
-        directories = []
+            return [], []
+        directories, skipped = [], []
         for entry in part.entries:
             if entry["type"] == "directory":
-                need = self.visit.enter(entry, part.depth + 1)
-                if need != "skip":
-                    name = entry["name"].rstrip("/")
-                    if need == "subtree":
-                        self.subtrees.add(name)
-                    self.listed[name] = {**entry, "name": name}
-                    directories.append((name, part.depth + 1))
-        return directories
+                depth = part.depth + 1
+                need = self.visit.enter(entry, depth)
+                name = entry["name"].rstrip("/")
+                if need == "skip":
+                    skipped.append(_Skipped({**entry, "name": name}, depth))
+                    continue
+                if need == "subtree":
+                    self.subtrees.add(name)
+                self.listed[name] = {**entry, "name": name}
+                directories.append((name, depth))
+        return directories, skipped
 
     def in_subtree(self, directory: str) -> bool:
         """Whether a directory is in a recursive listing: it, or a directory above it, is listed whole."""

@@ -21,14 +21,15 @@ from fsspec_alt_strategies.states import DuState, FindState, GlobState
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ._visit import _Pruned
-from .walk import _chunks, _Listing
+from .walk import _chunks, _FileRoot, _Listing
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
     from ..common.handler import StorageHandler, StoragePath
     from ._visit import _Visit
     from .handler import TreeFileOperationHandler
+    from .walk import _Event
 
 __all__: list[str] = []
 
@@ -158,30 +159,39 @@ async def _find_listings(
 
     async with aclosing(listings):
         try:
-            root_listing = await anext(listings)
+            first = await anext(listings)
         except StopAsyncIteration:
             return  # Stopping before the root was listed.
-        except (FileNotFoundError, NotADirectoryError) as e:
-            # Only the root's own listing raises them: any later one is yielded.
-            if file_root and isinstance(e, NotADirectoryError):
-                # The file's entry, as its listing gave it, else asked.
-                entry = getattr(e, "entry", None)
-                if entry is None:
-                    async with handler.operation_limit:
-                        entry = await handler.info(handler.entry(root))
-                yield _Listing(root, 0, [entry])
+        except FileNotFoundError:
+            # Only the root's own listing raises it: any later one is a part's.
+            return
+        if isinstance(first, _FileRoot):
+            if file_root:
+                yield await _file_entry(handler, root, first)
             return
 
-        yield root_listing
-        if root_listing.last:
-            async for listing in _root_entry(handler, root, dir_root, stopping):
-                yield listing
+        async for event in _then(first, listings):
+            if isinstance(event, _Listing):
+                yield event
+                if event.directory == root and event.last:
+                    async for own in _root_entry(handler, root, dir_root, stopping):
+                        yield own
 
-        async for listing in listings:
-            yield listing
-            if listing.directory == root and listing.last:
-                async for own in _root_entry(handler, root, dir_root, stopping):
-                    yield own
+
+async def _then(first: _Event, rest: AsyncIterator[_Event]) -> AsyncGenerator[_Event]:
+    """An event taken already, then the rest."""
+    yield first
+    async for event in rest:
+        yield event
+
+
+async def _file_entry(handler: StorageHandler, root: str, file: _FileRoot) -> _Listing:
+    """A root that is a file, as a listing of depth 0: its entry as its listing gave it, else asked."""
+    entry = getattr(file.error, "entry", None)
+    if entry is None:
+        async with handler.operation_limit:
+            entry = await handler.info(handler.entry(root))
+    return _Listing(root, 0, [entry])
 
 
 async def _root_entry(

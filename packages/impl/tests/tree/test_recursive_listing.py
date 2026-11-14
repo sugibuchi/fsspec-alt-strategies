@@ -19,7 +19,7 @@ from fsspec_alt_strategies_impl.tree.du import _tree_du
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.glob import _tree_glob
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
-from fsspec_alt_strategies_impl.tree.walk import _chunks, _tree_walk
+from fsspec_alt_strategies_impl.tree.walk import _chunks, _FileRoot, _tree_walk
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 
@@ -383,8 +383,9 @@ async def test_a_missing_root_raises(any_fs: SimulatedFileSystem) -> None:
             pass
 
 
-async def test_a_file_root_raises_not_a_directory(any_fs: SimulatedFileSystem) -> None:
+async def test_a_file_root_is_yielded_as_such(any_fs: SimulatedFileSystem) -> None:
     any_fs.add_file("a/x")
-    with pytest.raises(NotADirectoryError):
-        async for _ in _chunks(_view(any_fs), "a/x"):
-            pass
+    events = [e async for e in _chunks(_view(any_fs), "a/x")]
+    assert len(events) == 1
+    assert isinstance(events[0], _FileRoot)
+    assert isinstance(events[0].error, NotADirectoryError)
