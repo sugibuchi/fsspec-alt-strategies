@@ -153,9 +153,11 @@ one, so each is verified:
 - `verify_path(path)`, abstract, raises ValueError for a path the storage refuses, or the handler does not serve,
   e.g. another account's. It sends no request.
 - `verified(path)` is a caller's path once verified, and `entry(path)` its entry, `{"name": path}`.
-- `join(directory, name)` refuses a name that is empty, ".", "..", or holds a "/", then verifies the path built.
-  `join_all` does so for several names, verifying once.
-- `parent(path)` is verified too, and `name(path)` is the last name.
+- `join(directory, *paths)` joins paths as `os.path.join` does, verifying the path built once. `_split` splits each
+  path into segments by the class's `delimiter`, "/" by default, and `_verify_segment` refuses a segment that is empty,
+  ".", "..", or holds the delimiter. A storage overrides either. Unlike `os.path.join`, a path starting with the
+  delimiter never starts again from the root.
+- `parent(path)` is verified too, and `name(path)` is the last name, both by the delimiter.
 
 So a copy places each file by joining names below its destination, never by string operations. A key holding ".."
 can never leave the destination, whatever the source allows.
@@ -291,7 +293,7 @@ The strategies changing a storage run on `common/jobs.py`:
   holds a permit of the handler's `operation_limit`, through a `_Queue`.
 - `_TreeJobs` and `_FlatJobs` say where the items come from, in each family's `_jobs.py`.
 - `_CopyJobs` places each path of a copy or move, as fsspec's `copy` does, whatever the family. It builds each target
-  by the destination's `join_all`.
+  by the destination's `join`.
 
 A family's copy joins the two, e.g. `_CopyOrMove(_CopyJobs, _TreeJobs)`. Their constructors take keywords only, and
 pass on what they do not take, so either order works.

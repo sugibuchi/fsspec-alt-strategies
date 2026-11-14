@@ -713,11 +713,11 @@ class _CopyJobs(_Jobs):
             root = path
             while root not in self.places and "/" in root:
                 root = root.rpartition("/")[0]
-            target = self.dst.join_all(self.places[root], path[len(root) :])
+            target = self.dst.join(self.places[root], path[len(root) :])
         elif self.prefix:
-            target = self.dst.join_all(self.base, path[len(self.prefix) :])
+            target = self.dst.join(self.base, path[len(self.prefix) :])
         else:
-            target = self.dst.join_all(self.base, path)
+            target = self.dst.join(self.base, path)
 
         if path.endswith("/") and not target.endswith("/"):
             # A flat storage's marker is a key: its directory's path and a "/".

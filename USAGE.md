@@ -134,7 +134,8 @@ class MyHandler(TreeHandler):
   read or write: a file to write may not exist yet, its entry holding its name alone. An entry is a dict whose
   `"name"` alone is sure. The other keys, e.g. a size or an id, are there when a listing found them, so a primitive
   needs no request to ask them again.
-- The strategies build paths only by the handler's `join`, `join_all` and `parent`, each verified by `verify_path`.
+- The strategies build paths only by the handler's `join` and `parent`, each verified by `verify_path`. `join` takes
+  several paths, as `os.path.join` does, and refuses a segment such as "..".
   So a name another storage listed, e.g. one holding "..", can never leave the directory it is copied into.
 - `open_file(entry, mode)` returns a file used sync or async, mode "rb", "wb" or "xb", e.g. the adaptive files below.
 - A tree handler with a recursive listing of its own implements `ils_recursive`, and declares its order in

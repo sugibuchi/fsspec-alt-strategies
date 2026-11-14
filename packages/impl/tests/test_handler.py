@@ -67,27 +67,47 @@ def test_verify_path_is_abstract() -> None:
         NoVerify()
 
 
-def test_join_checks_the_name_then_verifies_the_path() -> None:
+def test_join_checks_each_segment_then_verifies_the_path_once() -> None:
     handler = _Account()
     assert handler.join("acct/c", "x") == "acct/c/x"
     assert handler.checked == ["acct/c/x"]
+    handler.checked.clear()
+    # Several paths, each split: a leading delimiter starts no root again.
+    assert handler.join("acct/c", "a/b", "/d/", "e") == "acct/c/a/b/d/e"
+    assert handler.checked == ["acct/c/a/b/d/e"]
 
-    for name in ("", ".", "..", "a/b"):
+    for path in (".", "..", "a/../../other", "a//b"):
         with pytest.raises(ValueError, match="Not a name"):
-            handler.join("acct/c", name)
+            handler.join("acct/c", path)
     with pytest.raises(ValueError, match="holds ':'"):
         handler.join("acct/c", "a:b")
 
 
-def test_join_all_verifies_the_path_built_once() -> None:
+def test_join_of_nothing_is_the_directory() -> None:
     handler = _Account()
-    assert handler.join_all("acct/c", "/a/b/") == "acct/c/a/b"
-    assert handler.checked == ["acct/c/a/b"]
-    assert handler.join_all("acct/c", "") == "acct/c"
-    with pytest.raises(ValueError, match="Not a name"):
-        handler.join_all("acct/c", "a/../../other")
-    with pytest.raises(ValueError, match="Not a name"):
-        handler.join_all("acct/c", "a//b")
+    assert handler.join("acct/c") == "acct/c"
+    assert handler.join("acct/c", "", "/") == "acct/c"
+    assert handler.checked == []
+
+
+def test_a_storage_overrides_its_delimiter_split_and_segments() -> None:
+    class Keys(_Account):
+        delimiter = ":"
+
+        def verify_path(self, path: str) -> None:
+            self.checked.append(path)
+
+        def _verify_segment(self, segment: str) -> None:
+            super()._verify_segment(segment)
+            if segment.startswith("~"):
+                raise ValueError(f"Not a name here: {segment!r}")
+
+    handler = Keys()
+    assert handler.join("acct", "a:b", "c") == "acct:a:b:c"
+    assert handler.parent("acct:a:b") == "acct:a"
+    assert handler.name("acct:a:b") == "b"
+    with pytest.raises(ValueError, match="Not a name here"):
+        handler.join("acct", "a:~b")
 
 
 def test_verified_is_a_callers_path_once_verified() -> None:

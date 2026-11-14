@@ -61,7 +61,7 @@ code: read it before adding a strategy or a handler.
   cached: they serve a wrapped filesystem.
 - A primitive takes an entry for an item that exists, and a `StoragePath` for one to be made. `open_file` alone takes
   an entry whatever its mode, holding only the name of a file to write. Build paths only by the
-  handler's `verified`, `entry`, `join`, `join_all` and `parent`, which verify them. Never concatenate strings.
+  handler's `verified`, `entry`, `join` and `parent`, which verify them. Never concatenate strings.
 - A name a listing gave is never verified again. Pass a listing's entries on whole, never wrapped again from their
   names: a storage may need their size or id.
 
@@ -121,7 +121,7 @@ code: read it before adding a strategy or a handler.
   Those that only read derive directories with `flat._keys`. Those changing the storage build on
   `flat._jobs._FlatJobs`.
 - The strategies changing a storage, in any family, run on `common.jobs._Jobs`, and start with `_Jobs.operation`. A
-  copy or move also builds on `common.jobs._CopyJobs`, which places its paths by the destination's `join_all`:
+  copy or move also builds on `common.jobs._CopyJobs`, which places its paths by the destination's `join`:
   `_CopyOrMove(_CopyJobs, _TreeJobs)`. Their constructors take keywords only, and pass the rest on.
 ### Packages
 

@@ -36,7 +36,7 @@ StoragePath = NewType("StoragePath", str)
 
 Never make one directly, as ``StoragePath(path)``: that skips the check. Get
 one from the handler: `StorageHandler.verified` for a caller's path, or its
-``join``, ``join_all`` and ``parent`` for one built from another.
+``join`` and ``parent`` for one built from another.
 """
 
 
@@ -113,8 +113,8 @@ class _PathHandler(ABC):
         accepts, as the parent of the paths at the root.
 
         The filesystem verifies each path a caller gives before it calls a
-        strategy or a primitive. The paths `join`, `join_all` and `parent`
-        build, and those `entry` wraps, are verified by them. So a strategy and
+        strategy or a primitive. The paths `join` and `parent` build, and
+        those `entry` wraps, are verified by them. So a strategy and
         a primitive take only verified paths, or entries a listing gave.
         """
 
@@ -122,7 +122,7 @@ class _PathHandler(ABC):
         """A caller's path as a `StoragePath`, once `verify_path` accepts it, else ValueError.
 
         It and `entry` are the only ways a string becomes a path. A strategy
-        builds the others by `join`, `join_all` and `parent`, which verify too.
+        builds the others by `join` and `parent`, which verify too.
         """
         self.verify_path(path)
         return StoragePath(path)
@@ -136,31 +136,55 @@ class _PathHandler(ABC):
         """
         return {"name": self.verified(path)}
 
-    def join(self, directory: StoragePath, name: str) -> StoragePath:
-        """The path of ``name`` in ``directory``, verified, raising ValueError for one refused.
+    def join(self, directory: StoragePath, *paths: str) -> StoragePath:
+        """The path of ``paths`` in ``directory``, each relative to the one before, as `os.path.join` joins them.
 
-        A name is refused if empty, ".", "..", or holding a "/". So a path built
-        by joining names never leaves the directory it was built from, whatever
-        names another storage listed. The path built is then verified by
-        `verify_path`, e.g. for a name the storage refuses.
+        Each path is split into segments by `_split`, e.g. "a/b" into "a" and
+        "b", and each segment checked by `_verify_segment`, which refuses "..".
+        The segments are joined to the directory by ``delimiter``, and the path
+        built is verified once by `verify_path`, e.g. for a name the storage
+        refuses. A segment or a path refused raises ValueError.
+
+        So a path built never leaves the directory it was built from, whatever
+        names another storage listed. Unlike `os.path.join`, a path starting
+        with the delimiter is still relative: it never starts again from the
+        root. No path, or only empty ones, is the directory itself.
         """
-        return self.verified(_joined(directory, name))
+        path = str(directory)
+        delimiter = self.delimiter
+        joined = False
+        for relative in paths:
+            for segment in self._split(relative):
+                self._verify_segment(segment)
+                if path and not path.endswith(delimiter):
+                    path += delimiter
+                path += segment
+                joined = True
+        return self.verified(path) if joined else directory
 
-    def join_all(self, directory: StoragePath, relative: str) -> StoragePath:
-        """The path of ``relative``, names joined by "/", in ``directory``, verified as `join` verifies one.
+    delimiter: str = "/"
+    """The delimiter between a path's names, which `join` splits and joins paths by."""
 
-        Each name is checked as `join` checks one, and the path built is
-        verified once. One leading "/", the separator after the directory's own
-        path, and a trailing one are ignored. An empty ``relative`` is the
-        directory itself.
+    def _split(self, path: str) -> list[str]:
+        """The segments of a relative path, for `join`: split by ``delimiter``.
+
+        One leading delimiter, the one after the directory's own path, and the
+        trailing ones are ignored, so an empty path has none. A storage whose
+        names may hold the delimiter, escaped, overrides it.
         """
-        path = StoragePath(directory)
-        rest = relative.removeprefix("/").rstrip("/")
-        if not rest:
-            return path
-        for name in rest.split("/"):
-            path = _joined(path, name)
-        return self.verified(path)
+        delimiter = self.delimiter
+        rest = path.removeprefix(delimiter).rstrip(delimiter)
+        return rest.split(delimiter) if rest else []
+
+    def _verify_segment(self, segment: str) -> None:
+        """Raise ValueError for a segment that is no single name: empty, ".", "..", or holding the delimiter.
+
+        `join` checks each segment by it before joining it. A storage refusing
+        other names, or allowing ".", overrides it, calling this one unless
+        it relaxes it. The whole path is checked afterwards by `verify_path`.
+        """
+        if not segment or segment in (".", "..") or self.delimiter in segment:
+            raise ValueError(f"Not a name in a directory: {segment!r}")
 
     def parent(self, path: str) -> StoragePath:
         """The directory a path is in, verified: the root for one at the root.
@@ -170,17 +194,18 @@ class _PathHandler(ABC):
         The root is in no directory: it raises ValueError, as does a parent
         `verify_path` refuses, e.g. one too short for the storage's paths.
         """
-        trimmed = path.rstrip("/") or path
+        delimiter = self.delimiter
+        trimmed = path.rstrip(delimiter) or path
         if trimmed == self.root:
             raise ValueError(f"The root has no parent: {path!r}")
-        head = trimmed.rpartition("/")[0]
+        head = trimmed.rpartition(delimiter)[0]
         return self.verified(
             head or (self.root if trimmed.startswith(self.root) else "")
         )
 
     def name(self, path: str) -> str:
-        """The last name of a path."""
-        return path.rstrip("/").rpartition("/")[2]
+        """The last name of a path, after its last ``delimiter``."""
+        return path.rstrip(self.delimiter).rpartition(self.delimiter)[2]
 
 
 class StorageHandler(_PathHandler):
@@ -361,18 +386,6 @@ class StorageHandler(_PathHandler):
         ``sign`` does.
         """
         raise NotImplementedError(f"{type(self).__name__} signs no URL")
-
-
-def _joined(directory: str, name: str) -> StoragePath:
-    """The path of a single name in a directory, raising ValueError for a name that is no single name."""
-    if not name or name in (".", "..") or "/" in name:
-        raise ValueError(f"Not a name in a directory: {name!r}")
-    if not directory:
-        return StoragePath(name)
-    if directory.endswith("/"):
-        return StoragePath(directory + name)
-    else:
-        return StoragePath(f"{directory}/{name}")
 
 
 def _limit(concurrency: int | asyncio.Semaphore, name: str) -> asyncio.Semaphore:
