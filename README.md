@@ -28,8 +28,8 @@ directories. It is a third-party project, not part of fsspec.
 
 ### Hierarchical namespaces, used
 
-- Where a storage lists by directory, some operations scan the directories recursively, several at once. That can beat a
-  scan of a flat list of files, e.g. for a pattern pruning most of the tree.
+- Where a storage lists by directory, some operations scan the directories recursively, several at once. That can
+  beat a scan of a flat list of files, e.g. for a pattern pruning most of the tree.
 - A storage's own operations on a whole tree, such as the atomic move of a directory, plug in where the storage has
   them.
 
@@ -37,8 +37,8 @@ directories. It is a third-party project, not part of fsspec.
 
 - fsspec's abstract filesystem classes give default file operations, but many fsspec implementations override them,
   each for its own storage's behaviour.
-- This library declares a storage's behaviour in a profile instead. From the profile declared for a filesystem, its
-  operations choose the fitting algorithm.
+- This library declares a storage's behaviour in a profile instead. The operations adapt their requests to the
+  profile, e.g. a move renames where the storage renames.
 - A storage has one profile. Where its behaviour differs by path, e.g. from one bucket to another, it is served as
   several storages behind a router, each with its own profile. So no operation needs exceptions by path.
 - The same goes for files: one abstract file object class works well across different types of workloads, without
@@ -64,8 +64,8 @@ directories. It is a third-party project, not part of fsspec.
   The library gives the rest of fsspec's API on it.
 - Every path is checked before the storage is accessed. A copy places each file below its destination, so a name
   holding ".." can never leave it.
-- The library keeps fsspec's conventions for every filesystem: its answers and errors, its listings cache, and the
-  monitoring of each call.
+- Every filesystem answers and fails as fsspec's do, and keeps fsspec's listings cache. Each of its calls can be
+  monitored.
 - A storage changing many files by one request, e.g. a batch delete, plugs that request in. The library sends it the
   files in batches.
 - A developer chooses another algorithm for one operation by overriding it, e.g. a storage's own glob.
@@ -107,7 +107,8 @@ feature, and how to use each one.
 
 - **Python:** 3.11 to 3.14, each tested in CI.
 - **fsspec:** 2024.2.0 or later.
-- **Dependencies:** none but fsspec. The command line copying the strategies needs click, with the `cli` extra.
+- **Dependencies:** none but fsspec, beside the library's own `fsspec-alt-strategies`. The command line copying the
+  strategies needs click, with the `cli` extra.
 - **Filesystems:** any fsspec filesystem, async or sync. Those known to `monitored()` are the local filesystem,
   s3fs, gcsfs, adlfs, and fsspec's memory, SFTP and HDFS filesystems.
 

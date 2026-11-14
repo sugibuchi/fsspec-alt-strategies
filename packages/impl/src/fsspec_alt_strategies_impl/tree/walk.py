@@ -576,7 +576,7 @@ async def _splitter(
     keeping it as its ``ils_recursive`` needs to declare nothing. A storage's
     own listing keeps the order its profile declares. Unknown, it is taken as
     parents first, which is right on any storage. The handler is opened either
-    way, as the walk starts: it makes the clients the listing sends by.
+    way, as the walk starts: its profile is loaded as every strategy loads it.
     """
     await handler.open()
     if (

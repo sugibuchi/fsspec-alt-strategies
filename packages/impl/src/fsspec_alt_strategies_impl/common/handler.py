@@ -296,10 +296,11 @@ class _PathHandler(ABC):
 class StorageHandler(_PathHandler):
     """A storage's primitives, profile, limits and clients, for the strategies.
 
-    It is made without a request. `open` loads its profile, and makes its
-    clients, on the running loop: the strategies read ``profile`` once it is
-    open. `aclose` releases what `open` made, and `close` all it holds, from a
-    sync caller.
+    It is made without a request. `open` loads its profile, on the running
+    loop: the strategies read ``profile`` once it is open. Its clients are
+    made as its requests first need them, e.g. by a mixin of `clients`.
+    `aclose` releases what it made, and `close` all it holds, from a sync
+    caller.
 
     Two limits bound its requests, each an `asyncio.Semaphore`:
 
@@ -350,7 +351,10 @@ class StorageHandler(_PathHandler):
     # Its lifecycle.
 
     async def open(self) -> None:
-        """Load the profile, and make the clients, once: a call after the first does nothing.
+        """Load the profile, once: a call after the first does nothing.
+
+        It makes no client: a handler's clients are made as its requests first
+        need them, e.g. by `AsyncClientSupport.ensure_clients`.
 
         A first call opens it while the others wait, then find it open. One
         that raises leaves it closed: the next call tries again. So a profile

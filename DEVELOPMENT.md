@@ -13,10 +13,10 @@ ruff, mypy, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
 | `.../states.py`                                         | The states the strategies report, e.g. `FindState`                          |
 | `.../wrapper.py`                                        | `known_implementations`: how each known filesystem class is wrapped         |
 | `packages/impl/src/fsspec_alt_strategies_impl/`         | The strategies, copied into projects                                        |
-| `.../tree/`, `.../flat/`                                | The two families: each one's handler class, filesystem class and strategies |
-| `.../common/`                                           | What the families share, e.g. the base handler, the jobs and the transfer   |
+| `.../tree/`, `.../flat/`                                | The two families: each one's handler class and strategies                   |
+| `.../common/`                                           | What the families share, e.g. the base handler, `BaseFileSystem`, the jobs  |
 | `.../files/`                                            | File objects, their async adapters, and transactions                        |
-| `.../wrapper/`, `.../monitor.py`                        | The handlers wrapping fsspec filesystems, their filesystems, `monitored()`   |
+| `.../wrapper/`, `.../monitor.py`                        | Handlers wrapping fsspec filesystems, `FileSystemWrapper`, `monitored()`    |
 | `.../router.py`                                         | `RoutingHandler` and `RoutingFileSystem`, spanning several storages         |
 | `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem` and its views, apart so that copies leave them out    |
 | `packages/impl/src/fsspec_alt_strategies_impl_cli/`     | The command line copying the strategies, with the `cli` extra               |
@@ -64,9 +64,9 @@ The library aims at large cloud storages, such as data lakes holding millions of
 
 - **Streaming first.** A handler's listing is the primitive every strategy lists with: an async iterator yielding
   entries as the storage is scanned, where fsspec lists every path first with `expand_path`. A strategy acts on each
-  part of a listing as it arrives, and never holds a whole directory or tree. Only `_walk` holds a directory whole, as
-  fsspec's `walk` answers a directory at a time. The tree strategies keep only names, where nothing else is right, as
-  "The tree strategies" says.
+  part of a listing as it arrives, and never holds a whole directory or tree. Only the walks hold a directory whole,
+  as fsspec's `walk` answers a directory at a time. The tree strategies keep only names, where nothing else is right,
+  as "The tree strategies" says.
 - **Hierarchical namespaces, used.** Where a storage lists by directory, the tree strategies scan directories
   recursively, several at once, e.g. to prune a tree by a pattern. A storage's own operations on a whole tree plug in
   as optional primitives, such as `rm_tree`, `mv_tree` and `cp_tree`.
@@ -127,50 +127,68 @@ AsyncFileSystem                        fsspec's
 
 `StorageHandler` holds what both families share:
 
-- **Its lifecycle.** It is made without a request. `await open()` makes its clients on the running loop, and loads its
-  profile with `load_profile()`, once. `await aclose()` closes them, and a later call opens it again. Its sync
-  `close()` is the filesystem's: it releases at once what it can without awaiting, e.g. threads. A handler may refuse
-  calls after it, as a closed filesystem does, so `aclose()` never calls it.
+- **Its lifecycle.** It is made without a request. `await open()` loads its profile with `load_profile()`, once.
+  `await aclose()` releases what `open()` made, and a later call opens it again. Its sync `close()` is the
+  filesystem's: it releases at once what it can without awaiting, e.g. threads. A handler may refuse calls after it,
+  as a closed filesystem does, so `aclose()` never calls it.
 - **Its clients,** by a mixin of `common/clients.py`. `SyncClientSupport` runs a sync client's calls in threads of
-  the handler's own. `AsyncClientSupport` makes an async client's clients on the running loop by `create_clients`,
-  in the handler's own fields, notes the loop, and closes them on it by `close_clients`: awaited there, or sent there
-  as a task. A closing the sync `close` sent is awaited before new clients are made, so it never sees them. A loop ended
-  leaves its clients dropped, as nothing can close them. Their closing's failure is dropped unlogged: a storage's
-  message may carry credentials.
-- **Its profile,** `profile`, as the next sections say.
+  the handler's own. `AsyncClientSupport` makes an async client's clients by `create_clients`, in the handler's own
+  fields, once `ensure_clients` asks for them on the running loop. It notes the loop, and closes them on it by
+  `close_clients`: awaited there, or sent there as a task.
+  - A closing the sync `close` sent is awaited before new clients are made, so it never sees them.
+  - A loop ended leaves its clients dropped, as nothing can close them.
+  - A closing's failure is dropped unlogged: a storage's message may carry credentials.
+- **Its profile,** `profile`, as "Storage profiles" says.
 - **Its limits,** `operation_limit` for the strategies' requests and `io_limit` for reads and writes of data. The
   callers hold the permits, never the primitives: the strategies hold one of `operation_limit` around each primitive.
   Data is the exception: the adaptive files hold one of `io_limit` per part, and a handler's own `cat_file`,
   `pipe_file`, `get_file` or `put_file` one per request it sends.
 - **Its paths:** its `protocol`, `strip_protocol` and `unstrip_protocol`, its `root`, and the path methods below.
-- **The primitives of single paths:** `ils`, `info`, `rm_file`, `rmdir`, `makedirs`, `cp_file` and `mv_file`, and its
-  files: `open_file`, with Python's sync API, for fsspec's sync `open`, and `open_async_file`, whose methods are
-  awaited, for `open_async` and the strategies. Both raise NotImplementedError by default. A handler gives its files
-  either API, e.g. through `AsyncFileAdapter`, and supports fsspec's transactions in `open_file`, as it chooses.
+- **The primitives of single paths:** `ils`, `info`, `rm_file`, `rmdir`, `makedirs`, `cp_file` and `mv_file`.
+- **Its files:** `open_file`, with Python's sync API, for fsspec's sync `open`, and `open_async_file`, whose methods
+  are awaited, for `open_async` and the strategies. Both raise NotImplementedError by default. A handler gives its
+  files either API, e.g. through `AsyncFileAdapter`, and supports fsspec's transactions in `open_file`, as it chooses.
+
+Beside the primitives, `StorageHandler` declares methods with defaults a handler may override:
+
+- `cat_file`, `pipe_file`, `get_file` and `put_file` move data whole, by default through `open_async_file`. A handler
+  may send a request of its own instead, e.g. one ranged download. The defaults hold no permit: the files take their
+  own.
+- `sign(entry, expiration)`, `created(entry)` and `modified(entry)` answer fsspec's `sign`, `created` and `modified`.
+  They are async, as a storage may need a request, e.g. Azure's user delegation key to sign with. Their defaults raise
+  NotImplementedError, as fsspec's do.
+- `invalidate_cache` drops what the handler keeps of listings, by default nothing.
+
+The filesystem calls only what `StorageHandler` declares, never finding a method by `getattr`.
 
 `FileOperationHandler` adds the `Strategy` mixin's methods, one per strategy: `walk`, `find`, `glob`, `du`, `rm`,
-`rm_files`, `cp`, `cp_files`, `mv` and `mv_files`. Each takes its strategy's arguments but the handler, which is `self`, and returns an operation, not
-started, which the filesystem runs. A copy or move takes the destination's handler, `dst`. The mixin also declares
-how its batch strategies run in bulk: `rm_batch_size`, `cp_batch_size` and `mv_batch_size`. That is no concern of
-`StorageHandler`, whose primitives each act on one item.
+`rm_files`, `cp`, `cp_files`, `mv` and `mv_files`. Each takes its strategy's arguments but the handler, which is
+`self`. It returns an operation, not started, which the filesystem runs. A copy or move takes the destination's
+handler, `dst`. The mixin also declares how its batch strategies run in bulk: `rm_batch_size`, `cp_batch_size` and
+`mv_batch_size`. That is no concern of `StorageHandler`, whose primitives each act on one item.
 
-Each family's handler class implements them by its strategies, and adds the primitives they call:
+Each family's handler class implements the strategy methods by its strategies, but the batch ones, whose defaults are
+the mixin's. It adds the primitives its strategies call:
 
-| Class                      | Adds                                                                                |
-|----------------------------|-------------------------------------------------------------------------------------|
+| Class                      | Adds                                                                                  |
+|----------------------------|---------------------------------------------------------------------------------------|
 | `TreeFileOperationHandler` | `ils_recursive`, by default `_tree_ils`, and optional `rm_tree`, `mv_tree`, `cp_tree` |
-| `FlatFileOperationHandler` | Required `ils_recursive(entry, prefix=...)`                                      |
+| `FlatFileOperationHandler` | Required `ils_recursive(entry, prefix=...)`                                           |
+
+A handler's class tells its family. A storage's handler overrides a strategy method to choose another strategy, e.g.
+its own.
 
 `rm_files(entries)` is the strategy deleting files a caller found. The recursive deletions and moves of both families
 send it their files in batches of the handler's `rm_batch_size`, 1 by default. Its default, `rm_files._rm_each_file`,
 deletes each by `rm_file`, as many at once as `operation_limit` allows. A storage deleting several files by one
-request overrides it with `rm_files._rm_by_request` and that request, and declares its batch, e.g. 1000 on S3 or 256
+request overrides it with `rm_files._rm_by_request` and that request. It declares its batch, e.g. 1000 on S3 or 256
 for Azure's Blob Batch.
 
 `cp_files(transfers)` and `mv_files(transfers)` are the strategies copying and moving files within one storage. Each
-`FileTransfer` is a source's entry, where it goes, and whether that is known missing. Their defaults, in `cp_files`,
-send each by `cp_file` or `mv_file`. A storage changing many files by one request, e.g. the Hugging Face Hub's commit,
-overrides them with `_cp_by_request` or `_mv_by_request`, and declares `cp_batch_size` or `mv_batch_size`.
+`FileTransfer` is a source's entry, where it goes, whether that is known missing, and its parent's entry. Their
+defaults, `cp_files._cp_each_file` and `_mv_each_file`, send each by `cp_file` or `mv_file`. A storage changing many
+files by one request, e.g. the Hugging Face Hub's commit, overrides them with `_cp_by_request` or `_mv_by_request`. It
+declares `cp_batch_size` or `mv_batch_size`.
 
 - The recursive copies and moves within one storage send their files to them, unless the caller gives its own
   `cp_entry` or `mv_entry`. Between two storages, each file streams on its own.
@@ -181,23 +199,6 @@ overrides them with `_cp_by_request` or `_mv_by_request`, and declares `cp_batch
 
 A batch's job holds no permit of `operation_limit`: its operation's requests take theirs, and a permit held around
 them would wait for itself once all were so held.
-
-A handler's class tells its family. A storage's handler overrides a strategy method to choose another strategy, e.g.
-its own. The filesystem calls only what `StorageHandler` declares,
-never finding a method by `getattr`. Beside the primitives, it declares methods with defaults a handler may override:
-
-- `cat_file`, `pipe_file`, `get_file` and `put_file` move data whole, by default through `open_async_file`. A
-  handler sending a request of its own instead, e.g. one download, holds a permit of `io_limit` around it, as the
-  files do. The defaults hold none: the files take their own.
-- `invalidate_cache` drops what the handler keeps of listings, by default nothing.
-
-A monitor's `Call` names the filesystem whose method was called, by its `_unwrapped()`: the filesystem itself, or,
-for `FileSystemWrapper`, the filesystem it wraps, as its user made it. Under a router, a call names the filesystem the
-router made on the storage's handler, and the routers in `Call.via`.
-
-`StorageHandler.sign(entry, expiration)`, `created(entry)` and `modified(entry)` answer fsspec's `sign`, `created`
-and `modified`. They are async, as a storage may need a request, e.g. Azure's user delegation key to sign with. A
-handler without them keeps the defaults, which raise NotImplementedError, as fsspec's do.
 
 #### Paths and entries
 
@@ -214,9 +215,9 @@ one, so each is verified:
   `{"name": path}`. The filesystem passes its caller's paths to them as they come: `verified` is where a path loses
   its protocol. With `strip_only_protocol=True`, a trailing "/" stays, for the strategies taking a path as given.
 - `join(directory, *paths)` joins paths as `os.path.join` does, verifying the path built once. `_split` splits each
-  path into segments by the class's `delimiter`, "/" by default, and `_verify_segment` refuses a segment that is empty,
-  ".", "..", or holds the delimiter. A storage overrides either. Unlike `os.path.join`, a path starting with the
-  delimiter never starts again from the root.
+  path into segments by the class's `delimiter`, "/" by default, and `_verify_segment` refuses a segment that is
+  empty, ".", "..", or holds the delimiter. A storage overrides either. Unlike `os.path.join`, a path starting with
+  the delimiter never starts again from the root.
 - `parent(path)` is verified too, and `name(path)` is the last name, both by the delimiter.
 
 So a copy places each file by joining names below its destination, never by string operations. A key holding ".."
@@ -231,16 +232,17 @@ An item that exists is named by its entry, a dict as fsspec's `ls` with `detail`
   its listing gave, whole, so that a storage addressing items by id, or needing a size, asks nothing again. A name a
   listing gave is never verified again.
 - `open_file` and `open_async_file` take an entry whatever the mode, so that one method opens a file to read or to
-  write. A file to write may not exist yet: its entry then holds its name, as `entry` makes it from a verified path,
-  and its final `"size"` where the caller knows it: `pipe_file`'s and `put_file`'s defaults, and a copy between
-  storages, put it there. A storage needing the size up front, e.g. for an upload session, need not hold the file.
+  write. A file to write may not exist yet: its entry then holds its name, as `entry` makes it from a verified path.
+  It also holds the file's final `"size"` where the caller knows it, as `pipe_file`'s and `put_file`'s defaults and a
+  copy between storages put it there. A storage needing the size up front, e.g. for an upload session, then need not
+  hold the file.
 - `makedirs`, `cp_file` and `mv_file` take `missing`: True where the caller knows nothing is at the path. A copy or
   move says so below a destination it found missing, as nothing is there unless another client puts it. A storage
   whose creation never conflicts, e.g. Google Drive, which makes a second item of the name, skips its lookup. Any
   other may ignore it.
 - `makedirs`, `cp_file`, `mv_file`, `cp_tree` and `mv_tree` take `parent` too: the entry of the path's parent, where
   the caller holds it, else None. A write's entry holds it as `"parent"`. A storage addressing items by id, e.g. Box
-  or Google Drive, then needs not resolve the parent's path.
+  or Google Drive, then need not resolve the parent's path.
 - `makedirs` returns the entry of the directory it made, where the storage tells it. A copy or move keeps it, and the
   entry of a destination directory its `info` found, as the parent of what goes inside.
 
@@ -250,15 +252,22 @@ An item that exists is named by its entry, a dict as fsspec's `ls` with `detail`
 
 - It takes a handler, as a required argument, and keeps it private, as `_handler`: its strategy methods return
   operations, which callers never get. It exposes neither its profile nor its limits: they are the handler's.
-- It strips the protocol of each path a caller gives, verifies it by the handler, and wraps it by `handler.entry`
-  where it names an item.
-- Its data methods, `_cat_file`, `_pipe_file`, `_get_file` and `_put_file`, call the handler's extras where it has
-  them, else go through its files.
+- It passes each path a caller gives to the handler's `verified`, or to `entry` where the path names an item, as
+  given. They verify it before they strip its protocol.
+- Its data methods, `_cat_file`, `_pipe_file`, `_get_file` and `_put_file`, call the handler's, whose defaults go
+  through its files.
 - `_walk`, `_find`, `_du`, `_glob`, and `_rm`, `_copy` and `_mv` when recursive, run the handler's `walk`, `find`,
-  `du`, `glob`, `rm`, `cp` and `mv`. The paths of a copy, a move, a deletion and a glob are the handler's `verified`
-  with `strip_only_protocol=True`, which keeps a trailing "/".
-- It answers and raises as fsspec's methods do, and tells the monitors of each call.
+  `du`, `glob`, `rm`, `cp` and `mv`. A copy or move of a single file runs the handler's `cp` or `mv` too, so that a
+  move renames where the storage can.
+- The paths of a copy, a move, a deletion and a glob are the handler's `verified` with `strip_only_protocol=True`,
+  which keeps a trailing "/".
+- It answers and raises as fsspec's methods do, and tells the monitors of each call. A method raises its strategy's
+  failures: one as it is, several in an ExceptionGroup.
 - It has the sync methods fsspec does not make, `mv` and `rmdir`, and fsspec's `dircache`, as the next section says.
+
+A monitor's `Call` names the filesystem whose method was called, by its `_unwrapped()`. That is the filesystem
+itself, or, for `FileSystemWrapper`, the filesystem it wraps, as its user made it. Under a router, a call names the
+filesystem the router made on the storage's handler, and the routers in `Call.via`.
 
 A storage's own class, by convention, is a small subclass of it:
 
@@ -276,8 +285,8 @@ class MyFileSystem(BaseFileSystem):
 It takes storage options, not a handler, so that fsspec makes it from a URL or a registry, caches it and pickles it.
 It names its paths as its handler class's, as fsspec reads them of the class before a filesystem is made. So does
 `_get_kwargs_from_urls`, the handler class's `options_from_url`: the storage options a URL names beyond its path,
-e.g. an account or a host, which fsspec asks for before a filesystem, or a handler, is made. It overrides nothing
-else.
+e.g. an account or a host. fsspec asks for them before a filesystem, or a handler, is made. The class overrides
+nothing else.
 
 Its `__init__` is what its users call, so its signature names each option, repeating its handler's:
 
@@ -293,8 +302,6 @@ Its `__init__` is what its users call, so its signature names each option, repea
 stripping of the handler it is given. It is never cached, as fsspec would key it by its handler's repr, which two
 wrappers of one filesystem share.
 
-A method raises its strategy's failures: one as it is, several in an ExceptionGroup.
-
 #### fsspec's listings cache
 
 fsspec lets a filesystem keep its listings in `dircache`, for its own methods and callers. Here:
@@ -307,8 +314,8 @@ fsspec lets a filesystem keep its listings in `dircache`, for its own methods an
   A new one does too.
 - Opening a file to write drops them too, as the file is opened: the file knows no filesystem, so its closing cannot.
   A listing taken while it is written may then miss it once it is closed.
-- `invalidate_cache(path)` drops the listings of `path`, of what is below it, and of its parents. It passes on to a
-  wrapper's handler, whose wrapped filesystem manages its own cache.
+- `invalidate_cache(path)` drops the listings of `path`, of what is below it, and of its parents. It passes on to the
+  handler, e.g. a wrapper's, whose wrapped filesystem manages its own cache.
 
 ### Choosing
 
@@ -324,8 +331,8 @@ A developer chooses, per storage:
 `monitored(fs)` picks the handler of a filesystem from `known_implementations`, a table the developer may replace. An
 entry's `handler` names a `FileOperationHandler` by a string, as the interface never imports the strategies. A bare
 name is one of the built-in handlers in `monitor.py`'s `_BUILT_IN`, e.g. the generic `FsspecTreeHandler` and
-`FsspecFlatHandler`, and a full name is imported. The handler's class is what chooses the strategies: the profile names
-no family, as a family's adaptation to its storage is its handler's.
+`FsspecFlatHandler`, and a full name is imported. The handler's class is what chooses the strategies. The profile
+names no family, as a family's adaptation to its storage is its handler's.
 
 Only a generic handler takes its profile, limits and batch sizes from its entry, as it knows nothing of the storage.
 A dedicated handler, e.g. `S3fsHandler`, knows its storage, so it declares them as class attributes, beside the code
@@ -333,13 +340,15 @@ relying on them. `monitored()` makes it with the filesystem alone, and refuses a
 
 ### Operations
 
-Each recursive method starts a private strategy of its family, e.g. `tree/rm.py`'s `_tree_rm`:
+Each recursive method runs its handler's strategy method, a private strategy of its family, e.g. `tree/rm.py`'s
+`_tree_rm`:
 
 - It takes the handler it works on: `_tree_rm(handler, path, maxdepth=...)`. A copy or move takes two, `src` and
   `dst`, which are the same handler within one storage.
 - It reads what it needs from the handler: the primitives, `operation_limit` and `profile`, once open.
-- It takes no function but one: a copy's or a move's `cp_entry` or `mv_entry`, a `_Transfer`, taking the source's
-  entry. Between two storages, it defaults to `common/transfer.py`'s `_across`.
+- The only functions it takes are a copy's `cp_entry`, and a move's `cp_entry` and `mv_entry`. Each is a `_Transfer`,
+  taking the source's entry. Between two storages, `cp_entry` defaults to `common/transfer.py`'s `_across`. A move's
+  `mv_entry` defaults to `cp_entry`, then the source's `rm_file`.
 - Paths come without a protocol, verified.
 - Argument errors are raised by the call. Errors ending the whole operation, such as a missing root, are raised by
   the iteration.
@@ -366,8 +375,8 @@ A strategy replacing an fsspec method answers as it does. Where it departs on pu
 - A copy or move of a list keeps each directory's tree, under its name, as `cp -r` does. fsspec's flattens the trees.
 - With `maxdepth`, a copy or move places the files as without it. fsspec's places them by the files found, which
   moves them when all are in one subdirectory.
-- With `maxdepth`, a move keeps the files deeper than the limit, and the directories holding them. fsspec's deletes the
-  whole source.
+- With `maxdepth`, a move keeps the files deeper than the limit, and the directories holding them. fsspec's deletes
+  the whole source.
 
 ### Jobs
 
@@ -389,8 +398,8 @@ jobs and their `Operation` at once.
 
 A copy or move between two handlers sends each file by `common/transfer.py`, unless its caller gives another way:
 
-- It reads and writes by the source's and the destination's `open_async_file`, a block of 8 MiB at a time.
-  So each handler keeps the primitives of its own storage only.
+- It reads and writes by the source's and the destination's `open_async_file`, a block of the source's
+  `transfer_size` at a time, 8 MiB by default. So each handler keeps the primitives of its own storage only.
 - It leaves no part of a file. Where the destination's profile declares `atomic_writes`, it writes in place.
   Otherwise it writes to a temporary name beside the destination, then moves it there by `mv_file`, deleting it on a
   failure.
@@ -401,19 +410,22 @@ A copy or move between two handlers sends each file by `common/transfer.py`, unl
 ### Routers
 
 `RoutingFileSystem`, in `router.py`, passes each call to the filesystem of the path's storage. Where each path goes is
-its `RoutingHandler`'s, which a developer implements:
+its `RoutingHandler`'s. A developer implements the first three of its methods, and overrides the last two where paths
+lie above the storages:
 
 - `verify_path(path)` checks the router's own paths;
 - `route(path)` gives the handler of the path's storage and its path there, or None above every storage;
 - `outer(handler, path)` gives the router's path of a path of one of its handlers;
-- `roots(entry)` lists a directory above the storages. Without such paths, e.g. for URLs naming their storage, the
-  default raises FileNotFoundError.
+- `roots(entry)` lists a directory above the storages. Its default raises FileNotFoundError, for a router with no such
+  paths, e.g. one whose URLs name their storage;
+- `root_info(entry)` describes a path above the storages, by default by its parent's `roots`.
 
 `route` makes each handler once, by `inner(key, make)`, without a request. The routing handler's `aclose()` closes
 them, and its sync `close()` releases them at once, as the filesystem's `close()` does.
 
-For each storage routed to, the router makes a `BaseFileSystem` on its handler, uncached. The
-handler must be a `FileOperationHandler`, which runs its own strategies. Each path is checked twice: by the routing handler, then its path in the storage by the storage's handler.
+For each storage routed to, the router makes a `BaseFileSystem` on its handler, uncached. The handler must be a
+`FileOperationHandler`, which runs its own strategies. Each path is checked twice: by the routing handler, then its
+path in the storage by the storage's handler.
 
 `route` may give another routing handler, which routes the inner path again. Each level checks its own path, and the
 names answered are mapped back through each level's `outer`. The roots of a nested router are listed by it.
@@ -431,54 +443,42 @@ Within one storage, a call is that storage's own. Between two, a recursive copy 
 `transfer_limit`. By default these stream the data, as the previous section says. A routing handler can copy on the
 server instead, e.g. from a URL. Through nested routers, the outermost router's are used.
 
-The router imports no family: each storage's handler runs its own strategies. Its transaction commits file by file, so it is not atomic across storages.
+The router imports no family: each storage's handler runs its own strategies. Its transaction commits file by file,
+so it is not atomic across storages.
 
 ### The tree strategies
 
 The tree strategies list a directory with the handler's `ils`, its entries in any order, and a tree with its
-`ils_recursive`. A recursive listing keeps one of two orders, which tell the walk when a directory is done:
+`ils_recursive`. A recursive listing may leave a directory out, as object stores list only files: the walk tells it
+from the paths below it.
+
+By default, `ils_recursive` is `tree/listing.py`'s `_tree_ils`, which lists depth first, a directory per request,
+several ahead at a time. The generic tree handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing.
+A storage may refuse a recursive listing in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`.
+Its handler's `ils_recursive` then falls back on `_tree_ils` itself.
+
+A recursive listing keeps one of two orders, which tell the walk when a directory is done:
 
 - depth first: a directory's entry, then all below it, before any other entry. Siblings may come in any order.
 - by name: sorted by the whole name, as object stores list keys. A directory's entry may come apart from what is below
   it, as "a/b-x" comes between "a/b" and "a/b/c".
 
-The profile's `recursive_order` says which order a storage's listing keeps. "depth_first" covers both of the above.
-"parents_first" covers a directory's entry before what is below it, and nothing more, e.g. breadth first, as
-Dropbox's recursive listing documents no more. Unknown, the order is taken as "parents_first", as the profile's rule
-has it.
+The profile's `recursive_order` declares which order a storage's own listing keeps:
 
-- The walk cannot tell that order from a depth-first one: by the time an entry comes under a directory taken as done,
-  that directory's last part has gone, and a move may have deleted it.
-- Parents first, `tree.walk._ParentsFirst` keeps every directory open until the listing ends, and the names of all its
-  entries, to resume a break. Depth first, `_Split` closes each directory as the listing passes it.
-- "parents_first" is always right, as a depth-first listing is parents first too. It costs the streaming of each
-  directory done, and the memory of the tree's names. So a storage whose own listing is depth first declares it, as
-  `AdlfsHandler` does.
+- "depth_first" covers both of the above. `tree.walk._Split` then closes each directory as the listing passes it.
+- "parents_first" covers a directory's entry before what is below it, and nothing more, e.g. breadth first, as
+  Dropbox's recursive listing documents no more. `tree.walk._ParentsFirst` then keeps every directory open until the
+  listing ends, and the names of all its entries, to resume a break.
+- Unknown, the order is taken as "parents_first". The walk cannot tell that order from a depth-first one: by the time
+  an entry comes under a directory taken as done, that directory's last part has gone, and a move may have deleted it.
 
-A directory may be left out, as object stores list only files: the walk tells it from the paths below it. By default,
-`ils_recursive` is `tree/listing.py`'s `_tree_ils`, which lists depth first, a directory per request, several ahead
-at a time. The generic tree handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing.
-
-`_tree_ils`'s listing is a `_DepthFirst`, whose type tells the walk its order. So a handler keeping the default needs
-no `recursive_order`, and the walk closes each directory as it passes it. The profile declares the order of a
-storage's own listing alone. A handler falling back on `_tree_ils` gets the same, whatever its profile says.
-
-A storage may refuse a recursive listing in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`.
-Its handler's `ils_recursive` then falls back on `_tree_ils` itself.
+"parents_first" is always right, as a depth-first listing is parents first too. It costs the streaming of each
+directory done, and the memory of the tree's names. So a storage whose own listing is depth first declares it, as
+`AdlfsHandler` does. `_tree_ils`'s listing is a `_DepthFirst`, whose type tells the walk its order. So a handler
+keeping the default, or falling back on it, needs no `recursive_order`.
 
 The strategies walk with a private engine, `tree.walk._chunks`. It streams each directory in parts of at most 1000
 entries. A huge directory is never held whole, except by `_tree_walk`, which answers as fsspec's `walk` does.
-
-A storage may list a directory twice, e.g. as a prefix and as its marker object. `_chunks` yields each subdirectory
-once, keeping the names of those found in each directory being listed. Two more sets of names are kept, as nothing
-else is right:
-
-- A copy or move keeps the names of the files found in each directory being listed, by `_CopyOrMove.names`. Two files
-  of one name, e.g. on Google Drive, would go to one place: the second is refused.
-- A recursive listing keeps names to resume a break, by `_Open.seen`, as below. Parents first, that is every name
-  listed until the listing ends.
-
-Each set holds names alone, never entries. The first two are dropped once their directory is listed to its last part.
 
 - A tree that nothing prunes is listed by one recursive listing per root. Its order tells when each directory is
   done. Where the storage has a recursive listing, that is one paginated request, which usually beats a directory per
@@ -497,7 +497,18 @@ Each set holds names alone, never entries. The first two are dropped once their 
 - `_tree_walk` top down lists a directory per request: a recursive listing ends a directory after all below it, so the
   whole tree would be held.
 
-They come in two layers:
+The walk keeps sets of names alone, never entries, where nothing else is right:
+
+- `_chunks` yields each subdirectory once, as a storage may list a directory twice, e.g. as a prefix and as its marker
+  object. It keeps the names of those found in each directory being listed.
+- A copy or move keeps the names of the files found in each directory being listed, by `_CopyOrMove.names`. Two files
+  of one name, e.g. on Google Drive, would go to one place: the second is refused.
+- A recursive listing keeps names to resume a break, by `_Open.seen`, as above. Parents first, that is every name
+  listed until the listing ends.
+
+The first two are dropped once their directory is listed to its last part.
+
+The tree strategies come in two layers:
 
 | Strategies                             | They send                         | They build on    |
 |----------------------------------------|-----------------------------------|------------------|
@@ -519,8 +530,8 @@ methods. The two are one request with or without a delimiter, as on S3, GCS and 
 - Directories are derived from the keys, by `flat/_keys.py`. A key ending with "/" marks a directory.
 - `_flat_rm` deletes in batches of the handler's `rm_batch_size`, by its `rm_files`. A batch may span buckets.
   `rm_files` yields each key deleted, and the error of each it could not delete, so that the others count as deleted.
-- `_flat_mv` renames with `mv_file` when the profile says the storage renames. Otherwise it copies, then deletes in
-  batches.
+- `_flat_mv` renames with `mv_file` within one storage whose profile says it renames files. Otherwise it copies, then
+  deletes in batches.
 - A listing error ends the operation: there is no other listing to go on with.
 
 ### Storage profiles
@@ -539,9 +550,10 @@ profile only saves requests or data:
 | `copies_directories`    | True: every request in a directory copied whole by one `cp_tree`       |
 | `case_sensitive`        | False: a path moved onto itself in another case, by one `mv_tree`      |
 | `atomic_writes`         | True: the temporary file and the move of a copy between storages       |
+| `recursive_order`       | "depth_first": the names of a tree held until its listing ends         |
 
-- A storage has one profile, which never changes. It is the handler's `profile`, `UNKNOWN` unless the handler sets
-  what it knows. Or it is what the handler's `load_profile()` finds with a request.
+- A storage has one profile, which never changes. It is the handler's `profile`: `UNKNOWN` unless the handler sets
+  what it knows, or what its `load_profile()` finds with a request.
 - A strategy awaits the handler's `open()` as its operation starts, e.g. in its jobs' `setup()`, then reads
   `profile`. `open()` loads it once, under a lock. A load that fails raises, and the next call tries again.
 - Neither takes a path, so that the profile cannot differ by path. A storage whose behaviour does, e.g. GCS's buckets
@@ -552,6 +564,7 @@ profile only saves requests or data:
   `copies_directories` and `case_sensitive` count only within one storage, and `atomic_writes` only between two.
 - Between two storages, a file copied is written: `parents_required` counts. Within one, it goes by the storage's own
   copy, which may make no parent where a write does, as on Microsoft Graph: `copy_parents_required` counts.
+- `recursive_order` tells of a tree handler's own `ils_recursive` only, as "The tree strategies" says.
 - A field left None is unknown, and the strategy takes the way right on any storage.
 - `case_sensitive` is the exception: no way is right on both kinds of names. Unknown, paths are compared as fsspec
   compares them, as strings. On a storage whose names are not case-sensitive, a path copied or moved onto itself in
