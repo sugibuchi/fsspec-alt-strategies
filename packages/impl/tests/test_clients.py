@@ -29,7 +29,7 @@ async def test_calls_run_in_its_own_threads() -> None:
     client = _Client()
     names = await asyncio.gather(
         *(
-            client._run_in_thread(lambda: threading.current_thread().name)
+            client.run_in_thread(lambda: threading.current_thread().name)
             for _ in range(4)
         )
     )
@@ -41,7 +41,7 @@ async def test_calls_run_in_its_own_threads() -> None:
 async def test_a_shared_semaphore_leaves_the_count_to_the_default() -> None:
     client = _Client(asyncio.Semaphore(3))
     assert client._thread_count() is None
-    await client._run_in_thread(lambda: None)
+    await client.run_in_thread(lambda: None)
     client.close()
 
 
@@ -49,25 +49,25 @@ async def test_the_context_goes_with_the_call() -> None:
     var: contextvars.ContextVar[str] = contextvars.ContextVar("var")
     var.set("caller's")
     client = _Client()
-    assert await client._run_in_thread(var.get) == "caller's"
+    assert await client.run_in_thread(var.get) == "caller's"
     client.close()
 
 
 async def test_close_shuts_the_threads_down_and_a_call_after_makes_them_again() -> None:
     client = _Client()
-    await client._run_in_thread(lambda: None)
+    await client.run_in_thread(lambda: None)
     first = client._thread_pool()
     client.close()
     assert client._executor is None
     assert first._shutdown
-    await client._run_in_thread(lambda: None)
+    await client.run_in_thread(lambda: None)
     assert client._thread_pool() is not first
     client.close()
 
 
 async def test_aclose_shuts_the_threads_down_too() -> None:
     client = _Client()
-    await client._run_in_thread(lambda: None)
+    await client.run_in_thread(lambda: None)
     first = client._thread_pool()
     await client.aclose()
     assert client._executor is None
@@ -76,7 +76,7 @@ async def test_aclose_shuts_the_threads_down_too() -> None:
 
 async def test_collecting_it_shuts_the_threads_down() -> None:
     client = _Client()
-    await client._run_in_thread(lambda: None)
+    await client.run_in_thread(lambda: None)
     pool = client._thread_pool()
     del client
     gc.collect()

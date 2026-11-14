@@ -41,7 +41,7 @@ _T = TypeVar("_T")
 class SyncClientSupport:
     """A handler mixin running a sync client's blocking calls in the handler's own threads.
 
-    ``_run_in_thread`` runs a call in one of the threads, made on first use.
+    ``run_in_thread`` runs a call in one of the threads, made on first use.
     There are as many as ``_thread_count`` says: by default the handler's
     ``operation_concurrency``, if a number. A semaphore shared with others
     leaves the count to the executor's default.
@@ -56,7 +56,7 @@ class SyncClientSupport:
     --------
     >>> class MyHandler(SyncClientSupport, TreeFileOperationHandler):
     ...     async def info(self, entry, **kwargs):
-    ...         return await self._run_in_thread(self.client.stat, entry["name"])
+    ...         return await self.run_in_thread(self.client.stat, entry["name"])
     """
 
     _executor: ThreadPoolExecutor | None = None
@@ -66,7 +66,7 @@ class SyncClientSupport:
         concurrency = getattr(self, "operation_concurrency", None)
         return concurrency if isinstance(concurrency, int) else None
 
-    async def _run_in_thread(
+    async def run_in_thread(
         self, func: Callable[..., _T], /, *args: Any, **kwargs: Any
     ) -> _T:
         """Run a blocking call in one of the handler's own threads, and await it.

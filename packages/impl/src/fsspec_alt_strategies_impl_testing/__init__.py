@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks, sync
 
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
-from fsspec_alt_strategies_impl.common.rm_files import _rm_by_request
+from fsspec_alt_strategies_impl.common.rm_files import rm_by_request
 from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
@@ -878,9 +878,7 @@ class TreeView(_Files, TreeFileOperationHandler):
         if self._rm_files is None:
             return super().rm_files(entries)
         request = self._rm_files
-        return _rm_by_request(
-            self, entries, lambda es: request([e["name"] for e in es])
-        )
+        return rm_by_request(self, entries, lambda es: request([e["name"] for e in es]))
 
     async def rmdir(self, entry: dict[str, Any]) -> None:
         await self._rmdir(entry["name"])
@@ -1055,6 +1053,4 @@ class FlatView(_Files, FlatFileOperationHandler):
     def rm_files(self, entries: list[dict[str, Any]]) -> Operation[str, RmState]:
         # The filesystem's batch deletion, unless given, by one request per batch.
         request = self._rm_files
-        return _rm_by_request(
-            self, entries, lambda es: request([e["name"] for e in es])
-        )
+        return rm_by_request(self, entries, lambda es: request([e["name"] for e in es]))

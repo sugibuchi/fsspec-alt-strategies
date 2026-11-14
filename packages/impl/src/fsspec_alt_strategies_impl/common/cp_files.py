@@ -6,7 +6,7 @@
 handlers: each file by the handler's ``cp_file`` or ``mv_file``, as many at
 once as its ``operation_limit`` allows. A storage copying or moving several
 files by one request, e.g. the Hugging Face Hub's commit, overrides
-``cp_files`` or ``mv_files`` with `_cp_by_request` or `_mv_by_request`, given
+``cp_files`` or ``mv_files`` with `cp_by_request` or `mv_by_request`, given
 that request. The recursive copies and moves send their files to them in
 batches of the handler's ``cp_batch_size`` or ``mv_batch_size``.
 
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
     from .handler import FileTransfer, StorageHandler
 
-__all__: list[str] = []
+__all__ = ["cp_by_request", "mv_by_request"]
 
 
 def _cp_each_file(
@@ -44,7 +44,7 @@ def _cp_each_file(
     while it runs.
 
     It wins on a storage copying one file per request, as most do. A storage
-    copying several by one request wins with `_cp_by_request` instead.
+    copying several by one request wins with `cp_by_request` instead.
 
     Once cancelled, it starts no new copy, and yields those in flight. Closed,
     it waits for those in flight without yielding them.
@@ -70,7 +70,7 @@ def _mv_each_file(
     """Move files, each by the handler's ``mv_file``, as many at once as its ``operation_limit`` allows.
 
     As `_cp_each_file`, for a move. A storage moving several files by one
-    request wins with `_mv_by_request` instead.
+    request wins with `mv_by_request` instead.
 
     Requests: one ``mv_file`` per file.
 
@@ -107,7 +107,7 @@ async def _each(
             yield _noted(error, doing, transfer)
 
 
-def _cp_by_request(
+def cp_by_request(
     handler: StorageHandler,
     transfers: list[FileTransfer],
     request: Callable[[list[FileTransfer]], Awaitable[Mapping[str, Exception] | None]],
@@ -137,7 +137,7 @@ def _cp_by_request(
     ...     cp_batch_size = 100
     ...
     ...     def cp_files(self, transfers):
-    ...         return _cp_by_request(self, transfers, self._commit_copies)
+    ...         return cp_by_request(self, transfers, self._commit_copies)
     """
     return Operation(
         lambda op: _by_request(handler, transfers, request, "Copying", _copied, op),
@@ -145,14 +145,14 @@ def _cp_by_request(
     )
 
 
-def _mv_by_request(
+def mv_by_request(
     handler: StorageHandler,
     transfers: list[FileTransfer],
     request: Callable[[list[FileTransfer]], Awaitable[Mapping[str, Exception] | None]],
 ) -> Operation[tuple[str, str], MvState]:
     """Move files by one request moving them all, e.g. a commit, for a handler's ``mv_files``.
 
-    As `_cp_by_request`, for a move, at most the handler's ``mv_batch_size``.
+    As `cp_by_request`, for a move, at most the handler's ``mv_batch_size``.
     A file it could not move stays where it was.
 
     Requests: one ``request``.

@@ -253,7 +253,7 @@ class Strategy(ABC):
         of the handler's ``rm_batch_size``. A family's handler deletes each by
         ``rm_file``, as many at once as ``operation_limit`` allows. A storage
         deleting several files by one request overrides it, e.g. with
-        `rm_files._rm_by_request` and S3's DeleteObjects.
+        `rm_files.rm_by_request` and S3's DeleteObjects.
 
         Parameters
         ----------
@@ -320,7 +320,7 @@ class Strategy(ABC):
         batches of the handler's ``cp_batch_size``, once each destination's
         directory is ready. A family's handler copies each by ``cp_file``, as
         many at once as ``operation_limit`` allows. A storage copying several
-        files by one request overrides it, e.g. with `cp_files._cp_by_request`
+        files by one request overrides it, e.g. with `cp_files.cp_by_request`
         and a commit.
 
         Parameters

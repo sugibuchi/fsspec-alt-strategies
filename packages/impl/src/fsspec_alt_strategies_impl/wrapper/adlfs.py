@@ -23,7 +23,7 @@ nothing of adlfs or of the Azure SDK: it calls the wrapped filesystem's own
 objects. ``service_client`` and ``_details`` are private, as of adlfs 2026.x:
 where one is missing, the strategies list as with the generic handler.
 
-This module depends on `tree`, and `listing` of `tree`.
+This module depends on `tree`.
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.profile import StorageProfile
 
-from ..tree.listing import _tree_ils
 from .tree import FsspecTreeHandler
 
 if TYPE_CHECKING:
@@ -103,7 +102,7 @@ class AdlfsHandler(FsspecTreeHandler):
         else:
             # The containers, adlfs without its own, or a caller's options, which
             # adlfs's ls takes: a directory per request.
-            return _tree_ils(self, path, entry=entry, **kwargs)
+            return self.ils_by_directory(entry, **kwargs)
 
     async def _blobs(self, path: str) -> AsyncIterator[Entry]:
         """All below ``path``, by one ListBlobs without a delimiter, a page at a time.

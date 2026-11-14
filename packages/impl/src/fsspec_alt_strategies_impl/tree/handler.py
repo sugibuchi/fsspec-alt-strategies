@@ -57,8 +57,8 @@ class TreeFileOperationHandler(FileOperationHandler):
     implement too:
 
     - ``ils_recursive``, all below a directory in one listing, depth first or
-      by name, or parents first, as the profile's ``recursive_order`` says. By default,
-      a directory per request, several at a time;
+      by name, or parents first, as the profile's ``recursive_order`` says. By
+      default, `ils_by_directory`: a directory per request, several at a time;
     - ``rm_tree``, a storage's recursive delete, declared by the profile's
       ``deletes_directories=True``;
     - ``mv_tree``, a storage's rename of a directory, declared by
@@ -96,12 +96,20 @@ class TreeFileOperationHandler(FileOperationHandler):
         strategies tell it from the paths below it. A file lists itself. A
         missing directory raises FileNotFoundError, when the iteration starts.
 
-        Here, `listing._tree_ils` lists a directory per request by ``ils``,
-        several at a time, depth first: the walk knows it, whatever the
-        profile declares, so a handler keeping it declares nothing. A storage
-        listing a tree in one request overrides it. One whose storage may
-        refuse that listing, as only asking tells, e.g. a WebDAV server
-        refusing ``Depth: infinity``, falls back on `listing._tree_ils` itself.
+        Here, it is `ils_by_directory`. A storage listing a tree in one
+        request overrides it. One whose storage may refuse that listing, as
+        only asking tells, e.g. a WebDAV server refusing ``Depth: infinity``,
+        falls back on `ils_by_directory` itself.
+        """
+        return self.ils_by_directory(entry, **kwargs)
+
+    def ils_by_directory(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
+        """List all below a directory depth first, a directory per request by ``ils``, several at a time.
+
+        It is the default ``ils_recursive``, and the fallback of one whose
+        storage refuses its own listing. The walk knows it is depth first,
+        whatever the profile declares, so a handler keeping it declares no
+        ``recursive_order``. ``kwargs`` go to each ``ils``.
         """
         return _tree_ils(self, entry["name"], entry=entry, **kwargs)
 

@@ -28,7 +28,7 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-from ..common.rm_files import _rm_by_request
+from ..common.rm_files import rm_by_request
 from ..flat.handler import FlatFileOperationHandler
 from ._base import _FsspecHandler
 
@@ -142,7 +142,7 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
 
     def rm_files(self, entries: list[Entry]) -> Operation[str, RmState]:
         # A batch by one call of the wrapped one's rm: see _rm_batch.
-        return _rm_by_request(self, entries, self._rm_batch)
+        return rm_by_request(self, entries, self._rm_batch)
 
     async def _rm_batch(self, entries: list[Entry]) -> Mapping[str, Exception] | None:
         """Delete a batch by the wrapped one's ``rm`` of all its paths, which s3fs, e.g., sends as one request."""

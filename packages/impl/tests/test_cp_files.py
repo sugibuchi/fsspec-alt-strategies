@@ -9,9 +9,9 @@ import pytest
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.cp_files import (
-    _cp_by_request,
     _cp_each_file,
-    _mv_by_request,
+    cp_by_request,
+    mv_by_request,
 )
 from fsspec_alt_strategies_impl.common.handler import FileTransfer
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
@@ -72,10 +72,10 @@ class _Batching:
         return refused
 
     def cp_files(self, transfers: list[Any]) -> Any:
-        return _cp_by_request(self, transfers, lambda ts: self.request("copy", ts))  # type: ignore[arg-type]
+        return cp_by_request(self, transfers, lambda ts: self.request("copy", ts))  # type: ignore[arg-type]
 
     def mv_files(self, transfers: list[Any]) -> Any:
-        return _mv_by_request(self, transfers, lambda ts: self.request("move", ts))  # type: ignore[arg-type]
+        return mv_by_request(self, transfers, lambda ts: self.request("move", ts))  # type: ignore[arg-type]
 
 
 class _TreeBatching(_Batching, TreeView):

@@ -156,9 +156,9 @@ class MyHandler(TreeFileOperationHandler):
   - "parents_first" only gives a directory's entry before what is below it;
   - unknown is taken as "parents_first", which costs the walk memory and streaming: declare "depth_first" where it
     holds.
-- Without a listing of its own, a tree is listed a directory per request, several at once, by
-  `tree.listing._tree_ils`. That listing is depth first, so it needs no `recursive_order`. A handler whose storage may
-  refuse its own recursive listing falls back on it.
+- Without a listing of its own, a tree is listed a directory per request, several at once, by the handler's
+  `ils_by_directory`. That listing is depth first, so it needs no `recursive_order`. A handler whose storage may
+  refuse its own recursive listing falls back on it: `return self.ils_by_directory(entry, **kwargs)`.
 - A flat handler implements `ils_recursive(entry, prefix=...)`: every key below a directory starting with the prefix,
   in name order.
 - `rm_tree`, `mv_tree` and `cp_tree`, a storage's own operations on a whole directory, are optional. The profile
@@ -168,11 +168,11 @@ class MyHandler(TreeFileOperationHandler):
   your own, with the same arguments.
 
 By default, `rm_files` deletes each file by `rm_file`. A storage deleting several files by one request, e.g. an object
-store, overrides it with `common.rm_files._rm_by_request`, and declares `rm_batch_size`. A recursive `rm` or `mv` then
+store, overrides it with `common.rm_files.rm_by_request`, and declares `rm_batch_size`. A recursive `rm` or `mv` then
 deletes its files in batches:
 
 ```python
-from fsspec_alt_strategies_impl.common.rm_files import _rm_by_request
+from fsspec_alt_strategies_impl.common.rm_files import rm_by_request
 from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
 
 
@@ -180,7 +180,7 @@ class MyHandler(FlatFileOperationHandler):
     rm_batch_size = 1000  # The most files one request deletes.
 
     def rm_files(self, entries):
-        return _rm_by_request(self, entries, self._delete_objects)
+        return rm_by_request(self, entries, self._delete_objects)
 
     async def _delete_objects(self, entries):
         # One request deleting them all. It returns the paths refused, each with its error, or None.
@@ -188,7 +188,7 @@ class MyHandler(FlatFileOperationHandler):
 ```
 
 Likewise, `cp_files` and `mv_files` copy or move each file by `cp_file` or `mv_file` by default. A storage copying or
-moving several files by one request overrides them with `common.cp_files._cp_by_request` or `_mv_by_request`, and
+moving several files by one request overrides them with `common.cp_files.cp_by_request` or `mv_by_request`, and
 declares `cp_batch_size` or `mv_batch_size`. A recursive `cp` or `mv` within the storage then sends its files in
 batches.
 
@@ -202,7 +202,7 @@ handler per bucket, and a router for the whole namespace.
 
 Two mixins in `common/clients.py` hold a handler's clients:
 
-- `SyncClientSupport` runs a sync client's blocking calls in threads of the handler's own, by `_run_in_thread`.
+- `SyncClientSupport` runs a sync client's blocking calls in threads of the handler's own, by `run_in_thread`.
 - `AsyncClientSupport` holds an async client, e.g. an aiohttp session, which belongs to the loop it was made on. A
   handler implements `create_clients`, making them in fields of its own, and `close_clients`, closing those. Its
   requests call `await self.ensure_clients()` first, which makes them on the running loop, once, and again on another

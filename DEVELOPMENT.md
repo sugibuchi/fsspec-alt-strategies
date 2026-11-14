@@ -172,7 +172,7 @@ the mixin's. It adds the primitives its strategies call:
 
 | Class                      | Adds                                                                                  |
 |----------------------------|---------------------------------------------------------------------------------------|
-| `TreeFileOperationHandler` | `ils_recursive`, by default `_tree_ils`, and optional `rm_tree`, `mv_tree`, `cp_tree` |
+| `TreeFileOperationHandler` | `ils_recursive`, by default `ils_by_directory`, and optional `rm_tree`, `mv_tree`, `cp_tree` |
 | `FlatFileOperationHandler` | Required `ils_recursive(entry, prefix=...)`                                           |
 
 A handler's class tells its family. A storage's handler overrides a strategy method to choose another strategy, e.g.
@@ -181,13 +181,13 @@ its own.
 `rm_files(entries)` is the strategy deleting files a caller found. The recursive deletions and moves of both families
 send it their files in batches of the handler's `rm_batch_size`, 1 by default. Its default, `rm_files._rm_each_file`,
 deletes each by `rm_file`, as many at once as `operation_limit` allows. A storage deleting several files by one
-request overrides it with `rm_files._rm_by_request` and that request. It declares its batch, e.g. 1000 on S3 or 256
+request overrides it with `rm_files.rm_by_request` and that request. It declares its batch, e.g. 1000 on S3 or 256
 for Azure's Blob Batch.
 
 `cp_files(transfers)` and `mv_files(transfers)` are the strategies copying and moving files within one storage. Each
 `FileTransfer` is a source's entry, where it goes, whether that is known missing, and its parent's entry. Their
 defaults, `cp_files._cp_each_file` and `_mv_each_file`, send each by `cp_file` or `mv_file`. A storage changing many
-files by one request, e.g. the Hugging Face Hub's commit, overrides them with `_cp_by_request` or `_mv_by_request`. It
+files by one request, e.g. the Hugging Face Hub's commit, overrides them with `cp_by_request` or `mv_by_request`. It
 declares `cp_batch_size` or `mv_batch_size`.
 
 - The recursive copies and moves within one storage send their files to them, unless the caller gives its own
@@ -452,10 +452,11 @@ The tree strategies list a directory with the handler's `ils`, its entries in an
 `ils_recursive`. A recursive listing may leave a directory out, as object stores list only files: the walk tells it
 from the paths below it.
 
-By default, `ils_recursive` is `tree/listing.py`'s `_tree_ils`, which lists depth first, a directory per request,
-several ahead at a time. The generic tree handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing.
+By default, `ils_recursive` is `ils_by_directory`, which runs `tree/listing.py`'s `_tree_ils`. It lists depth first,
+a directory per request, several ahead at a time. The generic tree handler lists so, but `AdlfsHandler` lists by
+Azure's own recursive listing.
 A storage may refuse a recursive listing in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`.
-Its handler's `ils_recursive` then falls back on `_tree_ils` itself.
+Its handler's `ils_recursive` then falls back on `ils_by_directory` itself.
 
 A recursive listing keeps one of two orders, which tell the walk when a directory is done:
 

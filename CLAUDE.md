@@ -61,12 +61,14 @@ code: read it before adding a strategy or a handler.
 - How the strategies run in bulk is the `Strategy` mixin's, never `StorageHandler`'s: `rm_batch_size`,
   `cp_batch_size` and `mv_batch_size` are declared there, each 1 by default. A primitive acts on one item.
 - `rm_files(entries)` deletes files a caller found: by default `common.rm_files._rm_each_file`, each by `rm_file`. A
-  storage deleting many by one request overrides it with `_rm_by_request`, and declares `rm_batch_size`. The
+  storage deleting many by one request overrides it with `rm_by_request`, and declares `rm_batch_size`. The
   recursive deletions and moves send it their files in batches, by `_Jobs.queue_deletion` and `flush_deletions`.
   `_Jobs.setup` reads the size once the handler is open.
+- `rm_by_request`, `cp_by_request` and `mv_by_request`, in `common/`, and `SyncClientSupport.run_in_thread` are public:
+  they are what a storage's handler calls. The strategies stay private.
 - `cp_files(transfers)` and `mv_files(transfers)` copy and move `FileTransfer`s within one storage, by default
-  `common.cp_files._cp_each_file` and `_mv_each_file`. A storage overrides them with `_cp_by_request` or
-  `_mv_by_request`, and declares `cp_batch_size` or `mv_batch_size`. The recursive copies and moves within one storage
+  `common.cp_files._cp_each_file` and `_mv_each_file`. A storage overrides them with `cp_by_request` or
+  `mv_by_request`, and declares `cp_batch_size` or `mv_batch_size`. The recursive copies and moves within one storage
   send them their files by `_CopyJobs.release`, unless the caller gives its own `cp_entry` or `mv_entry`. Each error
   they yield has its source's path as its `source`.
 - `BaseFileSystem`, in `common/filesystem.py`, implements fsspec's API on a `FileOperationHandler`, a required
@@ -112,7 +114,7 @@ code: read it before adding a strategy or a handler.
   - the options fsspec's method takes, such as `walk`'s `on_error`, and the walk's `descend`, which prunes it;
   - a copy's `cp_entry`, and a move's `cp_entry` and `mv_entry`, each a `common.jobs._Transfer` taking the source's
     entry;
-  - the `request` of `_rm_by_request`, `_cp_by_request` and `_mv_by_request`, the storage's request on a batch.
+  - the `request` of `rm_by_request`, `cp_by_request` and `mv_by_request`, the storage's request on a batch.
 - Between two storages, `cp_entry` defaults to `common.transfer._across`, which streams the data and leaves no part of
   a file. A move's `mv_entry` defaults to `cp_entry`, then the source's `rm_file`. The router passes its routing
   handler's `cp_across` and `mv_across` so.
@@ -173,8 +175,9 @@ code: read it before adding a strategy or a handler.
 
 #### The tree family
 
-- A tree handler's `ils_recursive` defaults to `tree.listing._tree_ils`, a directory per request by `ils`. A storage
-  listing a tree in one request overrides it, and falls back on `_tree_ils` itself where its storage refuses.
+- A tree handler's `ils_recursive` defaults to its `ils_by_directory`, `tree.listing._tree_ils`: a directory per
+  request by `ils`. A storage listing a tree in one request overrides it, and falls back on `ils_by_directory` where
+  its storage refuses. Outside `tree/`, call the method, never `_tree_ils`.
 - The profile's `recursive_order` says the order of a storage's own listing: the walk can never tell it.
   - Unknown is taken as "parents_first", right on any storage.
   - "depth_first", declared, covers name order too. It lets the walk close each directory as the listing passes it.

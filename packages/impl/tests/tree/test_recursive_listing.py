@@ -18,7 +18,6 @@ from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl.tree.du import _tree_du
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.glob import _tree_glob
-from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
 from fsspec_alt_strategies_impl.tree.walk import _chunks, _tree_walk
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
@@ -71,7 +70,7 @@ async def test_find_lists_once(any_fs: SimulatedFileSystem) -> None:
 class _Refusing(TreeView):
     """A storage refusing its recursive listing, as only asking tells.
 
-    As a handler does, it falls back on `_tree_ils` itself, and asks no more.
+    As a handler does, it falls back on `ils_by_directory` itself, and asks no more.
     """
 
     refused = 0
@@ -80,7 +79,7 @@ class _Refusing(TreeView):
         if self.recursive_listing:
             self.refused += 1  # Asked, and refused.
             self.recursive_listing = False
-        async for found in _tree_ils(self, entry["name"], entry=entry, **kwargs):
+        async for found in self.ils_by_directory(entry, **kwargs):
             yield found
 
 

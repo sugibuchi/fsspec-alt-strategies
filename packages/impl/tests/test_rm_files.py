@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.common.rm_files import _rm_by_request
+from fsspec_alt_strategies_impl.common.rm_files import rm_by_request
 from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
 from fsspec_alt_strategies_impl.flat.rm import _flat_rm
 from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
@@ -107,7 +107,7 @@ async def test_a_request_deletes_a_batch_yielding_each_path_or_its_error() -> No
         return {"b": PermissionError("b")}
 
     deleted, errors = await _collect_with_errors(
-        _rm_by_request(handler, _entries("a", "b", "c"), request)
+        rm_by_request(handler, _entries("a", "b", "c"), request)
     )
     assert sent == [["a", "b", "c"]]
     assert deleted == ["a", "c"]
@@ -120,7 +120,7 @@ async def test_a_request_failing_whole_ends_the_operation() -> None:
 
     handler = TreeView(SimulatedFileSystem(asynchronous=True))
     with pytest.raises(OSError, match="throttled"):
-        await _collect_with_errors(_rm_by_request(handler, _entries("a"), request))
+        await _collect_with_errors(rm_by_request(handler, _entries("a"), request))
 
 
 @pytest.mark.parametrize("family", ["tree", "flat"])

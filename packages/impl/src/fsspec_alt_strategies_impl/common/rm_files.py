@@ -5,7 +5,7 @@
 `_rm_each_file` is the default of both families' handlers: each file by the
 handler's ``rm_file``, as many at once as its ``operation_limit`` allows. A
 storage deleting several files by one request, e.g. S3's DeleteObjects or
-Azure's Blob Batch, overrides ``rm_files`` with `_rm_by_request`, given that
+Azure's Blob Batch, overrides ``rm_files`` with `rm_by_request`, given that
 request. The recursive deletions and moves send their files to ``rm_files`` in
 batches of the handler's ``rm_batch_size``.
 
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
     from .handler import Entry, StorageHandler
 
-__all__: list[str] = []
+__all__ = ["rm_by_request"]
 
 _T = TypeVar("_T")
 
@@ -44,7 +44,7 @@ def _rm_each_file(
     of the limit while it runs.
 
     It wins on a storage deleting one file per request, as most do. A storage
-    deleting several by one request wins with `_rm_by_request` instead.
+    deleting several by one request wins with `rm_by_request` instead.
 
     Once cancelled, it starts no new deletion, and yields those in flight.
     Closed, it waits for those in flight without yielding them.
@@ -119,7 +119,7 @@ async def _bounded(
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def _rm_by_request(
+def rm_by_request(
     handler: StorageHandler,
     entries: list[Entry],
     request: Callable[[list[Entry]], Awaitable[Mapping[str, Exception] | None]],
@@ -147,7 +147,7 @@ def _rm_by_request(
     ...     rm_batch_size = 1000
     ...
     ...     def rm_files(self, entries):
-    ...         return _rm_by_request(self, entries, self._delete_objects)
+    ...         return rm_by_request(self, entries, self._delete_objects)
     """
 
     async def run(op: Operation[str, RmState]) -> AsyncGenerator[str | Exception]:

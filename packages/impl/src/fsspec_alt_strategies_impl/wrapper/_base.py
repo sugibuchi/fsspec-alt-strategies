@@ -124,7 +124,7 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
         if self.asynchronous:
             return await getattr(self.fs, f"_{name}")(*args, **kwargs)
         else:
-            return await self._run_in_thread(getattr(self.fs, name), *args, **kwargs)
+            return await self.run_in_thread(getattr(self.fs, name), *args, **kwargs)
 
     # Its paths, as the wrapped filesystem's.
 
@@ -188,7 +188,7 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
             await self.fs._mv_file(entry["name"], path2)
         else:
             # A sync filesystem's own move, e.g. a local rename, is its mv.
-            await self._run_in_thread(self.fs.mv, entry["name"], path2)
+            await self.run_in_thread(self.fs.mv, entry["name"], path2)
 
     # The data methods, the wrapped filesystem's as they are, each under a
     # permit of io_limit: the wrapped one's requests take none of the handler's.
@@ -259,7 +259,7 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
         path = entry["name"]
         if self.asynchronous:
             return await self.fs.open_async(path, mode, **kwargs)
-        file = await self._run_in_thread(self.fs.open, path, mode, **kwargs)
+        file = await self.run_in_thread(self.fs.open, path, mode, **kwargs)
         return SyncFileAdapter(file)
 
     # The sync methods fsspec leaves to each filesystem, the wrapped one's. They
@@ -267,15 +267,15 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
     # sync() refuses the loop running this.
 
     async def created(self, entry: Entry) -> Any:
-        return await self._run_in_thread(self.fs.created, entry["name"])
+        return await self.run_in_thread(self.fs.created, entry["name"])
 
     async def modified(self, entry: Entry) -> Any:
-        return await self._run_in_thread(self.fs.modified, entry["name"])
+        return await self.run_in_thread(self.fs.modified, entry["name"])
 
     async def sign(self, entry: Entry, expiration: int = 100, **kwargs: Any) -> str:
         sign = self.fs.sign
         name = entry["name"]
-        return await self._run_in_thread(sign, name, expiration=expiration, **kwargs)
+        return await self.run_in_thread(sign, name, expiration=expiration, **kwargs)
 
     def invalidate_cache(self, path: str | None = None) -> None:
         self.fs.invalidate_cache(path)

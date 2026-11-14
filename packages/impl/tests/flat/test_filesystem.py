@@ -12,7 +12,7 @@ from fsspec.callbacks import Callback
 from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
-from fsspec_alt_strategies_impl.common.rm_files import _rm_by_request
+from fsspec_alt_strategies_impl.common.rm_files import rm_by_request
 from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
@@ -115,7 +115,7 @@ class _FlatHandler(FlatFileOperationHandler):
 
     def rm_files(self, entries: list[dict[str, Any]]) -> Any:
         # One request per batch, as an object store deletes keys.
-        return _rm_by_request(self, entries, self._rm_batch)
+        return rm_by_request(self, entries, self._rm_batch)
 
     async def _rm_batch(self, entries: list[dict[str, Any]]) -> None:
         await self.inner._rm_files([e["name"] for e in entries])

@@ -118,7 +118,7 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
         # The wrapped one's own recursive delete, as deletes_directories declares.
         path = entry["name"]
         if not self.asynchronous:
-            await self._run_in_thread(self.fs.rm, path, recursive=True)
+            await self.run_in_thread(self.fs.rm, path, recursive=True)
         else:
             await self.fs._rm(path, recursive=True)
 
@@ -128,7 +128,7 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
         # The wrapped one's own rename of a directory, as renames_directories declares.
         path = entry["name"]
         if not self.asynchronous:
-            await self._run_in_thread(self.fs.mv, path, path2)
+            await self.run_in_thread(self.fs.mv, path, path2)
         else:
             await self.fs._mv_file(path, path2)
 
@@ -138,6 +138,6 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
         # The wrapped one's own copy of a directory, as copies_directories declares.
         path = entry["name"]
         if not self.asynchronous:
-            await self._run_in_thread(self.fs.copy, path, path2, recursive=True)
+            await self.run_in_thread(self.fs.copy, path, path2, recursive=True)
         else:
             await self.fs._copy(path, path2, recursive=True)
