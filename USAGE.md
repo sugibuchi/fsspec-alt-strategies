@@ -268,8 +268,14 @@ fs = FileSystemWrapper(
 
 The known filesystems are those in `known_implementations`, by class: the local filesystem, s3fs, gcsfs, adlfs,
 fsspec's memory, SFTP and HDFS filesystems. Each entry names its handler class, e.g. "FsspecTreeHandler",
-"FsspecFlatHandler" or "S3fsHandler", and says its profile and its concurrency limits. A generic handler calls the
-filesystem's async methods if it has them. Pass your own table to
+"FsspecFlatHandler" or "S3fsHandler".
+
+- A generic handler, "FsspecTreeHandler" or "FsspecFlatHandler", takes the rest from the entry: its profile, its
+  concurrency limits, and its batch sizes. Each left out is the one right on any storage: unknown, or 1.
+- A dedicated handler, e.g. "S3fsHandler", declares its own as class attributes. Its entry gives none, and
+  `monitored()` refuses one that does. Subclass it to change them.
+
+A generic handler calls the filesystem's async methods if it has them. Pass your own table to
 `monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem. That wraps it the way right on every storage:
 by "FsspecTreeHandler", one request at a time, with nothing known of the storage.
 

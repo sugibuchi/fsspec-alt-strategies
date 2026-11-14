@@ -48,19 +48,22 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
     ----------
     fs : AbstractFileSystem
         The filesystem to wrap.
-    operation_concurrency : int or asyncio.Semaphore
-        The requests of the strategies at a time.
+    operation_concurrency : int or asyncio.Semaphore, optional
+        The requests of the strategies at a time: 1 by default.
         A semaphore is used as it is, shared with what else holds it.
-    io_concurrency : int or asyncio.Semaphore
-        The data methods' calls at a time, such as ``cat_file``.
+    io_concurrency : int or asyncio.Semaphore, optional
+        The data methods' calls at a time, such as ``cat_file``: 1 by default.
         A semaphore is used as it is, shared with what else holds it.
-    storage_profile : StorageProfile
-        What the storage does. ``UNKNOWN`` if it is unknown.
+    storage_profile : StorageProfile, optional
+        What the storage does: unknown by default.
+    rm_batch_size, cp_batch_size, mv_batch_size : int, optional
+        The most files ``rm_files``, ``cp_files`` and ``mv_files`` take at
+        once: 1 by default, as each goes by the wrapped one's own primitive.
 
     Raises
     ------
     ValueError
-        If a concurrency is less than 1.
+        If a concurrency, or a batch size, is less than 1.
 
     See Also
     --------

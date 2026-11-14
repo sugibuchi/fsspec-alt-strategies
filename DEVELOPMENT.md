@@ -321,6 +321,10 @@ name is one of the built-in handlers in `monitor.py`'s `_BUILT_IN`, e.g. the gen
 `FsspecFlatHandler`, and a full name is imported. The handler's class is what chooses the strategies: the profile names
 no family, as a family's adaptation to its storage is its handler's.
 
+Only a generic handler takes its profile, limits and batch sizes from its entry, as it knows nothing of the storage.
+A dedicated handler, e.g. `S3fsHandler`, knows its storage, so it declares them as class attributes, beside the code
+relying on them. `monitored()` makes it with the filesystem alone, and refuses an entry giving it options.
+
 ### Operations
 
 Each recursive method starts a private strategy of its family, e.g. `tree/rm.py`'s `_tree_rm`:

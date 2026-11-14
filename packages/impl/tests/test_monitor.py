@@ -9,7 +9,7 @@ from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.memory import MemoryFileSystem
 
 from fsspec_alt_strategies.monitor import Call, Monitor, Monitored, monitoring
-from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 from fsspec_alt_strategies.wrapper import known_implementations
 from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
 from fsspec_alt_strategies_impl.monitor import monitored
@@ -17,7 +17,7 @@ from fsspec_alt_strategies_impl.wrapper.adlfs import AdlfsHandler
 from fsspec_alt_strategies_impl.wrapper.filesystem import FileSystemWrapper
 from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
 from fsspec_alt_strategies_impl.wrapper.gcsfs import GcsfsHandler
-from fsspec_alt_strategies_impl.wrapper.s3fs import S3fsHandler
+from fsspec_alt_strategies_impl.wrapper.s3fs import S3FS_PROFILE, S3fsHandler
 from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
@@ -137,14 +137,9 @@ def test_s3fs_gcsfs_and_adlfs_get_their_own_handlers(name: str, own: type) -> No
     assert type(monitored(Extended())._handler) is own
 
 
-def _entry(handler: str, **rm_batch_size: int) -> Any:
-    return {
-        "handler": handler,
-        "storage_profile": StorageProfile(),
-        "operation_concurrency": 1,
-        "io_concurrency": 1,
-        **rm_batch_size,
-    }
+def _entry(handler: str, **options: Any) -> Any:
+    """An entry naming a handler: with options, as only a generic one takes them."""
+    return {"handler": handler, **options}
 
 
 @pytest.mark.parametrize(
@@ -158,9 +153,45 @@ def _entry(handler: str, **rm_batch_size: int) -> Any:
 def test_an_entry_names_its_handler_built_in_or_by_its_full_name(
     handler: str, cls: type
 ) -> None:
-    flat = {"rm_batch_size": 1} if handler != "FsspecTreeHandler" else {}
-    fs = monitored(SimulatedFileSystem(), {_SIMULATED: _entry(handler, **flat)})
+    fs = monitored(SimulatedFileSystem(), {_SIMULATED: _entry(handler)})
     assert type(fs._handler) is cls
+
+
+def test_a_dedicated_handler_declares_its_own() -> None:
+    fs = monitored(SimulatedFileSystem(), {_SIMULATED: _entry("S3fsHandler")})
+    handler = fs._handler
+    assert handler.profile is S3FS_PROFILE
+    assert (handler.operation_concurrency, handler.io_concurrency) == (32, 8)
+    assert handler.rm_batch_size == 1000
+
+
+def test_an_entry_gives_no_option_to_a_dedicated_handler() -> None:
+    entry = _entry("GcsfsHandler", rm_batch_size=10)
+    with pytest.raises(ValueError, match="declares its own rm_batch_size"):
+        monitored(SimulatedFileSystem(), {_SIMULATED: entry})
+
+
+def test_a_generic_handler_takes_the_entrys_options_or_its_defaults() -> None:
+    profile = StorageProfile(renames_files=True)
+    entry = _entry(
+        "FsspecFlatHandler",
+        storage_profile=profile,
+        operation_concurrency=4,
+        rm_batch_size=50,
+        cp_batch_size=5,
+    )
+    handler = monitored(SimulatedFileSystem(), {_SIMULATED: entry})._handler
+    assert handler.profile is profile
+    assert (handler.operation_concurrency, handler.io_concurrency) == (4, 1)
+    assert (handler.rm_batch_size, handler.cp_batch_size, handler.mv_batch_size) == (
+        50,
+        5,
+        1,
+    )
+    # Left out, each is the one right on any storage.
+    bare = monitored(SimulatedFileSystem(), {_SIMULATED: _entry("FsspecTreeHandler")})
+    assert bare._handler.profile is UNKNOWN
+    assert bare._handler.operation_concurrency == 1
 
 
 @pytest.mark.parametrize(
@@ -189,14 +220,9 @@ def test_every_handler_the_known_implementations_name_is_built_in() -> None:
         "AdlfsHandler",
     }
     for entry in known_implementations.values():
-        flat = (
-            {"rm_batch_size": entry["rm_batch_size"]}
-            if "rm_batch_size" in entry
-            else {}
-        )
-        own = _entry(entry["handler"], **flat)
+        # Each as it is: options for the generic handlers alone.
         assert isinstance(
-            monitored(SimulatedFileSystem(), {_SIMULATED: own}), Monitored
+            monitored(SimulatedFileSystem(), {_SIMULATED: entry}), Monitored
         )
 
 

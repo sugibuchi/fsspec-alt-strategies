@@ -18,7 +18,6 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.monitor import Monitored
-from fsspec_alt_strategies.profile import UNKNOWN
 from fsspec_alt_strategies.wrapper import known_implementations
 
 from .common.handler import FileOperationHandler
@@ -84,11 +83,13 @@ def monitored(
     wrapped, as the entry of its class says, or of the nearest class it
     inherits: by a handler, and a filesystem made on it, serving the wrapped
     one's paths: a `FileSystemWrapper`. The entry names the handler's class,
-    whose strategies suit the storage, and gives its profile and its limits.
-    A generic handler, "FsspecTreeHandler" or "FsspecFlatHandler", calls the
-    filesystem's async methods where its ``async_impl`` says it has them, else
-    its sync ones in threads. The filesystem returned is new, and may be
-    dropped once used.
+    whose strategies suit the storage. A generic handler, "FsspecTreeHandler"
+    or "FsspecFlatHandler", takes its profile, its limits and its batch sizes
+    from the entry, each at its default, the one right on any storage, where
+    left out. It calls the filesystem's async methods where its
+    ``async_impl`` says it has them, else its sync ones in threads. Any other
+    handler declares its own, and is made with the filesystem alone. The
+    filesystem returned is new, and may be dropped once used.
 
     An entry's ``handler`` names a `FileOperationHandler`:
 
@@ -123,7 +124,9 @@ def monitored(
     ValueError
         If ``fs`` is not monitored, no entry names its class, and
         ``wrap_unknown_fs`` is False. If the entry's ``handler`` names no
-        class, or one that is no `FileOperationHandler`.
+        class, or one that is no `FileOperationHandler`. If an entry naming
+        any handler but a generic one gives its options, e.g. its profile,
+        which that handler declares itself.
     ImportError
         If the module of the entry's ``handler`` cannot be imported.
 
@@ -144,22 +147,17 @@ def monitored(
         if not wrap_unknown_fs:
             name = f"{type(fs).__module__}.{type(fs).__qualname__}"
             raise ValueError(f"No known implementation says how to wrap {name}")
-        # A storage of unknown kind is a tree, the way right on any storage.
-        entry = {
-            "handler": "FsspecTreeHandler",
-            "storage_profile": UNKNOWN,
-            "operation_concurrency": 1,
-            "io_concurrency": 1,
-        }
+        # A storage of unknown kind is a tree, the way right on any storage:
+        # the generic handler's defaults are.
+        entry = {"handler": "FsspecTreeHandler"}
 
     handler_class: Any = _handler_class(entry)
-    options: dict[str, Any] = {
-        "operation_concurrency": entry["operation_concurrency"],
-        "io_concurrency": entry["io_concurrency"],
-        "storage_profile": entry["storage_profile"],
-    }
-    if "rm_batch_size" in entry:
-        options["rm_batch_size"] = entry["rm_batch_size"]
+    options = {k: v for k, v in entry.items() if k != "handler"}
+    if options and handler_class not in (FsspecTreeHandler, FsspecFlatHandler):
+        raise ValueError(
+            f"{entry['handler']} declares its own {', '.join(sorted(options))}:"
+            " only a generic handler takes them from an entry"
+        )
     handler = handler_class(fs, **options)
 
     # The filesystem runs on the wrapped one's loop, sync or not as it is.

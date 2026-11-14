@@ -57,6 +57,13 @@ def _async_impl(fs: AbstractFileSystem) -> bool:
     return True
 
 
+def _batch_size(size: int, name: str) -> int:
+    """A batch size given, refused below 1, as no batch could be sent."""
+    if size < 1:
+        raise ValueError(f"{name} must be at least 1: {size}")
+    return size
+
+
 class _FsspecHandler(SyncClientSupport, StorageHandler):
     """An fsspec filesystem's primitives, its data methods and its files, as a handler's.
 
@@ -66,21 +73,49 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
     A sync filesystem's calls run in threads of the handler's own, as many as
     both concurrencies together, when both are numbers: a filesystem unsafe to
     call from several threads needs both at 1. `close` and `aclose` shut them down.
+
+    Each option left out is the class's: a generic handler's is the one right
+    on any storage, an unknown profile, one request at a time, and batches of
+    1. A dedicated handler, e.g. `S3fsHandler`, declares its own as class
+    attributes, as the storage it wraps is known.
     """
+
+    operation_concurrency: int | asyncio.Semaphore = 1
+    """The strategies' requests at a time, unless given: one, right on any storage."""
+
+    io_concurrency: int | asyncio.Semaphore = 1
+    """The data methods' calls at a time, unless given: one, right on any storage."""
 
     def __init__(
         self,
         fs: AbstractFileSystem,
         *,
-        operation_concurrency: int | asyncio.Semaphore,
-        io_concurrency: int | asyncio.Semaphore,
-        storage_profile: StorageProfile,
+        operation_concurrency: int | asyncio.Semaphore | None = None,
+        io_concurrency: int | asyncio.Semaphore | None = None,
+        storage_profile: StorageProfile | None = None,
+        rm_batch_size: int | None = None,
+        cp_batch_size: int | None = None,
+        mv_batch_size: int | None = None,
     ) -> None:
         super().__init__(
-            operation_concurrency=operation_concurrency, io_concurrency=io_concurrency
+            operation_concurrency=(
+                self.operation_concurrency
+                if operation_concurrency is None
+                else operation_concurrency
+            ),
+            io_concurrency=(
+                self.io_concurrency if io_concurrency is None else io_concurrency
+            ),
         )
         self.fs = fs
-        self.profile = storage_profile
+        if storage_profile is not None:
+            self.profile = storage_profile
+        if rm_batch_size is not None:
+            self.rm_batch_size = _batch_size(rm_batch_size, "rm_batch_size")
+        if cp_batch_size is not None:
+            self.cp_batch_size = _batch_size(cp_batch_size, "cp_batch_size")
+        if mv_batch_size is not None:
+            self.mv_batch_size = _batch_size(mv_batch_size, "mv_batch_size")
         # The wrapped one's paths: its protocol, its root and its stripping.
         self.protocol = fs.protocol
         self.root = getattr(fs, "root_marker", "")

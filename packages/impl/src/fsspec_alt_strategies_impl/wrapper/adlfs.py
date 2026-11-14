@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from fsspec_alt_strategies.profile import StorageProfile
+
 from ..tree.listing import _tree_ils
 from .tree import FsspecTreeHandler
 
@@ -38,25 +40,46 @@ if TYPE_CHECKING:
 
     from ..common.handler import Entry
 
-__all__ = ["AdlfsHandler"]
+__all__ = ["ADLFS_PROFILE", "AdlfsHandler"]
+
+ADLFS_PROFILE = StorageProfile(
+    parents_required=False,
+    copy_parents_required=False,
+    implicit_directories=None,
+    renames_files=False,
+    renames_directories=False,
+    deletes_directories=False,
+    copies_directories=False,
+    case_sensitive=True,
+    recursive_order="depth_first",
+)
+"""Azure Blob Storage through adlfs, with a hierarchical namespace or without.
+
+Its directories are real with one, prefixes without, and one class serves
+both: unknown. It has no move of its own, so its mv is fsspec's copy, then a
+delete, even with a hierarchical namespace. The handler lists a tree by one
+listing without a delimiter: by name without a hierarchical namespace, depth
+first with one.
+"""
 
 
 class AdlfsHandler(FsspecTreeHandler):
     """An adlfs filesystem as a tree handler, its trees listed by one request.
 
-    It takes what `FsspecTreeHandler` takes.
+    It declares what is known of Azure: `ADLFS_PROFILE`, and 32 requests and
+    8 data calls at a time. It takes what `FsspecTreeHandler` takes, to
+    change one.
 
     Examples
     --------
     >>> tree = FileSystemWrapper(
-    ...     AdlfsHandler(
-    ...         adlfs.AzureBlobFileSystem(account_name="myaccount"),
-    ...         operation_concurrency=32,
-    ...         io_concurrency=8,
-    ...         storage_profile=known_implementations["adlfs.spec.AzureBlobFileSystem"]["storage_profile"],
-    ...     )
+    ...     AdlfsHandler(adlfs.AzureBlobFileSystem(account_name="myaccount"))
     ... )
     """
+
+    profile = ADLFS_PROFILE
+    operation_concurrency = 32
+    io_concurrency = 8
 
     async def rmdir(self, entry: Entry) -> None:
         # adlfs's _rmdir deletes containers alone: a directory below one would

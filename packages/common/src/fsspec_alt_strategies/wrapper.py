@@ -8,16 +8,16 @@ copy of the strategies wraps it:
 - its handler class, which runs the strategies that suit the storage: a
   generic one, e.g. "FsspecTreeHandler" or "FsspecFlatHandler", or one of a
   library, e.g. "S3fsHandler";
-- its `StorageProfile`;
-- its concurrency limits, and a flat handler's batch of deletions.
+- for a generic handler, its `StorageProfile`, its concurrency limits and its
+  batch sizes. A dedicated handler declares its own.
 
 A generic handler calls the filesystem's async methods where its
 ``async_impl`` says it has them. The strategies' ``monitored`` reads the
 table, or a table of the caller's own.
 
 It is declared, never detected: an entry says what the developer knows of the
-storage. Each entry sets every field of its profile, None where the storage's
-behaviour varies or is unknown. A project adds its own entries, or changes
+storage. Each profile sets every field, None where the storage's behaviour
+varies or is unknown. A project adds its own entries, or changes
 one, before wrapping.
 
 This module depends on `profile`.
@@ -38,6 +38,12 @@ class KnownImplementation(TypedDict):
     handler: str
     """The handler class wrapping it, which runs the strategies that suit the storage.
 
+    The other fields are a generic handler's options, "FsspecTreeHandler" or
+    "FsspecFlatHandler", each left out at its default, the one right on any
+    storage. A dedicated handler, e.g. "S3fsHandler", or a class of the
+    caller's own, declares its own as class attributes, and takes the
+    filesystem alone: an entry naming one gives none.
+
     A bare class name, e.g. "FsspecTreeHandler" or "S3fsHandler", is one of
     the handlers that every copy of the strategies has. A full name, e.g.
     "mypkg.handlers.MyHandler", is a class of the caller's own, imported when
@@ -45,17 +51,23 @@ class KnownImplementation(TypedDict):
     right on any storage.
     """
 
-    storage_profile: StorageProfile
-    """What the storage does."""
+    storage_profile: NotRequired[StorageProfile]
+    """What the storage does, for a generic handler: unknown if left out."""
 
-    operation_concurrency: int
-    """The handler's requests of the strategies at a time."""
+    operation_concurrency: NotRequired[int]
+    """A generic handler's requests of the strategies at a time: 1 if left out."""
 
-    io_concurrency: int
-    """The handler's reads and writes of data at a time."""
+    io_concurrency: NotRequired[int]
+    """A generic handler's reads and writes of data at a time: 1 if left out."""
 
     rm_batch_size: NotRequired[int]
-    """A flat handler's batch of deletions, e.g. 1000 on S3: passed to the handler where given."""
+    """A generic handler's batch of deletions, e.g. 1000 on S3: 1 if left out."""
+
+    cp_batch_size: NotRequired[int]
+    """A generic handler's batch of copies within the storage: 1 if left out."""
+
+    mv_batch_size: NotRequired[int]
+    """A generic handler's batch of moves within the storage: 1 if left out."""
 
 
 known_implementations: dict[str, KnownImplementation] = {
@@ -80,67 +92,18 @@ known_implementations: dict[str, KnownImplementation] = {
         "io_concurrency": 4,
     },
     "s3fs.core.S3FileSystem": {
-        # Directories are prefixes. Its mv is a copy, then a delete. Its handler
-        # streams its listing by prefix, and copies by the listed size.
+        # Its handler declares its profile, limits and batches: see S3fsHandler.
         "handler": "S3fsHandler",
-        "storage_profile": StorageProfile(
-            parents_required=False,
-            copy_parents_required=False,
-            implicit_directories=True,
-            renames_files=False,
-            renames_directories=False,
-            deletes_directories=False,
-            copies_directories=False,
-            case_sensitive=True,
-        ),
-        "operation_concurrency": 32,
-        "io_concurrency": 8,
-        "rm_batch_size": 1000,
     },
     "gcsfs.core.GCSFileSystem": {
         # For buckets without a hierarchical namespace. One with it has folders of
         # their own, which the flat strategies leave after a recursive rm or mv:
-        # wrap it as a tree. Both kinds served are a router, a filesystem per
-        # bucket. The handler moves by _mv_file, which is fsspec's copy, then a
-        # delete. It lists by prefix, and deletes 100 objects per batch request.
+        # wrap it as a tree. Its handler declares the rest: see GcsfsHandler.
         "handler": "GcsfsHandler",
-        "storage_profile": StorageProfile(
-            parents_required=False,
-            copy_parents_required=False,
-            implicit_directories=None,
-            renames_files=False,
-            renames_directories=False,
-            deletes_directories=False,
-            copies_directories=False,
-            case_sensitive=True,
-        ),
-        "operation_concurrency": 32,
-        "io_concurrency": 8,
-        # As GCS's batch requests take at most 100 calls.
-        "rm_batch_size": 100,
     },
     "adlfs.spec.AzureBlobFileSystem": {
-        # Its ls lists one directory per request, with walk_blobs and a delimiter,
-        # with a hierarchical namespace or without. Its directories are real with
-        # one, prefixes without, and one class serves both: unknown. It has no
-        # move of its own, so its mv is fsspec's copy, then a delete, even with
-        # a hierarchical namespace. Its handler lists a tree by one listing
-        # without a delimiter: by name without a hierarchical namespace, depth
-        # first with one.
+        # Its handler declares its profile and limits: see AdlfsHandler.
         "handler": "AdlfsHandler",
-        "storage_profile": StorageProfile(
-            parents_required=False,
-            copy_parents_required=False,
-            implicit_directories=None,
-            renames_files=False,
-            renames_directories=False,
-            deletes_directories=False,
-            copies_directories=False,
-            case_sensitive=True,
-            recursive_order="depth_first",
-        ),
-        "operation_concurrency": 32,
-        "io_concurrency": 8,
     },
     "fsspec.implementations.memory.MemoryFileSystem": {
         # Its directories are made by mkdir, or implied by the files in them: a

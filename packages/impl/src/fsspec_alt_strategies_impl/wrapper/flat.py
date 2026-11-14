@@ -35,9 +35,6 @@ from ._base import _FsspecHandler
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
-    from fsspec import AbstractFileSystem
-
-    from fsspec_alt_strategies.profile import StorageProfile
     from fsspec_alt_strategies.states import RmState
 
     from ..common.handler import Entry
@@ -67,22 +64,25 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
     ----------
     fs : AbstractFileSystem
         The filesystem to wrap.
-    rm_batch_size : int
-        The most keys the wrapped ``rm`` is given at once, e.g. 1000 on S3.
-    operation_concurrency : int or asyncio.Semaphore
-        The requests of the strategies at a time.
+    operation_concurrency : int or asyncio.Semaphore, optional
+        The requests of the strategies at a time: 1 by default.
         A semaphore is used as it is, shared with what else holds it.
-    io_concurrency : int or asyncio.Semaphore
-        The data methods' calls at a time, such as ``cat_file``.
+    io_concurrency : int or asyncio.Semaphore, optional
+        The data methods' calls at a time, such as ``cat_file``: 1 by default.
         A semaphore is used as it is, shared with what else holds it.
-    storage_profile : StorageProfile
-        What the storage does. ``UNKNOWN`` if it is unknown.
+    storage_profile : StorageProfile, optional
+        What the storage does: unknown by default.
+    rm_batch_size : int, optional
+        The most keys the wrapped ``rm`` is given at once, e.g. 1000 on S3: 1
+        by default.
+    cp_batch_size, mv_batch_size : int, optional
+        The most files ``cp_files`` and ``mv_files`` take at once: 1 by
+        default, as each goes by the wrapped one's own copy or move.
 
     Raises
     ------
     ValueError
-        If a concurrency, or ``rm_batch_size``, is less than 1.
-
+        If a concurrency, or a batch size, is less than 1.
     See Also
     --------
     FsspecTreeHandler : The same, for storages with a hierarchical namespace.
@@ -101,25 +101,6 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
     >>> with monitoring(Progress()):
     ...     flat.rm("bucket/data/2024", recursive=True)
     """
-
-    def __init__(
-        self,
-        fs: AbstractFileSystem,
-        *,
-        rm_batch_size: int,
-        operation_concurrency: int | asyncio.Semaphore,
-        io_concurrency: int | asyncio.Semaphore,
-        storage_profile: StorageProfile,
-    ) -> None:
-        if rm_batch_size < 1:
-            raise ValueError(f"rm_batch_size must be at least 1: {rm_batch_size}")
-        super().__init__(
-            fs,
-            operation_concurrency=operation_concurrency,
-            io_concurrency=io_concurrency,
-            storage_profile=storage_profile,
-        )
-        self.rm_batch_size = rm_batch_size
 
     async def ils_recursive(  # type: ignore[override]
         self, entry: Entry, *, prefix: str = "", **kwargs: Any

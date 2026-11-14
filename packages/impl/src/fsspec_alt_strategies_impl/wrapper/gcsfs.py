@@ -35,6 +35,8 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any
 
+from fsspec_alt_strategies.profile import StorageProfile
+
 from .flat import FsspecFlatHandler
 
 if TYPE_CHECKING:
@@ -42,7 +44,24 @@ if TYPE_CHECKING:
 
     from ..common.handler import Entry
 
-__all__ = ["GcsfsHandler"]
+__all__ = ["GCSFS_PROFILE", "GcsfsHandler"]
+
+GCSFS_PROFILE = StorageProfile(
+    parents_required=False,
+    copy_parents_required=False,
+    implicit_directories=None,
+    renames_files=False,
+    renames_directories=False,
+    deletes_directories=False,
+    copies_directories=False,
+    case_sensitive=True,
+)
+"""GCS through gcsfs, for buckets without a hierarchical namespace.
+
+One with it has folders of their own, which the flat strategies leave after a
+recursive rm or mv: wrap it as a tree. Both kinds served are a router, a
+filesystem per bucket. Its mv is fsspec's copy, then a delete.
+"""
 
 _BATCH = 100
 """The most calls one GCS batch request takes."""
@@ -51,22 +70,21 @@ _BATCH = 100
 class GcsfsHandler(FsspecFlatHandler):
     """A gcsfs filesystem as a flat handler, listing by prefix and deleting in full batches.
 
-    It takes what `FsspecFlatHandler` takes. ``rm_batch_size`` is best a
-    multiple of 100, the most objects one batch request deletes. It suits
-    buckets without a hierarchical namespace.
+    It declares what is known of GCS: `GCSFS_PROFILE`, 32 requests and 8 data
+    calls at a time, and batches of 100 deletions, the most objects one batch
+    request deletes. It takes what `FsspecFlatHandler` takes, to change one:
+    ``rm_batch_size`` is best a multiple of 100. It suits buckets without a
+    hierarchical namespace.
 
     Examples
     --------
-    >>> flat = FileSystemWrapper(
-    ...     GcsfsHandler(
-    ...         gcsfs.GCSFileSystem(),
-    ...         rm_batch_size=100,
-    ...         operation_concurrency=32,
-    ...         io_concurrency=8,
-    ...         storage_profile=known_implementations["gcsfs.core.GCSFileSystem"]["storage_profile"],
-    ...     )
-    ... )
+    >>> flat = FileSystemWrapper(GcsfsHandler(gcsfs.GCSFileSystem()))
     """
+
+    profile = GCSFS_PROFILE
+    operation_concurrency = 32
+    io_concurrency = 8
+    rm_batch_size = _BATCH
 
     def ils_recursive(  # type: ignore[override]
         self, entry: Entry, *, prefix: str = "", **kwargs: Any

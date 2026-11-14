@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from fsspec_alt_strategies.profile import StorageProfile
+
 from .flat import FsspecFlatHandler
 
 if TYPE_CHECKING:
@@ -31,7 +33,19 @@ if TYPE_CHECKING:
 
     from ..common.handler import Entry, StoragePath
 
-__all__ = ["S3fsHandler"]
+__all__ = ["S3FS_PROFILE", "S3fsHandler"]
+
+S3FS_PROFILE = StorageProfile(
+    parents_required=False,
+    copy_parents_required=False,
+    implicit_directories=True,
+    renames_files=False,
+    renames_directories=False,
+    deletes_directories=False,
+    copies_directories=False,
+    case_sensitive=True,
+)
+"""S3 through s3fs: directories are prefixes, and its mv is a copy, then a delete."""
 
 _COPY_LIMIT = 5 * 1024**3
 """The most CopyObject copies in one request, as s3fs's own ``_cp_file`` tells them apart."""
@@ -40,21 +54,21 @@ _COPY_LIMIT = 5 * 1024**3
 class S3fsHandler(FsspecFlatHandler):
     """An s3fs filesystem as a flat handler, listing and copying as s3fs does best.
 
-    It takes what `FsspecFlatHandler` takes. A copy by the listed size never
-    preserves a multipart ETag, as s3fs's ``preserve_etag`` would.
+    It declares what is known of S3: `S3FS_PROFILE`, 32 requests and 8 data
+    calls at a time, and batches of 1000 deletions, as DeleteObjects takes.
+    It takes what `FsspecFlatHandler` takes, to change one. A copy by the
+    listed size never preserves a multipart ETag, as s3fs's ``preserve_etag``
+    would.
 
     Examples
     --------
-    >>> flat = FileSystemWrapper(
-    ...     S3fsHandler(
-    ...         s3fs.S3FileSystem(),
-    ...         rm_batch_size=1000,
-    ...         operation_concurrency=64,
-    ...         io_concurrency=8,
-    ...         storage_profile=known_implementations["s3fs.core.S3FileSystem"]["storage_profile"],
-    ...     )
-    ... )
+    >>> flat = FileSystemWrapper(S3fsHandler(s3fs.S3FileSystem()))
     """
+
+    profile = S3FS_PROFILE
+    operation_concurrency = 32
+    io_concurrency = 8
+    rm_batch_size = 1000
 
     def ils_recursive(  # type: ignore[override]
         self, entry: Entry, *, prefix: str = "", **kwargs: Any

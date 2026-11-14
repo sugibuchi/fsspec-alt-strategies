@@ -145,6 +145,8 @@ code: read it before adding a strategy or a handler.
   `TreeFileOperationHandler` or a `FlatFileOperationHandler`, never an attribute naming it.
 - A wrapper of one library, such as `wrapper/s3fs.py`, is a handler, and never imports the library: it calls the
   wrapped filesystem's methods. Write one only where the library saves requests or data beyond fsspec's API.
+  It declares its profile, limits and batch sizes as class attributes: a `known_implementations` entry gives them
+  only to the generic `FsspecTreeHandler` and `FsspecFlatHandler`.
 - A family's modules export nothing public but its handler class, in `handler.py`.
 - A tree handler's `ils_recursive` defaults to `tree.listing._tree_ils`, a directory per request by `ils`. A storage
   listing a tree in one request overrides it, and falls back on `_tree_ils` itself where its storage refuses. The
