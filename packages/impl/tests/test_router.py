@@ -688,7 +688,8 @@ async def test_monitors_see_the_router_in_via(router: _Router) -> None:
         await router._copy("lake/tree/data", "lake/flat/copied", recursive=True)
     find, walk, copy = monitor.calls
     assert (find.method, find.path, find.via) == ("find", "data", (router,))
-    assert find.fs is router.tree
+    # The routed storage's filesystem, the router made on its handler.
+    assert find.fs is _backend(router, "tree")
     assert (walk.method, walk.via) == ("walk", (router,))
     # A copy across storages is the router's own call.
     assert (copy.fs, copy.method, copy.path, copy.via) == (

@@ -30,10 +30,12 @@ from typing import TYPE_CHECKING, Any
 
 from ..flat.filesystem import FlatFileSystem
 from ..flat.handler import FlatHandler
-from ._base import _FsspecHandler
+from ._base import _FsspecHandler, _unwrapped
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
+
+    from fsspec import AbstractFileSystem
 
     from fsspec_alt_strategies.profile import StorageProfile
 
@@ -177,6 +179,8 @@ class FlatFileSystemWrapper(FlatFileSystem):
     cachable = False
     """Not cached: fsspec would key it by its handler's repr, which two wrappers of one filesystem share."""
 
+    handler: FsspecFlatHandler
+
     def __init__(self, handler: FsspecFlatHandler, **kwargs: Any) -> None:
         super().__init__(handler, **kwargs)
 
@@ -184,3 +188,7 @@ class FlatFileSystemWrapper(FlatFileSystem):
         self.protocol = handler.protocol
         self.root_marker = handler.root
         self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]
+
+    def _unwrapped(self) -> AbstractFileSystem:
+        """The filesystem wrapped, as a monitor's `Call` names it: the one its user made."""
+        return _unwrapped(self.handler.fs)  # type: ignore[no-any-return]

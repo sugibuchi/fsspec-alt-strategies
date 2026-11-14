@@ -16,10 +16,12 @@ from typing import TYPE_CHECKING, Any
 
 from ..tree.filesystem import TreeFileSystem
 from ..tree.handler import TreeHandler
-from ._base import _FsspecHandler
+from ._base import _FsspecHandler, _unwrapped
 
 if TYPE_CHECKING:
     import asyncio
+
+    from fsspec import AbstractFileSystem
 
     from fsspec_alt_strategies.profile import StorageProfile
 
@@ -156,6 +158,8 @@ class TreeFileSystemWrapper(TreeFileSystem):
     cachable = False
     """Not cached: fsspec would key it by its handler's repr, which two wrappers of one filesystem share."""
 
+    handler: FsspecTreeHandler
+
     def __init__(self, handler: FsspecTreeHandler, **kwargs: Any) -> None:
         super().__init__(handler, **kwargs)
 
@@ -163,3 +167,7 @@ class TreeFileSystemWrapper(TreeFileSystem):
         self.protocol = handler.protocol
         self.root_marker = handler.root
         self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]
+
+    def _unwrapped(self) -> AbstractFileSystem:
+        """The filesystem wrapped, as a monitor's `Call` names it: the one its user made."""
+        return _unwrapped(self.handler.fs)  # type: ignore[no-any-return]

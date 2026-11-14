@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import Callable, Sequence
 
+    from fsspec import AbstractFileSystem
     from fsspec.callbacks import Callback
 
     from .handler import Entry, StorageHandler
@@ -84,10 +85,9 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         """A path of the storage as a URL: the handler's."""
         return self.handler.unstrip_protocol(name)
 
-    def _unwrapped(self) -> AsyncFileSystem:
-        """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
-        wrapped = self.handler.wrapped
-        return wrapped if wrapped is not None else self
+    def _unwrapped(self) -> AbstractFileSystem:
+        """The filesystem a monitor is told of, in its `Call`: this one. A wrapper names the one it wraps."""
+        return self
 
     # Files, the handler's as they are: open_async_file's for open_async, and
     # open_file's for the sync open.

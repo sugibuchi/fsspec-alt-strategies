@@ -8,7 +8,7 @@ in a thread of the handler's own. So a sync filesystem, e.g. a
 ``DirFileSystem`` over a local one, is wrapped as sync, whatever its class. A
 family's handler adds its own primitives.
 
-This module depends on `handler` and `clients` of `common`, and
+This module depends on `filesystem`, `handler` and `clients` of `common`, and
 `fsspec_async` of `files`.
 """
 
@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec.callbacks import DEFAULT_CALLBACK
 
 from ..common.clients import SyncClientSupport
+from ..common.filesystem import _BaseFileSystem
 from ..common.handler import StorageHandler
 from ..files.fsspec_async import SyncFileAdapter
 
@@ -33,6 +34,11 @@ if TYPE_CHECKING:
     from ..common.handler import Entry, StoragePath
 
 __all__: list[str] = []
+
+
+def _unwrapped(fs: Any) -> Any:
+    """A wrapped filesystem, as a monitor's `Call` names it: one of this package's names its own, e.g. a wrapper's."""
+    return fs._unwrapped() if isinstance(fs, _BaseFileSystem) else fs
 
 
 def _async_impl(fs: Any) -> bool:
@@ -82,12 +88,6 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} of {self.fs!r}>"
-
-    @property
-    def wrapped(self) -> Any:
-        """The filesystem wrapped, itself unwrapped if a wrapper: a monitor's `Call` names it."""
-        unwrap = getattr(self.fs, "_unwrapped", None)
-        return unwrap() if unwrap is not None else self.fs
 
     def _thread_count(self) -> int | None:
         # The data methods hold no permit of operation_limit: they need threads

@@ -40,7 +40,7 @@ _ROUTED = {
 # StorageHandler's method, whose default the wrapper replaces.
 _PASSED_ON = {
     "cat_file", "pipe_file", "get_file", "put_file", "open_file",
-    "open_async_file", "created", "modified", "sign", "invalidate_cache", "wrapped",
+    "open_async_file", "created", "modified", "sign", "invalidate_cache",
 }  # fmt: skip
 
 

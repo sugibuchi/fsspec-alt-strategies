@@ -517,7 +517,7 @@ class StorageHandler(_PathHandler):
                     await f.write(chunk)
                     callback.relative_update(len(chunk))
 
-    # What a filesystem on the handler keeps, and tells.
+    # What a filesystem on the handler keeps.
 
     def invalidate_cache(self, path: str | None = None) -> None:
         """Drop what the handler keeps of the storage's listings, for a filesystem's ``invalidate_cache``: here, nothing.
@@ -525,11 +525,6 @@ class StorageHandler(_PathHandler):
         A handler keeping ids by path, or a wrapper whose filesystem keeps its
         own listings, drops them here.
         """
-
-    @property
-    def wrapped(self) -> Any:
-        """The filesystem a wrapper wraps, which a monitor's `Call` names: None for a storage of its own."""
-        return None
 
     # What fsspec leaves to each filesystem.
 

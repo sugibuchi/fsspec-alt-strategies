@@ -152,8 +152,11 @@ never finding a method by `getattr`. Beside the primitives, it declares methods 
 - `cat_file`, `pipe_file`, `get_file` and `put_file` move data whole, by default through `open_async_file`. A
   handler sending a request of its own instead, e.g. one download, holds a permit of `io_limit` around it, as the
   files do. The defaults hold none: the files take their own.
-- `invalidate_cache` drops what the handler keeps of listings, by default nothing, and `wrapped` is the filesystem a
-  wrapper wraps, which monitors name, by default None.
+- `invalidate_cache` drops what the handler keeps of listings, by default nothing.
+
+A monitor's `Call` names the filesystem whose method was called, by its `_unwrapped()`: the filesystem itself, or,
+for `TreeFileSystemWrapper` and `FlatFileSystemWrapper`, the filesystem they wrap, as its user made it. Under a
+router, a call names the filesystem the router made on the storage's handler, and the routers in `Call.via`.
 
 `StorageHandler.sign(entry, expiration)`, `created(entry)` and `modified(entry)` answer fsspec's `sign`, `created`
 and `modified`. They are async, as a storage may need a request, e.g. Azure's user delegation key to sign with. A
