@@ -47,6 +47,13 @@ directories. It is a third-party project, not part of fsspec.
 - They resize their buffers as the data is read or written.
 - They fetch and send a file's blocks on an event loop, in the background and in parallel, as far as they can.
 
+### Client SDK support
+
+- Many storages are reached through a client library, sync or async. A pluggable mixin creates a storage's client and
+  shuts it down, the same way for both kinds.
+- Some client libraries give file-like objects of their own to read and write a storage's files. So transactions come
+  as adapters around any file-like object, with a few predefined transaction strategies to choose from.
+
 ### Observability and control
 
 - Follow a long operation file by file, see which files failed, and stop it at any time, through the familiar fsspec
