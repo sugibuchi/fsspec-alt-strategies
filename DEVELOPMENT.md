@@ -122,6 +122,11 @@ AsyncFileSystem                    fsspec's
   profile with `load_profile()`, once. `await aclose()` closes them, and a later call opens it again. Its sync
   `close()` is the filesystem's: it releases at once what it can without awaiting, e.g. threads. A handler may refuse
   calls after it, as a closed filesystem does, so `aclose()` never calls it.
+- **Its clients,** by a mixin of `common/clients.py`. `SyncClientSupport` runs a sync client's calls in threads of
+  the handler's own. `AsyncClientSupport` makes an async client's clients on the running loop by `create_clients`,
+  notes the loop, and closes them on it by `close_clients`: awaited there, or sent there as a task. A loop ended
+  leaves its clients dropped, as nothing can close them. Their closing's failure is dropped unlogged: a storage's
+  message may carry credentials.
 - **Its profile,** `profile`, as the next sections say.
 - **Its limits,** `operation_limit` for the strategies' requests and `io_limit` for reads and writes of data. The
   callers hold the permits, never the primitives: the strategies hold one of `operation_limit` around each primitive.

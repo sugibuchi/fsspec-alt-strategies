@@ -8,7 +8,7 @@ in a thread of the handler's own. So a sync filesystem, e.g. a
 ``DirFileSystem`` over a local one, is wrapped as sync, whatever its class. A
 family's handler adds its own primitives.
 
-This module depends on `handler` and `sync_client` of `common`, and
+This module depends on `handler` and `clients` of `common`, and
 `fsspec_async` of `files`.
 """
 
@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec.callbacks import DEFAULT_CALLBACK
 
+from ..common.clients import SyncClientSupport
 from ..common.handler import StorageHandler
-from ..common.sync_client import SyncClientSupport
 from ..files.fsspec_async import SyncFileAdapter
 
 if TYPE_CHECKING:

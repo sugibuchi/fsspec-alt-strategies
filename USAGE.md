@@ -153,6 +153,30 @@ A handler is made without a request. `await handler.open()` makes its clients on
 profile, once. A storage whose profile only a request can find, e.g. whether an account has a hierarchical namespace,
 overrides `async def load_profile(self)`. A load that fails raises, and the next operation tries again.
 
+Two mixins in `common/clients.py` hold a handler's clients:
+
+- `SyncClientSupport` runs a sync client's blocking calls in threads of the handler's own, by `_run_in_thread`.
+- `AsyncClientSupport` holds an async client, e.g. an aiohttp session, which belongs to the loop it was made on. A
+  handler implements `create_clients`, returning them, and `close_clients(clients)`. Its requests get them by
+  `await self.ensure_clients()`, which makes them on the running loop, once, and again on another loop. `aclose()`
+  closes them on their loop: awaited there, or sent there as a task from another loop.
+
+```python
+from fsspec_alt_strategies_impl.common.clients import AsyncClientSupport
+
+
+class MyHandler(AsyncClientSupport[aiohttp.ClientSession], TreeHandler):
+    async def create_clients(self):
+        return aiohttp.ClientSession()
+
+    async def close_clients(self, clients):
+        await clients.close()
+
+    async def info(self, entry, **kwargs):
+        session = await self.ensure_clients()
+        ...
+```
+
 It takes no path: the profile is one for the whole storage. A storage whose behaviour differs by path is several
 handlers under a router. On GCS, for example, buckets differ in having a hierarchical namespace: make one handler per
 bucket, and a router for the whole namespace.
