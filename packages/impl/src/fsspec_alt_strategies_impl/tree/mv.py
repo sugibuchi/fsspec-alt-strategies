@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from ..common.handler import Entry, StorageHandler, StoragePath
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
-    from ._walker import _Part
+    from ._walker import _Listing
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
@@ -250,15 +250,14 @@ class _Move(_CopyOrMove):
         # A directory root, as mv_tree takes a file too.
         return _Roots([self.path1_entry or {"name": root}])
 
-    def add(self, listing: _Part) -> list[Any] | None:
+    def add(self, listing: _Listing) -> list[Any] | None:
         self.track(listing)
         # The files refused, e.g. a name the destination takes not: yielded.
         refused = super().add(listing) or []
 
-        # All in it moved before its last part came. An empty directory goes once
+        # All in it moved before its listing came. An empty directory goes once
         # made at the destination, in done.
-        empty = listing.first and not listing.entries
-        if listing.last and not empty and self.finished(listing.directory):
+        if listing.entries and self.finished(listing.directory):
             return refused + self.remove(listing.directory)
         else:
             return refused or None

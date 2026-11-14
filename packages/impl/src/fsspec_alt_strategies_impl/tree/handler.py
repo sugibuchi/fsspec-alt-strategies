@@ -59,9 +59,8 @@ class TreeFileOperationHandler(FileOperationHandler):
     - ``ils_recursive``, all below a directory in one listing, depth first or
       by name, or parents first, as the profile's ``recursive_order`` says. By
       default, `ils_by_directory`: a directory per request, several at a time;
-    - ``lists_subtree``, whether a subtree is listed by one ``ils_recursive``:
-      by default, where the operation needs all of it, but not where it
-      prunes;
+    - ``lists_subtree``, whether a subtree an operation needs whole is listed
+      by one ``ils_recursive``: always, by default;
     - ``rm_tree``, a storage's recursive delete, declared by the profile's
       ``deletes_directories=True``;
     - ``mv_tree``, a storage's rename of a directory, declared by
@@ -106,37 +105,27 @@ class TreeFileOperationHandler(FileOperationHandler):
         """
         return self.ils_by_directory(entry, **kwargs)
 
-    def lists_subtree(self, entry: Entry, *, pruned: bool = False) -> bool:
-        """Whether all below a directory is listed by one ``ils_recursive``.
+    def lists_subtree(self, entry: Entry) -> bool:
+        """Whether all below a directory, which an operation needs whole, is listed by one ``ils_recursive``.
 
         The operation decides which directories it needs: e.g. a ``find``
         without ``maxdepth`` needs all below its root, and a glob all below a
         ``**``. The handler decides how they are listed, as that changes only
-        what the listing costs, never what the operation answers.
+        what the listing costs, never what the operation answers. True by
+        default: one recursive listing, which usually beats a directory per
+        request.
 
-        - Where the operation needs all below the directory, ``pruned`` is
-          False. True by default: one recursive listing, which usually beats a
-          directory per request. A handler returns False to list the
-          directory alone, as its storage's recursive listing may be slow to
-          start, billed apart, or limited per account.
-        - Where the operation prunes below it, e.g. a glob's ``*`` or a
-          ``maxdepth``, ``pruned`` is True. False by default: a directory per
-          request, each the operation can match in. A handler returns True to
-          list all below it at once, and the walk drops what the operation
-          leaves. That wins on a small subtree, where it saves a request per
-          directory, and loses on a large one, where it lists what is never
-          needed: only the storage's developer knows which subtrees are small,
-          e.g. those below a given depth of its paths.
-
-        A directory listed alone is asked of again for each subdirectory. A
-        walk top down, or a caller's ``descend``, never lists a pruned subtree
-        whole: they need each directory before those below it, or its whole
-        entry.
+        A handler returns False to list the directory alone, as its storage's
+        recursive listing may be slow to start, billed apart, or limited per
+        account. It is then asked again of each subdirectory, so that it may
+        list a subtree whole once it knows it is small, e.g. below a given
+        depth of its storage's paths. A walk top down never lists a subtree
+        whole, as it needs each directory before those below it.
 
         ``entry`` is the directory's, as a listing gave it, or as the handler's
         ``entry`` makes it from a path. It sends no request.
         """
-        return not pruned
+        return True
 
     def ils_by_directory(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
         """List all below a directory depth first, a directory per request by ``ils``, several at a time.

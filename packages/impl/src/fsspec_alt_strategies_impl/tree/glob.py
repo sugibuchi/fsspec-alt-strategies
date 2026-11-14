@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.handler import StoragePath
-    from ._walker import _Part
+    from ._walker import _Listing
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
@@ -184,7 +184,6 @@ async def _walk(
             else max(d for d in depths if d is not None),
             descend=lambda e: any(s.descend(e) for s in searches),
             whole=lambda e: any(s.whole(e) for s in searches),
-            by_name=True,
         ),
         ils_kwargs=ils_kwargs,
         stopping=op.cancelling,
@@ -199,7 +198,7 @@ async def _walk(
 
 
 def _matches_in(
-    listing: _Part,
+    listing: _Listing,
     searches: list[_Search],
     op: Operation[dict[str, Any], GlobState],
     found: set[str],

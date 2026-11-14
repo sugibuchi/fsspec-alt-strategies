@@ -21,14 +21,13 @@ from fsspec_alt_strategies.states import DuState, FindState, GlobState
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ._visit import _Pruned
-from ._walker import _FileRoot, _Part, _TreeWalk
+from ._walker import _Listing, _TreeWalk
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable
+    from collections.abc import AsyncGenerator, Callable
 
     from ..common.handler import StorageHandler, StoragePath
     from ._visit import _Visit
-    from ._walker import _Event
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
@@ -115,8 +114,8 @@ def _tree_find(
 _S = TypeVar("_S", FindState, DuState, GlobState)
 
 
-def _listed(state: _S, listing: _Part, **counts: int) -> _S:
-    """A state once a part of a listing is out, with ``counts`` its own: its error, and its directory once its last part comes.
+def _listed(state: _S, listing: _Listing, **counts: int) -> _S:
+    """A state once a directory's listing is out, with ``counts`` its own: its error, and the directory listed.
 
     Depth 0 is the root's own entry, which is no directory listed.
     """
@@ -124,8 +123,7 @@ def _listed(state: _S, listing: _Part, **counts: int) -> _S:
         state,
         errors=state.errors + (listing.error is not None),
         current=listing.directory,
-        directories_listed=(state.directories_listed or 0)
-        + (listing.depth > 0 and listing.last),
+        directories_listed=(state.directories_listed or 0) + (listing.depth > 0),
         **counts,
     )
 
@@ -139,72 +137,57 @@ async def _find_listings(
     stopping: Callable[[], object] | None = None,
     file_root: bool = False,
     dir_root: bool = False,
-) -> AsyncGenerator[_Part]:
-    """Walk as the strategies that only read do, such as find, du and glob.
+) -> AsyncGenerator[_Listing]:
+    """Walk as the strategies that only read do, such as find, du and glob: each directory's listing as it comes.
 
-    It yields each directory's listing in parts, as `_TreeWalk` does, but
-    treats ``path`` itself as fsspec's ``_find`` and ``_glob`` do:
+    It treats ``path`` itself as fsspec's ``_find`` and ``_glob`` do:
 
     - missing, it yields nothing;
     - a file, it yields the file's ``info`` entry if ``file_root``, else
       nothing;
     - a directory, it yields the directory's own ``info`` entry after its
-      listing's last part, if ``dir_root`` and the walk is not stopping.
+      listing, if ``dir_root`` and the walk is not stopping.
 
-    The root's own entry comes as a `_Part` of depth 0, which is no listing.
-    So the strategies filter and count it as any entry, but count no directory
+    Any other failure of the root is a failed listing, yielded as any is. The
+    root's own entry comes as a `_Listing` of depth 0, which is no listing. So
+    the strategies filter and count it as any entry, but count no directory
     listed for it.
     """
     root = _trim(path)
-    listings = _TreeWalk(
-        handler, root, visit, ils_kwargs=ils_kwargs, stopping=stopping
-    ).events()
+    walk = _TreeWalk(handler, root, visit, ils_kwargs=ils_kwargs, stopping=stopping)
+    listings = walk.listings()
 
     async with aclosing(listings):
-        try:
-            first = await anext(listings)
-        except StopAsyncIteration:
-            return  # Stopping before the root was listed.
-        except FileNotFoundError:
-            # Only the root's own listing raises it: any later one is a part's.
-            return
-        if isinstance(first, _FileRoot):
-            if file_root:
-                yield await _file_entry(handler, root, first)
-            return
-
-        async for event in _then(first, listings):
-            if isinstance(event, _Part):
-                yield event
-                if event.directory == root and event.last:
-                    async for own in _root_entry(handler, root, dir_root, stopping):
-                        yield own
-
-
-async def _then(first: _Event, rest: AsyncIterator[_Event]) -> AsyncGenerator[_Event]:
-    """An event taken already, then the rest."""
-    yield first
-    async for event in rest:
-        yield event
+        async for listing in listings:
+            if listing.directory == root and isinstance(
+                listing.error, FileNotFoundError
+            ):
+                return
+            if listing.directory == root and isinstance(
+                listing.error, NotADirectoryError
+            ):
+                if file_root:
+                    yield await _file_entry(handler, root, listing.error)
+                return
+            yield listing
+            stopped = stopping is not None and bool(stopping())
+            if (
+                listing.directory == root
+                and dir_root
+                and not stopped
+                and not listing.error
+            ):
+                async with handler.operation_limit:
+                    entry = await handler.info(handler.entry(root))
+                yield _Listing(root, 0, [entry])
 
 
-async def _file_entry(handler: StorageHandler, root: str, file: _FileRoot) -> _Part:
+async def _file_entry(
+    handler: StorageHandler, root: str, error: NotADirectoryError
+) -> _Listing:
     """A root that is a file, as a listing of depth 0: its entry as its listing gave it, else asked."""
-    entry = getattr(file.error, "entry", None)
+    entry = getattr(error, "entry", None)
     if entry is None:
         async with handler.operation_limit:
             entry = await handler.info(handler.entry(root))
-    return _Part(root, 0, [entry])
-
-
-async def _root_entry(
-    handler: StorageHandler,
-    root: str,
-    dir_root: bool,
-    stopping: Callable[[], object] | None,
-) -> AsyncGenerator[_Part]:
-    """The root directory's own ``info`` entry, as a listing of depth 0, if asked."""
-    if dir_root and not (stopping and stopping()):
-        async with handler.operation_limit:
-            entry = await handler.info(handler.entry(root))
-        yield _Part(root, 0, [entry])
+    return _Listing(root, 0, [entry])

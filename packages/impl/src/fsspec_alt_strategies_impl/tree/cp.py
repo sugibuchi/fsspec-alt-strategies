@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from ..common.handler import Entry, StorageHandler, StoragePath
     from ..common.jobs import _Roots, _Transfer
     from ..common.operation import Operation
-    from ._walker import _Part
+    from ._walker import _Listing, _Order
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
@@ -222,11 +222,6 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         )  # Those whose names the destination refused.
         self.roots_whole: int | None = None
 
-        # The names of the files found so far in each directory being listed:
-        # a second entry of one, as Google Drive lists, would go where the first
-        # went. Dropped once the directory is listed to its last part.
-        self.names: dict[str, set[str]] = {}
-
     async def prepare(self) -> _Roots | None:
         """Place the roots, and queue each directory that can go whole: the rest are walked.
 
@@ -291,7 +286,12 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
         job = _Job("file", entry, target)
         self.queue(self.dst.parent(target), "", [job])
 
-    def add(self, listing: _Part) -> list[Any] | None:
+    @property
+    def order(self) -> _Order:
+        """Parents first where each directory is made after its parent; else any, which lets a subtree be listed whole."""
+        return "topdown" if self.parents_first else "any"
+
+    def add(self, listing: _Listing) -> list[Any] | None:
         try:
             directory = self.target(listing.directory)
         except ValueError as e:
@@ -299,34 +299,34 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             # directory below one refused is no error of its own.
             above = self.below_refused(listing.directory)
             self.refused_dirs.add(listing.directory)
-            if listing.first and not above:
+            if not above:
                 return [self.refuse_name(listing.directory, e)]
             return None
 
         copies, refused = self.copies(listing)
-        if listing.first and listing.last and not listing.entries:
+        if not listing.entries:
             # An empty directory is made, whatever the storage. With maxdepth,
             # fsspec's copy leaves out directories, and copies files only.
             if self.maxdepth is not None:
                 return None
             self.queue(directory, listing.directory, [], always=True)
-        elif copies or (listing.first and self.parents_first):
+        elif copies or self.parents_first:
             # Parents first, each directory is made once its parent is. Else, a
             # directory holding only directories needs no mkdir: theirs create it.
             self.queue(directory, listing.directory, copies)
-        if listing.last:
-            self.names.pop(listing.directory, None)
         return refused or None
 
-    def copies(self, listing: _Part) -> tuple[list[_Job], list[Exception]]:
-        """The jobs of the files in a part of a listing, and the errors of those refused.
+    def copies(self, listing: _Listing) -> tuple[list[_Job], list[Exception]]:
+        """The jobs of the files in a directory's listing, and the errors of those refused.
 
         A file is refused if the destination takes no such name, or if another
         file of its name in its directory goes there already.
         """
         copies: list[_Job] = []
         refused: list[Exception] = []
-        names = self.names.setdefault(listing.directory, set())
+        # A second file of one name, as Google Drive lists, would go where the
+        # first went.
+        names: set[str] = set()
         for entry in listing.entries:
             if entry["type"] == "directory":
                 continue

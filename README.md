@@ -23,8 +23,8 @@ directories. It is a third-party project, not part of fsspec.
 - Its file operations list with one primitive, a storage's listing. fsspec's own operations list every path first,
   with `expand_path`. The listing is an async iterator instead: it scans the storage step by step, and yields each
   path as it is found.
-- The operations act on the paths as they arrive, as far as they can. So a large file tree is processed without ever
-  being held in memory whole.
+- The operations act on each directory's listing as it arrives. So a large file tree is processed directory by
+  directory, without ever being held in memory whole.
 
 ### Hierarchical namespaces, used
 

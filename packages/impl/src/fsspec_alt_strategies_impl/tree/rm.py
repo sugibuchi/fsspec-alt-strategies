@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from ..common.handler import StoragePath
     from ..common.operation import Operation
-    from ._walker import _Part
+    from ._walker import _Listing
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
@@ -190,7 +190,7 @@ class _Deletion(_TreeJobs):
         if not self.implicit_directories:
             self.waiting.append(_Job("directory", {"name": directory}))
 
-    def add(self, listing: _Part) -> None:
+    def add(self, listing: _Listing) -> None:
         self.track(listing)
 
         for entry in listing.entries:
@@ -198,8 +198,8 @@ class _Deletion(_TreeJobs):
                 self.files_found += 1
                 self.queue_deletion({**entry, "name": entry["name"].rstrip("/")})
 
-        # Empty, or all in it deleted before its last part came.
-        if listing.last and self.finished(listing.directory):
+        # Empty, or all in it deleted before its listing came.
+        if self.finished(listing.directory):
             self.remove(listing.directory)
 
     def exhausted(self) -> None:

@@ -14,7 +14,7 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree._walker import _FileRoot, _TreeWalk
+from fsspec_alt_strategies_impl.tree._walker import _TreeWalk
 from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl.tree.du import _tree_du
 from fsspec_alt_strategies_impl.tree.find import _tree_find
@@ -24,9 +24,9 @@ from fsspec_alt_strategies_impl.tree.walk import _tree_walk
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 
-def _events(handler: Any, path: Any, visit: Any = None, **kwargs: Any) -> Any:
-    """The events of a walk of ``path`` on ``handler``."""
-    return _TreeWalk(handler, path, visit, **kwargs).events()
+def _listings(handler: Any, path: Any, visit: Any = None, **kwargs: Any) -> Any:
+    """The listings of a walk of ``path`` on ``handler``."""
+    return _TreeWalk(handler, path, visit, **kwargs).listings()
 
 
 def _view(fs: SimulatedFileSystem, **kwargs: Any) -> TreeView:
@@ -263,32 +263,6 @@ async def test_glob_with_maxdepth_lists_a_directory_per_request(
     assert any_fs.stats.calls["list"] == 3
 
 
-async def test_a_directory_comes_before_its_own_parts(
-    flat_fs: SimulatedFileSystem,
-) -> None:
-    _tree(flat_fs)
-    seen: set[str] = {"data"}
-    last: list[str] = []
-
-    async for part in _events(_view(flat_fs), "data", chunk_size=1):
-        assert part.directory in seen
-        seen.update(
-            e["name"].rstrip("/") for e in part.entries if e["type"] == "directory"
-        )
-        if part.last:
-            last.append(part.directory)
-
-    # Each directory ends once, though an object store lists none of them.
-    assert sorted(last) == sorted(
-        [
-            "data",
-            "data/2023",
-            "data/2024",
-            *(f"data/{y}/{m}" for y in ("2023", "2024") for m in ("01", "02")),
-        ]
-    )
-
-
 async def test_entries_apart_from_their_directory_in_name_order(
     hierarchical_fs: SimulatedFileSystem,
 ) -> None:
@@ -299,12 +273,12 @@ async def test_entries_apart_from_their_directory_in_name_order(
     hierarchical_fs.add_dir("data/a/empty")
     hierarchical_fs.add_dir("data/a-empty")
 
-    parts = [p async for p in _events(_view(hierarchical_fs), "data")]
+    listings = [x async for x in _listings(_view(hierarchical_fs), "data")]
 
     entries: dict[str, list[str]] = {}
-    for part in parts:
-        assert part.first == (part.directory not in entries)
-        entries.setdefault(part.directory, []).extend(e["name"] for e in part.entries)
+    for listing in listings:
+        assert listing.directory not in entries  # Each directory once, whole.
+        entries[listing.directory] = [e["name"] for e in listing.entries]
     assert entries == {
         "data": ["data/a", "data/a-empty", "data/a-x", "data/a.txt", "data/b"],
         "data/a": ["data/a/empty", "data/a/f"],
@@ -313,9 +287,8 @@ async def test_entries_apart_from_their_directory_in_name_order(
         "data/a-x": ["data/a-x/g"],
         "data/b": ["data/b/h"],
     }
-    # Each directory ends once, all below it ending first.
-    ended = [p.directory for p in parts if p.last]
-    assert sorted(ended) == sorted(entries)
+    # Each directory after all below it, as the listing passes it.
+    ended = [x.directory for x in listings]
     for directory in ended:
         below = [d for d in ended if d.startswith(directory + "/")]
         assert all(ended.index(d) < ended.index(directory) for d in below)
@@ -353,12 +326,12 @@ async def test_depth_first_with_siblings_in_any_order(
     hierarchical_fs.add_dir("data/a-empty")
     view = _OwnDepthFirst(hierarchical_fs, ils=_reversed_ils(hierarchical_fs))
 
-    parts = [p async for p in _events(view, "data")]
+    listings = [x async for x in _listings(view, "data")]
 
     entries: dict[str, list[str]] = {}
-    for part in parts:
-        assert part.first == (part.directory not in entries)
-        entries.setdefault(part.directory, []).extend(e["name"] for e in part.entries)
+    for listing in listings:
+        assert listing.directory not in entries  # Each directory once, whole.
+        entries[listing.directory] = [e["name"] for e in listing.entries]
     assert {d: sorted(names) for d, names in entries.items()} == {
         "data": ["data/a", "data/a-empty", "data/a-x", "data/a.txt", "data/b"],
         "data/a": ["data/a/empty", "data/a/f"],
@@ -367,9 +340,8 @@ async def test_depth_first_with_siblings_in_any_order(
         "data/a-x": ["data/a-x/g"],
         "data/b": ["data/b/h"],
     }
-    # Each directory ends once, all below it ending first.
-    ended = [p.directory for p in parts if p.last]
-    assert sorted(ended) == sorted(entries)
+    # Each directory after all below it, as the listing passes it.
+    ended = [x.directory for x in listings]
     for directory in ended:
         below = [d for d in ended if d.startswith(directory + "/")]
         assert all(ended.index(d) < ended.index(directory) for d in below)
@@ -385,28 +357,29 @@ async def test_a_directory_ends_before_the_listing_does(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     _tree(flat_fs)
-    parts = [p async for p in _events(_view(flat_fs), "data")]
+    listings = [x async for x in _listings(_view(flat_fs), "data")]
 
-    # Its last part comes as the listing passes it, before data/2024's entries.
-    ended = next(
-        i for i, p in enumerate(parts) if p.last and p.directory == "data/2023/01"
+    # Its listing comes as the listing passes it, before data/2024's.
+    ended = next(i for i, x in enumerate(listings) if x.directory == "data/2023/01")
+    later = next(
+        i for i, x in enumerate(listings) if x.directory.startswith("data/2024")
     )
-    later = next(i for i, p in enumerate(parts) if p.directory.startswith("data/2024"))
     assert ended < later
 
 
-async def test_a_missing_root_raises(any_fs: SimulatedFileSystem) -> None:
-    with pytest.raises(FileNotFoundError):
-        async for _ in _events(_view(any_fs), "missing"):
-            pass
+async def test_a_missing_root_is_a_failed_listing(any_fs: SimulatedFileSystem) -> None:
+    listings = [x async for x in _listings(_view(any_fs), "missing")]
+    assert [(x.directory, type(x.error)) for x in listings] == [
+        ("missing", FileNotFoundError)
+    ]
 
 
-async def test_a_file_root_is_yielded_as_such(any_fs: SimulatedFileSystem) -> None:
+async def test_a_file_root_fails_with_its_entry(any_fs: SimulatedFileSystem) -> None:
     any_fs.add_file("a/x")
-    events = [e async for e in _events(_view(any_fs), "a/x")]
-    assert len(events) == 1
-    assert isinstance(events[0], _FileRoot)
-    assert isinstance(events[0].error, NotADirectoryError)
+    listings = [x async for x in _listings(_view(any_fs), "a/x")]
+    assert len(listings) == 1
+    assert isinstance(listings[0].error, NotADirectoryError)
+    assert listings[0].error.entry["name"] == "a/x"
 
 
 class _Choosing(TreeView):
@@ -418,7 +391,7 @@ class _Choosing(TreeView):
         super().__init__(fs, recursive_listing=True, **kwargs)
         self.below = below
 
-    def lists_subtree(self, entry: dict[str, Any], *, pruned: bool = False) -> bool:
+    def lists_subtree(self, entry: dict[str, Any]) -> bool:
         return self.below is not None and entry["name"].count("/") >= self.below
 
 
@@ -445,98 +418,3 @@ async def test_a_handler_chooses_how_a_subtree_is_listed(
     assert hierarchical_fs.stats.calls["list"] == listings
     expected = await AsyncFileSystem._find(hierarchical_fs, "data", withdirs=True)
     assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)
-
-
-class _Eager(TreeView):
-    """A storage listing every subtree whole, though the operation prunes below it: the walk drops what it leaves."""
-
-    def __init__(self, fs: SimulatedFileSystem) -> None:
-        profile = StorageProfile(recursive_order="depth_first")
-        super().__init__(fs, recursive_listing=True, storage_profile=profile)
-
-    def lists_subtree(self, entry: dict[str, Any], *, pruned: bool = False) -> bool:
-        return True
-
-
-@pytest.mark.parametrize(
-    "pattern",
-    [
-        "data/*/01/*",
-        "data/2024/*",
-        "data/*/*/part-0.parquet",
-        "*/README.md",
-        "data/2*",
-        "data/**/part-1.parquet",
-        "data/*/02/",
-    ],
-)
-async def test_a_glob_lists_a_pruned_subtree_whole_where_the_handler_chooses(
-    any_fs: SimulatedFileSystem, pattern: str
-) -> None:
-    _tree(any_fs)
-    expected = await AsyncFileSystem._glob(any_fs, pattern)
-    any_fs.stats.calls.clear()
-
-    found, errors = await _collect_with_errors(_tree_glob(_Eager(any_fs), pattern))
-
-    assert errors == []
-    assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)
-    # One listing of the pattern's root, where a directory per request lists each it can match in.
-    assert any_fs.stats.calls["list"] == 1
-
-
-@pytest.mark.parametrize("maxdepth", [1, 2, 3])
-async def test_find_and_du_within_maxdepth_by_one_listing(
-    any_fs: SimulatedFileSystem, maxdepth: int
-) -> None:
-    _tree(any_fs)
-    expected = await AsyncFileSystem._find(
-        any_fs, "data", maxdepth=maxdepth, withdirs=True
-    )
-    size = await AsyncFileSystem._du(any_fs, "data", maxdepth=maxdepth)
-    any_fs.stats.calls.clear()
-
-    found, errors = await _collect_with_errors(
-        _tree_find(_Eager(any_fs), "data", maxdepth=maxdepth, withdirs=True)
-    )
-    counted, _ = await _collect_with_errors(
-        _tree_du(_Eager(any_fs), "data", maxdepth=maxdepth)
-    )
-
-    assert errors == []
-    assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)
-    assert sum(e["size"] for e in counted) == size
-    assert any_fs.stats.calls["list"] == 2  # One for find, one for du.
-
-
-async def test_a_walk_bottom_up_within_maxdepth_by_one_listing(
-    hierarchical_fs: SimulatedFileSystem,
-) -> None:
-    _tree(hierarchical_fs)
-    alone = await _collect_with_errors(
-        _tree_walk(TreeView(hierarchical_fs), "data", maxdepth=2, topdown=False)
-    )
-    whole = await _collect_with_errors(
-        _tree_walk(_Eager(hierarchical_fs), "data", maxdepth=2, topdown=False)
-    )
-    assert sorted(d for d, _, _ in whole[0]) == sorted(d for d, _, _ in alone[0])
-    order = [d for d, _, _ in whole[0]]
-    assert order[-1] == "data"  # Bottom up: the root after all below it.
-
-
-async def test_rm_within_maxdepth_deletes_as_listed_alone() -> None:
-    # The directories the visit leaves are told of: rm deletes those at the limit
-    # only if empty, as fsspec does, so the four months, holding files, fail.
-    results = []
-    for view in (TreeView, _Eager):
-        fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-        _tree(fs)
-        deleted, errors = await _collect_with_errors(
-            _tree_rm(view(fs), "data", maxdepth=2)
-        )
-        failed = sorted(e.filename for e in errors if isinstance(e, OSError))
-        results.append(
-            (sorted(deleted), failed, sorted(await fs._find("", withdirs=True)))
-        )
-    assert results[0] == results[1]
-    assert len(results[0][1]) == 4

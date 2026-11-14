@@ -183,24 +183,18 @@ code: read it before adding a strategy or a handler.
   - "depth_first", declared, covers name order too. It lets the walk close each directory as the listing passes it.
   - `_tree_ils`'s listing is a `_DepthFirst`, which the walk reads a directory at a time itself, whatever the profile
     says.
-- The tree strategies walk with `tree._walker._TreeWalk`, which is private: never expose its `_Part`. It reads each
-  directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
-- The walk asks for each part, and nothing pushes one: no queue between the readers and it, and no task listing ahead.
-  Its directories to read wait on a stack, depth first. A reader holds one permit until it ends, taken by the walk
+- The tree strategies walk with `tree._walker._TreeWalk`, which is private. It gives one `_Listing` per directory, its
+  entries or its error, as a standard walk does, in the order the caller asks: "topdown", "bottomup" or "any".
+- Its directories to list wait on a stack, depth first. A listing holds one permit until it ends, taken by the walk
   before it starts. Keep it so: a queue or a task per directory would list beyond the walk's control, and past a
   cancel.
-- The walk takes a `tree._visit._Visit`: which directories the operation needs, e.g. within `maxdepth`. What it found
-  but did not list, it yields as events: a `_Skipped` subdirectory, a `_FileRoot`, and, when asked, a
-  `_SubtreeListed`. A consumer acts on those, and never checks `maxdepth` or catches a file root again.
-- How the walk lists what the visit needs is the handler's, by the tree handler's `lists_subtree(entry, pruned=...)`:
-  a subtree needed whole by one `ils_recursive` unless it says no, a pruned one only if it says yes. The walk then
-  keeps what the visit would list, by path: only a visit whose `by_path` holds allows it. Never decide it in a
-  visit, nor by the storage in a strategy.
-- Each reader drops a subdirectory its directory listed before, though a storage may list one twice. Beside them, only
-  a copy keeps names alone: its file names per directory, `tree.cp._CopyOrMove.names`, to refuse a second file of one
-  name.
-- A recursive listing that breaks off is a failed listing: its error, noted with its root, after what it passed.
-  Nothing is listed again: a storage resumes its own listing, e.g. a page by its continuation token.
+- The walk takes a `tree._visit._Visit`: which directories the operation needs, e.g. within `maxdepth`. How each is
+  listed is the handler's, by the tree handler's `lists_subtree(entry)`: a subtree needed whole by one
+  `ils_recursive`, unless it says no or the order is "topdown". Never decide it in a visit, nor by the storage in a
+  strategy.
+- A root's failure is a failed listing like any other. Each strategy decides what it means, as its fsspec method does.
+- A recursive listing that breaks off is a failed listing: its root's. Nothing is listed again: a storage resumes its
+  own listing, e.g. a page by its continuation token.
 - Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
 
