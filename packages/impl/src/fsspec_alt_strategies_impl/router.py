@@ -147,6 +147,9 @@ class RoutingHandler(_PathHandler):
         self.transfer_concurrency = transfer_concurrency
         self.transfer_limit = _limit(transfer_concurrency, "transfer_concurrency")
         self._inner: dict[Hashable, Any] = {}
+        # How many times it closed what it made: a router's filesystems on
+        # handlers made before are stale.
+        self.closes = 0
 
     # What a developer implements.
 
@@ -256,6 +259,7 @@ class RoutingHandler(_PathHandler):
     async def aclose(self) -> None:
         """Close the handlers made by `inner`, by their `aclose`, and forget them: a later route makes them again."""
         made, self._inner = self._inner, {}
+        self.closes += 1
         for handler in made.values():
             await handler.aclose()
 
@@ -266,8 +270,14 @@ class RoutingHandler(_PathHandler):
         again.
         """
         made, self._inner = self._inner, {}
+        self.closes += 1
         for handler in made.values():
             handler.close()
+
+
+def _closes(through: _Through) -> tuple[int, ...]:
+    """How many times each router gone through has closed the handlers it made."""
+    return tuple(router.closes for router, _ in through)
 
 
 class _Storage(NamedTuple):
@@ -276,6 +286,8 @@ class _Storage(NamedTuple):
     handler: FileOperationHandler
     fs: BaseFileSystem
     through: _Through
+    closes: tuple[int, ...]
+    """How many times each router gone through had closed its handlers when this was made."""
 
 
 class RoutingFileSystem(AsyncFileSystem, Monitored):
@@ -456,8 +468,14 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     def _storage(self, handler: FileOperationHandler, through: _Through) -> _Storage:
         """The storage of a handler, its filesystem made once."""
         storage = self._storages.get(handler)
-        if storage is not None:
+        if storage is not None and storage.closes == _closes(storage.through):
             return storage
+
+        # A miss: the storages a router gone through closed since are dropped,
+        # as their handlers are, rather than kept for ever.
+        self._storages = {
+            h: s for h, s in self._storages.items() if s.closes == _closes(s.through)
+        }
 
         # Never cached: the router keeps it, and fsspec would key it by the
         # handler's repr. fsspec's metaclass takes skip_instance_cache, before
@@ -468,7 +486,9 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
             loop=self.loop,
             skip_instance_cache=True,
         )
-        storage = self._storages[handler] = _Storage(handler, fs, through)
+        storage = self._storages[handler] = _Storage(
+            handler, fs, through, _closes(through)
+        )
         return storage
 
     def _outer(self, fs: AsyncFileSystem, path: str) -> str:

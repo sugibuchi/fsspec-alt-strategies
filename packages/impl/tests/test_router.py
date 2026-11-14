@@ -1036,3 +1036,16 @@ async def test_du_above_the_storages_is_each_storages_own(router: _Router) -> No
     # Each storage's du sums its listing's sizes: no request per file.
     for sim in (router.tree, router.flat, router.plain):
         assert "info" not in sim.stats.calls
+
+
+async def test_the_handlers_aclose_drops_the_filesystems_made_on_them(
+    router: _Router,
+) -> None:
+    _backend(router, "tree")
+    _backend(router, "flat")
+    await router.handler.aclose()
+    # Routed again: a filesystem made anew, and those made before the close dropped.
+    _backend(router, "tree")
+    assert len(router._storages) == 1
+    (storage,) = router._storages.values()
+    assert storage.closes == (router.handler.closes,)
