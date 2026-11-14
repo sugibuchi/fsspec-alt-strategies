@@ -13,18 +13,18 @@ batches of the handler's ``cp_batch_size`` or ``mv_batch_size``.
 Each error yielded notes its paths, and has its source's path as its
 ``source`` attribute, so that the caller tells which file it is of.
 
-This module depends on `handler` and `operation`.
+This module depends on `handler`, `operation` and `rm_files`.
 """
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import CpState, MvState
 
 from .operation import Operation
+from .rm_files import _bounded
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
@@ -97,41 +97,14 @@ async def _each(
 ) -> AsyncGenerator[tuple[str, str] | Exception]:
     """Send each transfer under a permit, yielding its outcome as it comes."""
     op.state = replace(op.state, files_found=len(transfers))
-    started: set[asyncio.Task[Any]] = set()
-
-    async def one(transfer: FileTransfer) -> bool:
-        async with handler.operation_limit:
-            if op.cancelling():
-                return False
-            started.add(asyncio.current_task())  # type: ignore[arg-type]
-            await send(transfer)
-            return True
-
-    tasks = {asyncio.ensure_future(one(t)): t for t in transfers}
-    try:
-        pending = set(tasks)
-        while pending:
-            done, pending = await asyncio.wait(
-                pending, return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in done:
-                transfer = tasks[task]
-                source = transfer.entry["name"]
-                try:
-                    if not task.result():
-                        continue  # Cancelled before its turn: nothing done.
-                except Exception as e:
-                    op.state = counted(op.state, source, True)
-                    yield _noted(e, doing, transfer)
-                else:
-                    op.state = counted(op.state, source, False)
-                    yield source, transfer.path2
-    finally:
-        # Closed early: the transfers not started are dropped, those running awaited.
-        for task in tasks:
-            if task not in started:
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    sent = _bounded(handler.operation_limit, transfers, send, op.cancelling)
+    async for transfer, error in sent:
+        source = transfer.entry["name"]
+        op.state = counted(op.state, source, error is not None)
+        if error is None:
+            yield source, transfer.path2
+        else:
+            yield _noted(error, doing, transfer)
 
 
 def _cp_by_request(

@@ -158,8 +158,11 @@ async def _find_listings(
         except (FileNotFoundError, NotADirectoryError) as e:
             # Only the root's own listing raises them: any later one is yielded.
             if file_root and isinstance(e, NotADirectoryError):
-                async with handler.operation_limit:
-                    entry = await handler.info(handler.entry(root))
+                # The file's entry, as its listing gave it, else asked.
+                entry = getattr(e, "entry", None)
+                if entry is None:
+                    async with handler.operation_limit:
+                        entry = await handler.info(handler.entry(root))
                 yield _Listing(root, 0, [entry])
             return
 

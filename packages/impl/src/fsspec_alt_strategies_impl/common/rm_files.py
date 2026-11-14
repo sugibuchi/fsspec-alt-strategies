@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from fsspec_alt_strategies.states import RmState
 
@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     from .handler import Entry, StorageHandler
 
 __all__: list[str] = []
+
+_T = TypeVar("_T")
 
 
 def _rm_each_file(
@@ -53,59 +55,68 @@ def _rm_each_file(
     `RmState`.
     """
 
+    async def delete(entry: Entry) -> None:
+        # A file missing is deleted: the storage is as asked.
+        with contextlib.suppress(FileNotFoundError):
+            await handler.rm_file(entry)
+
     async def run(op: Operation[str, RmState]) -> AsyncGenerator[str | Exception]:
         op.state = RmState(files_found=len(entries))
-        started: set[asyncio.Task[Any]] = set()
-        tasks = {
-            asyncio.ensure_future(_delete(handler, e, op, started)): e["name"]
-            for e in entries
-        }
-        try:
-            pending = set(tasks)
-            while pending:
-                done, pending = await asyncio.wait(
-                    pending, return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in done:
-                    path = tasks[task]
-                    try:
-                        if not task.result():
-                            continue  # Cancelled before its turn: nothing done.
-                    except Exception as e:
-                        e.add_note(f"Deleting {path!r} failed.")
-                        op.state = _counted(op.state, path, failed=True)
-                        yield e
-                    else:
-                        op.state = _counted(op.state, path, failed=False)
-                        yield path
-        finally:
-            # Closed early: the deletions not started are dropped, those running awaited.
-            for task in tasks:
-                if task not in started:
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+        sent = _bounded(handler.operation_limit, entries, delete, op.cancelling)
+        async for entry, error in sent:
+            path = entry["name"]
+            op.state = _counted(op.state, path, failed=error is not None)
+            if error is None:
+                yield path
+            else:
+                error.add_note(f"Deleting {path!r} failed.")
+                yield error
 
     return Operation(run, RmState())
 
 
-async def _delete(
-    handler: StorageHandler,
-    entry: Entry,
-    op: Operation[str, RmState],
-    started: set[asyncio.Task[Any]],
-) -> bool:
-    """Delete a file under a permit, unless cancelled before its turn: whether it was tried.
+async def _bounded(
+    limit: asyncio.Semaphore,
+    items: list[_T],
+    send: Callable[[_T], Awaitable[None]],
+    cancelling: Callable[[], object],
+) -> AsyncGenerator[tuple[_T, Exception | None]]:
+    """Send each item under a permit of ``limit``, yielding it with its error, or None, as each ends.
 
-    A file missing is deleted. Its task joins ``started`` once it holds its
-    permit, so that a close waits for it, and cancels those not started.
+    Once ``cancelling``, an item not started yet is dropped, never yielded.
+    Closed early, those not started are dropped, and those running awaited: a
+    request sent is never left behind.
     """
-    async with handler.operation_limit:
-        if op.cancelling():
-            return False
-        started.add(asyncio.current_task())  # type: ignore[arg-type]
-        with contextlib.suppress(FileNotFoundError):
-            await handler.rm_file(entry)
-        return True
+    started: set[asyncio.Task[Any]] = set()
+
+    async def one(item: _T) -> bool:
+        async with limit:
+            if cancelling():
+                return False
+            started.add(asyncio.current_task())  # type: ignore[arg-type]
+            await send(item)
+            return True
+
+    tasks = {asyncio.ensure_future(one(item)): item for item in items}
+    try:
+        pending = set(tasks)
+        while pending:
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                try:
+                    if not task.result():
+                        continue  # Cancelled before its turn: nothing done.
+                except Exception as e:
+                    yield tasks[task], e
+                else:
+                    yield tasks[task], None
+    finally:
+        for task in tasks:
+            if task not in started:
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _rm_by_request(

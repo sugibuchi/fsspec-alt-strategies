@@ -652,7 +652,11 @@ async def _relist(
                 if entry["type"] == "directory":
                     found.append((name, {**entry, "name": name}))
                 if len(chunk) >= chunk_size:
-                    await parts.put(directory.relisted(chunk, first, last=False))
+                    await parts.put(
+                        _Listing(
+                            directory.name, directory.depth, chunk, None, first, False
+                        )
+                    )
                     first, chunk = False, []
                     if stopped():
                         return found
@@ -661,12 +665,14 @@ async def _relist(
                 await aclose()
     except Exception as e:
         if chunk:
-            await parts.put(directory.relisted(chunk, first, last=False))
+            await parts.put(
+                _Listing(directory.name, directory.depth, chunk, None, first, False)
+            )
             first = False
         await parts.put(_Listing(directory.name, directory.depth, [], e, first, True))
         return found
 
-    await parts.put(directory.relisted(chunk, first, last=True))
+    await parts.put(_Listing(directory.name, directory.depth, chunk, None, first, True))
     return found
 
 
@@ -890,12 +896,6 @@ class _Open:
         self.entries, self.first = [], False
         return part
 
-    def relisted(
-        self, entries: list[dict[str, Any]], first: bool, *, last: bool
-    ) -> _Listing:
-        """A part of its listing again, once a recursive listing broke off in it."""
-        return _Listing(self.name, self.depth, entries, None, first, last)
-
 
 def _prefix(directory: str) -> str:
     """What the paths below a directory start with."""
@@ -962,10 +962,15 @@ class _Trees:
             )
 
     def listed(self, directory: str) -> bool:
-        """Whether the directory's subdirectories are in a recursive listing."""
-        return any(
-            r in (directory, "") or directory.startswith(r + "/") for r in self.roots
-        )
+        """Whether the directory's subdirectories are in a recursive listing: it, or a directory above it, is a root."""
+        if "" in self.roots:
+            return True
+        path = directory
+        while path:
+            if path in self.roots:
+                return True
+            path = path.rpartition("/")[0]
+        return False
 
 
 def _not_a_directory(root: str, entry: dict[str, Any]) -> NotADirectoryError:

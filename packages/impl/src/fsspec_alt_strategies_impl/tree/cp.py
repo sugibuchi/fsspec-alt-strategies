@@ -259,7 +259,6 @@ class _CopyOrMove(_CopyJobs, _TreeJobs):
             job = _Job("whole", root, target)
             self.queue(parent, "", [job], always=not self.implicit_directories)
 
-        self.roots_whole = 0
         return roots._replace(directories=walked)
 
     async def whole(self, root: dict[str, Any]) -> bool | Exception:
