@@ -62,6 +62,15 @@ async def test_release_shuts_the_threads_down_and_a_call_after_makes_them_again(
     client.release()
 
 
+async def test_close_shuts_the_threads_down_too() -> None:
+    client = _Client()
+    await client._run_in_thread(lambda: None)
+    first = client._thread_pool()
+    await client.close()
+    assert client._executor is None
+    assert first._shutdown
+
+
 async def test_collecting_it_shuts_the_threads_down() -> None:
     client = _Client()
     await client._run_in_thread(lambda: None)

@@ -85,7 +85,7 @@ class _File(io.BytesIO):
 
 
 class _Files:
-    """The file objects of the simulated storage a handler wraps, and its releases counted."""
+    """The file objects of the simulated storage a handler wraps, and its closes and releases counted."""
 
     fs: SimulatedFileSystem
     closed = 0
@@ -95,6 +95,10 @@ class _Files:
 
     def open_sync_file(self, path: str, mode: str, **kwargs: Any) -> Any:
         return _File(self.fs, path, kwargs.get("autocommit", True))
+
+    async def close(self) -> None:
+        _Files.closed += 1
+        await super().close()  # type: ignore[misc]
 
     def release(self) -> None:
         _Files.closed += 1

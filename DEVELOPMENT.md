@@ -119,8 +119,9 @@ AsyncFileSystem                    fsspec's
 `StorageHandler` holds what both families share:
 
 - **Its lifecycle.** It is made without a request. `await open()` makes its clients on the running loop, and loads its
-  profile with `load_profile()`, once. `await close()` releases them, and `release()` releases at once what needs no
-  request, e.g. threads.
+  profile with `load_profile()`, once. `await close()` closes them, and a later call opens it again. `release()` is
+  the filesystem's sync `close()`: it releases at once what it can without awaiting, e.g. threads. A handler may
+  refuse calls after it, as a closed filesystem does, so `close()` never calls it.
 - **Its profile,** `profile`, as the next sections say.
 - **Its limits,** `operation_limit` for the strategies' requests and `io_limit` for reads and writes of data. The
   callers hold the permits, never the primitives: the strategies hold one of `operation_limit` around each primitive,

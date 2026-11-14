@@ -253,15 +253,21 @@ class StorageHandler(_PathHandler):
         return self.profile
 
     async def close(self) -> None:
-        """Release what `open` made, and what `release` releases. A later `open` opens it again."""
-        self.release()
+        """Release what `open` made, on the running loop: a later `open` opens it again.
+
+        A subclass closes its clients, then calls this one. It never calls
+        `release`, which a handler may take as closing it for good: a handler
+        closed so is open again for the next call.
+        """
         self._opened = False
 
     def release(self) -> None:
-        """Release at once what needs no request to release, e.g. threads: here, nothing.
+        """Release at once, from a sync caller, what the handler holds: here, nothing.
 
-        A filesystem's sync ``close()`` calls it. A subclass holding threads
-        shuts them down here.
+        A filesystem's sync ``close()`` calls it, after which a handler may
+        refuse calls, as a closed filesystem does. A subclass holding threads
+        shuts them down here, and one holding clients closes them as it can
+        without awaiting. `close` never calls it.
         """
 
     # The primitives of single paths, which every handler has.

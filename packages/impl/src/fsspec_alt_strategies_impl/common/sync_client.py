@@ -36,10 +36,11 @@ class SyncClientSupport:
     ``operation_concurrency``, if a number. A semaphore shared with others
     leaves the count to the executor's default.
 
-    ``release()`` shuts the threads down, without waiting, cancelling the
-    calls not started, then releases as the next class does. So the handler's
-    ``close()``, and the sync ``close()`` of a filesystem on it, shut them
-    down, as does collecting the handler. A call after makes them again.
+    ``close()`` and ``release()`` shut the threads down, without waiting,
+    cancelling the calls not started, then close or release as the next class
+    does. So the handler's ``close()``, and the sync ``close()`` of a
+    filesystem on it, shut them down, as does collecting the handler. A call
+    after makes them again.
 
     Examples
     --------
@@ -89,6 +90,13 @@ class SyncClientSupport:
         executor, self._executor = self._executor, None
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
+
+    async def close(self) -> None:
+        """Shut the threads down, then close as the next class does, e.g. `StorageHandler`."""
+        self._shutdown_threads()
+        close = getattr(super(), "close", None)
+        if close is not None:
+            await close()
 
     def release(self) -> None:
         """Shut the threads down, then release as the next class does, e.g. `StorageHandler`."""

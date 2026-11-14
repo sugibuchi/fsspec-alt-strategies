@@ -39,6 +39,26 @@ class _Account(StorageHandler):
     async def mv_file(self, entry: Any, path2: str) -> None: ...
 
 
+async def test_close_never_releases_and_a_later_open_opens_again() -> None:
+    class Counted(_Account):
+        loads = releases = 0
+
+        async def load_profile(self) -> Any:
+            self.loads += 1
+            return await super().load_profile()
+
+        def release(self) -> None:
+            self.releases += 1
+
+    handler = Counted()
+    await handler.open()
+    await handler.close()
+    # A handler taking release as closing for good is still open to calls.
+    assert handler.releases == 0
+    await handler.open()
+    assert handler.loads == 2
+
+
 def test_verify_path_is_abstract() -> None:
     class NoVerify(_Account):
         verify_path = StorageHandler.verify_path  # type: ignore[assignment]
