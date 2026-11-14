@@ -188,7 +188,8 @@ class StorageHandler(_PathHandler):
 
     It is made without a request. `open` loads its profile, and makes its
     clients, on the running loop: the strategies read ``profile`` once it is
-    open. `close` releases what `open` made.
+    open. `aclose` releases what `open` made, and `close` all it holds, from a
+    sync caller.
 
     Two limits bound its requests, each an `asyncio.Semaphore`:
 
@@ -257,22 +258,22 @@ class StorageHandler(_PathHandler):
         """
         return self.profile
 
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         """Release what `open` made, on the running loop: a later `open` opens it again.
 
         A subclass closes its clients, then calls this one. It never calls
-        `release`, which a handler may take as closing it for good: a handler
+        `close`, which a handler may take as closing it for good: a handler
         closed so is open again for the next call.
         """
         self._opened = False
 
-    def release(self) -> None:
+    def close(self) -> None:
         """Release at once, from a sync caller, what the handler holds: here, nothing.
 
         A filesystem's sync ``close()`` calls it, after which a handler may
         refuse calls, as a closed filesystem does. A subclass holding threads
         shuts them down here, and one holding clients closes them as it can
-        without awaiting. `close` never calls it.
+        without awaiting. `aclose` never calls it.
         """
 
     # The primitives of single paths, which every handler has.

@@ -85,7 +85,7 @@ class _File(io.BytesIO):
 
 
 class _Files:
-    """The file objects of the simulated storage a handler wraps, and its closes and releases counted."""
+    """The file objects of the simulated storage a handler wraps, and its closes counted, sync or async."""
 
     fs: SimulatedFileSystem
     closed = 0
@@ -96,11 +96,11 @@ class _Files:
     def open_sync_file(self, path: str, mode: str, **kwargs: Any) -> Any:
         return _File(self.fs, path, kwargs.get("autocommit", True))
 
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         _Files.closed += 1
-        await super().close()  # type: ignore[misc]
+        await super().aclose()  # type: ignore[misc]
 
-    def release(self) -> None:
+    def close(self) -> None:
         _Files.closed += 1
 
 
@@ -742,12 +742,12 @@ def test_close_closes_the_storages_made(router: _Router) -> None:
     assert _backend(router, "tree") is not None
 
 
-async def test_the_handlers_async_close_closes_the_storages_made(
+async def test_the_handlers_aclose_closes_the_storages_made(
     router: _Router,
 ) -> None:
     _backend(router, "tree")
     before = _Files.closed
-    await router.handler.close()
+    await router.handler.aclose()
     assert _Files.closed == before + 1
 
 

@@ -119,9 +119,9 @@ AsyncFileSystem                    fsspec's
 `StorageHandler` holds what both families share:
 
 - **Its lifecycle.** It is made without a request. `await open()` makes its clients on the running loop, and loads its
-  profile with `load_profile()`, once. `await close()` closes them, and a later call opens it again. `release()` is
-  the filesystem's sync `close()`: it releases at once what it can without awaiting, e.g. threads. A handler may
-  refuse calls after it, as a closed filesystem does, so `close()` never calls it.
+  profile with `load_profile()`, once. `await aclose()` closes them, and a later call opens it again. Its sync
+  `close()` is the filesystem's: it releases at once what it can without awaiting, e.g. threads. A handler may refuse
+  calls after it, as a closed filesystem does, so `aclose()` never calls it.
 - **Its profile,** `profile`, as the next sections say.
 - **Its limits,** `operation_limit` for the strategies' requests and `io_limit` for reads and writes of data. The
   callers hold the permits, never the primitives: the strategies hold one of `operation_limit` around each primitive,
@@ -321,8 +321,8 @@ its `RoutingHandler`'s, which a developer implements:
 - `roots(entry)` lists a directory above the storages. Without such paths, e.g. for URLs naming their storage, the
   default raises FileNotFoundError.
 
-`route` makes each handler once, by `inner(key, make)`, without a request. The routing handler's `close()` closes
-them, and `release()` releases them, as the filesystem's sync `close()` does.
+`route` makes each handler once, by `inner(key, make)`, without a request. The routing handler's `aclose()` closes
+them, and its sync `close()` releases them at once, as the filesystem's `close()` does.
 
 For each storage routed to, the router makes a `TreeFileSystem` or `FlatFileSystem`, as its handler's class is a
 `TreeHandler` or a `FlatHandler`, uncached. Each path is checked twice: by the routing handler, then its path in the storage by the storage's handler.

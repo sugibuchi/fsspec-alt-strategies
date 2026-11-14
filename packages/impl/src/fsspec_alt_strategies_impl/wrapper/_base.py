@@ -56,7 +56,7 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
 
     A sync filesystem's calls run in threads of the handler's own, as many as
     both concurrencies together, when both are numbers: a filesystem unsafe to
-    call from several threads needs both at 1. `release` shuts them down.
+    call from several threads needs both at 1. `close` and `aclose` shut them down.
     """
 
     def __init__(

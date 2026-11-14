@@ -203,15 +203,13 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
             own(path)  # A wrapped filesystem's own listings kept.
 
     def close(self) -> None:
-        """Release what the filesystem holds: its handler's, released at once.
+        """Release what the filesystem holds: its handler's, by the handler's sync `close`.
 
         fsspec never calls it. A router closes its inner filesystems with it,
-        and ``with`` closes the filesystem it opened. A subclass, or a mixin
-        such as `SyncClientSupport`, releases its own, e.g. a client or
-        threads, and calls this one. It may be called more than once: each
-        releases what is held then.
+        and ``with`` closes the filesystem it opened. It may be called more
+        than once: each releases what is held then.
         """
-        self.handler.release()
+        self.handler.close()
 
     # fsspec's sync methods it leaves to each filesystem: the handler's, where it has them.
 

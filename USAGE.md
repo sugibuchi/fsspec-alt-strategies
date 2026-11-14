@@ -429,7 +429,8 @@ class Lake(RoutingHandler):
 fs = RoutingFileSystem(Lake(transfer_concurrency=8), asynchronous=True)
 ```
 
-- `route` makes each handler once, by `inner`, without a request. The routing handler's `close()` closes them.
+- `route` makes each handler once, by `inner`, without a request. The routing handler's `aclose()` closes them,
+  and its sync `close()` releases them at once.
 - Each path is checked twice: by the routing handler, then its path in the storage by the storage's handler.
 - `route` may give another routing handler, which routes the path again. The names answered are the outermost
   router's.

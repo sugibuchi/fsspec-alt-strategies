@@ -94,8 +94,8 @@ class RoutingHandler(_PathHandler):
     routers is checked three times, by each router and by the storage's
     handler.
 
-    `inner` makes the handlers it routes to, once each, so that `close` and
-    `release` close them. A copy or move between two storages goes a file at
+    `inner` makes the handlers it routes to, once each, so that `aclose` and
+    `close` close them. A copy or move between two storages goes a file at
     a time by `cp_across` or `mv_across`, ``transfer_concurrency`` at a time.
     Through nested routers, the outermost router's are those used.
 
@@ -238,8 +238,8 @@ class RoutingHandler(_PathHandler):
     def inner(self, key: Hashable, make: Callable[[], _Made]) -> _Made:
         """The handler of ``key``, made by ``make`` the first time, e.g. one per volume.
 
-        `route` makes the handlers it routes to by it, so that `close` and
-        `release` close them. ``make`` sends no request: a handler opens as
+        `route` makes the handlers it routes to by it, so that `aclose` and
+        `close` close them. ``make`` sends no request: a handler opens as
         its storage is first used.
         """
         made = self._inner.get(key)
@@ -250,21 +250,21 @@ class RoutingHandler(_PathHandler):
     async def open(self) -> None:
         """Nothing: each handler made opens as its storage is first used."""
 
-    async def close(self) -> None:
-        """Close the handlers made by `inner`, and forget them: a later route makes them again."""
+    async def aclose(self) -> None:
+        """Close the handlers made by `inner`, by their `aclose`, and forget them: a later route makes them again."""
         made, self._inner = self._inner, {}
         for handler in made.values():
-            await handler.close()
+            await handler.aclose()
 
-    def release(self) -> None:
-        """Release the handlers made by `inner` at once, by their ``release``, and forget them.
+    def close(self) -> None:
+        """Close the handlers made by `inner` at once, by their sync `close`, and forget them.
 
         The filesystem's sync ``close()`` calls it. A later route makes them
         again.
         """
         made, self._inner = self._inner, {}
         for handler in made.values():
-            handler.release()
+            handler.close()
 
 
 class _Storage(NamedTuple):
@@ -399,10 +399,10 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         """Release the handlers the routing handler made, and forget their filesystems.
 
         A call after makes them again. Their clients' sessions, which closing
-        takes a request, are closed by the routing handler's async `close`.
+        takes a request, are closed by the routing handler's `aclose`.
         """
         self._storages = {}
-        self.handler.release()
+        self.handler.close()
 
     # Routing.
 

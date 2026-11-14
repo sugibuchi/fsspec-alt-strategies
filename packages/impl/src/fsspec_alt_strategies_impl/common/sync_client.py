@@ -36,11 +36,11 @@ class SyncClientSupport:
     ``operation_concurrency``, if a number. A semaphore shared with others
     leaves the count to the executor's default.
 
-    ``close()`` and ``release()`` shut the threads down, without waiting,
-    cancelling the calls not started, then close or release as the next class
-    does. So the handler's ``close()``, and the sync ``close()`` of a
-    filesystem on it, shut them down, as does collecting the handler. A call
-    after makes them again.
+    ``aclose()`` and ``close()`` shut the threads down, without waiting,
+    cancelling the calls not started, then close as the next class does. So
+    the handler's ``aclose()``, and the sync ``close()`` of a filesystem on
+    it, shut them down, as does collecting the handler. A call after makes
+    them again.
 
     Examples
     --------
@@ -91,16 +91,16 @@ class SyncClientSupport:
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
 
-    async def close(self) -> None:
-        """Shut the threads down, then close as the next class does, e.g. `StorageHandler`."""
+    async def aclose(self) -> None:
+        """Shut the threads down, then close as the next class's `aclose` does, e.g. `StorageHandler`'s."""
+        self._shutdown_threads()
+        aclose = getattr(super(), "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+    def close(self) -> None:
+        """Shut the threads down, then close as the next class's `close` does, e.g. `StorageHandler`'s."""
         self._shutdown_threads()
         close = getattr(super(), "close", None)
         if close is not None:
-            await close()
-
-    def release(self) -> None:
-        """Shut the threads down, then release as the next class does, e.g. `StorageHandler`."""
-        self._shutdown_threads()
-        release = getattr(super(), "release", None)
-        if release is not None:
-            release()
+            close()
