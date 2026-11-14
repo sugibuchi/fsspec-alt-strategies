@@ -35,7 +35,7 @@ from fsspec_alt_strategies.states import GlobState
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _inside, _Search
-from .find import _find_listings
+from .find import _find_listings, _listed
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
@@ -208,12 +208,9 @@ def _matches_in(
             and e["name"].rstrip("/") not in found
         ]
 
-    op.state = GlobState(
-        errors=state.errors + (listing.error is not None),
-        current=listing.directory,
-        # Depth 0 is the root's own entry: no directory listed.
-        directories_listed=(state.directories_listed or 0)
-        + (listing.depth > 0 and listing.last),
+    op.state = _listed(
+        state,
+        listing,
         matched=state.matched + len(matches) - (listing.error is not None),
     )
 

@@ -13,9 +13,10 @@ This module depends on `walk`, and `handler`, `operation` and `paths` of `common
 from __future__ import annotations
 
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, TypeVar
 
-from fsspec_alt_strategies.states import FindState
+from fsspec_alt_strategies.states import DuState, FindState, GlobState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
@@ -94,13 +95,8 @@ def _tree_find(
                 found = [
                     e for e in listing.entries if withdirs or e["type"] != "directory"
                 ]
-                op.state = state = FindState(
-                    errors=state.errors + (listing.error is not None),
-                    current=listing.directory,
-                    # Depth 0 is the root's own entry: no directory listed.
-                    directories_listed=(state.directories_listed or 0)
-                    + (listing.depth > 0 and listing.last),
-                    found=state.found + len(found),
+                op.state = state = _listed(
+                    state, listing, found=state.found + len(found)
                 )
 
                 if listing.error is not None:
@@ -110,6 +106,24 @@ def _tree_find(
                     yield entry
 
     return Operation(run, FindState(directories_listed=0))
+
+
+_S = TypeVar("_S", FindState, DuState, GlobState)
+
+
+def _listed(state: _S, listing: _Listing, **counts: int) -> _S:
+    """A state once a part of a listing is out, with ``counts`` its own: its error, and its directory once its last part comes.
+
+    Depth 0 is the root's own entry, which is no directory listed.
+    """
+    return replace(
+        state,
+        errors=state.errors + (listing.error is not None),
+        current=listing.directory,
+        directories_listed=(state.directories_listed or 0)
+        + (listing.depth > 0 and listing.last),
+        **counts,
+    )
 
 
 async def _find_listings(

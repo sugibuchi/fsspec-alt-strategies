@@ -18,7 +18,7 @@ from fsspec_alt_strategies.states import DuState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
-from .find import _find_listings
+from .find import _find_listings, _listed
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -86,12 +86,9 @@ def _tree_du(
         async with aclosing(steps):
             async for listing in steps:
                 files = [e for e in listing.entries if e["type"] != "directory"]
-                op.state = state = DuState(
-                    errors=state.errors + (listing.error is not None),
-                    current=listing.directory,
-                    # Depth 0 is the root's own entry: no directory listed.
-                    directories_listed=(state.directories_listed or 0)
-                    + (listing.depth > 0 and listing.last),
+                op.state = state = _listed(
+                    state,
+                    listing,
                     files=state.files + len(files),
                     size=state.size + sum(e.get("size") or 0 for e in files),
                 )
