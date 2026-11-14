@@ -27,6 +27,7 @@ from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from datetime import datetime
 
 __all__ = ["Entry", "StorageHandler", "StoragePath"]
 
@@ -396,6 +397,22 @@ class StorageHandler(_PathHandler):
         ``sign`` does.
         """
         raise NotImplementedError(f"{type(self).__name__} signs no URL")
+
+    async def created(self, entry: Entry) -> datetime:
+        """When an item was created, as fsspec's ``created`` answers.
+
+        A storage telling no creation time raises NotImplementedError, as
+        fsspec's ``created`` does.
+        """
+        raise NotImplementedError(f"{type(self).__name__} tells no creation time")
+
+    async def modified(self, entry: Entry) -> datetime:
+        """When an item was last modified, as fsspec's ``modified`` answers.
+
+        A storage telling no modification time raises NotImplementedError, as
+        fsspec's ``modified`` does.
+        """
+        raise NotImplementedError(f"{type(self).__name__} tells no modification time")
 
 
 def _limit(concurrency: int | asyncio.Semaphore, name: str) -> asyncio.Semaphore:

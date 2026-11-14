@@ -278,17 +278,31 @@ def test_a_storages_class_names_its_handlers_paths() -> None:
     assert fs.unstrip_protocol("bucket://a/b") == "bucket://a/b"
 
 
-def test_sign_is_the_handlers() -> None:
-    class Signing(_Bucket):
+def test_sign_created_and_modified_are_the_handlers() -> None:
+    class Dating(_Bucket):
         async def sign(self, entry: Any, expiration: int = 100, **kwargs: Any) -> str:
             return f"https://signed/{entry['name']}?e={expiration}"
 
-    # Sync filesystems, as fsspec's sign is sync.
+        async def created(self, entry: Any) -> Any:
+            return ("created", entry["name"])
+
+        async def modified(self, entry: Any) -> Any:
+            return ("modified", entry["name"])
+
+    # Sync filesystems, as fsspec's methods are sync.
     fs = _BucketFileSystem(_storage(), skip_instance_cache=True)
     with pytest.raises(NotImplementedError, match="signs no URL"):
         fs.sign("bkt://a/b")
-    fs = TreeFileSystem(Signing(_storage()))
+    with pytest.raises(NotImplementedError, match="no creation time"):
+        fs.created("bkt://a/b")
+    with pytest.raises(NotImplementedError, match="no modification time"):
+        fs.modified("bkt://a/b")
+    fs = TreeFileSystem(Dating(_storage()))
     assert fs.sign("a/b", expiration=5) == "https://signed/a/b?e=5"
+    assert (fs.created("a/b"), fs.modified("a/b")) == (
+        ("created", "a/b"),
+        ("modified", "a/b"),
+    )
 
 
 def test_paths_of_a_storage_rooted_at_slash_are_absolute() -> None:

@@ -189,17 +189,17 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
     async def open_file(self, entry: Entry, mode: str = "rb", **kwargs: Any) -> Any:
         return await self.open_async_file(entry["name"], mode, **kwargs)
 
-    # The sync methods fsspec leaves to each filesystem, the wrapped one's.
+    # The sync methods fsspec leaves to each filesystem, the wrapped one's. They
+    # are sync, also of an async filesystem: each runs in a thread, as fsspec's
+    # sync() refuses the loop running this.
 
-    def created(self, path: str) -> Any:
-        return self.fs.created(path)
+    async def created(self, entry: Entry) -> Any:
+        return await self._run_in_thread(self.fs.created, entry["name"])
 
-    def modified(self, path: str) -> Any:
-        return self.fs.modified(path)
+    async def modified(self, entry: Entry) -> Any:
+        return await self._run_in_thread(self.fs.modified, entry["name"])
 
     async def sign(self, entry: Entry, expiration: int = 100, **kwargs: Any) -> str:
-        # fsspec's sign is sync, also of an async filesystem: in a thread, as
-        # its sync() refuses the loop running this.
         sign = self.fs.sign
         name = entry["name"]
         return await self._run_in_thread(sign, name, expiration=expiration, **kwargs)  # type: ignore[no-any-return]

@@ -64,7 +64,7 @@ async def test_an_async_filesystem_makes_a_dir() -> None:
     assert await inner._isdir("a/b")
 
 
-async def test_a_sync_filesystem_makes_a_dir_and_dates_a_file(
+async def test_a_sync_filesystem_makes_a_dir(
     tmp_path: Path,
 ) -> None:
     local = LocalFileSystem()
@@ -73,6 +73,13 @@ async def test_a_sync_filesystem_makes_a_dir_and_dates_a_file(
     assert tree.handler is not None and not tree.handler.asynchronous  # type: ignore[attr-defined]
     await tree._mkdir(f"{root}/a/b")
     assert local.isdir(f"{root}/a/b")
+
+
+def test_the_dates_are_the_wrapped_filesystems(tmp_path: Path) -> None:
+    # created and modified are sync, as in fsspec: a sync filesystem's.
+    local = LocalFileSystem()
+    root = local._strip_protocol(str(tmp_path))
+    tree = _tree(local, asynchronous=False)
     local.pipe_file(f"{root}/f.txt", b"f")
     assert tree.created(f"{root}/f.txt") == local.created(f"{root}/f.txt")
     assert tree.modified(f"{root}/f.txt") == local.modified(f"{root}/f.txt")

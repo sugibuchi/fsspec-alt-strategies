@@ -208,25 +208,21 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         """
         self.handler.close()
 
-    # fsspec's sync methods it leaves to each filesystem: the handler's, where it has them.
+    # fsspec's sync methods it leaves to each filesystem: the handler's, awaited on
+    # the filesystem's loop. A handler without them raises NotImplementedError.
 
     def created(self, path: str) -> Any:
-        return self._handler_method("created")(self._strip_protocol(path))
+        """When an item was created, as fsspec's ``created`` answers: the handler's `created`."""
+        return sync(self.loop, self.handler.created, self.handler.entry(path))
 
     def modified(self, path: str) -> Any:
-        return self._handler_method("modified")(self._strip_protocol(path))
+        """When an item was last modified, as fsspec's ``modified`` answers: the handler's `modified`."""
+        return sync(self.loop, self.handler.modified, self.handler.entry(path))
 
     def sign(self, path: str, expiration: int = 100, **kwargs: Any) -> str:
-        """A signed URL of a file, as fsspec's ``sign`` answers: the handler's `sign`, on the filesystem's loop."""
+        """A signed URL of a file, as fsspec's ``sign`` answers: the handler's `sign`."""
         entry = self.handler.entry(path)
         return sync(self.loop, self.handler.sign, entry, expiration, **kwargs)  # type: ignore[no-any-return]
-
-    def _handler_method(self, name: str) -> Callable[..., Any]:
-        """The handler's method of that name, else NotImplementedError, as fsspec's own raises."""
-        method = getattr(self.handler, name, None)
-        if method is None:
-            raise NotImplementedError(f"{type(self).__name__} has no {name}")
-        return method  # type: ignore[no-any-return]
 
     def __enter__(self) -> Self:
         return self
