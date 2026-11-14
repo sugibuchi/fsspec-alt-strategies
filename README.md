@@ -70,7 +70,6 @@ directories. It is a third-party project, not part of fsspec.
 
 - **Copies between storages:** one filesystem can span several storages, and copy or move files between them. A copy
   leaves no part of a file, and checks each file's size.
-- **Transactions:** writes can wait for fsspec's transaction to commit.
 - **Works with what you have:** existing fsspec filesystems, such as s3fs, get these features with a single call. A
   new one implements a storage handler: a few basic operations, and the checks of its paths.
 
