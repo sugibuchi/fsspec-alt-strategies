@@ -109,10 +109,9 @@ class StorageProfile:
         directory's entry before what is below it, and nothing more, e.g.
         breadth first, as Dropbox's listing documents. Unknown by default,
         taken as "parents_first", which a depth-first listing is too: the
-        strategies take every directory as done only once the listing ends,
-        and keep the names of all its entries, to resume it if it breaks off.
+        strategies take every directory as done only once the listing ends.
         A handler keeping the default listing, a directory per request,
-        declares nothing: the strategies know it is depth first.
+        declares nothing: the strategies read it so themselves.
 
     Raises
     ------

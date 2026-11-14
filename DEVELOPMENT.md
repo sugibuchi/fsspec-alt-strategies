@@ -470,7 +470,7 @@ The profile's `recursive_order` declares which order a storage's own listing kee
 - "depth_first" covers both of the above. `_DepthFirstSplit` then closes each directory as the listing passes it.
 - "parents_first" covers a directory's entry before what is below it, and nothing more, e.g. breadth first, as
   Dropbox's recursive listing documents no more. `_ParentsFirstSplit` then keeps every directory open until the
-  listing ends, and the names of all its entries, to resume a break.
+  listing ends.
 - Unknown, the order is taken as "parents_first". The walk cannot tell that order from a depth-first one: by the time
   an entry comes under a directory taken as done, that directory's last part has gone, and a move may have deleted it.
 
@@ -522,25 +522,21 @@ What it lists, and when:
   `**`, nothing is pruned, so it is listed recursively again. Pruning wins on a large tree, and loses on a small
   subtree that one recursive listing would cover. The library cannot tell which without guessing the tree's size, so
   it prunes, unless the handler's `lists_subtree` chooses otherwise.
-- A recursive listing broken off is resumed a directory per request. A long listing, e.g. a WebDAV body taking
-  minutes, may break off anywhere. Left so, the tree would lack an arbitrary part of it, which fsspec's `find` omits
-  with no error.
-- The resume reads again each directory the listing was in, alone, leaving out the entries already passed. Their
-  subdirectories below which nothing came are read anew, as the visit says, never by a recursive listing again. A
-  directory failing again yields its own error, and the rest of the tree goes on.
+- A recursive listing broken off is a failed listing. Its error comes as its root's last part, noted with the root,
+  after the parts it passed, and the walk goes on with its other directories. Nothing is listed again: a storage
+  resumes its own listing where it can, e.g. a page by its continuation token, as s3fs, gcsfs and adlfs do through
+  their SDKs.
 - `_tree_walk` top down lists a directory per request, as a recursive listing ends a directory after all below it. A
   subdirectory whose listing ends before its parent's waits for it.
 
-The walk keeps sets of names alone, never entries, where nothing else is right:
+The walk keeps sets of names alone, never entries, where nothing else is right. Both are dropped once their
+directory is listed to its last part:
 
 - Each reader drops a subdirectory its directory listed before, as a storage may list one twice, e.g. as a prefix and
   as its marker object: a `_DirectoryReader` by the names it showed, a split by those of each directory open.
 - A copy or move keeps the names of the files found in each directory being listed, by `_CopyOrMove.names`. Two files
   of one name, e.g. on Google Drive, would go to one place: the second is refused.
-- A recursive listing keeps names to resume a break, by `_OpenDirectory.seen`, as above. Parents first, that is every
-  name listed until the listing ends.
 
-The first two are dropped once their directory is listed to its last part.
 The tree strategies come in two layers:
 
 | Strategies                             | They send                         | They build on    |

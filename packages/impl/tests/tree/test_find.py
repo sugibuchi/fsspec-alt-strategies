@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.states import FindState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.find import _tree_find
@@ -170,34 +169,31 @@ class _BreakingOff(SimulatedFileSystem):
 
 @pytest.mark.parametrize("cut_after", [1, 2, 4, 6, 8])
 @pytest.mark.parametrize("withdirs", [False, True])
-async def test_a_recursive_listing_broken_off_is_resumed(
+async def test_a_recursive_listing_broken_off_yields_its_error(
     any_fs: SimulatedFileSystem, cut_after: int, withdirs: bool
 ) -> None:
     fs = _BreakingOff(hierarchical=any_fs.hierarchical, asynchronous=True)
     fs.cut_after = cut_after
     _tree(fs)
-    fs.add_file("data/2024/02/part-1.parquet")
     view = TreeView(fs, recursive_listing=True)
-    entries, errors = await _collect_with_errors(
-        _tree_find(view, "data", withdirs=withdirs)
-    )
-    # The whole tree, with no error: the break is resumed from where it came.
-    assert errors == []
+    try:
+        entries, errors = await _collect_with_errors(
+            _tree_find(view, "data", withdirs=withdirs)
+        )
+    except ConnectionResetError:
+        return  # Broken before its first part: the root's failure, raised.
+    # Nothing is listed again.
+    assert fs.stats.calls["list"] == 1
+    names = [e["name"] for e in entries]
+    assert len(names) == len(set(names))
     expected = await _fsspec_find(fs, "data", withdirs=withdirs)
-    assert sorted(e["name"] for e in entries) == expected
-
-
-async def test_a_resumed_listing_lists_only_what_it_had_not_passed() -> None:
-    fs = _BreakingOff(hierarchical=True, asynchronous=True)
-    fs.cut_after = 4
-    _tree(fs)
-    profile = StorageProfile(recursive_order="depth_first")
-    view = TreeView(fs, recursive_listing=True, storage_profile=profile)
-    await _collect_with_errors(_tree_find(view, "data"))
-    # In name order, the break comes after data/2023/02's entry, nothing below it
-    # yet. The directories open, data and data/2023, are listed again. Then
-    # data/2023/02 whole, and data/2024 with its 01 and 02, a directory per request.
-    assert fs.stats.calls == {"list": 1 + 2 + 1 + 3}
+    if not errors:
+        assert sorted(names) == expected  # A listing shorter than the cut ends whole.
+    else:
+        # A failed listing: its error, noted with the root it lists, and what it passed.
+        assert [type(e) for e in errors] == [ConnectionResetError]
+        assert errors[0].__notes__ == ["Listing 'data' failed."]
+        assert set(names) <= set(expected)
 
 
 async def test_cancel_after_the_first_listing(any_fs: SimulatedFileSystem) -> None:

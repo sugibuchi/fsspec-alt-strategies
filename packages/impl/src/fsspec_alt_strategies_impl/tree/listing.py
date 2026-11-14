@@ -70,7 +70,7 @@ def _tree_ils(
 
     A directory below ``entry`` that fails to list raises its error, noted with
     its path, and ends the listing: a recursive listing cannot go on past a
-    failure. The walk under the strategies resumes it a directory per request.
+    failure.
     A missing ``entry`` raises FileNotFoundError, when the iteration starts, as
     its own ``ils`` raises it.
 

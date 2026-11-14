@@ -197,11 +197,10 @@ code: read it before adding a strategy or a handler.
   keeps what the visit would list, by path: only a visit whose `by_path` holds allows it. Never decide it in a
   visit, nor by the storage in a strategy.
 - Each reader drops a subdirectory its directory listed before, though a storage may list one twice. Beside them, only
-  two places keep names alone:
-  - a copy's file names per directory, `tree.cp._CopyOrMove.names`, to refuse a second file of one name;
-  - a recursive listing's, `tree._walker._OpenDirectory.seen`, to resume a break, as the directories it was in are read
-    again. Depth first, it keeps those of the directories the listing is in. Parents first, it keeps all until the
-    listing ends.
+  a copy keeps names alone: its file names per directory, `tree.cp._CopyOrMove.names`, to refuse a second file of one
+  name.
+- A recursive listing that breaks off is a failed listing: its error, noted with its root, after what it passed.
+  Nothing is listed again: a storage resumes its own listing, e.g. a page by its continuation token.
 - Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
 

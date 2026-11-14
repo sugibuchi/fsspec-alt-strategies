@@ -62,10 +62,9 @@ def _tree_walk(
     only after all below it. A subdirectory whose listing ends first waits
     for its parent's. Without, a directory comes after all of those below
     it, and the tree is listed by one ``ils_recursive``, unless ``maxdepth`` or
-    ``descend`` prunes it. A listing broken off part way is resumed a
-    directory per request, so that a directory failing yields its own error,
-    and the walk goes on with the others. A walk bottom up that is cancelled
-    leaves out the directories whose subtrees were not done.
+    ``descend`` prunes it. A listing broken off part way yields its error, as
+    soon as it comes, and leaves out the directories it had not passed whole,
+    as a walk bottom up that is cancelled does.
 
     It departs from fsspec's ``walk`` top down in one way: a caller may not
     prune by changing ``dirs`` in place, as the subdirectories are listed
@@ -156,7 +155,8 @@ class _Order:
       in ``early`` until its parent's is out, then comes with those waiting
       for it.
     - Bottom up, a directory comes after all below it: its whole listing
-      waits in ``waiting`` until the walk tells its subtree is listed.
+      waits in ``waiting`` until the walk tells its subtree is listed. A
+      failed listing comes at once: the subtree below it may never end.
 
     So it holds whole listings, as only `_tree_walk` does, as fsspec's ``walk``
     gives a directory whole.
@@ -176,12 +176,15 @@ class _Order:
     def ready(self, event: _Part | _SubtreeListed) -> list[_Part]:
         """The whole listings an event makes ready, in the order to yield them."""
         if isinstance(event, _SubtreeListed):
-            return [self.waiting.pop(event.directory)]
+            listing = self.waiting.pop(event.directory, None)
+            return [] if listing is None else [listing]
         if (listing := self._whole(event)) is None:
             return []
-        elif not self.topdown:
+        elif not self.topdown and listing.error is None:
             self.waiting[listing.directory] = listing
             return []
+        elif not self.topdown:
+            return [listing]
         elif (
             parent := _parent(listing.directory)
         ) in self.parts or parent in self.held:

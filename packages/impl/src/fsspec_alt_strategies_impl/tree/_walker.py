@@ -25,7 +25,7 @@ This module depends on `_visit` and `listing`, and `handler` and `paths` of `com
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -152,23 +152,6 @@ class _Pending:
     """Its entry as its parent's listing gave it, else None: a root given as a path."""
     how: _How
     root: bool = False
-    after_break: bool = False
-    """Read again after a recursive listing broke off: no subtree below is listed whole again."""
-    skip: set[str] | None = None
-    """The names a broken listing passed already, left out as it is read again."""
-    first: bool = True
-    """Whether its first part is still to come."""
-
-
-@dataclass(slots=True)
-class _Read:
-    """What one read gives: parts, and after a recursive listing broke off, what to read again."""
-
-    parts: list[_Part]
-    again: list[_Pending] = field(default_factory=list)
-    """The directories the broken listing was in, each to be listed alone, leaving out what it passed."""
-    found: list[tuple[Entry, int]] = field(default_factory=list)
-    """Their subdirectories below which nothing came, with their depths: the walk plans them anew."""
 
 
 class _DirectoryReader:
@@ -194,10 +177,10 @@ class _DirectoryReader:
         self.entries: AsyncIterator[Entry] | None = None
         # The subdirectories shown so far: each comes once.
         self.subdirs: set[str] = set()
-        self.first = pending.first
+        self.first = True
         self.ended = False
 
-    async def read(self) -> _Read:
+    async def read(self) -> list[_Part]:
         """The next part, under the permit the walk holds for the read: its error last, if it fails."""
         pending = self.pending
         chunk: list[dict[str, Any]] = []
@@ -215,14 +198,10 @@ class _DirectoryReader:
                     chunk.append(kept)
         except Exception as e:
             self.ended = True
-            if pending.skip is not None and isinstance(e, FileNotFoundError):
-                # Read again after a break, and gone since, e.g. emptied by a
-                # deletion on an object store: nothing is left to list.
-                return _Read([self._part(chunk, last=True)])
             parts = [self._part(chunk, last=False)] if chunk else []
             parts.append(self._part([], last=True, error=e))
-            return _Read(parts)
-        return _Read([self._part(chunk, last=self.ended)])
+            return parts
+        return [self._part(chunk, last=self.ended)]
 
     def _kept(self, entry: dict[str, Any]) -> dict[str, Any] | None:
         name = entry["name"].rstrip("/")
@@ -231,8 +210,6 @@ class _DirectoryReader:
             if entry["type"] != "directory" and pending.root:
                 raise _not_a_directory(pending.name, entry)
             return None  # A directory's own marker is nothing in it.
-        if pending.skip is not None and name in pending.skip:
-            return None
         if entry["type"] == "directory":
             if name in self.subdirs:
                 return None
@@ -264,12 +241,11 @@ class _SubtreeReader:
     parts: see `_DepthFirstSplit` and `_ParentsFirstSplit`. In a filtered
     subtree, the parts of a directory ``keep`` refuses are dropped.
 
-    A listing failing before anything came is the root's error, as its first
-    and last part. One broken off later is read again a directory per request:
-    the read gives the parts passed, and what to list again. A recursive
-    listing is long, e.g. a WebDAV body of minutes, and a connection dropped
-    in it would otherwise leave an arbitrary part of the tree unwalked, which
-    fsspec's ``find`` then omits with no error.
+    A listing that fails is the root's failure, whenever it breaks: its error
+    comes as the root's last part, after the parts it passed, as any failed
+    listing's does. What it passed stands, and the directories it was in get
+    no last part. A storage resumes its own listing where it can, e.g. a page
+    by its continuation token: the walk does not list it again.
     """
 
     def __init__(
@@ -291,16 +267,14 @@ class _SubtreeReader:
         self.split: _DepthFirstSplit | _ParentsFirstSplit | None = None
         self.ended = False
 
-    async def read(self) -> _Read:
+    async def read(self) -> list[_Part]:
         """The parts the listing passed next, under the permit the walk holds for the read."""
         pending = self.pending
         parts: list[_Part] = []
         try:
             if self.split is None:
                 kind = _split_of(self.entries, self.handler.profile)
-                self.split = kind(
-                    pending.name, pending.depth, self.chunk_size, pending.entry
-                )
+                self.split = kind(pending.name, pending.depth, self.chunk_size)
             split = self.split
             while not parts:
                 try:
@@ -316,46 +290,15 @@ class _SubtreeReader:
             # failure is its first part.
             if self.split is not None:
                 parts += self.split.flush()
-            if self.split is None or self.split.first:
-                parts.append(_Part(pending.name, pending.depth, [], e, True, True))
-                return _Read(parts)
-            return self._resume(parts)
-        return _Read(self._kept(parts))
+            first = self.split is None or self.split.first
+            parts.append(_Part(pending.name, pending.depth, [], e, first, True))
+        return self._kept(parts)
 
     def _kept(self, parts: list[_Part]) -> list[_Part]:
         keep = self.keep
         return (
             parts if keep is None else [p for p in parts if keep(p.directory, p.depth)]
         )
-
-    def _resume(self, parts: list[_Part]) -> _Read:
-        """How to go on after the listing broke off: the parts it passed, and what the walk reads next instead.
-
-        The directories done have had their last part. Those the listing was
-        in, the open ones, are read again alone, leaving out the names they
-        showed. Their subdirectories below which nothing came are read anew, as
-        the visit says. So each break resumes deeper in the tree, and ends.
-        """
-        assert self.split is not None
-        keep = self.keep or (lambda directory, depth: True)
-        again, found = [], []
-        for directory in self.split.open:
-            if not keep(directory.name, directory.depth):
-                continue
-            again.append(
-                _Pending(
-                    directory.name,
-                    directory.depth,
-                    directory.entry,
-                    "alone",
-                    root=directory.name == self.pending.name and self.pending.root,
-                    after_break=True,
-                    skip=directory.seen,
-                    first=directory.first,
-                )
-            )
-            found += [(e, directory.depth + 1) for e in directory.pending.values()]
-        return _Read(self._kept(parts), again, found)
 
     async def close(self) -> None:
         await _close(self.entries)
@@ -440,7 +383,9 @@ class _TreeWalk:
         # The directories to read, a stack: the deepest found are read first.
         self.pending: list[_Pending] = []
         # The reads in flight, each with its reader, in the order they started.
-        self.reading: dict[asyncio.Task[_Read], _DirectoryReader | _SubtreeReader] = {}
+        self.reading: dict[
+            asyncio.Task[list[_Part]], _DirectoryReader | _SubtreeReader
+        ] = {}
         # The readers holding a permit, until they end.
         self.permits: set[_DirectoryReader | _SubtreeReader] = set()
         self.subtrees = _Subtrees() if subtrees else None
@@ -468,7 +413,7 @@ class _TreeWalk:
         finally:
             await self._close()
 
-    def _done(self) -> asyncio.Task[_Read] | None:
+    def _done(self) -> asyncio.Task[list[_Part]] | None:
         """The first read done, in the order they started, if any."""
         return next((t for t in self.reading if t.done()), None)
 
@@ -496,7 +441,7 @@ class _TreeWalk:
         """Start a reader's next read, under the permit it holds."""
         self.reading[asyncio.ensure_future(self._reading(reader))] = reader
 
-    async def _reading(self, reader: _DirectoryReader | _SubtreeReader) -> _Read:
+    async def _reading(self, reader: _DirectoryReader | _SubtreeReader) -> list[_Part]:
         """A reader's read, which gives back its permit as soon as the reader ends.
 
         The walk takes the read only when its caller next asks: the permit of a
@@ -560,9 +505,7 @@ class _TreeWalk:
     def _root(self, name: str, entry: Entry | None) -> _Pending:
         depth = self.visit.depth(name)
         listed = entry or {"name": name, "type": "directory"}
-        how = self._how(
-            listed, depth, self.visit.root(listed, depth), after_break=False
-        )
+        how = self._how(listed, depth, self.visit.root(listed, depth))
         assert how is not None  # A root is never left.
         return _Pending(name, depth, entry, how, root=True)
 
@@ -571,21 +514,13 @@ class _TreeWalk:
         entry: Entry,
         depth: int,
         need: Literal["skip", "directory", "subtree"],
-        *,
-        after_break: bool,
     ) -> _How | None:
         """How a directory is read: as the visit needs it, and the handler lists it. None if left."""
         if need == "skip":
             return None
         elif need == "subtree":
-            if after_break or not self.handler.lists_subtree(entry):
-                return "alone"
-            return "whole"
-        elif (
-            not after_break
-            and self.visit.by_path
-            and self.handler.lists_subtree(entry, pruned=True)
-        ):
+            return "whole" if self.handler.lists_subtree(entry) else "alone"
+        elif self.visit.by_path and self.handler.lists_subtree(entry, pruned=True):
             return "filtered"
         else:
             return "alone"
@@ -602,16 +537,10 @@ class _TreeWalk:
         )
 
     def _take(
-        self, reader: _DirectoryReader | _SubtreeReader, read: _Read
+        self, reader: _DirectoryReader | _SubtreeReader, parts: list[_Part]
     ) -> list[_Event]:
         """The events of one read: its parts, what the visit left, and the subtrees they end."""
-        events: list[_Event] = []
-        for part in read.parts:
-            events += self._part(reader, part)
-        # The directories the listing was in go first, then what is below them.
-        self._push([self._found(e, d) for e, d in read.found])
-        self.pending += reversed(read.again)
-        return events
+        return [event for part in parts for event in self._part(reader, part)]
 
     def _part(
         self, reader: _DirectoryReader | _SubtreeReader, part: _Part
@@ -629,13 +558,13 @@ class _TreeWalk:
             skipped, subdirs = self._in_subtree(reader, part)
             events = [*skipped, part]
         else:
-            skipped, subdirs = self._plan(part, reader.pending.after_break)
+            skipped, subdirs = self._plan(part)
             events = [*skipped, part]
         if self.subtrees is not None:
             events += self.subtrees.add(part, subdirs)
         return events
 
-    def _plan(self, part: _Part, after_break: bool) -> tuple[list[_Skipped], list[str]]:
+    def _plan(self, part: _Part) -> tuple[list[_Skipped], list[str]]:
         """Push the subdirectories of a part listed alone, as the visit and the handler say: the skipped ones, and the names pushed."""
         skipped: list[_Skipped] = []
         pushed: list[_Pending] = []
@@ -644,18 +573,11 @@ class _TreeWalk:
                 depth = part.depth + 1
                 name = entry["name"].rstrip("/")
                 listed = {**entry, "name": name}
-                how = self._how(
-                    listed,
-                    depth,
-                    self.visit.enter(entry, depth),
-                    after_break=after_break,
-                )
+                how = self._how(listed, depth, self.visit.enter(entry, depth))
                 if how is None:
                     skipped.append(_Skipped(listed, depth))
                 else:
-                    pushed.append(
-                        _Pending(name, depth, listed, how, after_break=after_break)
-                    )
+                    pushed.append(_Pending(name, depth, listed, how))
         self._push(pushed)
         return skipped, [p.name for p in pushed]
 
@@ -675,17 +597,9 @@ class _TreeWalk:
                     subdirs.append(name)
         return skipped, subdirs
 
-    def _found(self, entry: Entry, depth: int) -> _Pending | None:
-        """A subdirectory a broken listing found, below which nothing came: read anew, as the visit says."""
-        name = entry["name"].rstrip("/")
-        how = self._how(entry, depth, self.visit.enter(entry, depth), after_break=True)
-        return (
-            None if how is None else _Pending(name, depth, entry, how, after_break=True)
-        )
-
-    def _push(self, pending: Sequence[_Pending | None]) -> None:
+    def _push(self, pending: Sequence[_Pending]) -> None:
         """Push directories to read, the first found on top: read first."""
-        self.pending += reversed([p for p in pending if p is not None])
+        self.pending += reversed(pending)
 
     async def _close(self) -> None:
         """Cancel the reads in flight, give back their permits, and close every reader."""
@@ -768,27 +682,25 @@ class _Subtrees:
 class _OpenDirectory:
     """A directory a recursive listing is in, with its entries held.
 
-    It keeps the names of all its entries come so far, put or held, so that a
-    listing broken off in it leaves them out as it is listed again. That holds
-    a directory's names whole, but only of the directories open, and only
-    their names.
+    It keeps the names of its subdirectories come so far, put or held, so that
+    one listed twice comes once: only of the directories open, and only their
+    subdirectories' names.
     """
 
-    def __init__(self, name: str, depth: int, entry: Entry | None = None) -> None:
+    def __init__(self, name: str, depth: int) -> None:
         self.name = name
         self.depth = depth
-        # Its entry as its parent's listing gave it, None if derived or the root's path alone.
-        self.entry = entry
         self.entries: list[dict[str, Any]] = []
         self.first = True
         # Its subdirectories listed, below which nothing has come yet, in
-        # listing order, each with its entry.
-        self.pending: dict[str, Entry] = {}
-        self.seen: set[str] = set()
+        # listing order.
+        self.pending: dict[str, None] = {}
+        self.subdirs: set[str] = set()
 
     def hold(self, entry: dict[str, Any]) -> None:
         self.entries.append(entry)
-        self.seen.add(entry["name"].rstrip("/"))
+        if entry["type"] == "directory":
+            self.subdirs.add(entry["name"].rstrip("/"))
 
     def part(self, *, last: bool) -> _Part:
         part = _Part(self.name, self.depth, self.entries, None, self.first, last)
@@ -816,12 +728,10 @@ class _DepthFirstSplit:
     above it are. Once ``chunk_size`` entries are held in all, they are put.
     """
 
-    def __init__(
-        self, root: str, root_depth: int, chunk_size: int, entry: Entry | None = None
-    ) -> None:
+    def __init__(self, root: str, root_depth: int, chunk_size: int) -> None:
         self.root = root
         self.chunk_size = chunk_size
-        self.open = [_OpenDirectory(root, root_depth, entry)]
+        self.open = [_OpenDirectory(root, root_depth)]
         self.count = 0  # The entries held.
 
     @property
@@ -846,15 +756,14 @@ class _DepthFirstSplit:
             if directory not in top.pending:
                 top.hold({"name": directory, "size": 0, "type": "directory"})
                 self.count += 1
-            # Its entry as listed, to list it by if the listing breaks off in it.
-            listed = top.pending.pop(directory, None)
-            top = _OpenDirectory(directory, top.depth + 1, listed)
+            top.pending.pop(directory, None)
+            top = _OpenDirectory(directory, top.depth + 1)
             self.open.append(top)
 
         if entry["type"] == "directory":
-            if name in top.seen:
+            if name in top.subdirs:
                 return parts  # Listed twice, e.g. as its marker too.
-            top.pending[name] = {**entry, "name": name}
+            top.pending[name] = None
         top.hold(entry)
         self.count += 1
 
@@ -913,25 +822,17 @@ class _ParentsFirstSplit:
     and put a part at a time, parents first, once ``chunk_size`` are held in
     all. Their last parts come once the listing ends, the deepest first.
 
-    It answers a break as `_DepthFirstSplit` does: every directory seen is
-    ``open``, with the names of all its entries, and none ``pending``. That
-    holds every name of the tree, as only a parents-first listing needs.
+    It keeps every directory seen until the listing ends: their paths, as
+    only a parents-first listing needs.
     """
 
-    def __init__(
-        self, root: str, root_depth: int, chunk_size: int, entry: Entry | None = None
-    ) -> None:
+    def __init__(self, root: str, root_depth: int, chunk_size: int) -> None:
         self.root = root
         self.chunk_size = chunk_size
         # Every directory seen, by its path, each after its parent.
-        self.directories = {root: _OpenDirectory(root, root_depth, entry)}
+        self.directories = {root: _OpenDirectory(root, root_depth)}
         self.count = 0  # The entries held.
         self.current = self.directories[root]  # The directory of the entry listed last.
-
-    @property
-    def open(self) -> list[_OpenDirectory]:
-        """Every directory seen, parents first: all are open until the listing ends."""
-        return list(self.directories.values())
 
     @property
     def first(self) -> bool:
@@ -969,8 +870,7 @@ class _ParentsFirstSplit:
         if entry["type"] == "directory":
             if name in self.directories:
                 return parts  # Listed twice, e.g. as its marker too.
-            listed = {**entry, "name": name}
-            self.directories[name] = _OpenDirectory(name, top.depth + 1, listed)
+            self.directories[name] = _OpenDirectory(name, top.depth + 1)
         top.hold(entry)
         self.count += 1
 

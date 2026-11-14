@@ -270,19 +270,28 @@ class _BreakingOff(SimulatedFileSystem):
 
 
 @pytest.mark.parametrize("cut_after", [1, 2, 3, 5, 8])
-async def test_a_recursive_listing_broken_off_deletes_the_whole_tree(
+async def test_a_recursive_listing_broken_off_keeps_what_it_did_not_list(
     any_fs: SimulatedFileSystem, cut_after: int
 ) -> None:
     fs = _BreakingOff(hierarchical=any_fs.hierarchical, asynchronous=True)
     fs.cut_after = cut_after
     _tree(fs)
     view = TreeView(fs, recursive_listing=True)
-    deleted, errors = await _collect_with_errors(_tree_rm(view, "data"))
-    # Each directory is deleted once all in it is, as without the break.
-    assert errors == []
-    assert deleted[-1] == "data"
-    assert not await fs._exists("data")
+    try:
+        deleted, errors = await _collect_with_errors(_tree_rm(view, "data"))
+    except ConnectionResetError:
+        assert await fs._exists("data/README.md")  # Nothing listed, nothing deleted.
+        return
     assert await fs._exists("other/kept")
+    if not errors:
+        assert not await fs._exists(
+            "data"
+        )  # A listing shorter than the cut ends whole.
+    else:
+        # A failed listing: its error, and the root kept, with what it did not list.
+        assert [type(e) for e in errors] == [ConnectionResetError]
+        assert "data" not in deleted
+        assert await fs._exists("data")
 
 
 class _Doubling(SimulatedFileSystem):
