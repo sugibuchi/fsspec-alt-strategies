@@ -23,6 +23,7 @@ from fsspec_alt_strategies_impl.common.filesystem import (
     _raise,
 )
 from fsspec_alt_strategies_impl.common.handler import StorageHandler
+from fsspec_alt_strategies_impl.common.paths import fixed_prefix
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
 from fsspec_alt_strategies_impl.wrapper.flat import (
     FlatFileSystemWrapper,
@@ -185,6 +186,39 @@ def test_a_path_as_given_is_verified_a_pattern_too() -> None:
     for path in ("memory://w/~/", "memory://w/~*"):
         with pytest.raises(ValueError, match="Refused"):
             handler.verified(path, strip_only_protocol=True)
+
+
+@pytest.mark.parametrize(
+    ("path", "prefix"),
+    [
+        ("abfs://data/2026-*/x.csv", "abfs://data"),
+        (
+            "abfss://c@acct.dfs.core.windows.net/a/*.csv",
+            "abfss://c@acct.dfs.core.windows.net/a",
+        ),
+        ("abfs://data-*/x.csv", "abfs://"),
+        ("file:///*.txt", "file:///"),
+        ("/home/me/f?.txt", "/home/me"),
+        ("/[ab]", "/"),
+        ("a/b/[!c]/d", "a/b"),
+        ("a*", ""),
+        ("data/x.csv", "data/x.csv"),
+    ],
+)
+def test_the_fixed_prefix_of_a_pattern(path: str, prefix: str) -> None:
+    assert fixed_prefix(path) == prefix
+
+
+def test_a_handler_verifies_a_patterns_fixed_prefix() -> None:
+    class Names(FsspecTreeHandler):
+        """A storage whose names refuse "*": a glob's pattern is verified by its prefix."""
+
+        def verify_path(self, path: str) -> None:
+            if "*" in fixed_prefix(path):
+                raise ValueError(f"Refused: {path!r}")
+
+    handler = Names(MemoryFileSystem(), **_LIMITS)
+    assert handler.verified("memory://w/*.txt", strip_only_protocol=True) == "/w/*.txt"
 
 
 def test_a_copy_drops_sources_gone_unless_errors_raise() -> None:

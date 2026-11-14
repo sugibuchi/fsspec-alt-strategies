@@ -167,9 +167,12 @@ one, so each is verified:
 - `verify_path(path)`, abstract, raises ValueError for a path the storage refuses, or the handler does not serve,
   e.g. another account's. It sends no request. It sees the path as the caller gave it, a URL or not, so that it
   checks what a URL names beyond the path, e.g. abfs's account. A handler checking names strips the path first.
+- It sees glob patterns too, given to `glob`, or to a copy or deletion. A handler whose names refuse `*`, `?` or `[`
+  checks a pattern's fixed prefix instead, by `paths.fixed_prefix`: the directory the glob starts from. The names
+  it matches below are listed, never verified again.
 - `verified(path)` is a caller's path once verified, then stripped by `strip_protocol`, and `entry(path)` its entry,
   `{"name": path}`. The filesystem passes its caller's paths to them as they come: `verified` is where a path loses
-  its protocol. A pattern alone is stripped by the filesystem, as no handler verifies one.
+  its protocol. With `strip_only_protocol=True`, a trailing "/" stays, for the strategies taking a path as given.
 - `join(directory, *paths)` joins paths as `os.path.join` does, verifying the path built once. `_split` splits each
   path into segments by the class's `delimiter`, "/" by default, and `_verify_segment` refuses a segment that is empty,
   ".", "..", or holds the delimiter. A storage overrides either. Unlike `os.path.join`, a path starting with the

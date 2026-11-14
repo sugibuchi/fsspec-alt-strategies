@@ -120,6 +120,11 @@ class _PathHandler(ABC):
         is checked here, as `strip_protocol` then drops it. A handler checking
         the path's names strips it first, by `strip_protocol`.
 
+        It sees a glob pattern too, e.g. ``data/2026-*/x.csv``, given to
+        ``glob``, or to a copy or deletion. A handler whose names refuse a
+        pattern's characters checks its fixed prefix instead, by
+        `paths.fixed_prefix`: the names a glob matches below are listed.
+
         A handler refuses what its storage would, or what it does not serve,
         e.g. a path of another storage account than its own, a bucket name the
         storage refuses, or a name too long. It sends no request: it checks
