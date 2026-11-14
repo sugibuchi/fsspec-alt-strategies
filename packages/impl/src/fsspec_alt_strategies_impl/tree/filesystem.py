@@ -23,7 +23,6 @@ from ..common.filesystem import (
     _du_answer,
     _failed_dir,
     _raise,
-    _strip_only_protocol,
 )
 from ..common.operation import _collect_with_monitors, _with_monitors
 from .cp import _tree_cp
@@ -37,6 +36,11 @@ from .walk import _tree_walk
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable
+
+    from fsspec_alt_strategies.states import CpState, MvState
+
+    from ..common.handler import Entry
+    from ..common.operation import Operation
 
 
 __all__ = ["TreeFileSystem"]
@@ -328,7 +332,7 @@ class TreeFileSystem(_BaseFileSystem):
         entries, _ = await _collect_with_monitors(
             _tree_glob(
                 self.handler,
-                _strip_only_protocol(self, path),
+                self.handler.verified(path, strip_only_protocol=True),
                 maxdepth=maxdepth,
                 withdirs=withdirs,
                 ils_kwargs=kwargs,
@@ -352,9 +356,7 @@ class TreeFileSystem(_BaseFileSystem):
                 return
 
             _, errors = await _collect_with_monitors(
-                _tree_rm(
-                    self.handler, _strip_only_protocol(self, path), maxdepth=maxdepth
-                ),
+                _tree_rm(self.handler, self._as_given(path), maxdepth=maxdepth),
                 Call(self._unwrapped(), "rm", path),
                 kwargs.get("callback"),
             )
@@ -364,5 +366,31 @@ class TreeFileSystem(_BaseFileSystem):
             self._drop_listings()
 
     # The copy and move that _BaseFileSystem's _copy and _mv start, as fsspec's methods.
-    _cp_strategy = staticmethod(_tree_cp)
-    _mv_strategy = staticmethod(_tree_mv)
+
+    def _cp_operation(
+        self,
+        sources: str | list[str],
+        target: str,
+        *,
+        maxdepth: int | None,
+        root_entry: Entry | None,
+    ) -> Operation[tuple[str, str], CpState]:
+        """The tree copy within the storage: `_tree_cp`."""
+        handler = self.handler
+        return _tree_cp(
+            handler, handler, sources, target, maxdepth=maxdepth, root_entry=root_entry
+        )
+
+    def _mv_operation(
+        self,
+        sources: str | list[str],
+        target: str,
+        *,
+        maxdepth: int | None,
+        root_entry: Entry | None,
+    ) -> Operation[tuple[str, str], MvState]:
+        """The tree move within the storage: `_tree_mv`."""
+        handler = self.handler
+        return _tree_mv(
+            handler, handler, sources, target, maxdepth=maxdepth, root_entry=root_entry
+        )

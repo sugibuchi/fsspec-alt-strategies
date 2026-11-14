@@ -38,7 +38,8 @@ if TYPE_CHECKING:
 
     from fsspec.callbacks import Callback
 
-    from .handler import StorageHandler
+    from .handler import Entry, StorageHandler
+    from .operation import Operation
 
 
 _MiB = 1024 * 1024
@@ -230,9 +231,37 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
 
         return entry if entry["type"] != "directory" else None
 
-    # The family's copy and move, e.g. _tree_cp and _tree_mv: each family's class sets them.
-    _cp_strategy: Callable[..., Any]
-    _mv_strategy: Callable[..., Any]
+    # The family's copy and move, e.g. _tree_cp and _tree_mv, within the storage.
+
+    def _cp_operation(
+        self,
+        sources: str | list[str],
+        target: str,
+        *,
+        maxdepth: int | None,
+        root_entry: Entry | None,
+    ) -> Operation[tuple[str, str], Any]:
+        """The family's copy of ``sources`` to ``target``, not started: each family's class implements it."""
+        raise NotImplementedError(f"{type(self).__name__} copies nothing")
+
+    def _mv_operation(
+        self,
+        sources: str | list[str],
+        target: str,
+        *,
+        maxdepth: int | None,
+        root_entry: Entry | None,
+    ) -> Operation[tuple[str, str], Any]:
+        """The family's move of ``sources`` to ``target``, not started: each family's class implements it."""
+        raise NotImplementedError(f"{type(self).__name__} moves nothing")
+
+    def _as_given(self, path: str | list[str]) -> str | list[str]:
+        """A caller's path, or paths, verified with only the protocol stripped, as the strategies take them."""
+        handler = self.handler
+        if isinstance(path, str):
+            return handler.verified(path, strip_only_protocol=True)
+        else:
+            return [handler.verified(p, strip_only_protocol=True) for p in path]
 
     async def _copy(
         self,
@@ -263,11 +292,9 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
                 on_error = on_error or "raise"
 
             _, errors = await _collect_with_monitors(
-                self._cp_strategy(
-                    self.handler,
-                    self.handler,
-                    _strip_only_protocol(self, path1),
-                    _strip_only_protocol(self, path2),
+                self._cp_operation(
+                    self._as_given(path1),
+                    self.handler.verified(path2, strip_only_protocol=True),
                     maxdepth=maxdepth,
                     root_entry=entry,
                 ),
@@ -307,11 +334,9 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
                     return
 
             _, errors = await _collect_with_monitors(
-                self._mv_strategy(
-                    self.handler,
-                    self.handler,
-                    _strip_only_protocol(self, path1),
-                    _strip_only_protocol(self, path2),
+                self._mv_operation(
+                    self._as_given(path1),
+                    self.handler.verified(path2, strip_only_protocol=True),
                     maxdepth=maxdepth,
                     root_entry=entry,
                 ),
@@ -646,23 +671,6 @@ def _merge_ranges(
                 members, low, high = [index], begin, finish
 
     return fetches, plan  # type: ignore[return-value]
-
-
-def _strip_only_protocol(fs: Any, path: str | Sequence[str]) -> Any:
-    """A path, or paths, of ``fs`` without its protocol, keeping a trailing "/".
-
-    The strategies take paths without a protocol. A trailing "/" means
-    something to some, e.g. a glob of directories only, or a copy into a directory.
-
-    A path with no pattern is verified by ``fs``'s handler as given, so that
-    what a URL names beyond the path, e.g. an account, is checked before it
-    is stripped. A pattern is stripped only: no handler verifies a pattern,
-    and the strategy verifies the directory it starts from.
-    """
-    if not isinstance(path, str):
-        return [_strip_only_protocol(fs, p) for p in path]
-    plain = fs._strip_protocol(path) if has_magic(path) else fs.handler.verified(path)
-    return plain + "/" if path.endswith("/") and not plain.endswith("/") else plain
 
 
 def _check_mode(mode: str) -> None:

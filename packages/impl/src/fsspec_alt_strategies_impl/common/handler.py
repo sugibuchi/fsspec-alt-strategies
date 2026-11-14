@@ -132,27 +132,37 @@ class _PathHandler(ABC):
         a primitive take only verified paths, or entries a listing gave.
         """
 
-    def verified(self, path: str) -> StoragePath:
+    def verified(self, path: str, *, strip_only_protocol: bool = False) -> StoragePath:
         """A caller's path, a URL or not, as a `StoragePath`, once `verify_path` accepts it, else ValueError.
 
         `verify_path` sees the path as given, then `strip_protocol` drops the
         protocol and a trailing "/". So a filesystem passes its caller's paths
         on as they come: this is where they lose their protocol.
 
+        With ``strip_only_protocol``, the protocol alone is stripped, for a
+        path a strategy takes as given. A trailing "/" is kept, as it means a
+        directory to a copy or a glob. The path is verified all the same, a
+        glob pattern too: a handler refusing a pattern's characters refuses
+        the glob.
+
         It and `entry` are the only ways a string becomes a path. A strategy
         builds the others by `join` and `parent`, which verify too.
         """
         self.verify_path(path)
-        return StoragePath(self.strip_protocol(path))
+        plain = self.strip_protocol(path)
+        if strip_only_protocol and path.endswith("/") and not plain.endswith("/"):
+            plain += "/"
+        return StoragePath(plain)
 
-    def entry(self, path: str) -> Entry:
+    def entry(self, path: str, *, strip_only_protocol: bool = False) -> Entry:
         """The entry of a path alone, verified: for a primitive taking an item its caller knows only by its path.
 
         It raises ValueError for a path `verify_path` refuses. A name a listing
         gave is never wrapped so: the strategies pass on the entry the listing
         gave, as the storage holds what it lists, whatever its name.
+        ``strip_only_protocol`` is `verified`'s.
         """
-        return {"name": self.verified(path)}
+        return {"name": self.verified(path, strip_only_protocol=strip_only_protocol)}
 
     def join(self, directory: StoragePath, *paths: str) -> StoragePath:
         """The path of ``paths`` in ``directory``, each relative to the one before, as `os.path.join` joins them.

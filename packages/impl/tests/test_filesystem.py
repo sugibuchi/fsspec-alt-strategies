@@ -21,7 +21,6 @@ from fsspec_alt_strategies_impl.common.filesystem import (
     _copy_errors,
     _failed_dir,
     _raise,
-    _strip_only_protocol,
 )
 from fsspec_alt_strategies_impl.common.handler import StorageHandler
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
@@ -167,9 +166,25 @@ async def test_a_local_dir_is_no_transfer(tmp_path: Path) -> None:
     assert await _BaseFileSystem._put_file(tree, str(tmp_path), "/w/a") is None
 
 
-def test_plain_paths_keep_a_trailing_slash() -> None:
+def test_paths_as_given_keep_a_trailing_slash() -> None:
     tree = _tree(MemoryFileSystem())
-    assert _strip_only_protocol(tree, ["memory://w/a/", "w/b"]) == ["/w/a/", "/w/b"]
+    assert tree._as_given(["memory://w/a/", "w/b"]) == ["/w/a/", "/w/b"]
+    handler = tree.handler
+    assert handler.verified("memory://w/a/", strip_only_protocol=True) == "/w/a/"
+    assert handler.entry("w/a/", strip_only_protocol=True) == {"name": "/w/a/"}
+
+
+def test_a_path_as_given_is_verified_a_pattern_too() -> None:
+    class Strict(FsspecTreeHandler):
+        def verify_path(self, path: str) -> None:
+            if "~" in path:
+                raise ValueError(f"Refused: {path!r}")
+
+    handler = Strict(MemoryFileSystem(), **_LIMITS)
+    assert handler.verified("memory://w/*.txt", strip_only_protocol=True) == "/w/*.txt"
+    for path in ("memory://w/~/", "memory://w/~*"):
+        with pytest.raises(ValueError, match="Refused"):
+            handler.verified(path, strip_only_protocol=True)
 
 
 def test_a_copy_drops_sources_gone_unless_errors_raise() -> None:

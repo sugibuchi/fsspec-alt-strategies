@@ -24,7 +24,6 @@ from ..common.filesystem import (
     _du_answer,
     _failed_dir,
     _raise,
-    _strip_only_protocol,
 )
 from ..common.operation import _collect_with_monitors, _with_monitors
 from .cp import _flat_cp
@@ -37,6 +36,11 @@ from .walk import _flat_walk
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
+
+    from fsspec_alt_strategies.states import CpState, MvState
+
+    from ..common.handler import Entry
+    from ..common.operation import Operation
 
 
 __all__ = ["FlatFileSystem"]
@@ -267,7 +271,7 @@ class FlatFileSystem(_BaseFileSystem):
         entries, _ = await _collect_with_monitors(
             _flat_glob(
                 self.handler,
-                _strip_only_protocol(self, path),
+                self.handler.verified(path, strip_only_protocol=True),
                 maxdepth=maxdepth,
                 withdirs=kwargs.pop("withdirs", True),
             ),
@@ -289,9 +293,7 @@ class FlatFileSystem(_BaseFileSystem):
                 return
 
             _, errors = await _collect_with_monitors(
-                _flat_rm(
-                    self.handler, _strip_only_protocol(self, path), maxdepth=maxdepth
-                ),
+                _flat_rm(self.handler, self._as_given(path), maxdepth=maxdepth),
                 Call(self._unwrapped(), "rm", path),
                 kwargs.get("callback"),
             )
@@ -300,5 +302,31 @@ class FlatFileSystem(_BaseFileSystem):
             self._drop_listings()
 
     # The copy and move that _BaseFileSystem's _copy and _mv start, as fsspec's methods.
-    _cp_strategy = staticmethod(_flat_cp)
-    _mv_strategy = staticmethod(_flat_mv)
+
+    def _cp_operation(
+        self,
+        sources: str | list[str],
+        target: str,
+        *,
+        maxdepth: int | None,
+        root_entry: Entry | None,
+    ) -> Operation[tuple[str, str], CpState]:
+        """The flat copy within the storage: `_flat_cp`."""
+        handler = self.handler
+        return _flat_cp(
+            handler, handler, sources, target, maxdepth=maxdepth, root_entry=root_entry
+        )
+
+    def _mv_operation(
+        self,
+        sources: str | list[str],
+        target: str,
+        *,
+        maxdepth: int | None,
+        root_entry: Entry | None,
+    ) -> Operation[tuple[str, str], MvState]:
+        """The flat move within the storage: `_flat_mv`."""
+        handler = self.handler
+        return _flat_mv(
+            handler, handler, sources, target, maxdepth=maxdepth, root_entry=root_entry
+        )

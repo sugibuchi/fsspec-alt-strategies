@@ -39,7 +39,6 @@ from .common.filesystem import (
     _copy_errors,
     _raise,
     _range_bounds,
-    _strip_only_protocol,
 )
 from .common.handler import StorageHandler, _limit, _PathHandler
 from .common.operation import _collect_with_monitors
@@ -502,7 +501,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
 
     def _target(self, path: str) -> tuple[AsyncFileSystem, str] | None:
         """`_route` of a path given to a method, its protocol stripped."""
-        return self._route(_strip_only_protocol(self, path))
+        return self._route(self.handler.verified(path, strip_only_protocol=True))
 
     def _required(self, path: str) -> tuple[AsyncFileSystem, str]:
         """``_target`` of a path that must be in a storage, e.g. of a file."""
@@ -542,7 +541,9 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
             group[2].append(outer)
 
         for p in [path] if isinstance(path, str) else path:
-            target = self._pattern_target(_strip_only_protocol(self, p))
+            target = self._pattern_target(
+                self.handler.verified(p, strip_only_protocol=True)
+            )
             if target is not None:
                 add(target, p)
             elif has_magic(p):
@@ -620,13 +621,18 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         placed: dict[str, str] = {}
         errors: list[Exception] = []
         skipped: set[str] = set()
-        base = _trim(_strip_only_protocol(self, destination))
+        base = _trim(self.handler.verified(destination, strip_only_protocol=True))
 
-        for path in sorted(paths, key=lambda p: _trim(_strip_only_protocol(self, p))):
+        for path in sorted(
+            paths,
+            key=lambda p: _trim(self.handler.verified(p, strip_only_protocol=True)),
+        ):
             if has_magic(path):
                 continue
 
-            name = _trim(_strip_only_protocol(self, path)).rpartition("/")[2]
+            name = _trim(
+                self.handler.verified(path, strip_only_protocol=True)
+            ).rpartition("/")[2]
             target = f"{base}/{name}" if base else name
             if (other := placed.get(target)) is not None:
                 error = FileExistsError(target)
@@ -977,7 +983,9 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         return sizes if total else {self._outer(fs, n): s for n, s in sizes.items()}
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
-        target = self._pattern_target(_strip_only_protocol(self, path))
+        target = self._pattern_target(
+            self.handler.verified(path, strip_only_protocol=True)
+        )
         detail = kwargs.pop("detail", False)
         if target is None:
             # fsspec's glob, finding from the literal prefix over _roots.
@@ -998,7 +1006,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         **kwargs: Any,
     ) -> list[str]:
         target = (
-            self._pattern_target(_strip_only_protocol(self, path))
+            self._pattern_target(self.handler.verified(path, strip_only_protocol=True))
             if isinstance(path, str)
             else None
         )

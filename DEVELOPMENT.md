@@ -200,7 +200,9 @@ An item that exists is named by its entry, a dict as fsspec's `ls` with `detail`
   where it names an item.
 - Its data methods, `_cat_file`, `_pipe_file`, `_get_file` and `_put_file`, call the handler's extras where it has
   them, else go through its files.
-- `_copy` and `_mv` start the copy and move its family's class names, `_cp_strategy` and `_mv_strategy`.
+- `_copy` and `_mv` start the copy and move its family's class returns from `_cp_operation` and `_mv_operation`,
+  typed methods calling the family's strategy, e.g. `_tree_cp`. Their paths are the handler's `verified` with
+  `strip_only_protocol=True`, which keeps a trailing "/".
 - It answers and raises as fsspec's methods do, and tells the monitors of each call.
 - It has the sync methods fsspec does not make, `mv` and `rmdir`, and fsspec's `dircache`, as the next section says.
 
