@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""s3fs's ``S3FileSystem``, wrapped as a `FlatHandler`, with its own listing and copies.
+"""s3fs's ``S3FileSystem``, wrapped as a `FlatFileOperationHandler`, with its own listing and copies.
 
 The generic `FsspecFlatHandler` lists a prefix by s3fs's ``_find`` of its
 directory, and copies by its ``_cp_file``. `S3fsHandler` uses what s3fs has
@@ -45,7 +45,7 @@ class S3fsHandler(FsspecFlatHandler):
 
     Examples
     --------
-    >>> flat = FlatFileSystemWrapper(
+    >>> flat = FileSystemWrapper(
     ...     S3fsHandler(
     ...         s3fs.S3FileSystem(),
     ...         rm_batch_size=1000,

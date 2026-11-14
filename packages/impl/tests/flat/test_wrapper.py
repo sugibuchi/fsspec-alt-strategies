@@ -1,4 +1,4 @@
-"""Tests of the flat handlers: existing filesystems, as a `FlatFileSystem` on a `FsspecFlatHandler`."""
+"""Tests of the flat handlers: existing filesystems, as a `BaseFileSystem` on a `FsspecFlatHandler`."""
 
 from __future__ import annotations
 
@@ -9,16 +9,14 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.wrapper.flat import (
-    FlatFileSystemWrapper,
-    FsspecFlatHandler,
-)
+from fsspec_alt_strategies_impl.wrapper.filesystem import FileSystemWrapper
+from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
+    from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
 
 _OPTIONS: dict[str, Any] = {
     "rm_batch_size": 2,
@@ -29,11 +27,11 @@ _OPTIONS: dict[str, Any] = {
 _FILES = ["data/2023/01/a.txt", "data/2023/02/b.txt", "data/2024/c.txt", "data/d.txt"]
 
 
-def _flat(fs: Any, **options: Any) -> FlatFileSystem:
-    """A `FlatFileSystem` on a handler of `fs`, on its loop, as `monitored` makes one."""
+def _flat(fs: Any, **options: Any) -> BaseFileSystem:
+    """A `BaseFileSystem` on a handler of `fs`, on its loop, as `monitored` makes one."""
     asynchronous = options.pop("asynchronous", getattr(fs, "asynchronous", False))
     loop = {"loop": fs.loop} if fs.async_impl and not asynchronous else {}
-    return FlatFileSystemWrapper(
+    return FileSystemWrapper(
         FsspecFlatHandler(fs, **options), asynchronous=asynchronous, **loop
     )
 
@@ -70,7 +68,7 @@ async def test_an_async_filesystem_answers_as_fsspec(
 
 async def test_a_key_gone_meanwhile_is_no_error(inner: SimulatedFileSystem) -> None:
     flat = _flat(inner, **_OPTIONS)
-    await flat._rm_files(["data/d.txt", "missing.txt"])
+    await flat._handler.rm_files([{"name": p} for p in ["data/d.txt", "missing.txt"]])
     assert not await inner._exists("data/d.txt")
 
 
@@ -103,7 +101,7 @@ async def test_a_key_gone_from_a_batch_deletes_the_rest(
 
     monkeypatch.setattr(inner, "_rm", refused)
     flat = _flat(inner, **_OPTIONS)
-    await flat._rm_files(["data/d.txt", "missing.txt"])
+    await flat._handler.rm_files([{"name": p} for p in ["data/d.txt", "missing.txt"]])
     assert not await inner._exists("data/d.txt")
 
 
@@ -113,5 +111,7 @@ async def test_a_sync_key_gone_from_a_batch_deletes_the_rest(tmp_path: Path) -> 
     local.pipe_file(f"{root}/a.txt", b"a")
     flat = _flat(local, asynchronous=True, **_OPTIONS)
     # The local rm raises for the missing key: the rest goes one by one.
-    await flat._rm_files([f"{root}/a.txt", f"{root}/missing.txt"])
+    await flat._handler.rm_files(
+        [{"name": p} for p in [f"{root}/a.txt", f"{root}/missing.txt"]]
+    )
     assert not local.exists(f"{root}/a.txt")

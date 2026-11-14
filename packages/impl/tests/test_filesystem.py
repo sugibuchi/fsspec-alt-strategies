@@ -17,7 +17,7 @@ from fsspec.implementations.memory import MemoryFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.filesystem import (
-    _BaseFileSystem,
+    BaseFileSystem,
     _copy_errors,
     _failed_dir,
     _raise,
@@ -25,15 +25,12 @@ from fsspec_alt_strategies_impl.common.filesystem import (
 from fsspec_alt_strategies_impl.common.handler import StorageHandler
 from fsspec_alt_strategies_impl.common.paths import fixed_prefix
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
-from fsspec_alt_strategies_impl.wrapper.flat import (
-    FlatFileSystemWrapper,
-    FsspecFlatHandler,
-)
-from fsspec_alt_strategies_impl.wrapper.tree import (
-    FsspecTreeHandler,
-    TreeFileSystemWrapper,
-)
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
+from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
+from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
+from fsspec_alt_strategies_impl.wrapper.filesystem import FileSystemWrapper
+from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
+from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
+from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem, TreeView
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -47,10 +44,8 @@ _LIMITS: dict[str, Any] = {
 
 
 def _tree(fs: Any, handler: type = FsspecTreeHandler, **options: Any) -> Any:
-    """A `TreeFileSystemWrapper` on a handler of `fs`, async: it serves `fs`'s paths."""
-    return TreeFileSystemWrapper(
-        handler(fs, **{**_LIMITS, **options}), asynchronous=True
-    )
+    """A `FileSystemWrapper` on a handler of `fs`, async: it serves `fs`'s paths."""
+    return FileSystemWrapper(handler(fs, **{**_LIMITS, **options}), asynchronous=True)
 
 
 class _Transfers(SimulatedFileSystem):
@@ -85,7 +80,7 @@ async def test_a_handler_of_an_async_filesystem_passes_data_methods_on() -> None
     assert inner.transfers == [("get", "a", "local"), ("put", "local", "c")]
     assert await tree.open_async("a") == ("opened", "a", "rb")
     assert tree._open("a", "wb") == ("open", "a", "wb")
-    assert tree.handler.io_limit._value == 1
+    assert tree._handler.io_limit._value == 1
 
 
 async def test_a_handler_of_a_sync_filesystem_passes_data_methods_on(
@@ -108,7 +103,7 @@ async def test_a_handler_of_a_sync_filesystem_passes_data_methods_on(
     await tree._mv_file("/w/c", "/w/d")
     assert sorted(inner.ls("/w", detail=False)) == ["/w/a", "/w/b", "/w/d", "/w/e"]
     assert tree.unstrip_protocol("/w/d") == "memory:///w/d"
-    assert tree.handler.io_limit._value == 1
+    assert tree._handler.io_limit._value == 1
 
 
 class _Unseekable(io.BytesIO):
@@ -148,9 +143,9 @@ class _Streaming(FsspecTreeHandler):
 
 async def test_a_range_of_an_unseekable_file_skips_its_start() -> None:
     fs = _tree(MemoryFileSystem(), _Streaming)
-    handler = fs.handler
+    handler = fs._handler
     handler.transfer_size = 3
-    cat = _BaseFileSystem._cat_file
+    cat = BaseFileSystem._cat_file
     assert await cat(fs, "f", start=7, end=9) == b"78"
     # Read and dropped in chunks no bigger than a transfer.
     assert handler.opened[-1].reads == [3, 3, 1, 2]
@@ -163,14 +158,14 @@ async def test_a_range_of_an_unseekable_file_skips_its_start() -> None:
 async def test_a_local_dir_is_no_transfer(tmp_path: Path) -> None:
     # Both return before opening a file: fsspec makes local directories itself.
     tree = _tree(MemoryFileSystem())
-    assert await _BaseFileSystem._get_file(tree, "/w/a", str(tmp_path)) is None
-    assert await _BaseFileSystem._put_file(tree, str(tmp_path), "/w/a") is None
+    assert await BaseFileSystem._get_file(tree, "/w/a", str(tmp_path)) is None
+    assert await BaseFileSystem._put_file(tree, str(tmp_path), "/w/a") is None
 
 
 def test_paths_as_given_keep_a_trailing_slash() -> None:
     tree = _tree(MemoryFileSystem())
     assert tree._as_given(["memory://w/a/", "w/b"]) == ["/w/a/", "/w/b"]
-    handler = tree.handler
+    handler = tree._handler
     assert handler.verified("memory://w/a/", strip_only_protocol=True) == "/w/a/"
     assert handler.entry("w/a/", strip_only_protocol=True) == {"name": "/w/a/"}
 
@@ -267,7 +262,7 @@ async def test_a_file_copied_or_moved_into_a_missing_dir(
     if family == "tree":
         fs: Any = _tree(sim)
     else:
-        fs = FlatFileSystemWrapper(
+        fs = FileSystemWrapper(
             _Flat(sim, rm_batch_size=10, **_LIMITS), asynchronous=True
         )
 
@@ -294,7 +289,7 @@ async def test_many_paths_go_io_concurrency_at_a_time(batch_size: int | None) ->
 
 
 def test_fsspecs_options_are_named() -> None:
-    fs = TreeFileSystemWrapper(
+    fs = FileSystemWrapper(
         FsspecTreeHandler(MemoryFileSystem(), **_LIMITS),
         use_listings_cache=False,
         listings_expiry_time=5,
@@ -311,7 +306,7 @@ def test_an_option_not_named_is_refused(option: str) -> None:
     # fsspec's own constructors would ignore it, silently.
     handler = FsspecTreeHandler(MemoryFileSystem(), **_LIMITS)
     with pytest.raises(TypeError, match=option):
-        TreeFileSystemWrapper(handler, **{option: True})
+        FileSystemWrapper(handler, **{option: True})
 
 
 def _ranges_fs(**kwargs: Any) -> tuple[SimulatedFileSystem, Any]:
@@ -428,17 +423,42 @@ async def test_strategies_load_the_profile_once(
     handler: Any
     if family == "tree":
         handler = _NotingTree(inner, storage_profile=StorageProfile(), **limits)
-        fs: Any = TreeFileSystemWrapper(handler, asynchronous=True)
+        fs: Any = FileSystemWrapper(handler, asynchronous=True)
     else:
         handler = _NotingFlat(
             inner, rm_batch_size=10, storage_profile=StorageProfile(), **limits
         )
-        fs = FlatFileSystemWrapper(handler, asynchronous=True)
+        fs = FileSystemWrapper(handler, asynchronous=True)
     await call(fs)
     assert handler.loaded == loads
 
 
 async def test_the_profile_set_is_the_handlers() -> None:
     fs = _tree(SimulatedFileSystem(asynchronous=True))
-    await fs.handler.open()
-    assert fs.handler.profile == StorageProfile(fs_type="tree")
+    await fs._handler.open()
+    assert fs._handler.profile == StorageProfile()
+
+
+async def test_a_filesystem_runs_its_handlers_strategies() -> None:
+    fs = SimulatedFileSystem(asynchronous=True)
+    fs.add_file("data/a.txt", b"a")
+    tree = BaseFileSystem(TreeView(fs), asynchronous=True)
+    flat = BaseFileSystem(FlatView(fs), asynchronous=True)
+    assert await tree._find("data") == await flat._find("data") == ["data/a.txt"]
+
+
+async def test_a_strategy_overridden_is_the_one_the_filesystem_runs() -> None:
+    class Flat(FlatView):
+        def find(self, path: str, **kwargs: Any) -> Any:
+            self.found = path
+            return super().find(path, **kwargs)
+
+    for view in (Flat, TreeView):
+        assert issubclass(view, (TreeFileOperationHandler, FlatFileOperationHandler))
+    fs = SimulatedFileSystem(asynchronous=True)
+    fs.add_file("data/a.txt", b"a")
+    handler = Flat(fs)
+    assert await BaseFileSystem(handler, asynchronous=True)._find("data") == [
+        "data/a.txt"
+    ]
+    assert handler.found == "data"

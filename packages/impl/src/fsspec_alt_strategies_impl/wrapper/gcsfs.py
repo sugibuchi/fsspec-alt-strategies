@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""gcsfs's ``GCSFileSystem``, wrapped as a `FlatHandler`, listing by prefix and deleting in full batches.
+"""gcsfs's ``GCSFileSystem``, wrapped as a `FlatFileOperationHandler`, listing by prefix and deleting in full batches.
 
 `GcsfsHandler` uses what gcsfs has beside fsspec's API:
 
@@ -57,7 +57,7 @@ class GcsfsHandler(FsspecFlatHandler):
 
     Examples
     --------
-    >>> flat = FlatFileSystemWrapper(
+    >>> flat = FileSystemWrapper(
     ...     GcsfsHandler(
     ...         gcsfs.GCSFileSystem(),
     ...         rm_batch_size=100,

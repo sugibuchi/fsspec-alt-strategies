@@ -75,7 +75,7 @@ class Operation(OperationHandler, Generic[T, S]):
 
     Examples
     --------
-    >>> rm = _tree_rm(fs, "data/2024")  # fs, a TreeFileSystem.
+    >>> rm = _tree_rm(handler, "data/2024")  # handler, a TreeFileOperationHandler.
     >>> async with rm as op:
     ...     async for path in op:
     ...         if isinstance(path, Exception):

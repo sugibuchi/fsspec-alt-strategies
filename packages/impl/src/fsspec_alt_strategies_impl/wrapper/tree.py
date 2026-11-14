@@ -1,36 +1,29 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""Existing filesystems, wrapped as a `TreeHandler`.
+"""Existing filesystems, wrapped as a `TreeFileOperationHandler`.
 
 `FsspecTreeHandler` wraps an fsspec filesystem, async or sync, so that a
-`TreeFileSystem` on it answers its recursive methods by the tree strategies.
-It lists a tree a directory per request, by the wrapped one's ``ls``.
+`FileSystemWrapper` on it answers its recursive methods by the tree
+strategies. It lists a tree a directory per request, by the wrapped one's
+``ls``.
 
-This module depends on `_base`, and `filesystem` and `handler` of `tree`.
+This module depends on `_base`, and `handler` of `tree`.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from ..tree.filesystem import TreeFileSystem
-from ..tree.handler import TreeHandler
-from ._base import _FsspecHandler, _unwrapped
+from ..tree.handler import TreeFileOperationHandler
+from ._base import _FsspecHandler
 
 if TYPE_CHECKING:
-    import asyncio
-
-    from fsspec import AbstractFileSystem
-
-    from fsspec_alt_strategies.profile import StorageProfile
-
     from ..common.handler import Entry, StoragePath
 
-__all__ = ["FsspecTreeHandler", "TreeFileSystemWrapper"]
+__all__ = ["FsspecTreeHandler"]
 
 
-class FsspecTreeHandler(_FsspecHandler, TreeHandler):
+class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
     """An fsspec filesystem, async or sync, as a tree handler.
 
     Its primitives, such as ``ils``, ``rm_file`` and ``mv_file``, are the
@@ -48,9 +41,8 @@ class FsspecTreeHandler(_FsspecHandler, TreeHandler):
       ``copy``, where ``copies_directories=True``.
 
     It wins on storages listing one directory per request, such as a local
-    disk or SFTP, as the tree strategies do. A `TreeFileSystem` made on it by
-    ``TreeFileSystem.of`` is not cached: each is new, and may be dropped once
-    used.
+    disk or SFTP, as the tree strategies do. A `FileSystemWrapper` made on it
+    is not cached: each is new, and may be dropped once used.
 
     Parameters
     ----------
@@ -77,7 +69,7 @@ class FsspecTreeHandler(_FsspecHandler, TreeHandler):
     Examples
     --------
     >>> local = fsspec.filesystem("file")
-    >>> tree = TreeFileSystemWrapper(
+    >>> tree = FileSystemWrapper(
     ...     FsspecTreeHandler(
     ...         local,
     ...         operation_concurrency=8,
@@ -87,22 +79,6 @@ class FsspecTreeHandler(_FsspecHandler, TreeHandler):
     ... )
     >>> tree.mv("data/2024", "archive/2024", recursive=True)
     """
-
-    def __init__(
-        self,
-        fs: Any,
-        *,
-        operation_concurrency: int | asyncio.Semaphore,
-        io_concurrency: int | asyncio.Semaphore,
-        storage_profile: StorageProfile,
-    ) -> None:
-        super().__init__(
-            fs,
-            operation_concurrency=operation_concurrency,
-            io_concurrency=io_concurrency,
-            # A tree handler, whatever it wraps.
-            storage_profile=replace(storage_profile, fs_type="tree"),
-        )
 
     async def rm_tree(self, entry: Entry) -> None:
         # The wrapped one's own recursive delete, as deletes_directories declares.
@@ -133,41 +109,3 @@ class FsspecTreeHandler(_FsspecHandler, TreeHandler):
             await cp_tree(path, path2)
         else:
             await self.fs._copy(path, path2, recursive=True)
-
-
-class TreeFileSystemWrapper(TreeFileSystem):
-    """A `TreeFileSystem` on a handler wrapping another filesystem, serving that one's paths.
-
-    As it is made, it takes the handler's `protocol`, `root` and
-    `strip_protocol`, the wrapped filesystem's: it takes the URLs that one
-    takes, and gives its own. A `TreeFileSystem` takes none of its handler's
-    paths: a storage's class names its own.
-
-    Parameters
-    ----------
-    handler : FsspecTreeHandler
-        The handler of the filesystem wrapped.
-    **kwargs
-        fsspec's own options, as `TreeFileSystem` takes them, e.g. ``asynchronous=True``.
-
-    Examples
-    --------
-    >>> fs = TreeFileSystemWrapper(FsspecTreeHandler(fsspec.filesystem("file"), ...))
-    """
-
-    cachable = False
-    """Not cached: fsspec would key it by its handler's repr, which two wrappers of one filesystem share."""
-
-    handler: FsspecTreeHandler
-
-    def __init__(self, handler: FsspecTreeHandler, **kwargs: Any) -> None:
-        super().__init__(handler, **kwargs)
-
-        # The wrapped filesystem's paths, which its handler holds.
-        self.protocol = handler.protocol
-        self.root_marker = handler.root
-        self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]
-
-    def _unwrapped(self) -> AbstractFileSystem:
-        """The filesystem wrapped, as a monitor's `Call` names it: the one its user made."""
-        return _unwrapped(self.handler.fs)  # type: ignore[no-any-return]

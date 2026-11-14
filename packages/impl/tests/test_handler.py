@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
+from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
 from fsspec_alt_strategies_impl.common.handler import StorageHandler
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
@@ -120,7 +120,7 @@ async def test_verify_path_sees_the_callers_url_and_verified_strips_it() -> None
     assert handler.checked == ["acct://acct/c/"]
 
     handler.checked.clear()
-    await TreeFileSystem(handler, skip_instance_cache=True)._info("acct://acct/c")
+    await BaseFileSystem(handler, skip_instance_cache=True)._info("acct://acct/c")
     assert handler.checked == ["acct://acct/c"]
 
 
@@ -227,8 +227,8 @@ def _storage() -> SimulatedFileSystem:
 
 async def test_a_filesystem_on_a_handler_calls_its_primitives() -> None:
     inner = _storage()
-    fs = TreeFileSystem(_Strict(inner), asynchronous=True)
-    assert fs.handler is not None
+    fs = BaseFileSystem(_Strict(inner), asynchronous=True)
+    assert fs._handler is not None
     assert await fs._find("data") == ["data/a/x", "data/y"]
     assert (await fs._info("data/y"))["size"] == 2
     await fs._copy("data", "copied", recursive=True)
@@ -238,7 +238,7 @@ async def test_a_filesystem_on_a_handler_calls_its_primitives() -> None:
 
 
 async def test_a_filesystem_on_a_handler_verifies_a_callers_paths() -> None:
-    fs = TreeFileSystem(_Strict(_storage()), asynchronous=True)
+    fs = BaseFileSystem(_Strict(_storage()), asynchronous=True)
     with pytest.raises(ValueError, match="holds ':'"):
         await fs._info("data/a:b")
     with pytest.raises(ValueError, match="holds ':'"):
@@ -249,7 +249,7 @@ async def test_a_filesystem_on_a_handler_verifies_a_callers_paths() -> None:
 
 def test_a_filesystem_needs_a_handler() -> None:
     with pytest.raises(TypeError, match="handler"):
-        TreeFileSystem()  # type: ignore[call-arg]
+        BaseFileSystem()  # type: ignore[call-arg]
 
 
 class _Bucket(TreeView):
@@ -257,7 +257,7 @@ class _Bucket(TreeView):
     root = ""
 
 
-class _BucketFileSystem(TreeFileSystem):
+class _BucketFileSystem(BaseFileSystem):
     """A storage's class: its paths named as its handler class's, by convention."""
 
     protocol = _Bucket.protocol
@@ -297,7 +297,7 @@ def test_sign_created_and_modified_are_the_handlers() -> None:
         fs.created("bkt://a/b")
     with pytest.raises(NotImplementedError, match="no modification time"):
         fs.modified("bkt://a/b")
-    fs = TreeFileSystem(Dating(_storage()))
+    fs = BaseFileSystem(Dating(_storage()))
     assert fs.sign("a/b", expiration=5) == "https://signed/a/b?e=5"
     assert (fs.created("a/b"), fs.modified("a/b")) == (
         ("created", "a/b"),

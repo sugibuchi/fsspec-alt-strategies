@@ -43,13 +43,18 @@ code: read it before adding a strategy or a handler.
 
 ### Handlers and filesystems
 
-- A storage is a handler, `TreeHandler` or `FlatHandler`, which a developer writes: its primitives, paths, profile,
-  limits and clients. The strategies take handlers, never filesystems.
-- `TreeFileSystem` and `FlatFileSystem` implement fsspec's API on a handler, a required argument. Nobody overrides
-  their methods. Their recursive methods, such as `_rm` and `_copy`, start a private strategy, e.g. `_tree_rm`, and
-  answer as fsspec's method does.
-- A filesystem copies nothing from its handler: no profile, no limit, no `rm_batch_size`. It reads them from
-  `self.handler` where it uses them.
+- A storage is a handler, which a developer writes: its primitives, paths, profile, limits and clients. It subclasses
+  its family's, `TreeFileOperationHandler` or `FlatFileOperationHandler`, which declares the family's primitives and
+  runs its strategies. The strategies take handlers, never filesystems.
+- A `FileOperationHandler`, in `common/handler.py`, is a `StorageHandler` with the `Strategy` mixin's methods, `walk`,
+  `find`, `glob`, `du`, `rm`, `cp` and `mv`, in `common/strategy.py`. Each takes its strategy's arguments but the
+  handler, which is `self`, and returns an operation not started. A family's handler implements them by its
+  strategies, e.g. `rm` by `_tree_rm`. A storage's handler overrides a method to choose another strategy.
+- `BaseFileSystem` implements fsspec's API on a `FileOperationHandler`, a required argument. Nobody overrides its methods. Its recursive methods, such as `_rm` and `_copy`, run the handler's strategy, e.g. its `rm`, and answer as
+  fsspec's method does.
+- A filesystem keeps its handler private, as `self._handler`, so that no caller gets an operation from it. It copies
+  nothing from its handler: no profile, no limit, no `rm_batch_size`. It reads them from `self._handler` where it uses
+  them.
 - The filesystems' and the router's `__init__` name fsspec's options, `asynchronous`, `loop` and the `dircache`'s, so
   that any other raises TypeError. Never take `**kwargs` there, nor fsspec's `batch_size`.
 - A storage's own class, by convention, writes its `__init__`, its signature naming each of its handler's options and
@@ -57,8 +62,8 @@ code: read it before adding a strategy or a handler.
   e.g. a token credential's, the handler passing on those its constructor names. It makes its handler from them. It names
   `protocol`, `root_marker` and `_strip_protocol` as its handler class's, and overrides nothing else. There is no
   metaclass, no `__init_subclass__` and no decorator reflecting on a class.
-- `TreeFileSystemWrapper` and `FlatFileSystemWrapper` alone take their handler's paths at runtime, and alone are not
-  cached: they serve a wrapped filesystem.
+- `FileSystemWrapper` alone takes its handler's paths at runtime, and alone is not cached: it serves a wrapped
+  filesystem. The router makes its storages' `BaseFileSystem`s uncached.
 - A primitive takes an entry for an item that exists, and a `StoragePath` for one to be made. `open_file` and
   `open_async_file` take an entry whatever the mode, holding only the name of a file to write. `open_file` gives
   Python's sync API, and `open_async_file` fsspec's async one: the strategies use only the latter. Async adapters
@@ -82,8 +87,9 @@ code: read it before adding a strategy or a handler.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
 - Every strategy follows DEVELOPMENT.md's "Operations":
   - paths come without a protocol, verified;
-  - it returns a private `Operation`, an `OperationHandler` working as it is iterated. No public method returns one:
-    callers watch operations with a `Monitor`, which stops one through its `OperationHandler`;
+  - it returns a private `Operation`, an `OperationHandler` working as it is iterated. Only a
+    `FileOperationHandler`'s strategy methods return one, and the filesystem keeps its handler private: callers watch
+    operations with a `Monitor`, which stops one through its `OperationHandler`;
   - the operation yields what it did, mixed with an exception per failed path, each noting its path;
   - the call raises argument errors, and the iteration only errors ending the whole operation, such as a missing root;
   - its stopping mirrors `asyncio.Task`: `cancel()` starts nothing new but yields what is in flight, and `aclose()`
@@ -102,9 +108,10 @@ code: read it before adding a strategy or a handler.
   `pipe_file`, `get_file` or `put_file` per request. Their defaults, through `open_async_file`, hold none.
 - The filesystem calls only what `StorageHandler` declares. Never find a handler's method by `getattr`: declare it
   on `StorageHandler`, with a default that works.
-- The library never chooses a strategy for the developer. Each docstring says what the strategy assumes of the
-  storage, and when it wins or loses.
-- fsspec's `dircache` is for fsspec's own methods and callers only. `_BaseFileSystem._ls` keeps a listing once it has
+- The library never chooses a strategy for the developer: the developer chooses a family's handler, and overrides a
+  strategy method to choose another. Each docstring says what the strategy assumes of the storage, and when it wins
+  or loses.
+- fsspec's `dircache` is for fsspec's own methods and callers only. `BaseFileSystem._ls` keeps a listing once it has
   listed it whole. The strategies list by the handler, which never reads or fills it, and `_info` never reads it.
   Every method changing the storage calls `self._drop_listings()` in a `finally`: a new one does too.
 - Async first: write the async version, and a sync one only when asked.
@@ -113,13 +120,14 @@ code: read it before adding a strategy or a handler.
 ### Families
 
 - A family, such as `tree/` or `flat/`, never imports another. What two share goes in `common/`, a module per
-  concern. What builds on both sits at the package's root: `wrapper/` and `router.py`. The router imports a
-  family's filesystem only when routing to a storage of it, and its strategies only when copying or moving from one.
-  A handler's class tells its family: a `TreeHandler` or a `FlatHandler`, never an attribute naming it.
+  concern. What builds on both sits at the package's root: `wrapper/`, `monitor.py` and `router.py`. The router
+  imports no family: each storage's handler runs its own strategies. A handler's class tells its family: a
+  `TreeFileOperationHandler` or a `FlatFileOperationHandler`, never an attribute naming it.
 - A wrapper of one library, such as `wrapper/s3fs.py`, is a handler, and never imports the library: it calls the
   wrapped filesystem's methods. Write one only where the library saves requests or data beyond fsspec's API.
-- A family's modules export nothing public but its handler class, in `handler.py`, and its filesystem class, in
-  `filesystem.py`.
+- A family's modules export nothing public but its handler class, in `handler.py`.
+- A tree handler's `ils_recursive` defaults to `tree.listing._tree_ils`, a directory per request by `ils`. A storage
+  listing a tree in one request overrides it, and falls back on `_tree_ils` itself where its storage refuses.
 - The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
 - Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing

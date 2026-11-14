@@ -12,17 +12,15 @@ from fsspec.implementations.local import LocalFileSystem
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.handler import StorageHandler
 from fsspec_alt_strategies_impl.router import RoutingFileSystem
+from fsspec_alt_strategies_impl.wrapper.filesystem import FileSystemWrapper
 from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
-from fsspec_alt_strategies_impl.wrapper.tree import (
-    FsspecTreeHandler,
-    TreeFileSystemWrapper,
-)
+from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+    from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
 
 _LIMITS: dict[str, Any] = {
     "operation_concurrency": 4,
@@ -52,10 +50,10 @@ def test_every_primitive_is_passed_on(handler: type) -> None:
     assert {n for c in below for n in vars(c)} >= _PASSED_ON
 
 
-def _tree(fs: Any, **options: Any) -> TreeFileSystem:
-    """A ``TreeFileSystem`` on a handler of ``fs``."""
+def _tree(fs: Any, **options: Any) -> BaseFileSystem:
+    """A ``BaseFileSystem`` on a handler of ``fs``."""
     asynchronous = options.pop("asynchronous", getattr(fs, "asynchronous", False))
-    return TreeFileSystemWrapper(
+    return FileSystemWrapper(
         FsspecTreeHandler(fs, **_LIMITS, **options), asynchronous=asynchronous
     )
 
@@ -73,7 +71,7 @@ async def test_a_sync_filesystem_makes_a_dir(
     local = LocalFileSystem()
     root = local._strip_protocol(str(tmp_path))
     tree = _tree(local, asynchronous=True)
-    assert tree.handler is not None and not tree.handler.asynchronous  # type: ignore[attr-defined]
+    assert tree._handler is not None and not tree._handler.asynchronous  # type: ignore[attr-defined]
     await tree._mkdir(f"{root}/a/b")
     assert local.isdir(f"{root}/a/b")
 
@@ -101,7 +99,7 @@ class _Signing(SimulatedFileSystem):
 def test_sign_is_the_wrapped_filesystems() -> None:
     # The wrapped filesystem's loop is fsspec's, which runs the handler's sign too.
     tree = _tree(_Signing(hierarchical=True, skip_instance_cache=True))
-    assert tree.loop is tree.handler.fs.loop  # type: ignore[attr-defined]
+    assert tree.loop is tree._handler.fs.loop  # type: ignore[attr-defined]
     assert tree.sign("a/b", expiration=5) == "signed a/b 5"
 
 
@@ -115,5 +113,5 @@ async def test_a_sync_filesystem_of_an_async_class_is_wrapped_as_sync(
     local.pipe_file(f"{root}/a/x.txt", b"x")
     dirfs = DirFileSystem(path=root, fs=local)
     tree = _tree(dirfs, asynchronous=True)
-    assert not tree.handler.asynchronous  # type: ignore[union-attr]
+    assert not tree._handler.asynchronous  # type: ignore[union-attr]
     assert await tree._find("a") == ["a/x.txt"]

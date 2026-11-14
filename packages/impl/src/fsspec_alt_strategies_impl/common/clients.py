@@ -54,7 +54,7 @@ class SyncClientSupport:
 
     Examples
     --------
-    >>> class MyHandler(SyncClientSupport, TreeHandler):
+    >>> class MyHandler(SyncClientSupport, TreeFileOperationHandler):
     ...     async def info(self, entry, **kwargs):
     ...         return await self._run_in_thread(self.client.stat, entry["name"])
     """
@@ -142,7 +142,7 @@ class AsyncClientSupport:
 
     Examples
     --------
-    >>> class MyHandler(AsyncClientSupport, TreeHandler):
+    >>> class MyHandler(AsyncClientSupport, TreeFileOperationHandler):
     ...     async def create_clients(self):
     ...         self.session = aiohttp.ClientSession()
     ...

@@ -14,8 +14,9 @@ directory whole.
 
 A tree that nothing prunes is listed by one ``ils_recursive``, which gives it
 depth first or in name order. Its entries are split into the same parts, each
-directory's as soon as the listing has passed it. A storage with no recursive
-listing of its own answers it with a directory per request, several at a time.
+directory's as soon as the listing has passed it. A handler with no recursive
+listing of its own answers it by default with a directory per request, several
+at a time.
 Where the walk prunes, it lists each directory it enters on its own, several at
 a time, breadth first.
 
@@ -23,7 +24,7 @@ The tree strategies, and the engines under them, take the filesystem they
 work on, and call its primitives, such as ``ils``, under its
 ``operation_limit``.
 
-This module depends on `listing`, and `handler`, `jobs`, `operation` and `paths` of `common`.
+This module depends on `handler`, `jobs`, `operation` and `paths` of `common`.
 """
 
 from __future__ import annotations
@@ -38,7 +39,6 @@ from fsspec_alt_strategies.states import WalkState
 from ..common.jobs import _Queue
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
-from .listing import _recursive
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Collection, Iterable
@@ -493,7 +493,7 @@ async def _produce_tree(
     """
     tree = _Split(root, root_depth, chunk_size)
     try:
-        entries = _recursive(handler, listed or handler.entry(root), **ils_kwargs)
+        entries = handler.ils_recursive(listed or handler.entry(root), **ils_kwargs)
         try:
             async for entry in entries:
                 for part in tree.add(entry):

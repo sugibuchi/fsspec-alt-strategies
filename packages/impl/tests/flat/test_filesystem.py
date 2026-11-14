@@ -1,4 +1,4 @@
-"""Tests of `FlatFileSystem`, checked against fsspec's own methods on the same data."""
+"""Tests of `BaseFileSystem`, checked against fsspec's own methods on the same data."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from fsspec.callbacks import Callback
 
 from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
 from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
@@ -20,8 +21,7 @@ from fsspec_alt_strategies_impl.files.fsspec_transaction import (
     AdaptiveWritableTransaction,
     TransactionFile,
 )
-from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
-from fsspec_alt_strategies_impl.flat.handler import FlatHandler
+from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -78,7 +78,7 @@ async def _open_file(
     return _Writer(inner, path, **kwargs)
 
 
-class _FlatHandler(FlatHandler):
+class _FlatHandler(FlatFileOperationHandler):
     """A simulated object store's primitives, as a flat handler."""
 
     protocol = "flattest"
@@ -165,8 +165,8 @@ class _FlatHandler(FlatHandler):
         )
 
 
-class _Flat(FlatFileSystem):
-    """A FlatFileSystem on a simulated object store, made from it as from storage options."""
+class _Flat(BaseFileSystem):
+    """A BaseFileSystem on a simulated object store, made from it as from storage options."""
 
     protocol = _FlatHandler.protocol
     _strip_protocol = _FlatHandler.strip_protocol
@@ -187,9 +187,9 @@ class _Flat(FlatFileSystem):
         super().__init__(handler, **kwargs)
 
 
-def _on(handler: FlatHandler) -> Any:
-    """A FlatFileSystem on a handler, async."""
-    return FlatFileSystem(handler, asynchronous=True)
+def _on(handler: FlatFileOperationHandler) -> Any:
+    """A BaseFileSystem on a handler, async."""
+    return BaseFileSystem(handler, asynchronous=True)
 
 
 _FILES = [
@@ -346,7 +346,9 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
 def test_a_handler_missing_a_primitive_is_refused(primitive: str) -> None:
     # Still abstract, as if not written: fsspec's _rmdir and _makedirs would do nothing.
     incomplete = type(
-        "Incomplete", (_FlatHandler,), {primitive: getattr(FlatHandler, primitive)}
+        "Incomplete",
+        (_FlatHandler,),
+        {primitive: getattr(FlatFileOperationHandler, primitive)},
     )
 
     with pytest.raises(TypeError, match=primitive):

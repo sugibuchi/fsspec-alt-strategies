@@ -7,8 +7,8 @@ parent directories, others raise FileNotFoundError. A strategy works on any of
 them, but sends fewer requests, or copies less data, when it knows.
 `StorageProfile` tells it.
 
-A filesystem has one profile, which never changes. A strategy reads it from the
-filesystem it works on, or from the destination's for a copy or move.
+A storage has one profile, which never changes. A strategy reads it from the
+handler it works on, or from the destination's for a copy or move.
 `UNKNOWN`, `StorageProfile()`, knows nothing, and is right on any storage.
 
 The library never detects a storage's behaviour: the developer declares it. A
@@ -26,7 +26,6 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 __all__ = ["UNKNOWN", "StorageProfile"]
 
@@ -40,23 +39,15 @@ class StorageProfile:
 
     Parameters
     ----------
-    fs_type : {"tree", "flat"}, optional
-        The family of strategies the storage's filesystem answers with.
-        "tree" is a hierarchical namespace listed by directory, with
-        ``_ils``, as on a `TreeFileSystem`. "flat" is keys listed by prefix,
-        with a recursive ``_ils``, ``_rm_files`` and ``rm_batch_size``, as on a
-        `FlatFileSystem`. A router copying or moving between two storages
-        picks the source's strategies with it. Unknown by default: the router
-        then copies with fsspec's own copy.
     parents_required : bool, optional
         Whether writing a file into a missing directory fails, rather than
         creating its parents. Unknown by default, taken as True: directories are
         created before files are written into them. It tells of writes only,
         such as a router's copy from another storage. A rename's parent is
-        always created first, as ``_mv_file_entry`` is called only where the
-        destination's parent exists.
+        always created first, as the handler's ``mv_file`` is called only where
+        the destination's parent exists.
     copy_parents_required : bool, optional
-        Whether the filesystem's own copy of a file, ``_cp_file_entry``, into a
+        Whether the storage's own copy of a file, the handler's ``cp_file``, into a
         missing directory fails, rather than creating its parents. A copy
         within the storage reads it, where a copy from another storage, a
         write, reads ``parents_required``. They differ where the storage's copy
@@ -73,20 +64,20 @@ class StorageProfile:
         rather than a copy and a delete. Unknown by default, taken as False: a
         move copies, and deletes in batches where it can.
     renames_directories : bool, optional
-        Whether the filesystem's ``_mv_tree`` moves a directory with all in
+        Whether the handler's ``mv_tree`` moves a directory with all in
         it, in one request, as a storage's rename does. It moves a file too.
         Unknown by default, taken as False: a directory is walked, and its
         files moved one by one. True holds between any two paths of the
         filesystem: a storage whose rename stops at a boundary, e.g.
         containers, is several filesystems under a router.
     deletes_directories : bool, optional
-        Whether the filesystem's ``_rm_tree`` deletes a directory with all in
+        Whether the handler's ``rm_tree`` deletes a directory with all in
         it, in one request, as a storage's recursive delete does. It deletes a
         file too. Unknown by default, taken as False: a directory is walked, and
-        what is in it deleted one by one. Declared True, a failed ``_rm_tree``
+        what is in it deleted one by one. Declared True, a failed ``rm_tree``
         is the directory's failure, never walked.
     copies_directories : bool, optional
-        Whether the filesystem's ``_cp_tree`` copies a directory with all in
+        Whether the handler's ``cp_tree`` copies a directory with all in
         it, in one request, as a storage's copy of a folder does. It copies a
         file too. Unknown by default, taken as False: a directory is walked,
         and its files copied one by one. True holds between any two paths of
@@ -110,18 +101,16 @@ class StorageProfile:
     Raises
     ------
     ValueError
-        If ``fs_type`` is neither "tree" nor "flat", or if
-        ``implicit_directories`` is True with ``parents_required`` or
+        If ``implicit_directories`` is True with ``parents_required`` or
         ``copy_parents_required`` True, as a file's parents then exist as soon
         as it does.
 
     Examples
     --------
-    >>> class MyFileSystem(TreeFileSystem):
-    ...     storage_profile = StorageProfile(implicit_directories=True)
+    >>> class MyHandler(TreeFileOperationHandler):
+    ...     profile = StorageProfile(implicit_directories=True)
     """
 
-    fs_type: Literal["tree", "flat"] | None = None
     parents_required: bool | None = None
     copy_parents_required: bool | None = None
     implicit_directories: bool | None = None
@@ -133,8 +122,6 @@ class StorageProfile:
     atomic_writes: bool | None = None
 
     def __post_init__(self) -> None:
-        if self.fs_type not in (None, "tree", "flat"):
-            raise ValueError(f"fs_type must be 'tree' or 'flat': {self.fs_type!r}")
         for name in ("parents_required", "copy_parents_required"):
             if self.implicit_directories and getattr(self, name):
                 raise ValueError(

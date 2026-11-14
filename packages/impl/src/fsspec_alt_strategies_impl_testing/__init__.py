@@ -49,8 +49,8 @@ from fsspec_alt_strategies_impl.files.fsspec_transaction import (
     AdaptiveWritableTransaction,
     TransactionFile,
 )
-from fsspec_alt_strategies_impl.flat.handler import FlatHandler
-from fsspec_alt_strategies_impl.tree.handler import TreeHandler
+from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
+from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
@@ -774,7 +774,7 @@ class _Files:
         return _Writer(self.fs, path, mode=mode, concurrency_limit=self.io_limit)
 
 
-class TreeView(_Files, TreeHandler):
+class TreeView(_Files, TreeFileOperationHandler):
     """A simulated storage as a tree handler, its primitives replaceable.
 
     The tree strategies take a handler, and call its ``ils``, ``info``,
@@ -788,9 +788,12 @@ class TreeView(_Files, TreeHandler):
     `SimulatedFileSystem` has none.
 
     It has no recursive listing of its own, so the strategies list a tree a
-    directory per request. With ``recursive_listing``, it lists by the
-    filesystem's own recursive listing instead, a page per request, in name
-    order.
+    directory per request, by the default ``ils_recursive``. With
+    ``recursive_listing``, it lists by the filesystem's own recursive listing
+    instead, a page per request, in name order.
+
+    It runs the tree strategies, as a `TreeFileOperationHandler`, so that a
+    filesystem may be made on it too.
 
     It verifies no path: the simulated storage takes any. Its
     ``operation_limit`` is 32 requests at a time unless given, and its profile
@@ -817,7 +820,7 @@ class TreeView(_Files, TreeHandler):
     ) -> None:
         super().__init__(operation_concurrency=operation_limit or 32, io_concurrency=8)
         self.fs = fs
-        self.recursive_order = "name" if recursive_listing else None
+        self.recursive_listing = recursive_listing
         self._dir_ils = dir_ils(fs) if ils is None else ils
         self._info = fs._info if info is None else info
         self._rm_file = fs._rm_file if rm_file is None else rm_file
@@ -845,6 +848,8 @@ class TreeView(_Files, TreeHandler):
     def ils_recursive(
         self, entry: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
+        if not self.recursive_listing:
+            return super().ils_recursive(entry, **kwargs)
         return self.fs._ils_recursive(entry["name"])  # type: ignore[no-any-return]
 
     async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
@@ -884,7 +889,7 @@ class TreeView(_Files, TreeHandler):
             await self._cp_tree(entry["name"], path2)
 
 
-class FlatView(_Files, FlatHandler):
+class FlatView(_Files, FlatFileOperationHandler):
     """A simulated storage as a flat handler, its primitives replaceable.
 
     The flat strategies take a handler, and call its ``ils_recursive``,
@@ -898,7 +903,8 @@ class FlatView(_Files, FlatHandler):
 
     It verifies no path. Its ``operation_limit`` is 32 requests at a time
     unless given, its profile unknown, and its ``rm_batch_size`` 1000. Its
-    files are those of `TreeView`.
+    files are those of `TreeView`. It runs the flat strategies, as a
+    `FlatFileOperationHandler`.
     """
 
     def __init__(

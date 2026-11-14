@@ -11,17 +11,14 @@ from fsspec.implementations.memory import MemoryFileSystem
 from fsspec_alt_strategies.monitor import Call, Monitor, Monitored, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.wrapper import known_implementations
-from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
+from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
 from fsspec_alt_strategies_impl.monitor import monitored
-from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
 from fsspec_alt_strategies_impl.wrapper.adlfs import AdlfsHandler
+from fsspec_alt_strategies_impl.wrapper.filesystem import FileSystemWrapper
 from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
 from fsspec_alt_strategies_impl.wrapper.gcsfs import GcsfsHandler
 from fsspec_alt_strategies_impl.wrapper.s3fs import S3fsHandler
-from fsspec_alt_strategies_impl.wrapper.tree import (
-    FsspecTreeHandler,
-    TreeFileSystemWrapper,
-)
+from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -31,7 +28,7 @@ _SIMULATED = "fsspec_alt_strategies_impl_testing.SimulatedFileSystem"
 
 
 def test_a_monitored_filesystem_is_returned_as_it_is() -> None:
-    tree = TreeFileSystemWrapper(
+    tree = FileSystemWrapper(
         FsspecTreeHandler(
             SimulatedFileSystem(),
             operation_concurrency=1,
@@ -44,11 +41,12 @@ def test_a_monitored_filesystem_is_returned_as_it_is() -> None:
 
 def test_a_filesystem_is_wrapped_as_its_entry_says() -> None:
     fs = SimulatedFileSystem()
-    profile = StorageProfile(fs_type="flat", implicit_directories=True)
+    profile = StorageProfile(implicit_directories=True)
     flat = monitored(
         fs,
         {
             _SIMULATED: {
+                "handler": "FsspecFlatHandler",
                 "storage_profile": profile,
                 "operation_concurrency": 3,
                 "io_concurrency": 2,
@@ -56,26 +54,26 @@ def test_a_filesystem_is_wrapped_as_its_entry_says() -> None:
             }
         },
     )
-    assert isinstance(flat, FlatFileSystem)
-    assert isinstance(flat.handler, FsspecFlatHandler)
-    assert flat.handler.fs is fs
-    assert (flat.handler.operation_concurrency, flat.handler.io_concurrency) == (3, 2)
-    assert (flat.handler.rm_batch_size, flat.handler.profile) == (100, profile)
+    assert isinstance(flat, BaseFileSystem)
+    assert isinstance(flat._handler, FsspecFlatHandler)
+    assert flat._handler.fs is fs
+    assert (flat._handler.operation_concurrency, flat._handler.io_concurrency) == (3, 2)
+    assert (flat._handler.rm_batch_size, flat._handler.profile) == (100, profile)
 
 
 def test_a_subclass_takes_the_entry_of_its_class() -> None:
     class Mine(SimulatedFileSystem):
         pass
 
-    # Of no fs_type: a tree, the way right on any storage.
     entry: Any = {
+        "handler": "FsspecTreeHandler",
         "storage_profile": StorageProfile(),
         "operation_concurrency": 2,
         "io_concurrency": 1,
     }
     tree = monitored(Mine(), {_SIMULATED: entry})
-    assert isinstance(tree, TreeFileSystem)
-    assert type(tree.handler) is FsspecTreeHandler
+    assert isinstance(tree, BaseFileSystem)
+    assert type(tree._handler) is FsspecTreeHandler
 
 
 def test_an_unknown_filesystem_is_not_wrapped_by_guess() -> None:
@@ -89,8 +87,8 @@ def test_the_known_local_filesystem(tmp_path: Path) -> None:
     local.makedirs(f"{root}/data")
     local.pipe_file(f"{root}/data/a.txt", b"a")
     tree = monitored(local)
-    assert isinstance(tree, TreeFileSystem)
-    assert not tree.handler.asynchronous  # type: ignore[attr-defined]
+    assert isinstance(tree, BaseFileSystem)
+    assert not tree._handler.asynchronous  # type: ignore[attr-defined]
 
     class Calls(Monitor):
         def __init__(self) -> None:
@@ -112,8 +110,8 @@ def test_the_known_memory_filesystem() -> None:
     memory.pipe_file("/test_monitored/data/a.txt", b"a")
     try:
         tree = monitored(memory)
-        assert isinstance(tree, TreeFileSystem)
-        assert not tree.handler.asynchronous  # type: ignore[attr-defined]
+        assert isinstance(tree, BaseFileSystem)
+        assert not tree._handler.asynchronous  # type: ignore[attr-defined]
         assert tree.find("/test_monitored") == ["/test_monitored/data/a.txt"]
     finally:
         memory.rm("/test_monitored", recursive=True)
@@ -136,72 +134,78 @@ def test_s3fs_gcsfs_and_adlfs_get_their_own_handlers(name: str, own: type) -> No
     class Extended(known):  # type: ignore[valid-type, misc]
         pass
 
-    assert type(monitored(Extended()).handler) is own
+    assert type(monitored(Extended())._handler) is own
 
 
-def _entry(fs_type: str, **handler: str) -> Any:
+def _entry(handler: str, **rm_batch_size: int) -> Any:
     return {
-        "storage_profile": StorageProfile(fs_type=fs_type),  # type: ignore[arg-type]
+        "handler": handler,
+        "storage_profile": StorageProfile(),
         "operation_concurrency": 1,
         "io_concurrency": 1,
-        "rm_batch_size": 1,
-        **handler,
+        **rm_batch_size,
     }
 
 
 @pytest.mark.parametrize(
-    ("fs_type", "handler", "cls"),
+    ("handler", "cls"),
     [
-        ("flat", "S3fsHandler", S3fsHandler),
-        ("flat", "fsspec_alt_strategies_impl.wrapper.gcsfs.GcsfsHandler", GcsfsHandler),
-        ("tree", "FsspecTreeHandler", FsspecTreeHandler),
+        ("S3fsHandler", S3fsHandler),
+        ("fsspec_alt_strategies_impl.wrapper.gcsfs.GcsfsHandler", GcsfsHandler),
+        ("FsspecTreeHandler", FsspecTreeHandler),
     ],
 )
 def test_an_entry_names_its_handler_built_in_or_by_its_full_name(
-    fs_type: str, handler: str, cls: type
+    handler: str, cls: type
 ) -> None:
-    fs = monitored(
-        SimulatedFileSystem(), {_SIMULATED: _entry(fs_type, handler=handler)}
-    )
-    assert type(fs.handler) is cls
+    flat = {"rm_batch_size": 1} if handler != "FsspecTreeHandler" else {}
+    fs = monitored(SimulatedFileSystem(), {_SIMULATED: _entry(handler, **flat)})
+    assert type(fs._handler) is cls
 
 
 @pytest.mark.parametrize(
-    ("fs_type", "handler", "error"),
+    ("handler", "error"),
     [
-        ("flat", "NoSuchHandler", ValueError),
-        ("flat", "fsspec_alt_strategies_impl.wrapper.s3fs.NoSuchHandler", ValueError),
-        ("flat", "no_such_module.Handler", ImportError),
-        # A handler of another family than the profile's.
-        ("tree", "S3fsHandler", ValueError),
-        ("flat", "AdlfsHandler", ValueError),
+        ("NoSuchHandler", ValueError),
+        ("fsspec_alt_strategies_impl.wrapper.s3fs.NoSuchHandler", ValueError),
+        ("no_such_module.Handler", ImportError),
+        # A class, but none running the strategies.
+        ("fsspec.implementations.local.LocalFileSystem", ValueError),
     ],
 )
-def test_an_entry_naming_no_handler_of_its_family_raises(
-    fs_type: str, handler: str, error: type[Exception]
+def test_an_entry_naming_no_file_operation_handler_raises(
+    handler: str, error: type[Exception]
 ) -> None:
     with pytest.raises(error):
-        monitored(SimulatedFileSystem(), {_SIMULATED: _entry(fs_type, handler=handler)})
+        monitored(SimulatedFileSystem(), {_SIMULATED: _entry(handler)})
 
 
 def test_every_handler_the_known_implementations_name_is_built_in() -> None:
-    named = {e["handler"] for e in known_implementations.values() if "handler" in e}
-    assert named == {"S3fsHandler", "GcsfsHandler", "AdlfsHandler"}
-    # Each of the family its entry declares.
+    named = {e["handler"] for e in known_implementations.values()}
+    assert named == {
+        "FsspecTreeHandler",
+        "S3fsHandler",
+        "GcsfsHandler",
+        "AdlfsHandler",
+    }
     for entry in known_implementations.values():
-        if "handler" in entry:
-            fs_type = entry["storage_profile"].fs_type
-            own = _entry(fs_type or "tree", handler=entry["handler"])
-            assert isinstance(
-                monitored(SimulatedFileSystem(), {_SIMULATED: own}), Monitored
-            )
+        flat = (
+            {"rm_batch_size": entry["rm_batch_size"]}
+            if "rm_batch_size" in entry
+            else {}
+        )
+        own = _entry(entry["handler"], **flat)
+        assert isinstance(
+            monitored(SimulatedFileSystem(), {_SIMULATED: own}), Monitored
+        )
 
 
 @pytest.mark.parametrize("asynchronous", [True, False])
 def test_an_unknown_filesystem_is_wrapped_if_asked(asynchronous: bool) -> None:
     fs = SimulatedFileSystem() if asynchronous else LocalFileSystem()
     tree = monitored(fs, {}, wrap_unknown_fs=True)
-    assert isinstance(tree, TreeFileSystem)
-    assert tree.handler.asynchronous is asynchronous  # type: ignore[attr-defined]
-    assert (tree.handler.operation_concurrency, tree.handler.io_concurrency) == (1, 1)
-    assert tree.handler.profile == StorageProfile(fs_type="tree")
+    assert isinstance(tree, BaseFileSystem)
+    assert tree._handler.asynchronous is asynchronous  # type: ignore[attr-defined]
+    assert (tree._handler.operation_concurrency, tree._handler.io_concurrency) == (1, 1)
+    assert type(tree._handler) is FsspecTreeHandler
+    assert tree._handler.profile == StorageProfile()

@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""Existing filesystems, wrapped as a `FlatHandler`.
+"""Existing filesystems, wrapped as a `FlatFileOperationHandler`.
 
 `FsspecFlatHandler` wraps an fsspec filesystem, async or sync, so that a
-`FlatFileSystem` on it answers its recursive methods by the flat strategies.
+`FileSystemWrapper` on it answers its recursive methods by the flat
+strategies.
 
 fsspec has no listing by prefix in pages, which the flat strategies list with.
 The handler's ``ils_recursive`` lists with the wrapped filesystem's ``find``
@@ -18,33 +19,29 @@ costs twice:
 A subclass overriding ``ils_recursive`` with the storage's own listing by
 prefix, e.g. from its SDK, streams it page by page, and lists only the prefix.
 
-This module depends on `_base`, and `filesystem` and `handler` of `flat`.
+This module depends on `_base`, and `handler` of `flat`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from ..flat.filesystem import FlatFileSystem
-from ..flat.handler import FlatHandler
-from ._base import _FsspecHandler, _unwrapped
+from ..flat.handler import FlatFileOperationHandler
+from ._base import _FsspecHandler
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
-
-    from fsspec import AbstractFileSystem
 
     from fsspec_alt_strategies.profile import StorageProfile
 
     from ..common.handler import Entry
 
-__all__ = ["FlatFileSystemWrapper", "FsspecFlatHandler"]
+__all__ = ["FsspecFlatHandler"]
 
 
-class FsspecFlatHandler(_FsspecHandler, FlatHandler):
+class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
     """An fsspec filesystem, async or sync, as a flat handler.
 
     Its primitives, such as ``info``, ``cp_file`` and ``mv_file``, are the
@@ -57,8 +54,8 @@ class FsspecFlatHandler(_FsspecHandler, FlatHandler):
     which s3fs, e.g., deletes in one request. That ``rm`` tells no key apart,
     so any failure but a missing key fails the whole batch.
 
-    It wins on object stores, as the flat strategies do. A `FlatFileSystem`
-    made on it by ``FlatFileSystem.of`` is not cached: each is new, and may be
+    It wins on object stores, as the flat strategies do. A
+    `FileSystemWrapper` made on it is not cached: each is new, and may be
     dropped once used.
 
     Parameters
@@ -87,7 +84,7 @@ class FsspecFlatHandler(_FsspecHandler, FlatHandler):
 
     Examples
     --------
-    >>> flat = FlatFileSystemWrapper(
+    >>> flat = FileSystemWrapper(
     ...     FsspecFlatHandler(
     ...         s3,
     ...         rm_batch_size=1000,
@@ -115,8 +112,7 @@ class FsspecFlatHandler(_FsspecHandler, FlatHandler):
             fs,
             operation_concurrency=operation_concurrency,
             io_concurrency=io_concurrency,
-            # A flat handler, whatever it wraps.
-            storage_profile=replace(storage_profile, fs_type="flat"),
+            storage_profile=storage_profile,
         )
         self.rm_batch_size = rm_batch_size
 
@@ -154,41 +150,3 @@ def _starting(
     return sorted(
         (e for e in listing if e["name"].startswith(start)), key=lambda e: e["name"]
     )
-
-
-class FlatFileSystemWrapper(FlatFileSystem):
-    """A `FlatFileSystem` on a handler wrapping another filesystem, serving that one's paths.
-
-    As it is made, it takes the handler's `protocol`, `root` and
-    `strip_protocol`, the wrapped filesystem's: it takes the URLs that one
-    takes, and gives its own. A `FlatFileSystem` takes none of its handler's
-    paths: a storage's class names its own.
-
-    Parameters
-    ----------
-    handler : FsspecFlatHandler
-        The handler of the filesystem wrapped.
-    **kwargs
-        fsspec's own options, as `TreeFileSystem` takes them, e.g. ``asynchronous=True``.
-
-    Examples
-    --------
-    >>> fs = FlatFileSystemWrapper(FsspecFlatHandler(s3fs.S3FileSystem(), ...))
-    """
-
-    cachable = False
-    """Not cached: fsspec would key it by its handler's repr, which two wrappers of one filesystem share."""
-
-    handler: FsspecFlatHandler
-
-    def __init__(self, handler: FsspecFlatHandler, **kwargs: Any) -> None:
-        super().__init__(handler, **kwargs)
-
-        # The wrapped filesystem's paths, which its handler holds.
-        self.protocol = handler.protocol
-        self.root_marker = handler.root
-        self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]
-
-    def _unwrapped(self) -> AbstractFileSystem:
-        """The filesystem wrapped, as a monitor's `Call` names it: the one its user made."""
-        return _unwrapped(self.handler.fs)  # type: ignore[no-any-return]

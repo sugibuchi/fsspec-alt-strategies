@@ -14,10 +14,9 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.wrapper.adlfs import AdlfsHandler
-from fsspec_alt_strategies_impl.wrapper.flat import FlatFileSystemWrapper
+from fsspec_alt_strategies_impl.wrapper.filesystem import FileSystemWrapper
 from fsspec_alt_strategies_impl.wrapper.gcsfs import GcsfsHandler
 from fsspec_alt_strategies_impl.wrapper.s3fs import S3fsHandler
-from fsspec_alt_strategies_impl.wrapper.tree import TreeFileSystemWrapper
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -30,18 +29,18 @@ _LIMITS: dict[str, Any] = {
 
 
 def _s3fs(fs: Any, **options: Any) -> Any:
-    """A `FlatFileSystem` on an `S3fsHandler` of `fs`."""
-    return FlatFileSystemWrapper(S3fsHandler(fs, **options), asynchronous=True)
+    """A `BaseFileSystem` on an `S3fsHandler` of `fs`."""
+    return FileSystemWrapper(S3fsHandler(fs, **options), asynchronous=True)
 
 
 def _gcsfs(fs: Any, **options: Any) -> Any:
-    """A `FlatFileSystem` on a `GcsfsHandler` of `fs`."""
-    return FlatFileSystemWrapper(GcsfsHandler(fs, **options), asynchronous=True)
+    """A `BaseFileSystem` on a `GcsfsHandler` of `fs`."""
+    return FileSystemWrapper(GcsfsHandler(fs, **options), asynchronous=True)
 
 
 def _adlfs(fs: Any, **options: Any) -> Any:
-    """A `TreeFileSystem` on an `AdlfsHandler` of `fs`."""
-    return TreeFileSystemWrapper(AdlfsHandler(fs, **options), asynchronous=True)
+    """A `BaseFileSystem` on an `AdlfsHandler` of `fs`."""
+    return FileSystemWrapper(AdlfsHandler(fs, **options), asynchronous=True)
 
 
 class _Store(AsyncFileSystem):
@@ -156,13 +155,15 @@ async def test_s3fs_finds_by_its_listing() -> None:
 )
 async def test_s3fs_copies_by_the_listed_size(size: int | None, call: tuple) -> None:
     fs, flat = _s3({})
-    await flat._cp_file_entry({"name": "bkt/a", "type": "file", "size": size}, "bkt/b")
+    await flat._handler.cp_file(
+        {"name": "bkt/a", "type": "file", "size": size}, "bkt/b"
+    )
     assert fs.calls == [call]
 
 
 async def test_s3fs_moves_by_a_copy_then_a_delete() -> None:
     fs, flat = _s3({})
-    await flat._mv_file_entry({"name": "bkt/a", "type": "file", "size": 1}, "bkt/b")
+    await flat._handler.mv_file({"name": "bkt/a", "type": "file", "size": 1}, "bkt/b")
     assert fs.calls == [("_copy_basic", "bkt/a", "bkt/b"), ("_rm_file", "bkt/a")]
 
 
@@ -208,7 +209,7 @@ async def test_gcsfs_deletes_up_to_100_per_batch_by_its_own_rm_files() -> None:
     fs = _GcsBatches({f"bkt/k{i}": 1 for i in range(150)} | {"bkt/kept": 1})
     flat = _gcsfs(fs, rm_batch_size=1000, **_LIMITS)
     paths = [f"bkt/k{i}" for i in range(150)] + ["bkt/missing"]
-    assert await flat._rm_files(paths) == {}
+    assert await flat._handler.rm_files([{"name": p} for p in paths]) == {}
     assert fs.calls == [("batch", 100), ("batch", 51)]
     assert list(fs.keys) == ["bkt/kept"]
 
@@ -216,7 +217,9 @@ async def test_gcsfs_deletes_up_to_100_per_batch_by_its_own_rm_files() -> None:
 async def test_gcsfs_returns_the_keys_it_refused() -> None:
     fs = _GcsBatches({"bkt/a": 1, "bkt/b": 1}, refused={"bkt/b"})
     flat = _gcsfs(fs, rm_batch_size=100, **_LIMITS)
-    refused = await flat._rm_files(["bkt/a", "bkt/b", "bkt/missing"])
+    refused = await flat._handler.rm_files(
+        [{"name": p} for p in ["bkt/a", "bkt/b", "bkt/missing"]]
+    )
     assert list(refused) == ["bkt/b"]
     assert "retention" in str(refused["bkt/b"])
 
@@ -225,7 +228,7 @@ async def test_gcsfs_off_google_deletes_as_fsspec() -> None:
     fs = _GcsBatches({"bkt/a": 1})
     fs.on_google = False  # E.g. an emulator, where gcsfs sends no batch.
     flat = _gcsfs(fs, rm_batch_size=100, **_LIMITS)
-    await flat._rm_files(["bkt/a"])
+    await flat._handler.rm_files([{"name": p} for p in ["bkt/a"]])
     assert fs.calls == [("_rm", 1)]
 
 
@@ -382,7 +385,7 @@ async def test_s3fs_without_its_private_methods_lists_and_copies_as_fsspec() -> 
     flat = _s3fs(fs, rm_batch_size=1000, **_LIMITS)
     names = [e["name"] async for e in flat._ils("bkt/data", True, prefix="2024-")]
     assert names == ["bkt/data/2024-01.csv", "bkt/data/2024-02/a.csv"]
-    await flat._cp_file_entry({"name": "bkt/a", "type": "file", "size": 1}, "bkt/b")
+    await flat._handler.cp_file({"name": "bkt/a", "type": "file", "size": 1}, "bkt/b")
     assert fs.calls == [("_find", "bkt/data"), ("_cp_file", "bkt/a", "bkt/b")]
 
 

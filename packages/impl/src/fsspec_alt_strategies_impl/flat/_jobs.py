@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from ..common.handler import Entry, StorageHandler
     from ..common.jobs import _Roots
     from ..common.operation import Operation
-    from .handler import FlatHandler
+    from .handler import FlatFileOperationHandler
 
 
 def _check_batch_size(batch_size: int) -> None:
@@ -41,7 +41,7 @@ def _check_batch_size(batch_size: int) -> None:
 
 def _batch_size(handler: StorageHandler) -> int:
     """The most keys a flat handler's ``rm_files`` takes at once."""
-    return cast("FlatHandler", handler).rm_batch_size
+    return cast("FlatFileOperationHandler", handler).rm_batch_size
 
 
 def _keys_of(paths: tuple[str, ...]) -> str:

@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """A recursive listing made of one listing per directory, several at a time.
 
-A `TreeFileSystem`'s ``ils`` lists all below a directory with
-``recursive=True``, depth first or in name order. A storage with a recursive
-listing of its own answers with it. One without answers with `_tree_ils`, which
-lists a directory per request, as ``ils`` does without ``recursive``.
+A `TreeFileOperationHandler`'s ``ils_recursive`` lists all below a directory,
+depth first or in name order. A storage with a recursive listing of its own
+implements it so. One without has `_tree_ils`, its default, which lists a
+directory per request by ``ils``. One whose own may be refused, as only
+asking tells, falls back on it.
 
 It yields the entries depth first, as a walk visits them: each directory's
 entries in the order its listing gives them, and all below a subdirectory right
@@ -22,8 +23,7 @@ from __future__ import annotations
 import asyncio
 import heapq
 from collections import deque
-from contextlib import aclosing
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from ..common.paths import _trim
 
@@ -31,7 +31,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
 
     from ..common.handler import Entry, StorageHandler
-    from .handler import TreeHandler
 
 __all__: list[str] = []
 
@@ -73,8 +72,6 @@ async def _tree_ils(
     ``path`` is listed by ``entry``, its entry, where given, e.g. as its parent's
     listing gave it, else by its path. ``ils_kwargs`` go to each ``ils``.
     """
-    # A filesystem implementing its _ils by this one gives itself, as before handlers.
-    ils_kwargs.pop("recursive", None)
     handler = fs
     root = _trim(path)
     ahead = _Ahead(handler, ils_kwargs)
@@ -107,46 +104,6 @@ async def _tree_ils(
                 stack.append(ahead.take(subdirectory))
     finally:
         await ahead.close(stack)
-
-
-async def _recursive(
-    handler: StorageHandler, entry: Entry, **ils_kwargs: Any
-) -> AsyncGenerator[Entry]:
-    """All below a directory: by the handler's recursive listing, or else by `_tree_ils`.
-
-    A handler declaring no ``recursive_order`` has no recursive listing of its
-    own: the tree is listed a directory per request, several at a time. One
-    whose ``ils_recursive`` raises NotImplementedError before its first entry
-    is listed so too: its storage refused the recursive listing, e.g. a WebDAV
-    server refusing ``Depth: infinity``, as it can tell only by asking. Its
-    order is depth first, which the strategies take as they take any.
-    """
-    if cast("TreeHandler", handler).recursive_order is None:
-        async with aclosing(
-            _tree_ils(handler, entry["name"], entry=entry, **ils_kwargs)
-        ) as entries:
-            async for found in entries:
-                yield found
-        return
-
-    listing = handler.ils_recursive(entry, **ils_kwargs)  # type: ignore[attr-defined]
-    try:
-        try:
-            first = await anext(listing)
-        except StopAsyncIteration:
-            return
-        except NotImplementedError:
-            fallback = _tree_ils(handler, entry["name"], entry=entry, **ils_kwargs)
-            async with aclosing(fallback):
-                async for found in fallback:
-                    yield found
-            return
-        yield first
-        async for found in listing:
-            yield found
-    finally:
-        if (aclose := getattr(listing, "aclose", None)) is not None:
-            await aclose()
 
 
 class _Ahead:

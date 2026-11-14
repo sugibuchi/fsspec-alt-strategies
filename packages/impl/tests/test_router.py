@@ -866,7 +866,7 @@ async def test_transfers_across_storages_load_each_sides_profile_with_its_path(
     # opens. The source's family is its handler's class's.
     loaded: list[str] = []
     for name in ("tree", "flat"):
-        fs = _backend(router, name).handler
+        fs = _backend(router, name)._handler
         original = fs.load_profile
 
         async def note(name: str = name, original: Any = original) -> Any:
@@ -914,7 +914,7 @@ async def test_a_router_whose_every_path_routes_needs_no_roots() -> None:
     with pytest.raises(FileNotFoundError):
         await router._ls("", detail=False)
     fs, _ = router._route("s0/x.txt")
-    fs.handler.fs.add_file("x.txt", b"x")
+    fs._handler.fs.add_file("x.txt", b"x")  # type: ignore[attr-defined]
     assert await router._cat_file("s0/x.txt") == b"x"
     assert await router._ls("s0", detail=False) == ["s0/x.txt"]
 
@@ -924,7 +924,7 @@ def test_a_sync_router_runs_its_storages_on_its_loop() -> None:
     fs, _ = router._route("s0/x.txt")
     # Made in the router's mode, the storage's filesystem runs on its loop.
     assert fs.loop is router.loop
-    fs.handler.fs.add_file("x.txt", b"x")
+    fs._handler.fs.add_file("x.txt", b"x")  # type: ignore[attr-defined]
     with router.open("s0/x.txt", "rb") as f:
         assert f.read() == b"x"
     assert router.cat_file("s0/x.txt") == b"x"

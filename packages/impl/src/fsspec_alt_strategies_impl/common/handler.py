@@ -1,18 +1,22 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""What a storage handler holds, whatever its family: the base of `TreeHandler` and `FlatHandler`.
+"""What a storage handler holds, whatever its family: the base of `TreeFileOperationHandler` and `FlatFileOperationHandler`.
 
 A storage handler holds what is particular to a storage: its primitives, its
 profile, its limits, and its clients, opened and closed. The strategies take
 handlers, never filesystems. A family's handler class adds the primitives its
 strategies call, e.g. a tree's ``rm_tree``.
 
+`FileOperationHandler` is a `StorageHandler` with the methods of `Strategy`,
+which run the strategies on it: what a filesystem takes. A family's subclass
+of it, e.g. `TreeFileOperationHandler`, runs its family's strategies.
+
 The primitives name an item that exists by its entry, and one to be made by
 its path. An entry is a dict whose ``"name"`` alone is sure: a path given by a
 caller comes as `StorageHandler.entry`'s ``{"name": path}``, and a listing's
 entries come whole.
 
-This module depends on nothing else in the package.
+This module depends on `strategy`.
 """
 
 from __future__ import annotations
@@ -28,13 +32,15 @@ from fsspec.utils import stringify_path
 
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 
+from .strategy import Strategy
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from datetime import datetime
 
     from fsspec.callbacks import Callback
 
-__all__ = ["Entry", "StorageHandler", "StoragePath"]
+__all__ = ["Entry", "FileOperationHandler", "StorageHandler", "StoragePath"]
 
 _MiB = 1024 * 1024
 
@@ -348,6 +354,16 @@ class StorageHandler(_PathHandler):
         in any order: the listing is done when it ends.
         """
 
+    def ils_recursive(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
+        """List all below a directory, at any depth, as an async iterator of entries.
+
+        Each family says its order and its options: a tree handler lists a
+        tree depth first or by name, and a flat handler lists keys by name,
+        narrowed by a ``prefix``. The filesystem's recursive ``_ils`` calls it.
+        Here, it raises NotImplementedError.
+        """
+        raise NotImplementedError(f"{type(self).__name__} lists nothing recursively")
+
     @abstractmethod
     async def info(self, entry: Entry, **kwargs: Any) -> Entry:
         """The whole entry of an item, raising FileNotFoundError if there is none."""
@@ -554,6 +570,25 @@ class StorageHandler(_PathHandler):
                 while chunk := local.read(self.transfer_size):
                     await f.write(chunk)
                     callback.relative_update(len(chunk))
+
+
+class FileOperationHandler(StorageHandler, Strategy):
+    """A storage's primitives, with the strategies its filesystem's recursive methods run.
+
+    `BaseFileSystem` takes one. A family's subclass, `TreeFileOperationHandler`
+    or `FlatFileOperationHandler`, runs its family's strategies. A storage's
+    handler subclasses one, and overrides a strategy to choose another.
+
+    Parameters
+    ----------
+    operation_concurrency, io_concurrency
+        As `StorageHandler` takes them.
+
+    See Also
+    --------
+    StorageHandler : The primitives, profile, limits and clients.
+    Strategy : The strategies.
+    """
 
 
 def _write_mode(mode: str) -> str:

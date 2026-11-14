@@ -1,4 +1,4 @@
-"""Tests of the tree handlers: existing filesystems, as a `TreeFileSystem` on a `FsspecTreeHandler`."""
+"""Tests of the tree handlers: existing filesystems, as a `BaseFileSystem` on a `FsspecTreeHandler`."""
 
 from __future__ import annotations
 
@@ -9,10 +9,8 @@ from fsspec.implementations.local import LocalFileSystem
 
 from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.wrapper.tree import (
-    FsspecTreeHandler,
-    TreeFileSystemWrapper,
-)
+from fsspec_alt_strategies_impl.wrapper.filesystem import FileSystemWrapper
+from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -20,7 +18,7 @@ if TYPE_CHECKING:
 
     import pytest
 
-    from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+    from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
 
 _LIMITS: dict[str, Any] = {
     "operation_concurrency": 4,
@@ -35,11 +33,11 @@ _DELETES: dict[str, Any] = {
 _FILES = ["data/2023/01/a.txt", "data/2023/02/b.txt", "data/2024/c.txt", "data/d.txt"]
 
 
-def _tree(fs: Any, **options: Any) -> TreeFileSystem:
-    """A `TreeFileSystem` on a handler of `fs`, on its loop, as `monitored` makes one."""
+def _tree(fs: Any, **options: Any) -> BaseFileSystem:
+    """A `BaseFileSystem` on a handler of `fs`, on its loop, as `monitored` makes one."""
     asynchronous = options.pop("asynchronous", getattr(fs, "asynchronous", False))
     loop = {"loop": fs.loop} if fs.async_impl and not asynchronous else {}
-    return TreeFileSystemWrapper(
+    return FileSystemWrapper(
         FsspecTreeHandler(fs, **options), asynchronous=asynchronous, **loop
     )
 
@@ -124,7 +122,7 @@ async def test_a_filesystem_without_rm_tree_deletes_by_its_recursive_rm(
         called.append((path, recursive))
 
     monkeypatch.setattr(inner, "_rm", own_rm)
-    await _tree(inner, **_DELETES)._rm_tree("data")
+    await _tree(inner, **_DELETES)._handler.rm_tree({"name": "data"})
     assert called == [("data", True)]
 
 

@@ -1,4 +1,4 @@
-"""Tests of `TreeFileSystem`, checked against fsspec's own methods on the same data."""
+"""Tests of `BaseFileSystem`, checked against fsspec's own methods on the same data."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from fsspec_alt_strategies.monitor import (
     monitoring,
 )
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
 from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
     AdaptiveWritableFile,
@@ -25,9 +26,7 @@ from fsspec_alt_strategies_impl.files.fsspec_transaction import (
     AdaptiveWritableTransaction,
     TransactionFile,
 )
-from fsspec_alt_strategies_impl.flat.filesystem import FlatFileSystem
-from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
-from fsspec_alt_strategies_impl.tree.handler import TreeHandler
+from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -85,7 +84,7 @@ async def _open_file(
     return _Writer(inner, path, **kwargs)
 
 
-class _TreeHandler(TreeHandler):
+class _TreeHandler(TreeFileOperationHandler):
     """A simulated storage's primitives, as a tree handler: no recursive listing of its own."""
 
     protocol = "treetest"
@@ -165,8 +164,8 @@ class _TreeHandler(TreeHandler):
         )
 
 
-class _Tree(TreeFileSystem):
-    """A TreeFileSystem on a simulated storage, made from it as from storage options."""
+class _Tree(BaseFileSystem):
+    """A BaseFileSystem on a simulated storage, made from it as from storage options."""
 
     protocol = _TreeHandler.protocol
     _strip_protocol = _TreeHandler.strip_protocol
@@ -187,9 +186,9 @@ class _Tree(TreeFileSystem):
         super().__init__(handler, **kwargs)
 
 
-def _on(handler: TreeHandler) -> Any:
-    """A TreeFileSystem on a handler, async."""
-    return TreeFileSystem(handler, asynchronous=True)
+def _on(handler: TreeFileOperationHandler) -> Any:
+    """A BaseFileSystem on a handler, async."""
+    return BaseFileSystem(handler, asynchronous=True)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
@@ -276,8 +275,8 @@ async def test_extra_keyword_arguments_go_to_every_listing(
 ) -> None:
     # As fsspec's recursive methods pass them on to _ls, e.g. to skip a cache.
     await method(fs, "data", refresh=True)
-    assert fs.handler.ls_kwargs
-    assert all(kwargs == {"refresh": True} for kwargs in fs.handler.ls_kwargs)
+    assert fs._handler.ls_kwargs
+    assert all(kwargs == {"refresh": True} for kwargs in fs._handler.ls_kwargs)
 
 
 class _Forbidding(SimulatedFileSystem):
@@ -477,14 +476,14 @@ async def test_a_profile_found_by_a_request_is_loaded_once(
 
     fs = _on(Found(inner))
     with pytest.raises(ConnectionError):
-        await fs.handler.open()
+        await fs._handler.open()
 
     # The strategy loads it: deleted whole, as declared.
     inner.reset_stats()
     await fs._rm("data", recursive=True)
     assert inner.stats.calls == {"delete": 1}
     # Kept: concurrent calls load nothing more.
-    await asyncio.gather(*(fs.handler.open() for _ in range(3)))
+    await asyncio.gather(*(fs._handler.open() for _ in range(3)))
     assert loads == [True, False]
 
 
@@ -506,7 +505,7 @@ async def test_the_handlers_profile_is_the_profile_loaded(
     assert handler.profile is found
 
     # A profile set loads as itself.
-    declared = _Tree(inner, asynchronous=True).handler
+    declared = _Tree(inner, asynchronous=True)._handler
     profile = declared.profile
     await declared.open()
     assert declared.profile is profile
@@ -533,7 +532,7 @@ async def test_failures_are_raised(fs: _Tree, inner: SimulatedFileSystem) -> Non
             raise PermissionError(entry["name"])
         await inner._rm_file(entry["name"])
 
-    fs.handler.rm_file = refused  # type: ignore[method-assign]
+    fs._handler.rm_file = refused  # type: ignore[method-assign]
     with pytest.raises(PermissionError):
         await fs._rm("data", recursive=True)
     assert await inner._exists("data/README.md")
@@ -572,7 +571,7 @@ async def test_filesystems_share_a_semaphore_given() -> None:
     limit = asyncio.Semaphore(3)
     fs1 = _Tree(inner, operation_concurrency=limit, asynchronous=True)
     fs2 = _Tree(inner, operation_concurrency=limit, asynchronous=True)
-    assert fs1.handler.operation_limit is fs2.handler.operation_limit is limit
+    assert fs1._handler.operation_limit is fs2._handler.operation_limit is limit
     await asyncio.gather(fs1._find("a"), fs2._find("b"))
     # Both together keep to the one limit.
     assert inner.stats.max_concurrency == 3
@@ -708,13 +707,13 @@ async def test_fsspec_callback_counts_the_bytes_of_a_file(
 
 def test_a_handler_missing_a_primitive_is_refused() -> None:
     class Incomplete(_TreeHandler):
-        rmdir = TreeHandler.rmdir  # Still abstract, as if not written.
+        rmdir = TreeFileOperationHandler.rmdir  # Still abstract, as if not written.
 
     with pytest.raises(TypeError, match="rmdir"):
         Incomplete(SimulatedFileSystem())
 
 
-@pytest.mark.parametrize("family", [TreeFileSystem, FlatFileSystem])
+@pytest.mark.parametrize("family", [BaseFileSystem, BaseFileSystem])
 def test_a_filesystem_exposes_no_profile(family: type) -> None:
     # The profile is the handler's alone, which the strategies read.
     for name in ("storage_profile", "_get_storage_profile", "_load_storage_profile"):
@@ -726,7 +725,7 @@ def _copied(fs: SimulatedFileSystem) -> dict[str, bytes]:
 
 
 def _twins() -> tuple[_Tree, SimulatedFileSystem, SimulatedFileSystem]:
-    """A TreeFileSystem on a storage, and a second storage with the same data."""
+    """A BaseFileSystem on a storage, and a second storage with the same data."""
     inner, reference = (
         SimulatedFileSystem(hierarchical=True, asynchronous=True) for _ in range(2)
     )
@@ -841,18 +840,18 @@ async def test_cp_file_hands_the_handler_the_path_alone(
 async def test_ls_keeps_the_listing(fs: _Tree) -> None:
     first = await fs._ls("data")
     assert await fs._ls("treetest://data/", detail=False) == [e["name"] for e in first]
-    assert len(fs.handler.ls_kwargs) == 1
+    assert len(fs._handler.ls_kwargs) == 1
     # refresh=True lists again, and keeps the new listing.
     assert await fs._ls("data", refresh=True) == first
-    assert len(fs.handler.ls_kwargs) == 2
-    assert fs.handler.ls_kwargs[-1] == {}
+    assert len(fs._handler.ls_kwargs) == 2
+    assert fs._handler.ls_kwargs[-1] == {}
 
 
 async def test_ls_keeps_none_when_told(inner: SimulatedFileSystem) -> None:
     fs = _Tree(inner, asynchronous=True, use_listings_cache=False)
     await fs._ls("data")
     await fs._ls("data")
-    assert len(fs.handler.ls_kwargs) == 2
+    assert len(fs._handler.ls_kwargs) == 2
 
 
 async def test_strategies_and_info_never_use_the_listings_kept(

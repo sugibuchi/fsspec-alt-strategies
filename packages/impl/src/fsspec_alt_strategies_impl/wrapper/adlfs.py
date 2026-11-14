@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""adlfs's ``AzureBlobFileSystem``, wrapped as a `TreeHandler`, listing a tree in one request.
+"""adlfs's ``AzureBlobFileSystem``, wrapped as a `TreeFileOperationHandler`, listing a tree in one request.
 
 adlfs lists one directory per request, with a delimiter, so it is wrapped as a
 tree, with or without a hierarchical namespace. The generic `FsspecTreeHandler`
@@ -48,7 +48,7 @@ class AdlfsHandler(FsspecTreeHandler):
 
     Examples
     --------
-    >>> tree = TreeFileSystemWrapper(
+    >>> tree = FileSystemWrapper(
     ...     AdlfsHandler(
     ...         adlfs.AzureBlobFileSystem(account_name="myaccount"),
     ...         operation_concurrency=32,
@@ -57,9 +57,6 @@ class AdlfsHandler(FsspecTreeHandler):
     ...     )
     ... )
     """
-
-    # By the whole name without a hierarchical namespace, depth first with one.
-    recursive_order = "name"
 
     async def rmdir(self, entry: Entry) -> None:
         # adlfs's _rmdir deletes containers alone: a directory below one would

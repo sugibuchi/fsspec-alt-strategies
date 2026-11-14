@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec.callbacks import DEFAULT_CALLBACK
 
 from ..common.clients import SyncClientSupport
-from ..common.filesystem import _BaseFileSystem
+from ..common.filesystem import BaseFileSystem
 from ..common.handler import StorageHandler
 from ..files.fsspec_async import SyncFileAdapter
 
@@ -38,7 +38,7 @@ __all__: list[str] = []
 
 def _unwrapped(fs: Any) -> Any:
     """A wrapped filesystem, as a monitor's `Call` names it: one of this package's names its own, e.g. a wrapper's."""
-    return fs._unwrapped() if isinstance(fs, _BaseFileSystem) else fs
+    return fs._unwrapped() if isinstance(fs, BaseFileSystem) else fs
 
 
 def _async_impl(fs: Any) -> bool:

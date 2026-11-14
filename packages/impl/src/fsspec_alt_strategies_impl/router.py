@@ -5,18 +5,16 @@
 `RoutingFileSystem` is the filesystem of a namespace spanning several
 storages, e.g. a cloud's volumes or containers, each with a handler of its
 own. A `RoutingHandler`, which a developer implements, says where each path
-goes. The router makes the filesystem of each storage it routes to, by its
-handler's family, and passes each call on to it, so that the storage's
-strategies run. A copy or move between two storages runs the source's
-family's strategy, each file by the routing handler's ``cp_across`` or
+goes. The router makes the filesystem of each storage it routes to, on its
+handler, and passes each call on to it, so that the storage's strategies
+run. A copy or move between two storages runs the source handler's
+strategy, each file by the routing handler's ``cp_across`` or
 ``mv_across``, which stream the data by `transfer._cross_cp_file` unless
 overridden.
 
 This module depends on `filesystem`, `handler`, `operation`, `paths` and
-`transfer` of `common`, and the `handler` of each family, whose class tells
-a handler's family. It imports a family's filesystem only to route to a
-storage of it, and the family's `cp` and `mv` only to copy or move from one,
-so a router never loads what it does not use.
+`transfer` of `common`. It imports no family: each storage's handler runs
+its own strategies.
 """
 
 from __future__ import annotations
@@ -35,17 +33,20 @@ from fsspec.spec import AbstractFileSystem
 from fsspec_alt_strategies.monitor import Call, Monitored, routing
 
 from .common.filesystem import (
-    _BaseFileSystem,
+    BaseFileSystem,
     _copy_errors,
     _raise,
     _range_bounds,
 )
-from .common.handler import StorageHandler, _limit, _PathHandler
+from .common.handler import (
+    FileOperationHandler,
+    StorageHandler,
+    _limit,
+    _PathHandler,
+)
 from .common.operation import _collect_with_monitors
 from .common.paths import _trim
 from .common.transfer import _cross_cp_file
-from .flat.handler import FlatHandler
-from .tree.handler import TreeHandler
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -67,7 +68,7 @@ __all__ = ["RoutingFileSystem", "RoutingHandler"]
 _Group = tuple[AsyncFileSystem, list[str], list[str]]
 """An inner filesystem, the inner paths given to it, and the router's paths of them."""
 
-_Made = TypeVar("_Made", bound="StorageHandler | RoutingHandler")
+_Made = TypeVar("_Made", bound="FileOperationHandler | RoutingHandler")
 """The class of a handler a routing handler makes, e.g. one per volume."""
 
 _Through = tuple[tuple["RoutingHandler", Any], ...]
@@ -149,7 +150,7 @@ class RoutingHandler(_PathHandler):
     @abstractmethod
     def route(
         self, path: StoragePath
-    ) -> tuple[StorageHandler | RoutingHandler, str] | None:
+    ) -> tuple[FileOperationHandler | RoutingHandler, str] | None:
         """The handler of a path's storage, and its path there, or None above them all.
 
         ``path`` is the router's, verified, without a trailing "/". It may be a
@@ -163,7 +164,7 @@ class RoutingHandler(_PathHandler):
         """
 
     @abstractmethod
-    def outer(self, handler: StorageHandler | RoutingHandler, path: str) -> str:
+    def outer(self, handler: FileOperationHandler | RoutingHandler, path: str) -> str:
         """The router's path of ``path``, a path of ``handler``, one `route` gave."""
 
     # What a developer may override.
@@ -269,8 +270,8 @@ class RoutingHandler(_PathHandler):
 class _Storage(NamedTuple):
     """A storage a router routed to: its handler, its filesystem, and the routers it goes through."""
 
-    handler: StorageHandler
-    fs: _BaseFileSystem
+    handler: FileOperationHandler
+    fs: BaseFileSystem
     through: _Through
 
 
@@ -280,9 +281,8 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     It suits a namespace spanning several storages, each with a handler of
     its own, e.g. a cloud's volumes, or an account's containers each with its
     own client. Its `RoutingHandler` says where each path goes. The router
-    makes the filesystem of each storage it routes to, a `TreeFileSystem` or
-    a `FlatFileSystem` as the storage's handler's family says, and passes each
-    fsspec call on to it.
+    makes the filesystem of each storage it routes to, a `BaseFileSystem` on
+    the storage's handler, and passes each fsspec call on to it.
 
     The primitives, e.g. ``_info``, ``_cat_file`` and ``_open``, call the
     storage's filesystem's own. The recursive methods, e.g. ``_find``,
@@ -300,9 +300,9 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     PermissionError.
 
     A copy or move between two paths of one storage is the storage's own.
-    Between two storages, it is the copy or move of the source's family:
-    that of `TreeFileSystem` or `FlatFileSystem`, walking or listing the
-    source as they do, with ``maxdepth`` too. Each file goes by the handler's
+    Between two storages, it is the source handler's ``cp`` or ``mv``,
+    walking or listing the source as its strategy does, with ``maxdepth``
+    too. Each file goes by the handler's
     ``cp_across`` or ``mv_across``, which stream the data unless the handler
     overrides them, e.g. with a copy on the server. A move between two
     storages deletes each source file once its copy succeeds, and the source
@@ -339,7 +339,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     handler : RoutingHandler
         Where each path goes.
     asynchronous, loop, use_listings_cache, listings_expiry_time, max_paths
-        fsspec's own options, as `TreeFileSystem` takes them.
+        fsspec's own options, as `BaseFileSystem` takes them.
 
     Raises
     ------
@@ -349,7 +349,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     See Also
     --------
     RoutingHandler : Where each path goes.
-    TreeFileSystem, FlatFileSystem : The filesystems of the storages.
+    BaseFileSystem : The filesystem of each storage.
 
     Examples
     --------
@@ -377,7 +377,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         listings_expiry_time: float | None = None,
         max_paths: int | None = None,
     ) -> None:
-        # fsspec's own options, named, as `TreeFileSystem` names them.
+        # fsspec's own options, named, as `BaseFileSystem` names them.
         super().__init__(
             asynchronous=asynchronous,
             loop=loop,
@@ -407,7 +407,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
 
     def _resolve(
         self, path: str
-    ) -> tuple[_Through, RoutingHandler, StorageHandler | None, str]:
+    ) -> tuple[_Through, RoutingHandler, FileOperationHandler | None, str]:
         """Route a router's path through each router, to a storage's handler or above them.
 
         It gives the routers gone through, the last router, the storage's
@@ -431,42 +431,33 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
             if isinstance(handler, RoutingHandler):
                 router, path = handler, inner
                 continue
-            if not isinstance(handler, StorageHandler):
+            if not isinstance(handler, FileOperationHandler):
                 raise TypeError(
                     f"{router!r} routed {plain!r} to {handler!r}: a storage's handler"
-                    " is needed. Wrap a filesystem, e.g. in FsspecTreeHandler(fs)."
+                    " with strategies is needed, a FileOperationHandler. Wrap a"
+                    " filesystem, e.g. in FsspecTreeHandler(fs)."
                 )
 
             handler.verify_path(inner.rstrip("/") or handler.root)
             return tuple(through), router, handler, inner
 
-    def _route(self, path: str) -> tuple[_BaseFileSystem, str] | None:
+    def _route(self, path: str) -> tuple[BaseFileSystem, str] | None:
         """The filesystem of a path's storage, and its path there, or None above them all."""
         through, _, handler, inner = self._resolve(path)
         if handler is None:
             return None
         return self._storage(handler, through).fs, inner
 
-    def _storage(self, handler: StorageHandler, through: _Through) -> _Storage:
-        """The storage of a handler, its filesystem made once, by the handler's family: its class."""
+    def _storage(self, handler: FileOperationHandler, through: _Through) -> _Storage:
+        """The storage of a handler, its filesystem made once."""
         storage = self._storages.get(id(handler))
         if storage is not None and storage.handler is handler:
             return storage
 
-        # A family's filesystem is imported only when routed to.
-        family: Any
-        if isinstance(handler, TreeHandler):
-            from .tree.filesystem import TreeFileSystem as family  # noqa: PLC0415
-        elif isinstance(handler, FlatHandler):
-            from .flat.filesystem import FlatFileSystem as family  # noqa: PLC0415
-        else:
-            raise TypeError(
-                f"{handler!r} is of no family: a TreeHandler or a FlatHandler is needed"
-            )
-
         # Never cached: the router keeps it, and fsspec would key it by the
-        # handler's repr.
-        fs = family(
+        # handler's repr. fsspec's metaclass takes skip_instance_cache, before
+        # __init__ sees the options.
+        fs = BaseFileSystem(  # type: ignore[call-arg]
             handler,
             asynchronous=self.asynchronous,
             loop=self.loop,
@@ -477,7 +468,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
 
     def _outer(self, fs: AsyncFileSystem, path: str) -> str:
         """The router's path of ``path``, a path of a storage's filesystem."""
-        handler = fs.handler  # type: ignore[attr-defined]
+        handler = fs._handler  # type: ignore[attr-defined]
         return self._lifted(self._storages[id(handler)].through, path)
 
     @staticmethod
@@ -1185,39 +1176,20 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         path2: str,
         maxdepth: int | None = None,
     ) -> Operation[tuple[str, str], Any]:
-        """The recursive copy from ``fs1`` to ``fs2``, by the source's family.
+        """The recursive copy from ``fs1`` to ``fs2``, by the source's handler's ``cp``.
 
         Each file goes by the routing handler's ``cp_across``. The operation is
         returned not yet started.
         """
         src, dst = self._handler_of(fs1), self._handler_of(fs2)
-        cp_entry = self._across(src, dst)
-
-        # A family's strategies are imported only when used.
-        if isinstance(src, FlatHandler):
-            from .flat.cp import _flat_cp  # noqa: PLC0415
-
-            return _flat_cp(
-                src,
-                dst,
-                path1,
-                path2,
-                cp_entry=cp_entry,
-                same_storage=False,
-                maxdepth=maxdepth,
-            )
-        else:
-            from .tree.cp import _tree_cp  # noqa: PLC0415
-
-            return _tree_cp(
-                src,
-                dst,
-                path1,
-                path2,
-                cp_entry=cp_entry,
-                same_storage=False,
-                maxdepth=maxdepth,
-            )
+        return src.cp(
+            dst,
+            path1,
+            path2,
+            cp_entry=self._across(src, dst),
+            same_storage=False,
+            maxdepth=maxdepth,
+        )
 
     async def _cross_fs_mv(
         self,
@@ -1227,49 +1199,27 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         path2: str,
         maxdepth: int | None = None,
     ) -> Operation[tuple[str, str], Any]:
-        """The recursive move from ``fs1`` to ``fs2``, by the source's family.
+        """The recursive move from ``fs1`` to ``fs2``, by the source's handler's ``mv``.
 
-        As `_cross_fs_cp`, each file by the routing handler's ``mv_across``. A
-        flat source copies each key by ``cp_across`` instead, and deletes the
-        keys copied in batches, by its handler's ``rm_files``: two storages
-        never rename.
+        As `_cross_fs_cp`, each file by the routing handler's ``mv_across``,
+        or, where the move copies, e.g. a flat one deleting the keys copied in
+        batches, by its ``cp_across``: two storages never rename.
         """
         src, dst = self._handler_of(fs1), self._handler_of(fs2)
-        cp_entry = self._across(src, dst)
-        mv_entry = self._across(src, dst, move=True)
-
-        # A family's strategies are imported only when used.
-        if isinstance(src, FlatHandler):
-            from .flat.mv import _flat_mv  # noqa: PLC0415
-
-            return _flat_mv(
-                src,
-                dst,
-                path1,
-                path2,
-                cp_entry=cp_entry,
-                mv_entry=mv_entry,
-                same_storage=False,
-                maxdepth=maxdepth,
-            )
-        else:
-            from .tree.mv import _tree_mv  # noqa: PLC0415
-
-            return _tree_mv(
-                src,
-                dst,
-                path1,
-                path2,
-                cp_entry=cp_entry,
-                mv_entry=mv_entry,
-                same_storage=False,
-                maxdepth=maxdepth,
-            )
+        return src.mv(
+            dst,
+            path1,
+            path2,
+            cp_entry=self._across(src, dst),
+            mv_entry=self._across(src, dst, move=True),
+            same_storage=False,
+            maxdepth=maxdepth,
+        )
 
     @staticmethod
-    def _handler_of(fs: AsyncFileSystem) -> StorageHandler:
+    def _handler_of(fs: AsyncFileSystem) -> FileOperationHandler:
         """The handler of a storage's filesystem, one the router made."""
-        return fs.handler  # type: ignore[attr-defined, no-any-return]
+        return fs._handler  # type: ignore[attr-defined, no-any-return]
 
     def _across(
         self, src: StorageHandler, dst: StorageHandler, *, move: bool = False

@@ -17,6 +17,7 @@ from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl.tree.du import _tree_du
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.glob import _tree_glob
+from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
 from fsspec_alt_strategies_impl.tree.walk import _chunks, _tree_walk
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
@@ -65,15 +66,19 @@ async def test_find_lists_once(any_fs: SimulatedFileSystem) -> None:
 
 
 class _Refusing(TreeView):
-    """A storage refusing its recursive listing, as only asking tells: once, then never asked again."""
+    """A storage refusing its recursive listing, as only asking tells.
+
+    As a handler does, it falls back on `_tree_ils` itself, and asks no more.
+    """
 
     refused = 0
 
     async def ils_recursive(self, entry: Any, **kwargs: Any) -> Any:  # type: ignore[override]
-        self.refused += 1
-        self.recursive_order = None
-        raise NotImplementedError("refused")
-        yield  # An async generator, raising as its iteration starts.
+        if self.recursive_listing:
+            self.refused += 1  # Asked, and refused.
+            self.recursive_listing = False
+        async for found in _tree_ils(self, entry["name"], entry=entry, **kwargs):
+            yield found
 
 
 async def test_a_refused_recursive_listing_lists_each_directory(
@@ -89,7 +94,7 @@ async def test_a_refused_recursive_listing_lists_each_directory(
         )
         assert errors == []
         assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)
-    # Asked once: the handler declared no recursive listing after it.
+    # Asked once: the handler lists a directory per request after it.
     assert handler.refused == 1
 
 

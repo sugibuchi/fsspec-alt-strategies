@@ -16,11 +16,12 @@ storage's directories are:
 - the `flat` family, in `flat/`, for storages whose directories are only prefixes of keys, such as S3. It lists by
   prefix, and deletes keys in batches.
 
-Each family's filesystem, `TreeFileSystem` or `FlatFileSystem`, answers fsspec's recursive methods, such as `find`,
-`rm` and `copy`, with its strategies. It runs on a storage handler, in one of two forms:
+Each family's handler, `TreeFileOperationHandler` or `FlatFileOperationHandler`, runs its strategies. `BaseFileSystem`
+answers fsspec's recursive methods, such as `find`, `rm` and `copy`, with its handler's strategies. It runs on a
+storage handler, in one of two forms:
 
-- **Your own handler**, for a new filesystem implementation: you implement the storage's primitives in a
-  `TreeHandler` or a `FlatHandler`, and the filesystem implements fsspec's API on it.
+- **Your own handler**, for a new filesystem implementation: you implement the storage's primitives in a subclass of
+  `TreeFileOperationHandler` or `FlatFileOperationHandler`, and the filesystem implements fsspec's API on it.
 - **Wrappers**, in `wrapper/`, for existing filesystem implementations: a handler calling the filesystem, and a
   filesystem serving its paths. `monitored()` picks the wrapper for a known filesystem.
 
@@ -85,14 +86,14 @@ code goes with it.
 
 | Feature                         | Modules to copy                                                                    |
 |---------------------------------|------------------------------------------------------------------------------------|
-| A family's handler and filesystem | `tree/` or `flat/`, and `common/`; `files/` for its file objects               |
+| A family's handler and filesystem | `tree/` or `flat/`, and `common/`; `files/` for its file objects             |
 | Wrappers and `monitored()`      | `wrapper/`, `monitor.py`, `__init__.py`, `tree/`, `flat/`, `common/` and `files/` |
 | Monitor                         | Nothing: it is in the interface package                                            |
 | Async file objects              | `files/`                                                                           |
 | Filesystem router               | `router.py`, `common/`, `files/`, and the family of each storage routed to         |
 
-A monitor watches only filesystems whose methods run the strategies: the families' filesystems, the wrappers and the
-router.
+A monitor watches only filesystems whose methods run the strategies: `BaseFileSystem`'s subclasses, the wrapper and
+the router.
 
 ## Usage
 
@@ -101,14 +102,15 @@ router.
 #### Storage handlers
 
 A storage handler holds what is particular to a storage: its primitives, its paths, its profile, its limits and its
-clients. Subclass `TreeHandler` or `FlatHandler`, and implement the primitives each declares abstract:
+clients. Subclass `TreeFileOperationHandler` or `FlatFileOperationHandler`, and implement the primitives each declares
+abstract:
 
 ```python
 from fsspec_alt_strategies import UNKNOWN
-from fsspec_alt_strategies_impl.tree.handler import TreeHandler
+from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
 
 
-class MyHandler(TreeHandler):
+class MyHandler(TreeFileOperationHandler):
     protocol = "my"
     root = ""
     profile = UNKNOWN  # The default: nothing known, right on any storage.
@@ -142,12 +144,16 @@ class MyHandler(TreeHandler):
   `open_async_file(entry, mode)` one whose methods are awaited, for `open_async` and the strategies. Mode is "rb",
   "wb" or "xb". Both raise NotImplementedError by default: a handler implements what it supports, e.g. with the
   adaptive files below.
-- A tree handler with a recursive listing of its own implements `ils_recursive`, and declares its order in
-  `recursive_order`: "depth first" or "name". Without it, a tree is listed a directory per request, several at once.
+- A tree handler with a recursive listing of its own implements `ils_recursive`, depth first or in name order.
+  Without it, a tree is listed a directory per request, several at once. One whose storage may refuse its own falls
+  back on `tree.listing._tree_ils`, the default.
 - A flat handler implements `ils_recursive(entry, prefix=...)`, every key below a directory starting with the prefix,
   in name order, and `rm_files`, deleting at most `rm_batch_size` keys by one request.
 - `rm_tree`, `mv_tree` and `cp_tree`, a storage's own operations on a whole directory, are optional. The profile
   declares them.
+- The family's strategies are its methods: `walk`, `find`, `glob`, `du`, `rm`, `cp` and `mv`. Each returns an
+  operation the filesystem runs. Override one to choose another strategy, e.g. one of your own, with the same
+  arguments.
 
 A handler is made without a request. `await handler.open()` makes its clients on the running loop, and loads its
 profile, once. A storage whose profile only a request can find, e.g. whether an account has a hierarchical namespace,
@@ -165,7 +171,7 @@ Two mixins in `common/clients.py` hold a handler's clients:
 from fsspec_alt_strategies_impl.common.clients import AsyncClientSupport
 
 
-class MyHandler(AsyncClientSupport, TreeHandler):
+class MyHandler(AsyncClientSupport, TreeFileOperationHandler):
     async def create_clients(self):
         self.session = aiohttp.ClientSession()
 
@@ -184,16 +190,16 @@ bucket, and a router for the whole namespace.
 
 #### Filesystems on a handler
 
-`TreeFileSystem` and `FlatFileSystem` implement fsspec's whole API on a handler. Make one on a handler, or give the
-storage a class of its own, so that fsspec makes it from a URL:
+`BaseFileSystem` implements fsspec's whole API on a handler. Make one on a handler, or give the storage a class of its
+own, so that fsspec makes it from a URL:
 
 ```python
-from fsspec_alt_strategies_impl.tree.filesystem import TreeFileSystem
+from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
 
-fs = TreeFileSystem(MyHandler("mine"), asynchronous=True)
+fs = BaseFileSystem(MyHandler("mine"), asynchronous=True)
 
 
-class MyFileSystem(TreeFileSystem):
+class MyFileSystem(BaseFileSystem):
     protocol = MyHandler.protocol
     root_marker = MyHandler.root
     _strip_protocol = MyHandler.strip_protocol
@@ -205,8 +211,8 @@ class MyFileSystem(TreeFileSystem):
 A storage's class takes its storage options, makes its handler from them, and names its paths as its handler's. It
 overrides nothing else: what the storage does is the handler's.
 
-Its signature names each of its handler's options, and passes fsspec's on as keywords. The families' filesystems
-name fsspec's options: `asynchronous`, `loop`, `use_listings_cache`, `listings_expiry_time` and `max_paths`. Any other
+Its signature names each of its handler's options, and passes fsspec's on as keywords. `BaseFileSystem` names
+fsspec's options: `asynchronous`, `loop`, `use_listings_cache`, `listings_expiry_time` and `max_paths`. Any other
 option raises TypeError, e.g. one misspelled, which fsspec's own filesystems would silently ignore. fsspec's
 `batch_size` is not taken: the handler's `io_concurrency` bounds the paths handled at a time.
 
@@ -217,7 +223,7 @@ seen once a change is made, or with `refresh=True` or `invalidate_cache()`.
 
 #### Wrappers
 
-`monitored()` wraps a filesystem it knows as the family that suits it:
+`monitored()` wraps a filesystem it knows by the handler that suits it:
 
 ```python
 import fsspec
@@ -227,13 +233,14 @@ fs = monitored(fsspec.filesystem("file"))
 fs.rm("data/2024", recursive=True)  # Deletes by the tree family's strategy.
 ```
 
-It returns a `TreeFileSystemWrapper` or a `FlatFileSystemWrapper`, on a handler calling the filesystem. They take the
-wrapped filesystem's URLs, and make one directly:
+It returns a `FileSystemWrapper`, on a handler calling the filesystem: an `FsspecTreeHandler` or an
+`FsspecFlatHandler`, as the filesystem's family. It takes the wrapped filesystem's URLs. Make one directly:
 
 ```python
-from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler, TreeFileSystemWrapper
+from fsspec_alt_strategies_impl.wrapper.filesystem import FileSystemWrapper
+from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
 
-fs = TreeFileSystemWrapper(
+fs = FileSystemWrapper(
     FsspecTreeHandler(
         fsspec.filesystem("file"),
         operation_concurrency=8,
@@ -244,10 +251,11 @@ fs = TreeFileSystemWrapper(
 ```
 
 The known filesystems are those in `known_implementations`, by class: the local filesystem, s3fs, gcsfs, adlfs,
-fsspec's memory, SFTP and HDFS filesystems. Each entry says its profile, whose `fs_type` is its family, and its
-concurrency limits. The handler calls the filesystem's async methods if it has them. Pass your own table to
+fsspec's memory, SFTP and HDFS filesystems. Each entry names its handler class, e.g. "FsspecTreeHandler",
+"FsspecFlatHandler" or "S3fsHandler", and says its profile and its concurrency limits. A generic handler calls the
+filesystem's async methods if it has them. Pass your own table to
 `monitored()`, or `wrap_unknown_fs=True` to wrap any other filesystem. That wraps it the way right on every storage:
-as a tree, one request at a time, with nothing known of the storage.
+by "FsspecTreeHandler", one request at a time, with nothing known of the storage.
 
 A filesystem whose profile is found at runtime, e.g. per account, needs a handler of its own. It subclasses a
 wrapper's handler, overriding `load_profile()` and the primitives the storage does better itself. Examples are
