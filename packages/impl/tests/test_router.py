@@ -994,3 +994,45 @@ async def test_a_copy_between_storages_of_two_nested_routers() -> None:
     await router._copy("eu/lake/tree/data", "us/lake/flat/copied", recursive=True)
     us = router.handler.lakes["us"]
     assert us.flat._file_data["copied/x.txt"].data == b"x"
+
+
+# Patterns and measures spanning storages.
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "lake/t*/data/a/*.txt",
+        "*/f*/data/*/1.txt",
+        "lake/[tp]*/data/b/*",
+        "lake/*/data/a/",
+        "lake/*/data/**/*.txt",
+    ],
+)
+async def test_a_pattern_spanning_storages_answers_as_fsspec(
+    router: _Router, pattern: str
+) -> None:
+    expected = await AsyncFileSystem._glob(router, pattern)
+    _reset(router)
+    assert await router._glob(pattern) == expected
+
+
+async def test_a_pattern_spanning_storages_lists_only_those_it_can_match(
+    router: _Router,
+) -> None:
+    _reset(router)
+    found = await router._glob("lake/t*/data/a/*.txt")
+    assert found == ["lake/tree/data/a/1.txt", "lake/tree/data/a/2.txt"]
+    # The roots matched, then the tree's own glob: the others are never listed.
+    assert router.tree.stats.calls
+    assert not router.flat.stats.calls and not router.plain.stats.calls
+
+
+async def test_du_above_the_storages_is_each_storages_own(router: _Router) -> None:
+    expected = await AsyncFileSystem._du(router, "lake", total=False)
+    _reset(router)
+    assert await router._du("lake", total=False) == expected
+    assert await router._du("") == sum(expected.values())
+    # Each storage's du sums its listing's sizes: no request per file.
+    for sim in (router.tree, router.flat, router.plain):
+        assert "info" not in sim.stats.calls

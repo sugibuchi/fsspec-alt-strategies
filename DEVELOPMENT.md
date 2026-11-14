@@ -417,6 +417,14 @@ handler must be a `FileOperationHandler`, which runs its own strategies. Each pa
 `route` may give another routing handler, which routes the inner path again. Each level checks its own path, and the
 names answered are mapped back through each level's `outer`. The roots of a nested router are listed by it.
 
+Above the storages, the router lists by `roots`, and hands each storage what is below it:
+
+- A glob pattern spanning storages, e.g. one bucket per storage and `data*/x.txt`, is expanded a segment at a time
+  over `roots` above them. Each storage it reaches then globs the rest by its own strategy, and a storage the pattern
+  cannot match is never listed. A `**` above the storages, or a pattern ending there, is fsspec's glob.
+- A `du` above the storages sums each storage's own, which sends no request per file. With `maxdepth`, it is
+  fsspec's, which counts the levels above the storages.
+
 Within one storage, a call is that storage's own. Between two, a recursive copy or move runs the source handler's
 `cp` or `mv`, with `maxdepth` too. Each file goes by the routing handler's `cp_across` or `mv_across`, under its
 `transfer_limit`. By default these stream the data, as the previous section says. A routing handler can copy on the

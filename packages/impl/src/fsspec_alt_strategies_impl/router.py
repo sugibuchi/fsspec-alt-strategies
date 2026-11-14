@@ -20,6 +20,7 @@ its own strategies.
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import os
 from abc import abstractmethod
 from contextlib import aclosing
@@ -520,6 +521,65 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         whole = self._target(path)
         return whole if whole is not None and whole[0] is base[0] else None
 
+    async def _storage_roots(self, path: str) -> list[str]:
+        """The roots of the storages below a path above them, found by `_roots`, level by level."""
+        roots: list[str] = []
+        frontier = [path.rstrip("/")]
+        while frontier:
+            prefix = frontier.pop()
+            for entry in await self._roots(prefix):
+                name = entry["name"].rstrip("/")
+                if self._target(name) is not None:
+                    roots.append(name)
+                elif entry.get("type") == "directory":
+                    frontier.append(name)
+        return sorted(roots)
+
+    async def _spread(self, pattern: str, maxdepth: int | None) -> list[str] | None:
+        """A pattern spanning storages as one pattern per storage it can match, or None to glob as fsspec does.
+
+        The segments above the storages are expanded one at a time: a literal
+        one is taken as it is, and one with wildcards matched against the
+        names `_roots` lists there. Once a path is in a storage, the rest of the
+        pattern is that storage's to glob, so a storage matching no segment
+        above it is never listed: e.g. ``data*/x.txt`` lists the buckets, then
+        ``x.txt`` in each bucket named ``data...``.
+
+        It answers None where fsspec's glob counts what is above the storages:
+        a ``**`` there, a ``maxdepth`` with a ``**``, or a pattern ending above
+        the storages, matching their roots themselves.
+        """
+        segments = pattern.rstrip("/").split("/")
+        trailing = "/" if pattern.endswith("/") else ""
+        if maxdepth is not None and "**" in segments:
+            return None
+
+        spread: list[str] = []
+        frontier = [("", 0)]
+        while frontier:
+            prefix, index = frontier.pop()
+            if prefix and self._target(prefix) is not None:
+                rest = "/".join(segments[index:])
+                spread.append(
+                    f"{prefix}/{rest}{trailing}" if rest else prefix + trailing
+                )
+                continue
+            if index >= len(segments) - 1:
+                return None  # The pattern ends above the storages.
+            segment = segments[index]
+            if segment == "**":
+                return None
+            if not has_magic(segment):
+                frontier.append(
+                    (f"{prefix}/{segment}" if prefix else segment, index + 1)
+                )
+                continue
+            for entry in await self._roots(prefix):
+                name = entry["name"].rstrip("/")
+                if fnmatch.fnmatchcase(name.rpartition("/")[2], segment):
+                    frontier.append((name, index + 1))
+        return sorted(spread)
+
     async def _grouped(self, path: str | Sequence[str]) -> list[_Group]:
         """The paths of a call changing the storages, grouped by inner filesystem.
 
@@ -967,7 +1027,17 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     ) -> Any:
         target = self._target(path)
         if target is None:
-            return await super()._du(path, total=total, maxdepth=maxdepth, **kwargs)
+            if maxdepth is not None:
+                # fsspec's du, as maxdepth counts the levels above the storages.
+                return await super()._du(path, total=total, maxdepth=maxdepth, **kwargs)
+            # Each storage's own du, which sends no request per file.
+            measured = [
+                await self._du(root, total=total, **kwargs)
+                for root in await self._storage_roots(path)
+            ]
+            if total:
+                return sum(measured)
+            return {name: size for sizes in measured for name, size in sizes.items()}
 
         fs, inner = target
         sizes = await self._on(
@@ -977,13 +1047,22 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         return sizes if total else {self._outer(fs, n): s for n, s in sizes.items()}
 
     async def _glob(self, path: str, maxdepth: int | None = None, **kwargs: Any) -> Any:
-        target = self._pattern_target(
-            self.handler.verified(path, strip_only_protocol=True)
-        )
+        verified = self.handler.verified(path, strip_only_protocol=True)
+        target = self._pattern_target(verified)
         detail = kwargs.pop("detail", False)
         if target is None:
-            # fsspec's glob, finding from the literal prefix over _roots.
-            return await super()._glob(path, maxdepth=maxdepth, detail=detail, **kwargs)
+            spread = await self._spread(verified, maxdepth)
+            if spread is None:
+                # fsspec's glob, finding from the literal prefix over _roots.
+                return await super()._glob(
+                    path, maxdepth=maxdepth, detail=detail, **kwargs
+                )
+            # Each storage's own glob of what is below it: none other is listed.
+            entries: dict[str, Any] = {}
+            for pattern in spread:
+                entries.update(await self._glob(pattern, detail=True, **kwargs))
+            names = sorted(entries)
+            return {n: entries[n] for n in names} if detail else names
 
         fs, inner = target
         found = await self._on(
