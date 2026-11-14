@@ -54,6 +54,8 @@ code: read it before adding a strategy or a handler.
   `find`, `glob`, `du`, `rm`, `rm_files`, `cp`, `cp_files`, `mv` and `mv_files`, in `common/strategy.py`. Each takes its strategy's arguments
   but the handler, which is `self`, and returns an operation not started. A family's handler implements them by its
   strategies, e.g. `rm` by `_tree_rm`. A storage's handler overrides a method to choose another strategy.
+- How the strategies run in bulk is the `Strategy` mixin's, never `StorageHandler`'s: `rm_batch_size`,
+  `cp_batch_size` and `mv_batch_size` are declared there. A primitive acts on one item.
 - `rm_files(entries)` deletes files a caller found: by default `common.rm_files._rm_each_file`, each by `rm_file`. A
   storage deleting many by one request overrides it with `_rm_by_request`, and declares `rm_batch_size`, 1 by
   default. The recursive deletions and moves send it their files in batches, by `_Jobs.send_batch`.

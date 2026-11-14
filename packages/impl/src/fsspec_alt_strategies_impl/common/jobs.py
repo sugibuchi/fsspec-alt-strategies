@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     )
     from typing import Protocol
 
-    from .handler import Entry, StorageHandler
+    from .handler import Entry, FileOperationHandler, StorageHandler
 
     class _Transfer(Protocol):
         """How one file goes from its source entry to a destination path.
@@ -260,7 +260,7 @@ def _check_batch_size(batch_size: int, name: str = "rm_batch_size") -> None:
         raise ValueError(f"{name} must be at least 1: {batch_size}")
 
 
-def _batch_size(handler: StorageHandler) -> int:
+def _batch_size(handler: FileOperationHandler) -> int:
     """The most paths a handler's ``rm_files`` takes at once."""
     return handler.rm_batch_size
 
@@ -291,14 +291,14 @@ class _Jobs(ABC):
     def __init__(
         self,
         *,
-        handler: StorageHandler,
+        handler: FileOperationHandler,
         op: Operation[Any, Any],
         maxdepth: int | None = None,
         ils_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        self.handler: StorageHandler = handler
+        self.handler: FileOperationHandler = handler
         self.maxdepth = maxdepth
 
         # The options of each listing the jobs make, a pattern's glob too.
@@ -356,7 +356,7 @@ class _Jobs(ABC):
         entries = [self.batched.pop(p, {"name": p}) for p in paths]
         deleted: list[str] = []
         errors: list[Exception] = []
-        async with self.handler.rm_files(entries) as operation:  # type: ignore[attr-defined]
+        async with self.handler.rm_files(entries) as operation:
             async for outcome in operation:
                 if isinstance(outcome, Exception):
                     errors.append(outcome)
@@ -1038,10 +1038,11 @@ class _CopyJobs(_Jobs):
             FileTransfer(j.source, j.destination, self.known_missing(j.destination))
             for j in jobs
         ]
+        operation: Operation[tuple[str, str], Any]
         if self.transfers == "copy":
-            operation = self.handler.cp_files(transfers)  # type: ignore[attr-defined]
+            operation = self.handler.cp_files(transfers)
         else:
-            operation = self.handler.mv_files(transfers)  # type: ignore[attr-defined]
+            operation = self.handler.mv_files(transfers)
 
         outcomes: dict[str, Exception | None] = {}
         apart: list[Exception] = []

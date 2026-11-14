@@ -149,7 +149,9 @@ AsyncFileSystem                        fsspec's
 
 `FileOperationHandler` adds the `Strategy` mixin's methods, one per strategy: `walk`, `find`, `glob`, `du`, `rm`,
 `rm_files`, `cp`, `cp_files`, `mv` and `mv_files`. Each takes its strategy's arguments but the handler, which is `self`, and returns an operation, not
-started, which the filesystem runs. A copy or move takes the destination's handler, `dst`.
+started, which the filesystem runs. A copy or move takes the destination's handler, `dst`. The mixin also declares
+how its batch strategies run in bulk: `rm_batch_size`, `cp_batch_size` and `mv_batch_size`. That is no concern of
+`StorageHandler`, whose primitives each act on one item.
 
 Each family's handler class implements them by its strategies, and adds the primitives they call:
 

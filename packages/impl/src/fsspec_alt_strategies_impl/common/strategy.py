@@ -62,6 +62,39 @@ class Strategy(ABC):
     FlatFileOperationHandler : These, by the flat strategies.
     """
 
+    # How the strategies run in bulk: the most files each batch strategy takes
+    # at once. They tell of the strategies, not of how the storage is
+    # accessed: a handler's primitives each act on one item.
+
+    rm_batch_size: int = 1
+    """The most files the strategies give ``rm_files`` at once: 1 by default.
+
+    By default, a file is deleted as soon as it is found. A storage deleting
+    several files by one request overrides ``rm_files``, and declares its
+    most here, e.g. 1000 keys as S3's DeleteObjects takes, or 256 blobs as
+    Azure's Blob Batch: the files then wait for their batch to fill, or for
+    the listing to end.
+    """
+
+    cp_batch_size: int = 1
+    """The most files the strategies give ``cp_files`` at once: 1 by default.
+
+    By default, a file is copied as soon as its destination's directory is
+    ready. A storage copying several files by one request, e.g. the Hugging
+    Face Hub's commit, overrides ``cp_files``, and declares its most here.
+    The files then wait for their batch to fill, or for the walk to end with
+    every directory made. Only a copy within one storage batches: between
+    two, each file streams on its own.
+    """
+
+    mv_batch_size: int = 1
+    """The most files the strategies give ``mv_files`` at once: 1 by default.
+
+    As ``cp_batch_size``, for the files a move renames within one storage. A
+    move copying then deleting batches its copies by ``cp_batch_size``, and
+    its deletions by ``rm_batch_size``.
+    """
+
     @abstractmethod
     def walk(
         self,
