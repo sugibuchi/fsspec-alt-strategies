@@ -422,6 +422,16 @@ The tree strategies list a directory with the handler's `ils`, its entries in an
 - by name: sorted by the whole name, as object stores list keys. A directory's entry may come apart from what is below
   it, as "a/b-x" comes between "a/b" and "a/b/c".
 
+A handler whose listing guarantees less declares its `recursive_order` "parents_first". That covers a directory's
+entry before what is below it, and nothing more, e.g. breadth first, as Dropbox's recursive listing documents no more.
+
+- The walk cannot tell that order from a depth-first one: by the time an entry comes under a directory taken as done,
+  that directory's last part has gone, and a move may have deleted it.
+- Parents first, `tree.walk._ParentsFirst` keeps every directory open until the listing ends, and the names of all its
+  entries, to resume a break. Depth first, `_Split` closes each directory as the listing passes it.
+- "parents_first" is always right, as a depth-first listing is parents first too. It costs the streaming of each
+  directory done, and the memory of the tree's names.
+
 A directory may be left out, as object stores list only files: the walk tells it from the paths below it. By default,
 `ils_recursive` is `tree/listing.py`'s `_tree_ils`, which lists depth first, a directory per request, several ahead
 at a time. The generic tree handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing.

@@ -145,7 +145,9 @@ code: read it before adding a strategy or a handler.
   wrapped filesystem's methods. Write one only where the library saves requests or data beyond fsspec's API.
 - A family's modules export nothing public but its handler class, in `handler.py`.
 - A tree handler's `ils_recursive` defaults to `tree.listing._tree_ils`, a directory per request by `ils`. A storage
-  listing a tree in one request overrides it, and falls back on `_tree_ils` itself where its storage refuses.
+  listing a tree in one request overrides it, and falls back on `_tree_ils` itself where its storage refuses. One
+  whose listing gives a directory before what is below it, but no more, declares its `recursive_order`
+  "parents_first": the walk can never tell it.
 - The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
   A recursive listing keeps only the names of the directories it is in, to resume a break: see `tree.walk._resume`.

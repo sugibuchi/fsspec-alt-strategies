@@ -14,7 +14,8 @@ directory whole.
 
 A tree that nothing prunes is listed by one ``ils_recursive``, which gives it
 depth first or in name order. Its entries are split into the same parts, each
-directory's as soon as the listing has passed it. A listing broken off part way
+directory's as soon as the listing has passed it, or once it ends, where the
+handler declares it parents first. A listing broken off part way
 is resumed a directory per request, from the directories it was in. A handler with no recursive
 listing of its own answers it by default with a directory per request, several
 at a time.
@@ -493,7 +494,10 @@ async def _produce_tree(
     The listing is the handler's ``ils_recursive``, or with ``own`` False
     `_tree_ils`, a directory per request. The entries come depth first or in
     name order, all below a directory together, so a directory is done once
-    the listing has passed it: `_Split` puts its last part then.
+    the listing has passed it: `_Split` puts its last part then. A handler
+    declaring its ``recursive_order`` "parents_first" gives a directory before
+    what is below it, but nothing more: `_ParentsFirst` puts every
+    directory's last part once the listing ends.
 
     A listing failing before anything came puts its error as the root's first
     and last part, raised as such for a root of the walk. One broken off later
@@ -503,7 +507,7 @@ async def _produce_tree(
     leave an arbitrary part of the tree unwalked, which fsspec's ``find`` then
     omits with no error.
     """
-    tree = _Split(root, root_depth, chunk_size, listed)
+    tree = _splitter(handler, own)(root, root_depth, chunk_size, listed)
     try:
         entry = listed or handler.entry(root)
         if own:
@@ -533,10 +537,23 @@ async def _produce_tree(
         await parts.put(part)
 
 
+def _splitter(
+    handler: TreeFileOperationHandler, own: bool
+) -> type[_Split | _ParentsFirst]:
+    """How a recursive listing is split: parents first only where the handler's own declares it.
+
+    `_tree_ils` lists depth first, whatever the handler's own order.
+    """
+    if own and handler.recursive_order == "parents_first":
+        return _ParentsFirst
+    else:
+        return _Split
+
+
 async def _resume(
     handler: TreeFileOperationHandler,
     ils_kwargs: dict[str, Any],
-    tree: _Split,
+    tree: _Split | _ParentsFirst,
     parts: asyncio.Queue[_Listing],
     chunk_size: int,
     stopped: Callable[[], bool],
@@ -729,6 +746,82 @@ class _Split:
         """The parts of all held, parents first."""
         self.count = 0
         return [o.part(last=False) for o in self.open if o.entries]
+
+
+class _ParentsFirst:
+    """A recursive listing's entries, parents first, split into each directory's parts.
+
+    A directory's entry comes before what is below it, but the directories'
+    contents interleave, e.g. breadth first: no entry tells that a directory
+    is done. So every directory stays open, its entries held as they come,
+    and put a part at a time, parents first, once ``chunk_size`` are held in
+    all. Their last parts come once the listing ends, the deepest first.
+
+    It answers `_resume` as `_Split` does: every directory seen is ``open``,
+    with the names of all its entries, and none ``pending``. That holds every
+    name of the tree, as only a parents-first listing needs.
+    """
+
+    def __init__(
+        self, root: str, root_depth: int, chunk_size: int, entry: Entry | None = None
+    ) -> None:
+        self.root = root
+        self.chunk_size = chunk_size
+        # Every directory seen, by its path, each after its parent.
+        self.directories = {root: _Open(root, root_depth, entry)}
+        self.count = 0  # The entries held.
+
+    @property
+    def open(self) -> list[_Open]:
+        """Every directory seen, parents first: all are open until the listing ends."""
+        return list(self.directories.values())
+
+    @property
+    def first(self) -> bool:
+        """Whether no part of the root has been put yet."""
+        return self.directories[self.root].first
+
+    def add(self, entry: dict[str, Any]) -> list[_Listing]:
+        """Hold an entry in its directory, and the parts it fills."""
+        name = entry["name"].rstrip("/")
+        if name == self.root:
+            # A file lists itself. A directory may list its own marker.
+            if entry["type"] != "directory":
+                raise _not_a_directory(self.root, entry)
+            return []
+        if not _below(name, self.root):
+            return []  # No storage should list it.
+
+        # A directory not listed, as an object store lists only files, gets an
+        # entry in its parent from the path below it.
+        top = self.directories[self.root]
+        for directory in _between(self.root, name):
+            if (known := self.directories.get(directory)) is None:
+                top.hold({"name": directory, "size": 0, "type": "directory"})
+                self.count += 1
+                known = self.directories[directory] = _Open(directory, top.depth + 1)
+            top = known
+
+        if entry["type"] == "directory":
+            if name in self.directories:
+                return []  # Listed twice, e.g. as its marker too.
+            listed = {**entry, "name": name}
+            self.directories[name] = _Open(name, top.depth + 1, listed)
+        top.hold(entry)
+        self.count += 1
+
+        return self.flush() if self.count >= self.chunk_size else []
+
+    def flush(self) -> list[_Listing]:
+        """The parts of all held, parents first."""
+        self.count = 0
+        return [d.part(last=False) for d in self.directories.values() if d.entries]
+
+    def end(self) -> list[_Listing]:
+        """The last parts of every directory, once the listing has ended: the deepest first."""
+        parts = self.flush()
+        parts += [d.part(last=True) for d in reversed(self.directories.values())]
+        return parts
 
 
 class _Open:
