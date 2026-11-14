@@ -25,6 +25,7 @@ from ._keys import _close, _dir, _dirs, _listing
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
+    from ..common.handler import StoragePath
     from .handler import FlatFileOperationHandler
 
 __all__: list[str] = []
@@ -32,7 +33,7 @@ __all__: list[str] = []
 
 def _flat_walk(
     handler: FlatFileOperationHandler,
-    path: str,
+    path: StoragePath,
     *,
     maxdepth: int | None = None,
     topdown: bool = True,

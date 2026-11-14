@@ -23,6 +23,7 @@ from ._jobs import _TreeJobs
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
+    from ..common.handler import StoragePath
     from ..common.operation import Operation
     from .handler import TreeFileOperationHandler
     from .walk import _Listing
@@ -32,7 +33,7 @@ __all__: list[str] = []
 
 def _tree_rm(
     handler: TreeFileOperationHandler,
-    path: str | Sequence[str],
+    path: StoragePath | Sequence[StoragePath],
     *,
     maxdepth: int | None = None,
     ils_kwargs: dict[str, Any] | None = None,
@@ -132,7 +133,9 @@ def _tree_rm(
 class _Deletion(_TreeJobs):
     """The jobs of one `_tree_rm`: a deletion per batch of files, then per directory."""
 
-    def __init__(self, *, path: str | Sequence[str], **kwargs: Any) -> None:
+    def __init__(
+        self, *, path: StoragePath | Sequence[StoragePath], **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
 
         self.path = path

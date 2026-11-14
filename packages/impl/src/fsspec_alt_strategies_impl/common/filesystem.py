@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from fsspec import AbstractFileSystem
     from fsspec.callbacks import Callback
 
-    from .handler import FileOperationHandler
+    from .handler import FileOperationHandler, StorageHandler, StoragePath
 
 __all__ = ["BaseFileSystem"]
 
@@ -482,13 +482,9 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
         finally:
             self._drop_listings()
 
-    def _as_given(self, path: str | list[str]) -> str | list[str]:
-        """A caller's path, or paths, verified with only the protocol stripped, as the strategies take them."""
-        handler = self._handler
-        if isinstance(path, str):
-            return handler.verified(path, strip_only_protocol=True)
-        else:
-            return [handler.verified(p, strip_only_protocol=True) for p in path]
+    def _as_given(self, path: str | list[str]) -> StoragePath | list[StoragePath]:
+        """A caller's path, or paths, as the strategies take them: by `_as_given`."""
+        return _as_given(self._handler, path)
 
     async def _copy(
         self,
@@ -957,3 +953,17 @@ def _failed_dir(
     if callable(on_error):
         on_error(error)
     return (directory, {}, {}) if detail else (directory, [], [])
+
+
+def _as_given(
+    handler: StorageHandler, path: str | Sequence[str]
+) -> StoragePath | list[StoragePath]:
+    """A caller's path, or paths, verified by ``handler`` with only the protocol stripped, as the strategies take them.
+
+    A pattern keeps its wildcards, and a path its trailing "/", which tell the
+    strategies how to place it.
+    """
+    if isinstance(path, str):
+        return handler.verified(path, strip_only_protocol=True)
+    else:
+        return [handler.verified(p, strip_only_protocol=True) for p in path]

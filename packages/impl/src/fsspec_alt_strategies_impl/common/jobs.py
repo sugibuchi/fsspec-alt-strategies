@@ -402,10 +402,10 @@ class _Jobs(ABC):
         """The operation's state now."""
 
     @abstractmethod
-    def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
+    def glob(self, pattern: StoragePath | Sequence[StoragePath]) -> Operation[Any, Any]:
         """The family's glob of ``pattern`` on ``handler``, within ``maxdepth``."""
 
-    async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
+    async def glob_roots(self, pattern: StoragePath | Sequence[StoragePath]) -> _Roots:
         """The roots matching glob patterns, noting those a pattern matched.
 
         The glob's errors go to ``found``, yielded first.
@@ -631,8 +631,8 @@ class _CopyJobs(_Jobs):
     def __init__(
         self,
         *,
-        path1: str | Sequence[str],
-        path2: str,
+        path1: StoragePath | Sequence[StoragePath],
+        path2: StoragePath,
         dst: StorageHandler,
         same_storage: bool,
         root_entry: dict[str, Any] | None = None,

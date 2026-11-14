@@ -27,6 +27,7 @@ from .glob import _flat_glob
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
+    from ..common.handler import StoragePath
     from ..common.jobs import _Roots
     from ..common.operation import Operation
     from .handler import FlatFileOperationHandler
@@ -45,7 +46,7 @@ class _FlatJobs(_Jobs):
     handler: FlatFileOperationHandler
     """The handler listed: a flat one's, which the flat strategies take."""
 
-    def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
+    def glob(self, pattern: StoragePath | Sequence[StoragePath]) -> Operation[Any, Any]:
         return _flat_glob(
             self.handler, pattern, maxdepth=self.maxdepth, ils_kwargs=self.ils_kwargs
         )

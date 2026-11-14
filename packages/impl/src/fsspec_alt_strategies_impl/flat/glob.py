@@ -30,6 +30,7 @@ from ._keys import _close, _dir, _dirs, _listing, _new
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
+    from ..common.handler import StoragePath
     from .handler import FlatFileOperationHandler
 
 __all__: list[str] = []
@@ -37,7 +38,7 @@ __all__: list[str] = []
 
 def _flat_glob(
     handler: FlatFileOperationHandler,
-    path: str | Sequence[str],
+    path: StoragePath | Sequence[StoragePath],
     *,
     maxdepth: int | None = None,
     withdirs: bool = True,

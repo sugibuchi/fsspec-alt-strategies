@@ -34,6 +34,7 @@ from fsspec_alt_strategies.monitor import Call, Monitored, routing
 
 from .common.filesystem import (
     BaseFileSystem,
+    _as_given,
     _copy_errors,
     _raise,
     _range_bounds,
@@ -1186,8 +1187,8 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         src, dst = self._handler_of(fs1), self._handler_of(fs2)
         return src.cp(
             dst,
-            path1,
-            path2,
+            _as_given(src, path1),
+            dst.verified(path2, strip_only_protocol=True),
             cp_entry=self._across(src, dst),
             same_storage=False,
             maxdepth=maxdepth,
@@ -1210,8 +1211,8 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         src, dst = self._handler_of(fs1), self._handler_of(fs2)
         return src.mv(
             dst,
-            path1,
-            path2,
+            _as_given(src, path1),
+            dst.verified(path2, strip_only_protocol=True),
             cp_entry=self._across(src, dst),
             mv_entry=self._across(src, dst, move=True),
             same_storage=False,

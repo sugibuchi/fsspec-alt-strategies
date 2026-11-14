@@ -24,7 +24,7 @@ from .walk import _chunks, _Listing
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
-    from ..common.handler import StorageHandler
+    from ..common.handler import StorageHandler, StoragePath
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
@@ -32,7 +32,7 @@ __all__: list[str] = []
 
 def _tree_find(
     handler: TreeFileOperationHandler,
-    path: str,
+    path: StoragePath,
     *,
     maxdepth: int | None = None,
     withdirs: bool = False,

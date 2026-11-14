@@ -24,6 +24,7 @@ from ._jobs import _FlatJobs
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
+    from ..common.handler import StoragePath
     from ..common.operation import Operation
     from .handler import FlatFileOperationHandler
 
@@ -32,7 +33,7 @@ __all__: list[str] = []
 
 def _flat_rm(
     handler: FlatFileOperationHandler,
-    path: str | Sequence[str],
+    path: StoragePath | Sequence[StoragePath],
     *,
     maxdepth: int | None = None,
     ils_kwargs: dict[str, Any] | None = None,
@@ -98,7 +99,9 @@ def _flat_rm(
 class _Deletion(_FlatJobs):
     """The jobs of one `_flat_rm`: a deletion per batch of keys."""
 
-    def __init__(self, *, path: str | Sequence[str], **kwargs: Any) -> None:
+    def __init__(
+        self, *, path: StoragePath | Sequence[StoragePath], **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
 
         self.path = path

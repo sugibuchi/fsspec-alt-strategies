@@ -122,7 +122,7 @@ class TreeFileOperationHandler(FileOperationHandler):
 
     def walk(
         self,
-        path: str,
+        path: StoragePath,
         *,
         maxdepth: int | None = None,
         topdown: bool = True,
@@ -145,7 +145,7 @@ class TreeFileOperationHandler(FileOperationHandler):
 
     def find(
         self,
-        path: str,
+        path: StoragePath,
         *,
         maxdepth: int | None = None,
         withdirs: bool = False,
@@ -158,7 +158,7 @@ class TreeFileOperationHandler(FileOperationHandler):
 
     def glob(
         self,
-        path: str | Sequence[str],
+        path: StoragePath | Sequence[StoragePath],
         *,
         maxdepth: int | None = None,
         withdirs: bool = True,
@@ -171,7 +171,7 @@ class TreeFileOperationHandler(FileOperationHandler):
 
     def du(
         self,
-        path: str,
+        path: StoragePath,
         *,
         maxdepth: int | None = None,
         ils_kwargs: dict[str, Any] | None = None,
@@ -181,7 +181,7 @@ class TreeFileOperationHandler(FileOperationHandler):
 
     def rm(
         self,
-        path: str | Sequence[str],
+        path: StoragePath | Sequence[StoragePath],
         *,
         maxdepth: int | None = None,
         ils_kwargs: dict[str, Any] | None = None,
@@ -196,8 +196,8 @@ class TreeFileOperationHandler(FileOperationHandler):
     def cp(
         self,
         dst: StorageHandler,
-        path1: str | Sequence[str],
-        path2: str,
+        path1: StoragePath | Sequence[StoragePath],
+        path2: StoragePath,
         *,
         cp_entry: _Transfer | None = None,
         same_storage: bool | None = None,
@@ -221,8 +221,8 @@ class TreeFileOperationHandler(FileOperationHandler):
     def mv(
         self,
         dst: StorageHandler,
-        path1: str | Sequence[str],
-        path2: str,
+        path1: StoragePath | Sequence[StoragePath],
+        path2: StoragePath,
         *,
         cp_entry: _Transfer | None = None,
         mv_entry: _Transfer | None = None,

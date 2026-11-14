@@ -23,6 +23,7 @@ from .find import _find_listings
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    from ..common.handler import StoragePath
     from .handler import TreeFileOperationHandler
 
 
@@ -31,7 +32,7 @@ __all__: list[str] = []
 
 def _tree_du(
     handler: TreeFileOperationHandler,
-    path: str,
+    path: StoragePath,
     *,
     maxdepth: int | None = None,
     ils_kwargs: dict[str, Any] | None = None,

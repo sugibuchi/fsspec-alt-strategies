@@ -37,8 +37,8 @@ __all__: list[str] = []
 def _flat_mv(
     src: FlatFileOperationHandler,
     dst: StorageHandler,
-    path1: str | Sequence[str],
-    path2: str,
+    path1: StoragePath | Sequence[StoragePath],
+    path2: StoragePath,
     *,
     cp_entry: _Transfer | None = None,
     mv_entry: _Transfer | None = None,

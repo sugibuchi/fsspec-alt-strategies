@@ -26,6 +26,7 @@ from .walk import _chunks
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
+    from ..common.handler import StoragePath
     from ..common.jobs import _Roots
     from ..common.operation import Operation
     from .handler import TreeFileOperationHandler
@@ -66,7 +67,7 @@ class _TreeJobs(_Jobs):
         It returns what is done at once, if anything, e.g. a directory found gone.
         """
 
-    def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
+    def glob(self, pattern: StoragePath | Sequence[StoragePath]) -> Operation[Any, Any]:
         return _tree_glob(
             self.handler, pattern, maxdepth=self.maxdepth, ils_kwargs=self.ils_kwargs
         )

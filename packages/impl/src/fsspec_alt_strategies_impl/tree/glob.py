@@ -40,6 +40,7 @@ from .find import _find_listings
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
+    from ..common.handler import StoragePath
     from .handler import TreeFileOperationHandler
     from .walk import _Listing
 
@@ -48,7 +49,7 @@ __all__: list[str] = []
 
 def _tree_glob(
     handler: TreeFileOperationHandler,
-    path: str | Sequence[str],
+    path: StoragePath | Sequence[StoragePath],
     *,
     maxdepth: int | None = None,
     withdirs: bool = True,

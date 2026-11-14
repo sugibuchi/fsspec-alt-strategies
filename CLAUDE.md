@@ -97,7 +97,8 @@ code: read it before adding a strategy or a handler.
   filesystem is the caller's.
 - Strategies use only fsspec's API that every implementation has. Never special-case an implementation's class.
 - Every strategy follows DEVELOPMENT.md's "Operations":
-  - paths come without a protocol, verified;
+  - paths come without a protocol, verified, typed `StoragePath`: a pattern or a list too, as `filesystem._as_given`
+    gives them;
   - it returns a private `Operation`, an `OperationHandler` working as it is iterated. Only a
     `FileOperationHandler`'s strategy methods return one, and the filesystem keeps its handler private: callers watch
     operations with a `Monitor`, which stops one through its `OperationHandler`;

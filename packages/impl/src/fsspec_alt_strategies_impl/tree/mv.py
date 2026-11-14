@@ -39,8 +39,8 @@ __all__: list[str] = []
 def _tree_mv(
     src: TreeFileOperationHandler,
     dst: StorageHandler,
-    path1: str | Sequence[str],
-    path2: str,
+    path1: StoragePath | Sequence[StoragePath],
+    path2: StoragePath,
     *,
     cp_entry: _Transfer | None = None,
     mv_entry: _Transfer | None = None,

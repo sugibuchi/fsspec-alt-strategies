@@ -46,7 +46,7 @@ from .listing import _tree_ils
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Collection, Iterable
 
-    from ..common.handler import Entry, StorageHandler
+    from ..common.handler import Entry, StorageHandler, StoragePath
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
@@ -54,7 +54,7 @@ __all__: list[str] = []
 
 def _tree_walk(
     handler: TreeFileOperationHandler,
-    path: str,
+    path: StoragePath,
     *,
     maxdepth: int | None = None,
     topdown: bool = True,

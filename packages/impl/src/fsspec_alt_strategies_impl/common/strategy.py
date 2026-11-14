@@ -35,7 +35,7 @@ if TYPE_CHECKING:
         WalkState,
     )
 
-    from .handler import Entry, StorageHandler
+    from .handler import Entry, StorageHandler, StoragePath
     from .jobs import _Transfer
     from .operation import Operation
 
@@ -50,7 +50,8 @@ class Strategy(ABC):
     takes the destination's handler, ``dst``, ``self`` again within one
     storage. Each returns an operation, not started: the filesystem runs it.
 
-    Paths come as the filesystem verified them, without a protocol. Each
+    Paths come as the filesystem verified them, without a protocol: each a
+    `StoragePath`, a glob pattern too, by the handler's ``verified``. Each
     method raises argument errors, e.g. ValueError for ``maxdepth`` below 1,
     when called. The operation yields what it did, mixed with an error per
     failed path, as its strategy says.
@@ -64,7 +65,7 @@ class Strategy(ABC):
     @abstractmethod
     def walk(
         self,
-        path: str,
+        path: StoragePath,
         *,
         maxdepth: int | None = None,
         topdown: bool = True,
@@ -78,7 +79,7 @@ class Strategy(ABC):
 
         Parameters
         ----------
-        path : str
+        path : StoragePath
             The directory the walk starts from.
         maxdepth : int, optional
             The levels walked: 1 yields only ``path``.
@@ -102,7 +103,7 @@ class Strategy(ABC):
     @abstractmethod
     def find(
         self,
-        path: str,
+        path: StoragePath,
         *,
         maxdepth: int | None = None,
         withdirs: bool = False,
@@ -112,7 +113,7 @@ class Strategy(ABC):
 
         Parameters
         ----------
-        path : str
+        path : StoragePath
             The directory searched: a file finds itself.
         maxdepth : int, optional
             The levels searched: 1 finds only what is in ``path``.
@@ -130,7 +131,7 @@ class Strategy(ABC):
     @abstractmethod
     def glob(
         self,
-        path: str | Sequence[str],
+        path: StoragePath | Sequence[StoragePath],
         *,
         maxdepth: int | None = None,
         withdirs: bool = True,
@@ -140,7 +141,7 @@ class Strategy(ABC):
 
         Parameters
         ----------
-        path : str or sequence of str
+        path : StoragePath or sequence of StoragePath
             A pattern, or several: a trailing "/" matches only directories.
         maxdepth : int, optional
             How deep a ``**`` goes.
@@ -158,7 +159,7 @@ class Strategy(ABC):
     @abstractmethod
     def du(
         self,
-        path: str,
+        path: StoragePath,
         *,
         maxdepth: int | None = None,
         ils_kwargs: dict[str, Any] | None = None,
@@ -167,7 +168,7 @@ class Strategy(ABC):
 
         Parameters
         ----------
-        path : str
+        path : StoragePath
             The directory measured: a file measures itself.
         maxdepth : int, optional
             The levels counted: 1 counts only the files in ``path``.
@@ -184,7 +185,7 @@ class Strategy(ABC):
     @abstractmethod
     def rm(
         self,
-        path: str | Sequence[str],
+        path: StoragePath | Sequence[StoragePath],
         *,
         maxdepth: int | None = None,
         ils_kwargs: dict[str, Any] | None = None,
@@ -193,7 +194,7 @@ class Strategy(ABC):
 
         Parameters
         ----------
-        path : str or sequence of str
+        path : StoragePath or sequence of StoragePath
             A directory, a file, a glob pattern, or a list of them.
         maxdepth : int, optional
             The levels deleted below each path.
@@ -234,8 +235,8 @@ class Strategy(ABC):
     def cp(
         self,
         dst: StorageHandler,
-        path1: str | Sequence[str],
-        path2: str,
+        path1: StoragePath | Sequence[StoragePath],
+        path2: StoragePath,
         *,
         cp_entry: _Transfer | None = None,
         same_storage: bool | None = None,
@@ -249,9 +250,9 @@ class Strategy(ABC):
         ----------
         dst : FileOperationHandler
             The handler copied to: ``self`` within one storage.
-        path1 : str or sequence of str
+        path1 : StoragePath or sequence of StoragePath
             A directory, a file, a glob pattern, or a list of them.
-        path2 : str
+        path2 : StoragePath
             Where they go, placed as fsspec's ``copy`` places them.
         cp_entry : callable, optional
             Copies a file by its source entry: by default the source's
@@ -275,8 +276,8 @@ class Strategy(ABC):
     def mv(
         self,
         dst: StorageHandler,
-        path1: str | Sequence[str],
-        path2: str,
+        path1: StoragePath | Sequence[StoragePath],
+        path2: StoragePath,
         *,
         cp_entry: _Transfer | None = None,
         mv_entry: _Transfer | None = None,
@@ -291,9 +292,9 @@ class Strategy(ABC):
         ----------
         dst : FileOperationHandler
             The handler moved to: ``self`` within one storage.
-        path1 : str or sequence of str
+        path1 : StoragePath or sequence of StoragePath
             A directory, a file, a glob pattern, or a list of them.
-        path2 : str
+        path2 : StoragePath
             Where they go, placed as fsspec's ``mv`` places them.
         cp_entry : callable, optional
             Copies a file by its source entry, where the move copies.
