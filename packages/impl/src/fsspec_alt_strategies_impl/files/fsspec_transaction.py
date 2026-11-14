@@ -556,15 +556,17 @@ class AdaptiveWritableTransaction(FileTransaction):
 
     On some storages, the last part makes the file visible, e.g. Google Cloud
     Storage's resumable uploads. ``hold_last_part`` holds it back too, in
-    memory, until commit uploads it.
+    memory, until commit uploads it. By default, the file's class tells it, by
+    its ``last_part_completes``, so that a caller opening a storage's file
+    need not know the storage.
 
     Parameters
     ----------
     file : AdaptiveWritableFile
         The file, open for writing.
-    hold_last_part : bool
+    hold_last_part : bool, optional
         Whether the last part waits for commit, for storages where it makes
-        the file visible.
+        the file visible. The file's ``last_part_completes`` if None.
 
     Examples
     --------
@@ -572,11 +574,13 @@ class AdaptiveWritableTransaction(FileTransaction):
     """
 
     def __init__(
-        self, file: AdaptiveWritableFile, *, hold_last_part: bool = False
+        self, file: AdaptiveWritableFile, *, hold_last_part: bool | None = None
     ) -> None:
         super().__init__(file.path)
 
         self.file = file
+        if hold_last_part is None:
+            hold_last_part = getattr(file, "last_part_completes", False)
         self.hold_last_part = hold_last_part
 
         # The request making the file visible, once closing held it back.

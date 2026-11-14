@@ -668,6 +668,14 @@ class AdaptiveWritableFile(_AdaptiveFile, ABC):
     max_request_size: int | None = None
     """The most bytes a request may upload, if the storage limits it."""
 
+    last_part_completes: bool = False
+    """Whether the last part's upload makes the file visible, e.g. a resumable upload's last request.
+
+    `AdaptiveWritableTransaction` then holds that part back until commit, by
+    default. A storage completing an upload by a request of its own leaves it
+    False.
+    """
+
     mode: str = "wb"
     """The mode, as fsspec's files have it: "wb", or "xb" to create only."""
 

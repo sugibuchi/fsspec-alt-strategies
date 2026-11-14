@@ -364,7 +364,8 @@ strategy of file-level transactions. The package provides these:
   then, but the file's bytes are held locally.
 - `AdaptiveWritableTransaction` holds back an adaptive file's last request, which makes it visible, until commit. It
   costs nothing more than writing without a transaction, but needs a storage where an upload is invisible until
-  completed.
+  completed. Where the last part completes the upload, as in a resumable upload, the file's class declares
+  `last_part_completes = True`, and the transaction holds that part back too.
 
 A storage with a way of its own, such as a staged upload, subclasses `FileTransaction`.
 

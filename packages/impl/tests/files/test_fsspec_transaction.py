@@ -154,6 +154,7 @@ class _Resumable(_Parts):
     """Uploads parts in order, the last one making the file visible, as GCS does."""
 
     sequential = True
+    last_part_completes = True
 
     async def _upload_part(
         self, data: bytes, start: int, end: int, index: int, last: bool
@@ -174,7 +175,8 @@ def test_adaptive_holds_back_a_last_part_that_publishes(
     fs: SimulatedFileSystem, commit: bool
 ) -> None:
     file = _Resumable(fs, "f.bin")
-    f = TransactionFile(AdaptiveWritableTransaction(file, hold_last_part=True))
+    # Held back as the file's class declares, with no argument.
+    f = TransactionFile(AdaptiveWritableTransaction(file))
     f.write(_BIG)
     f.close()
     # All parts but the last are uploaded, and nothing is visible.
@@ -188,6 +190,16 @@ def test_adaptive_holds_back_a_last_part_that_publishes(
         f.discard()
         assert file.aborted
         assert not fs.exists("f.bin")
+
+
+def test_hold_last_part_given_overrides_the_files(fs: SimulatedFileSystem) -> None:
+    file = _Resumable(fs, "f.bin")
+    f = TransactionFile(AdaptiveWritableTransaction(file, hold_last_part=False))
+    f.write(_BIG)
+    f.close()
+    # The last part went with the others, making the file visible.
+    assert fs.cat_file("f.bin") == _BIG
+    f.commit()
 
 
 def test_adaptive_completes_the_upload_on_commit(fs: SimulatedFileSystem) -> None:
