@@ -25,11 +25,13 @@ from ._keys import _close, _dir, _dirs, _listing
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
+    from .handler import FlatFileOperationHandler
+
 __all__: list[str] = []
 
 
 def _flat_walk(
-    fs: Any,
+    handler: FlatFileOperationHandler,
     path: str,
     *,
     maxdepth: int | None = None,
@@ -80,7 +82,7 @@ def _flat_walk(
     another. One ``info`` for ``path``, if nothing is under it, holding a
     permit of the handler's ``operation_limit``. The listing holds none.
 
-    ``path`` is the directory the walk starts from on ``fs``. Its ``ils_recursive``
+    ``path`` is the directory the walk starts from on ``handler``. Its ``ils_recursive``
      lists every key below a directory, in name order, each key once,
     as an object store lists them. ``maxdepth`` of 1 yields only ``path``.
     ``topdown`` puts a directory before those below it. ``descend``, called with
@@ -108,7 +110,7 @@ def _flat_walk(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
     ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
         directories = _dirs_done(
-            fs,
+            handler,
             path,
             maxdepth=maxdepth,
             descend=descend,
@@ -157,7 +159,7 @@ def _flat_walk(
 
 
 async def _dirs_done(
-    fs: Any,
+    handler: FlatFileOperationHandler,
     path: str,
     *,
     maxdepth: int | None,
@@ -182,7 +184,7 @@ async def _dirs_done(
     # The directories open, the root first, each with its entries so far.
     open_: list[tuple[str, list[dict[str, Any]]]] = [(root, [])]
 
-    keys = _listing(fs, prefix, ils_kwargs=ils_kwargs)
+    keys = _listing(handler, prefix, ils_kwargs=ils_kwargs)
     try:
         while True:
             # Only the listing's own error is the walk's to handle: the
@@ -210,7 +212,6 @@ async def _dirs_done(
 
     if not under and root:
         # Nothing under it: a file, or missing, as _tree_walk raises for them.
-        handler = fs
         async with handler.operation_limit:
             entry = await handler.info(handler.entry(root))
         if entry["type"] != "directory":

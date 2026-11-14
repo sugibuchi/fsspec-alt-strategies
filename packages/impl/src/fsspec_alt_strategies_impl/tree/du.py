@@ -23,12 +23,14 @@ from .find import _find_listings
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    from .handler import TreeFileOperationHandler
+
 
 __all__: list[str] = []
 
 
 def _tree_du(
-    fs: Any,
+    handler: TreeFileOperationHandler,
     path: str,
     *,
     maxdepth: int | None = None,
@@ -57,7 +59,7 @@ def _tree_du(
     ``ils`` per directory instead, as the handler's ``operation_limit``
     allows. One ``info`` for ``path``, if a file.
 
-    ``path`` is the directory measured on ``fs``, by its ``ils`` and ``info``.
+    ``path`` is the directory measured on ``handler``, by its ``ils`` and ``info``.
     ``maxdepth`` of 1 counts only the files in ``path``. ``ils_kwargs`` go to
     each ``ils``, as fsspec's ``du`` passes its own on.
 
@@ -71,7 +73,7 @@ def _tree_du(
         op: Operation[dict[str, Any], DuState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         steps = _find_listings(
-            fs,
+            handler,
             path,
             maxdepth=maxdepth,
             ils_kwargs=ils_kwargs,

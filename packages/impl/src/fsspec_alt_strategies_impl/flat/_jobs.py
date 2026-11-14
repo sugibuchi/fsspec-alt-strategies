@@ -29,17 +29,21 @@ if TYPE_CHECKING:
 
     from ..common.jobs import _Roots
     from ..common.operation import Operation
+    from .handler import FlatFileOperationHandler
 
 
 class _FlatJobs(_Jobs):
     """The jobs of one operation, run while the keys under its roots are listed.
 
-    ``fs`` is the handler listed, by its ``ils_recursive`` and ``info``.
+    ``handler`` is the handler listed, by its ``ils_recursive`` and ``info``.
     ``ils_kwargs`` go to each ``ils_recursive``, a pattern's glob's too. With ``maxdepth``, the keys deeper than it are listed, as a prefix lists
     every key under it, but left out, as fsspec's ``_expand_path`` finds paths.
 
     A batch deletion runs by `_Jobs`'s `delete`, by the handler's ``rm_files``.
     """
+
+    handler: FlatFileOperationHandler
+    """The handler listed: a flat one's, which the flat strategies take."""
 
     def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
         return _flat_glob(
@@ -103,6 +107,6 @@ class _FlatJobs(_Jobs):
                 continue
 
             async with self.concurrency_limit:
-                entry = await self.handler.info(root)  # type: ignore[arg-type]
+                entry = await self.handler.info(root)
             if entry["type"] != "directory":
                 yield entry

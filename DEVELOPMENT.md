@@ -149,7 +149,7 @@ AsyncFileSystem                        fsspec's
 
 `FileOperationHandler` adds the `Strategy` mixin's methods, one per strategy: `walk`, `find`, `glob`, `du`, `rm`,
 `rm_files`, `cp` and `mv`. Each takes its strategy's arguments but the handler, which is `self`, and returns an operation, not
-started, which the filesystem runs. A copy or move takes the destination's handler, `dst_fs`.
+started, which the filesystem runs. A copy or move takes the destination's handler, `dst`.
 
 Each family's handler class implements them by its strategies, and adds the primitives they call:
 
@@ -311,8 +311,8 @@ no family, as a family's adaptation to its storage is its handler's.
 
 Each recursive method starts a private strategy of its family, e.g. `tree/rm.py`'s `_tree_rm`:
 
-- It takes the handler it works on: `_tree_rm(handler, path, maxdepth=...)`. A copy or move takes two, `src_fs` and
-  `dst_fs`, which are the same handler within one storage.
+- It takes the handler it works on: `_tree_rm(handler, path, maxdepth=...)`. A copy or move takes two, `src` and
+  `dst`, which are the same handler within one storage.
 - It reads what it needs from the handler: the primitives, `operation_limit` and `profile`, once open.
 - It takes no function but one: a copy's or a move's `cp_entry` or `mv_entry`, a `_Transfer`, taking the source's
   entry. Between two storages, it defaults to `common/transfer.py`'s `_across`.

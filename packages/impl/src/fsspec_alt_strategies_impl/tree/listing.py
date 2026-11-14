@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
 
     from ..common.handler import Entry, StorageHandler
+    from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
 
@@ -43,7 +44,11 @@ _HELD = 32 * _BATCH
 
 
 async def _tree_ils(
-    fs: Any, path: str, *, entry: Entry | None = None, **ils_kwargs: Any
+    handler: TreeFileOperationHandler,
+    path: str,
+    *,
+    entry: Entry | None = None,
+    **ils_kwargs: Any,
 ) -> AsyncGenerator[dict[str, Any]]:
     """List all below a directory depth first, by one ``ils`` per directory.
 
@@ -72,7 +77,6 @@ async def _tree_ils(
     ``path`` is listed by ``entry``, its entry, where given, e.g. as its parent's
     listing gave it, else by its path. ``ils_kwargs`` go to each ``ils``.
     """
-    handler = fs
     root = _trim(path)
     ahead = _Ahead(handler, ils_kwargs)
     # The directories being yielded, the root first: each is yielding one of the next.

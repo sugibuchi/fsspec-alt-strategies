@@ -35,6 +35,8 @@ from ._base import _FsspecHandler
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
+    from fsspec import AbstractFileSystem
+
     from fsspec_alt_strategies.profile import StorageProfile
     from fsspec_alt_strategies.states import RmState
 
@@ -102,7 +104,7 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
 
     def __init__(
         self,
-        fs: Any,
+        fs: AbstractFileSystem,
         *,
         rm_batch_size: int,
         operation_concurrency: int | asyncio.Semaphore,

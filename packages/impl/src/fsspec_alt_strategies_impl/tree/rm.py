@@ -24,13 +24,14 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
     from ..common.operation import Operation
+    from .handler import TreeFileOperationHandler
     from .walk import _Listing
 
 __all__: list[str] = []
 
 
 def _tree_rm(
-    fs: Any,
+    handler: TreeFileOperationHandler,
     path: str | Sequence[str],
     *,
     maxdepth: int | None = None,
@@ -111,7 +112,7 @@ def _tree_rm(
     ``rmdir``. A FileNotFoundError from ``rm_dir`` counts as
     deleted, as object stores have no directories to delete.
 
-    ``path`` is the directory deleted from ``fs``, as its ``ils`` takes it. A
+    ``path`` is the directory deleted from ``handler``, as its ``ils`` takes it. A
     file is deleted alone. A glob pattern, or a list of paths and patterns,
     deletes all they match. ``maxdepth`` of 1 deletes only what is in
     ``path``, and ``path`` if it is then empty. ``ils_kwargs`` go to each
@@ -122,9 +123,9 @@ def _tree_rm(
     ``rm_batch_size``, is less than 1.
     """
     _check_maxdepth(maxdepth)
-    _check_batch_size(_batch_size(fs))
+    _check_batch_size(_batch_size(handler))
     return _Deletion.operation(
-        fs=fs, path=path, maxdepth=maxdepth, ils_kwargs=ils_kwargs
+        handler=handler, path=path, maxdepth=maxdepth, ils_kwargs=ils_kwargs
     )
 
 
@@ -225,7 +226,7 @@ class _Deletion(_TreeJobs):
         if job.kind == "delete":
             return self.delete(job.paths)
         if job.kind == "tree":
-            return self.handler.rm_tree(job.source)  # type: ignore[attr-defined, no-any-return]
+            return self.handler.rm_tree(job.source)
         else:
             return self.handler.rmdir(job.source)
 

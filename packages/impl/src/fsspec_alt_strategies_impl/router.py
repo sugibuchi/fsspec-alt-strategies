@@ -1221,7 +1221,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
     @staticmethod
     def _handler_of(fs: AsyncFileSystem) -> FileOperationHandler:
         """The handler of a storage's filesystem, one the router made."""
-        return fs._handler  # type: ignore[attr-defined, no-any-return]
+        return fs._handler
 
     def _across(
         self, src: StorageHandler, dst: StorageHandler, *, move: bool = False

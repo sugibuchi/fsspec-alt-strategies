@@ -40,13 +40,14 @@ from .find import _find_listings
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
+    from .handler import TreeFileOperationHandler
     from .walk import _Listing
 
 __all__: list[str] = []
 
 
 def _tree_glob(
-    fs: Any,
+    handler: TreeFileOperationHandler,
     path: str | Sequence[str],
     *,
     maxdepth: int | None = None,
@@ -102,7 +103,7 @@ def _tree_glob(
     One ``info`` per pattern without wildcards, and per literal root directory
     walked that a pattern matches, e.g. that of ``data/**``.
 
-    ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``ils``
+    ``path`` is a pattern, or patterns, of paths on ``handler``, as its ``ils``
     takes them: a trailing "/" matches only directories. ``maxdepth`` is how
     deep a ``**`` goes, and ``withdirs`` whether directories can match, as with
     fsspec's ``_glob``. ``ils_kwargs`` go to each ``ils``, as fsspec's
@@ -127,14 +128,14 @@ def _tree_glob(
         op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         found: set[str] = set()
-        infos = _infos(fs, literals, op, found)
+        infos = _infos(handler, literals, op, found)
         async for entry in infos:
             yield entry
 
         for root, group in _walks(searches):
             if op.cancelling():
                 return
-            walk = _walk(fs, root, group, op, found, ils_kwargs)
+            walk = _walk(handler, root, group, op, found, ils_kwargs)
             async for match in walk:
                 yield match
 
@@ -156,7 +157,7 @@ def _walks(searches: list[_Search]) -> list[tuple[str, list[_Search]]]:
 
 
 async def _walk(
-    fs: Any,
+    handler: TreeFileOperationHandler,
     root: str,
     searches: list[_Search],
     op: Operation[dict[str, Any], GlobState],
@@ -170,7 +171,7 @@ async def _walk(
     # nothing. Its find includes the root directory itself, which few patterns
     # match.
     steps = _find_listings(
-        fs,
+        handler,
         root,
         maxdepth=None if None in depths else max(d for d in depths if d is not None),
         descend=lambda e: any(s.descend(e) for s in searches),

@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from fsspec import AbstractFileSystem
 
     from ._base import _FsspecHandler
+    from .flat import FsspecFlatHandler
+    from .tree import FsspecTreeHandler
 
 __all__ = ["FileSystemWrapper"]
 
@@ -53,7 +55,9 @@ class FileSystemWrapper(BaseFileSystem):
 
     _handler: _FsspecHandler  # type: ignore[assignment]
 
-    def __init__(self, handler: Any, **kwargs: Any) -> None:
+    def __init__(
+        self, handler: FsspecTreeHandler | FsspecFlatHandler, **kwargs: Any
+    ) -> None:
         super().__init__(handler, **kwargs)
 
         # The wrapped filesystem's paths, which its handler holds.

@@ -27,17 +27,18 @@ from .cp import _CopyOrMove
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
-    from ..common.handler import Entry, StoragePath
+    from ..common.handler import Entry, StorageHandler, StoragePath
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
+    from .handler import TreeFileOperationHandler
     from .walk import _Listing
 
 __all__: list[str] = []
 
 
 def _tree_mv(
-    src_fs: Any,
-    dst_fs: Any,
+    src: TreeFileOperationHandler,
+    dst: StorageHandler,
     path1: str | Sequence[str],
     path2: str,
     *,
@@ -74,8 +75,8 @@ def _tree_mv(
     go first. A directory is created at the destination before files are moved
     into it, and for each empty directory.
 
-    The destination is described by ``dst_fs`` and its ``profile``,
-    unknown if it has none. Within one storage, ``dst_fs`` is ``src_fs``, and
+    The destination is described by ``dst`` and its ``profile``,
+    unknown if it has none. Within one storage, ``dst`` is ``src``, and
     ``same_storage`` is True. Between two, ``mv_entry`` copies a file to the
     other storage, then deletes it: by default ``cp_entry``, then the source's
     ``rm_file``. A path may then go to the same path, or under it, and nothing
@@ -148,8 +149,8 @@ def _tree_mv(
     ``mv_tree`` are the source's, ``rm_dir`` its ``rmdir``, and ``dst_info``
     and ``dst_makedirs`` the destination's ``info`` and ``makedirs``.
 
-    ``src_fs`` is the handler moved from, and ``dst_fs`` the one moved to,
-    ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
+    ``src`` is the handler moved from, and ``dst`` the one moved to,
+    ``src`` again within one storage. ``path1`` is a directory, a file, a
     glob pattern, or a list of them, as the source's ``ils`` takes paths.
     ``mv_entry(entry, destination)`` moves a file by its source entry, as its
     listing gave it: by default, the source's ``mv_file`` within one storage.
@@ -157,7 +158,7 @@ def _tree_mv(
     Between two, it defaults to ``cp_entry(entry, destination)``, then the
     source's ``rm_file``. ``cp_entry`` copies a file, as `_tree_cp` takes it:
     by default `transfer._across`. Given ``mv_entry``, a move uses no
-    ``cp_entry``. ``same_storage`` is whether ``dst_fs`` is ``src_fs``,
+    ``cp_entry``. ``same_storage`` is whether ``dst`` is ``src``,
     unless given.
     ``maxdepth`` of 1 moves only the files in ``path1``. ``root_entry`` is as
     `_tree_cp` takes it: a single file moved so costs the ``dst_info`` of
@@ -170,12 +171,10 @@ def _tree_mv(
     ValueError if ``maxdepth`` is less than 1. `_tree_cp` does the same, keeping the source.
     """
     _check_maxdepth(maxdepth)
-    _, mv_entry, same_storage = _moves_of(
-        src_fs, dst_fs, cp_entry, mv_entry, same_storage
-    )
+    _, mv_entry, same_storage = _moves_of(src, dst, cp_entry, mv_entry, same_storage)
     return _Move.operation(
-        fs=src_fs,
-        dst_fs=dst_fs,
+        handler=src,
+        dst=dst,
         path1=path1,
         path2=path2,
         same_storage=same_storage,
@@ -264,7 +263,7 @@ class _Move(_CopyOrMove):
             return super().run(job)
 
     def transfer_whole(self, entry: Entry, destination: StoragePath) -> Awaitable[None]:
-        return self.handler.mv_tree(entry, destination)  # type: ignore[attr-defined, no-any-return]
+        return self.handler.mv_tree(entry, destination)
 
     async def transfer_file(
         self, entry: dict[str, Any], destination: StoragePath

@@ -25,12 +25,13 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
     from ..common.handler import StorageHandler
+    from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
 
 
 def _tree_find(
-    fs: Any,
+    handler: TreeFileOperationHandler,
     path: str,
     *,
     maxdepth: int | None = None,
@@ -62,7 +63,7 @@ def _tree_find(
     allows. One ``info`` more for ``path`` itself, if a file, or a directory
     with ``withdirs``.
 
-    ``path`` is the directory searched on ``fs``, by its ``ils`` and ``info``.
+    ``path`` is the directory searched on ``handler``, by its ``ils`` and ``info``.
     ``maxdepth`` of 1 finds only the files in ``path``. ``withdirs`` finds
     directories too, ``path`` included. ``ils_kwargs`` go to each ``ils``, as
     fsspec's ``find`` passes its own on.
@@ -78,7 +79,7 @@ def _tree_find(
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         root = _trim(path)
         steps = _find_listings(
-            fs,
+            handler,
             root,
             maxdepth=maxdepth,
             ils_kwargs=ils_kwargs,
@@ -112,7 +113,7 @@ def _tree_find(
 
 
 async def _find_listings(
-    fs: Any,
+    handler: TreeFileOperationHandler,
     path: str,
     *,
     maxdepth: int | None = None,
@@ -138,7 +139,6 @@ async def _find_listings(
     So the strategies filter and count it as any entry, but count no directory
     listed for it.
     """
-    handler = fs
     root = _trim(path)
     listings = _chunks(
         handler,

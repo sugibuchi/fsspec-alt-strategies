@@ -85,7 +85,7 @@ code: read it before adding a strategy or a handler.
 ### Strategies
 
 - A strategy takes the handler it works on, never its methods as functions: `_tree_rm(handler, path, maxdepth=...)`.
-  A copy or move takes `src_fs` and `dst_fs`, handlers, the same within one storage.
+  A copy or move takes `src` and `dst`, handlers, the same within one storage.
 - The only functions a strategy takes are a copy's `cp_entry`, and a move's `cp_entry` and `mv_entry`, each a
   `common.jobs._Transfer` taking the source's entry. Between two storages, `cp_entry` defaults to
   `common.transfer._across`, which streams the data and leaves no part of a file. A move's `mv_entry` defaults to

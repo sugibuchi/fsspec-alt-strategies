@@ -29,17 +29,18 @@ from ._jobs import _TreeJobs
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
-    from ..common.handler import Entry, StoragePath
+    from ..common.handler import Entry, StorageHandler, StoragePath
     from ..common.jobs import _Roots, _Transfer
     from ..common.operation import Operation
+    from .handler import TreeFileOperationHandler
     from .walk import _Listing
 
 __all__: list[str] = []
 
 
 def _tree_cp(
-    src_fs: Any,
-    dst_fs: Any,
+    src: TreeFileOperationHandler,
+    dst: StorageHandler,
     path1: str | Sequence[str],
     path2: str,
     *,
@@ -86,8 +87,8 @@ def _tree_cp(
     without ``maxdepth``: fsspec places them by the common prefix of the files
     found, which moves them when all are in one subdirectory.
 
-    The destination is described by ``dst_fs`` and its ``profile``,
-    unknown if it has none. Within one storage, ``dst_fs`` is ``src_fs``, and
+    The destination is described by ``dst`` and its ``profile``,
+    unknown if it has none. Within one storage, ``dst`` is ``src``, and
     ``same_storage`` is True: a path copied onto itself, or under itself, is
     refused. Between two, ``cp_entry`` copies from one to the other, by default
     `transfer._across`, its data through the caller. A
@@ -157,12 +158,12 @@ def _tree_cp(
     ``cp_tree`` are the source's, and ``dst_info``, ``dst_makedirs`` and
     ``dst_rm_file`` the destination's ``info``, ``makedirs`` and ``rm_file``.
 
-    ``src_fs`` is the handler copied from, and ``dst_fs`` the one copied
-    to, ``src_fs`` again within one storage. ``path1`` is a directory, a file,
+    ``src`` is the handler copied from, and ``dst`` the one copied
+    to, ``src`` again within one storage. ``path1`` is a directory, a file,
     a glob pattern, or a list of them, as the source's ``ils`` takes paths.
     ``cp_entry(entry, destination)`` copies a file: by default, the source's
     ``cp_file`` within one storage, and `transfer._across` between two. ``same_storage`` is
-    whether ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 copies
+    whether ``dst`` is ``src``, unless given. ``maxdepth`` of 1 copies
     only the files in ``path1``. ``ils_kwargs`` go to each of the source's
     ``ils``, a pattern's glob's too.
 
@@ -171,10 +172,10 @@ def _tree_cp(
     ``maxdepth`` is less than 1. `_tree_mv` does the same, deleting the source as it goes.
     """
     _check_maxdepth(maxdepth)
-    cp_entry, same_storage = _transfer_of(src_fs, dst_fs, cp_entry, same_storage)
+    cp_entry, same_storage = _transfer_of(src, dst, cp_entry, same_storage)
     return _Copy.operation(
-        fs=src_fs,
-        dst_fs=dst_fs,
+        handler=src,
+        dst=dst,
         path1=path1,
         path2=path2,
         same_storage=same_storage,
@@ -188,7 +189,7 @@ def _tree_cp(
 class _CopyOrMove(_CopyJobs, _TreeJobs):
     """The jobs of a copy or a move: a directory made where needed, and one per file.
 
-    The tree walked is the source's, ``fs``. A file's job waits for its
+    The tree walked is the source's, ``handler``. A file's job waits for its
     destination directory, when the storage needs it. A subclass says how a file
     goes, in `transfer_file`.
 
@@ -455,4 +456,4 @@ class _Copy(_CopyOrMove):
         await self.copy_file(self.cp_entry, entry, destination)
 
     def transfer_whole(self, entry: Entry, destination: StoragePath) -> Awaitable[None]:
-        return self.handler.cp_tree(entry, destination)  # type: ignore[attr-defined, no-any-return]
+        return self.handler.cp_tree(entry, destination)

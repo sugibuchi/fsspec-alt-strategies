@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import AsyncIterator
 
+    from fsspec import AbstractFileSystem
     from fsspec.callbacks import Callback
 
     from fsspec_alt_strategies.profile import StorageProfile
@@ -36,12 +37,12 @@ if TYPE_CHECKING:
 __all__: list[str] = []
 
 
-def _unwrapped(fs: Any) -> Any:
+def _unwrapped(fs: AbstractFileSystem) -> AbstractFileSystem:
     """A wrapped filesystem, as a monitor's `Call` names it: one of this package's names its own, e.g. a wrapper's."""
     return fs._unwrapped() if isinstance(fs, BaseFileSystem) else fs
 
 
-def _async_impl(fs: Any) -> bool:
+def _async_impl(fs: AbstractFileSystem) -> bool:
     """Whether a filesystem's async methods work: its ``async_impl``, and that of the one it chains over.
 
     A filesystem chained over another, e.g. fsspec's ``DirFileSystem`` in its
@@ -69,7 +70,7 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
 
     def __init__(
         self,
-        fs: Any,
+        fs: AbstractFileSystem,
         *,
         operation_concurrency: int | asyncio.Semaphore,
         io_concurrency: int | asyncio.Semaphore,

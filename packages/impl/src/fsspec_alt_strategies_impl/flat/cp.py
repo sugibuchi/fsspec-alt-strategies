@@ -24,16 +24,17 @@ if TYPE_CHECKING:
 
     from fsspec_alt_strategies.states import CpState
 
-    from ..common.handler import StoragePath
+    from ..common.handler import StorageHandler, StoragePath
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
+    from .handler import FlatFileOperationHandler
 
 __all__: list[str] = []
 
 
 def _flat_cp(
-    src_fs: Any,
-    dst_fs: Any,
+    src: FlatFileOperationHandler,
+    dst: StorageHandler,
     path1: str | Sequence[str],
     path2: str,
     *,
@@ -55,9 +56,9 @@ def _flat_cp(
     The keys are listed as `_flat_find` lists them, and each is copied by one
     ``cp_entry`` as soon as the listing gives it.
 
-    The destination is described by ``dst_fs`` and its ``profile``,
+    The destination is described by ``dst`` and its ``profile``,
     unknown if it has none, and may be flat or a tree. Within one storage,
-    ``dst_fs`` is ``src_fs``, and ``same_storage`` is True: a path copied onto
+    ``dst`` is ``src``, and ``same_storage`` is True: a path copied onto
     itself, or under itself, is refused. Between two, ``cp_entry`` copies from
     one to the other, by default `transfer._across`, its data through the
     caller. A path may then go to the same path, or under it.
@@ -121,13 +122,13 @@ def _flat_cp(
     source's ``ils_recursive``, and ``dst_info``, ``dst_makedirs`` and
     ``dst_rm_file`` the destination's ``info``, ``makedirs`` and ``rm_file``.
 
-    ``src_fs`` is the handler copied from, and ``dst_fs`` the one copied
-    to, ``src_fs`` again within one storage. ``path1`` is a directory, a file,
+    ``src`` is the handler copied from, and ``dst`` the one copied
+    to, ``src`` again within one storage. ``path1`` is a directory, a file,
     a glob pattern, or a list of them, as the source's ``ils`` takes paths.
     ``cp_entry(entry, destination)`` copies a file: by default, the source's
     ``cp_file`` within one storage, and `transfer._across` between two.
     ``same_storage`` is
-    whether ``dst_fs`` is ``src_fs``, unless given. ``maxdepth`` of 1 copies
+    whether ``dst`` is ``src``, unless given. ``maxdepth`` of 1 copies
     only the keys right in ``path1``. ``ils_kwargs`` go to each of the
     source's ``ils_recursive``, a pattern's glob's too.
 
@@ -136,10 +137,10 @@ def _flat_cp(
     ``maxdepth`` is less than 1. `_flat_mv` does the same, deleting the sources as it goes.
     """
     _check_maxdepth(maxdepth)
-    cp_entry, same_storage = _transfer_of(src_fs, dst_fs, cp_entry, same_storage)
+    cp_entry, same_storage = _transfer_of(src, dst, cp_entry, same_storage)
     return _Copy.operation(
-        fs=src_fs,
-        dst_fs=dst_fs,
+        handler=src,
+        dst=dst,
         path1=path1,
         path2=path2,
         same_storage=same_storage,
@@ -153,7 +154,7 @@ def _flat_cp(
 class _CopyOrMove(_CopyJobs, _FlatJobs):
     """The jobs of a copy or a move: a directory made where needed, and one per key.
 
-    The keys listed are the source's, ``fs``. A key's job waits for its
+    The keys listed are the source's, ``handler``. A key's job waits for its
     destination directory, when the destination needs it. The keys of one
     directory come apart in the listing, so the directories made are
     remembered, and each is made once. A subclass says how a key goes, in `transfer_file`.

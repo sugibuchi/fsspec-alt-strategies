@@ -35,7 +35,7 @@ if TYPE_CHECKING:
         WalkState,
     )
 
-    from .handler import Entry
+    from .handler import Entry, StorageHandler
     from .jobs import _Transfer
     from .operation import Operation
 
@@ -47,7 +47,7 @@ class Strategy(ABC):
 
     Each takes the arguments of a family's strategy, e.g. ``_tree_walk``'s,
     without the handler it works on: the handler is ``self``. A copy or move
-    takes the destination's handler, ``dst_fs``, ``self`` again within one
+    takes the destination's handler, ``dst``, ``self`` again within one
     storage. Each returns an operation, not started: the filesystem runs it.
 
     Paths come as the filesystem verified them, without a protocol. Each
@@ -233,7 +233,7 @@ class Strategy(ABC):
     @abstractmethod
     def cp(
         self,
-        dst_fs: Any,
+        dst: StorageHandler,
         path1: str | Sequence[str],
         path2: str,
         *,
@@ -247,7 +247,7 @@ class Strategy(ABC):
 
         Parameters
         ----------
-        dst_fs : FileOperationHandler
+        dst : FileOperationHandler
             The handler copied to: ``self`` within one storage.
         path1 : str or sequence of str
             A directory, a file, a glob pattern, or a list of them.
@@ -257,7 +257,7 @@ class Strategy(ABC):
             Copies a file by its source entry: by default the source's
             ``cp_file`` within one storage, else a stream between the two.
         same_storage : bool, optional
-            Whether ``dst_fs`` is ``self``, unless given.
+            Whether ``dst`` is ``self``, unless given.
         maxdepth : int, optional
             The levels copied below each path.
         root_entry : dict, optional
@@ -274,7 +274,7 @@ class Strategy(ABC):
     @abstractmethod
     def mv(
         self,
-        dst_fs: Any,
+        dst: StorageHandler,
         path1: str | Sequence[str],
         path2: str,
         *,
@@ -289,7 +289,7 @@ class Strategy(ABC):
 
         Parameters
         ----------
-        dst_fs : FileOperationHandler
+        dst : FileOperationHandler
             The handler moved to: ``self`` within one storage.
         path1 : str or sequence of str
             A directory, a file, a glob pattern, or a list of them.
@@ -301,7 +301,7 @@ class Strategy(ABC):
             Moves a file by its source entry, where the move renames: by
             default the source's ``mv_file`` within one storage.
         same_storage : bool, optional
-            Whether ``dst_fs`` is ``self``, unless given.
+            Whether ``dst`` is ``self``, unless given.
         maxdepth : int, optional
             The levels moved below each path.
         root_entry : dict, optional

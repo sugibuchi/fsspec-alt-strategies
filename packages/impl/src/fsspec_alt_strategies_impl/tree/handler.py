@@ -39,7 +39,7 @@ if TYPE_CHECKING:
         WalkState,
     )
 
-    from ..common.handler import Entry, StoragePath
+    from ..common.handler import Entry, StorageHandler, StoragePath
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
 
@@ -195,7 +195,7 @@ class TreeFileOperationHandler(FileOperationHandler):
 
     def cp(
         self,
-        dst_fs: Any,
+        dst: StorageHandler,
         path1: str | Sequence[str],
         path2: str,
         *,
@@ -208,7 +208,7 @@ class TreeFileOperationHandler(FileOperationHandler):
         """`_tree_cp` from this handler."""
         return _tree_cp(
             self,
-            dst_fs,
+            dst,
             path1,
             path2,
             cp_entry=cp_entry,
@@ -220,7 +220,7 @@ class TreeFileOperationHandler(FileOperationHandler):
 
     def mv(
         self,
-        dst_fs: Any,
+        dst: StorageHandler,
         path1: str | Sequence[str],
         path2: str,
         *,
@@ -234,7 +234,7 @@ class TreeFileOperationHandler(FileOperationHandler):
         """`_tree_mv` from this handler."""
         return _tree_mv(
             self,
-            dst_fs,
+            dst,
             path1,
             path2,
             cp_entry=cp_entry,

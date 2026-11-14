@@ -28,19 +28,23 @@ if TYPE_CHECKING:
 
     from ..common.jobs import _Roots
     from ..common.operation import Operation
+    from .handler import TreeFileOperationHandler
     from .walk import _Listing
 
 
 class _TreeJobs(_Jobs):
-    """The jobs of one operation, run while the tree of ``fs`` is walked.
+    """The jobs of one operation, run while the tree of ``handler`` is walked.
 
-    ``fs`` is the handler walked, by its ``ils`` and ``info``, each
+    ``handler`` is the handler walked, by its ``ils`` and ``info``, each
     request holding a permit of its ``operation_limit``. ``ils_kwargs`` go to
     each ``ils``, a pattern's glob's too. With ``maxdepth``, the
     walk lists no directory deeper than it, as fsspec's ``_expand_path`` finds
     paths. Each subdirectory the walk leaves unlisted goes to `at_limit`, as
     fsspec finds it, but not what is in it.
     """
+
+    handler: TreeFileOperationHandler
+    """The handler walked: a tree's, which the tree strategies take."""
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

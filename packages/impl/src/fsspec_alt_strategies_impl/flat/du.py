@@ -23,11 +23,13 @@ from .find import _find_entries
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    from .handler import FlatFileOperationHandler
+
 __all__: list[str] = []
 
 
 def _flat_du(
-    fs: Any,
+    handler: FlatFileOperationHandler,
     path: str,
     *,
     maxdepth: int | None = None,
@@ -54,7 +56,7 @@ def _flat_du(
     another. One ``info`` for ``path``, if nothing is under it, holding a
     permit of the handler's ``operation_limit``. The listing holds none.
 
-    ``path`` is the directory measured on ``fs``. Its ``ils_recursive`` lists
+    ``path`` is the directory measured on ``handler``. Its ``ils_recursive`` lists
     every key below a directory, in name order, each key once. ``maxdepth`` of
     1 counts only the files in ``path``, though the listing still lists every
     key under it. ``ils_kwargs`` go to the ``ils_recursive``, as fsspec's
@@ -69,7 +71,7 @@ def _flat_du(
         op: Operation[dict[str, Any], DuState],
     ) -> AsyncGenerator[dict[str, Any]]:
         steps = _find_entries(
-            fs,
+            handler,
             path,
             maxdepth=maxdepth,
             ils_kwargs=ils_kwargs,

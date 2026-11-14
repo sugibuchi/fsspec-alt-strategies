@@ -25,12 +25,13 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Sequence
 
     from ..common.operation import Operation
+    from .handler import FlatFileOperationHandler
 
 __all__: list[str] = []
 
 
 def _flat_rm(
-    fs: Any,
+    handler: FlatFileOperationHandler,
     path: str | Sequence[str],
     *,
     maxdepth: int | None = None,
@@ -75,7 +76,7 @@ def _flat_rm(
     Each request but the listing holds a permit of the filesystem's
     ``operation_limit`` while it runs.
 
-    ``path`` is the directory deleted from ``fs``, as its ``ils`` takes
+    ``path`` is the directory deleted from ``handler``, as its ``ils`` takes
     paths. A file is deleted alone. A glob pattern, or a list of paths and
     patterns, deletes all they match. ``maxdepth`` of 1 deletes only the keys
     right in ``path``. The filesystem's ``rm_files`` takes a key missing as
@@ -86,11 +87,11 @@ def _flat_rm(
     `RmState`. The call raises ValueError if ``rm_batch_size`` or ``maxdepth``
     is less than 1.
     """
-    _check_batch_size(_batch_size(fs))
+    _check_batch_size(_batch_size(handler))
     _check_maxdepth(maxdepth)
 
     return _Deletion.operation(
-        fs=fs, path=path, maxdepth=maxdepth, ils_kwargs=ils_kwargs
+        handler=handler, path=path, maxdepth=maxdepth, ils_kwargs=ils_kwargs
     )
 
 

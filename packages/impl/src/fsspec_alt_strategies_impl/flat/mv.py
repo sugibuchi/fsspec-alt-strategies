@@ -27,15 +27,16 @@ from .cp import _Copy, _CopyOrMove
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Sequence
 
-    from ..common.handler import StoragePath
+    from ..common.handler import StorageHandler, StoragePath
     from ..common.jobs import _Transfer
+    from .handler import FlatFileOperationHandler
 
 __all__: list[str] = []
 
 
 def _flat_mv(
-    src_fs: Any,
-    dst_fs: Any,
+    src: FlatFileOperationHandler,
+    dst: StorageHandler,
     path1: str | Sequence[str],
     path2: str,
     *,
@@ -68,7 +69,7 @@ def _flat_mv(
     which is right on any storage: about one request per key either way, but
     a rename copies no data.
 
-    The destination is described by ``dst_fs`` and its profile, as with
+    The destination is described by ``dst`` and its profile, as with
     `_flat_cp`. Between two storages, ``same_storage`` is False, and
     ``cp_entry`` copies to the other storage. ``rm_files`` always deletes the
     source's.
@@ -100,8 +101,8 @@ def _flat_mv(
     Requests: as `_flat_cp`, with one ``mv_entry`` per key instead of its
     ``cp_entry``, or with one ``rm_files`` more per batch.
 
-    ``src_fs`` is the handler moved from, and ``dst_fs`` the one moved to,
-    ``src_fs`` again within one storage. ``path1`` is a directory, a file, a
+    ``src`` is the handler moved from, and ``dst`` the one moved to,
+    ``src`` again within one storage. ``path1`` is a directory, a file, a
     glob pattern, or a list of them, as the source's ``ils`` takes paths.
     ``path2`` places them as `_flat_cp` does. ``cp_entry(entry, destination)``
     copies a file by its source entry when the move copies: by default, the
@@ -109,7 +110,7 @@ def _flat_mv(
     two. ``mv_entry(entry, destination)`` moves one when the move renames: by
     default, the source's ``mv_file``. Between two storages, nothing is
     renamed, and ``mv_entry`` is not used: the copies' sources are deleted in
-    batches instead. ``same_storage`` is whether ``dst_fs`` is ``src_fs``,
+    batches instead. ``same_storage`` is whether ``dst`` is ``src``,
     unless given. ``maxdepth`` of 1 moves
     only the keys right in ``path1``. ``root_entry`` is as `_flat_cp` takes it.
     ``ils_kwargs`` go to each of the source's ``ils_recursive``, a pattern's
@@ -121,11 +122,11 @@ def _flat_mv(
     """
     _check_maxdepth(maxdepth)
     cp_entry, mv_entry, same_storage = _moves_of(
-        src_fs, dst_fs, cp_entry, mv_entry, same_storage
+        src, dst, cp_entry, mv_entry, same_storage
     )
     options = {
-        "fs": src_fs,
-        "dst_fs": dst_fs,
+        "handler": src,
+        "dst": dst,
         "path1": path1,
         "path2": path2,
         "same_storage": same_storage,
@@ -134,13 +135,13 @@ def _flat_mv(
         "ils_kwargs": ils_kwargs,
     }
 
-    _check_batch_size(_batch_size(src_fs))
+    _check_batch_size(_batch_size(src))
 
     async def run(op: Operation[Any, MvState]) -> AsyncGenerator[Any]:
         # A rename wins only where the storage is known to rename: the profile,
         # awaited, chooses the jobs.
-        await dst_fs.open()
-        renames = same_storage and dst_fs.profile.renames_files is True
+        await dst.open()
+        renames = same_storage and dst.profile.renames_files is True
         jobs: _CopyOrMove = (
             _Rename(op=op, mv_entry=mv_entry, **options)
             if renames

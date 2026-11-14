@@ -23,11 +23,13 @@ from ._keys import _close, _dir, _dirs, _listing, _new
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
+    from .handler import FlatFileOperationHandler
+
 __all__: list[str] = []
 
 
 def _flat_find(
-    fs: Any,
+    handler: FlatFileOperationHandler,
     path: str,
     *,
     maxdepth: int | None = None,
@@ -61,7 +63,7 @@ def _flat_find(
     with ``withdirs``, holding a permit of the filesystem's
     ``operation_limit``. The listing holds none.
 
-    ``path`` is the directory searched on ``fs``. Its ``ils_recursive`` lists
+    ``path`` is the directory searched on ``handler``. Its ``ils_recursive`` lists
     every key below a directory, in name order, each key once. ``maxdepth`` of
     1 finds only the files in ``path``, though the listing still lists every
     key under it. ``withdirs`` finds directories too, ``path`` included.
@@ -77,7 +79,7 @@ def _flat_find(
         op: Operation[dict[str, Any], FindState],
     ) -> AsyncGenerator[dict[str, Any]]:
         steps = _find_entries(
-            fs,
+            handler,
             path,
             maxdepth=maxdepth,
             withdirs=withdirs,
@@ -94,7 +96,7 @@ def _flat_find(
 
 
 async def _find_entries(
-    fs: Any,
+    handler: FlatFileOperationHandler,
     path: str,
     *,
     maxdepth: int | None = None,
@@ -123,7 +125,7 @@ async def _find_entries(
     # The directories of the key listed last.
     before: list[str] = []
 
-    entries = _listing(fs, prefix, ils_kwargs=ils_kwargs)
+    entries = _listing(handler, prefix, ils_kwargs=ils_kwargs)
     try:
         async for entry in entries:
             under = True
@@ -143,8 +145,6 @@ async def _find_entries(
 
     if not root or (under and not withdirs):
         return
-
-    handler = fs
     try:
         async with handler.operation_limit:
             entry = await handler.info(handler.entry(root))

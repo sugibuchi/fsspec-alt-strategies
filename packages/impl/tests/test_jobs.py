@@ -45,7 +45,7 @@ class _Toy(_Jobs):
         failing: frozenset[str] = frozenset(),
         delay: float = 0.01,
     ) -> None:
-        super().__init__(fs=SimpleNamespace(operation_limit=limit), op=op)
+        super().__init__(handler=SimpleNamespace(operation_limit=limit), op=op)
         self.batches = batches
         self.failing = failing
         self.delay = delay
@@ -253,8 +253,8 @@ class _Copy(_CopyJobs):
             SimulatedFileSystem(hierarchical=True, asynchronous=True), info=_missing
         )
         super().__init__(
-            fs=storage,
-            dst_fs=storage,
+            handler=storage,
+            dst=storage,
             path1=path1,
             path2=path2,
             same_storage=True,

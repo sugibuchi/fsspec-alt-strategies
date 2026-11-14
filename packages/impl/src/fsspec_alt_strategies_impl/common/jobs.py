@@ -26,7 +26,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from contextlib import aclosing
 from glob import has_magic
-from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar, cast
 
 from fsspec.utils import common_prefix
 
@@ -68,28 +68,29 @@ _T = TypeVar("_T")
 
 
 def _transfer_of(
-    src_fs: Any,
-    dst_fs: Any,
+    src: StorageHandler,
+    dst: StorageHandler,
     cp_entry: _Transfer | None,
     same_storage: bool | None,
 ) -> tuple[_Transfer, bool]:
     """How a copy sends each file, and whether it stays in one storage.
 
-    ``same_storage`` is whether ``dst_fs`` is ``src_fs``, unless given. Unless
+    ``same_storage`` is whether ``dst`` is ``src``, unless given. Unless
     ``cp_entry`` is given, a file goes by the source's own ``cp_file`` within
     one storage, and by `transfer._across` between two, its data through the
     caller.
     """
     if same_storage is None:
-        same_storage = src_fs is dst_fs
+        same_storage = src is dst
     if cp_entry is None:
-        cp_entry = src_fs.cp_file if same_storage else _across(src_fs, dst_fs)
+        # A primitive takes a StoragePath, which the strategies pass: a _Transfer.
+        cp_entry = cast("_Transfer", src.cp_file) if same_storage else _across(src, dst)
     return cp_entry, same_storage
 
 
 def _moves_of(
-    src_fs: Any,
-    dst_fs: Any,
+    src: StorageHandler,
+    dst: StorageHandler,
     cp_entry: _Transfer | None,
     mv_entry: _Transfer | None,
     same_storage: bool | None,
@@ -101,10 +102,10 @@ def _moves_of(
     ``cp_entry``, then the source's ``rm_file``: a file whose copy failed is
     kept. So a caller's copy, e.g. a cloud's copy from a URL, moves too.
     """
-    cp_entry, same_storage = _transfer_of(src_fs, dst_fs, cp_entry, same_storage)
+    cp_entry, same_storage = _transfer_of(src, dst, cp_entry, same_storage)
     if mv_entry is None:
         if same_storage:
-            mv_entry = src_fs.mv_file
+            mv_entry = cast("_Transfer", src.mv_file)
         else:
             copy = cp_entry
 
@@ -112,7 +113,7 @@ def _moves_of(
                 entry: dict[str, Any], path2: str, *, missing: bool = False
             ) -> None:
                 await copy(entry, path2, missing=missing)
-                await src_fs.rm_file(entry)
+                await src.rm_file(entry)
 
             mv_entry = move
 
@@ -272,7 +273,7 @@ def _keys_of(paths: tuple[str, ...]) -> str:
 
 
 class _Jobs(ABC):
-    """The jobs of one operation on ``fs``, run while what it changes is found.
+    """The jobs of one operation on ``handler``, run while what it changes is found.
 
     Each request holds a permit of the filesystem's ``operation_limit``. The
     constructor takes keywords only, and passes on what it does not take, so
@@ -289,14 +290,14 @@ class _Jobs(ABC):
     def __init__(
         self,
         *,
-        fs: Any,
+        handler: StorageHandler,
         op: Operation[Any, Any],
         maxdepth: int | None = None,
         ils_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        self.handler: StorageHandler = fs
+        self.handler: StorageHandler = handler
         self.maxdepth = maxdepth
 
         # The options of each listing the jobs make, a pattern's glob too.
@@ -402,7 +403,7 @@ class _Jobs(ABC):
 
     @abstractmethod
     def glob(self, pattern: str | Sequence[str]) -> Operation[Any, Any]:
-        """The family's glob of ``pattern`` on ``fs``, within ``maxdepth``."""
+        """The family's glob of ``pattern`` on ``handler``, within ``maxdepth``."""
 
     async def glob_roots(self, pattern: str | Sequence[str]) -> _Roots:
         """The roots matching glob patterns, noting those a pattern matched.
@@ -607,13 +608,13 @@ class _Jobs(ABC):
 
 
 class _CopyJobs(_Jobs):
-    """The jobs of a copy or a move: where each path goes, onto ``dst_fs``.
+    """The jobs of a copy or a move: where each path goes, onto ``dst``.
 
     A path under ``prefix`` goes to the same place under ``base``. For a list,
     a path under a root of ``places`` goes there instead. `prepare` sets them,
     before `target` is used.
 
-    ``dst_fs`` is the handler copied to, described by its profile, unknown
+    ``dst`` is the handler copied to, described by its profile, unknown
     if it has none. Within one storage, it is the source, and ``same_storage``
     is True: a path copied onto itself, or under itself, is refused. Between two, a path may go to the same path, or under
     it, as that is another storage's. The paths are compared folded on a storage
@@ -632,7 +633,7 @@ class _CopyJobs(_Jobs):
         *,
         path1: str | Sequence[str],
         path2: str,
-        dst_fs: Any,
+        dst: StorageHandler,
         same_storage: bool,
         root_entry: dict[str, Any] | None = None,
         **kwargs: Any,
@@ -647,7 +648,7 @@ class _CopyJobs(_Jobs):
         # The profile is the destination's, as what a copy saves depends on
         # where it writes. Within one storage, it is the source's too. Unknown
         # until setup awaits it.
-        self.dst: StorageHandler = dst_fs
+        self.dst: StorageHandler = dst
         self.profile = UNKNOWN
         self.implicit_directories = False
         self.parents_required = True

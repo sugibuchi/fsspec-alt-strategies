@@ -44,12 +44,13 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Collection, Iterable
 
     from ..common.handler import Entry, StorageHandler
+    from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
 
 
 def _tree_walk(
-    fs: Any,
+    handler: TreeFileOperationHandler,
     path: str,
     *,
     maxdepth: int | None = None,
@@ -93,7 +94,7 @@ def _tree_walk(
     answers with one per directory.
 
     ``path`` is the directory the walk starts from, listed by the ``ils`` of
-    ``fs``. ``maxdepth`` of 1 lists only ``path``. ``topdown`` puts a directory
+    ``handler``. ``maxdepth`` of 1 lists only ``path``. ``topdown`` puts a directory
     before those below it. ``descend``, called with the entry of each
     subdirectory found, lets the walk list it only if it returns True.
     ``ils_kwargs`` go to each ``ils``, as fsspec's ``walk`` passes its own on.
@@ -125,7 +126,7 @@ def _tree_walk(
         held: dict[str, list[dict[str, Any]]] = {}
         bottom_up = None if topdown else _BottomUp()
         chunks = _chunks(
-            fs,
+            handler,
             path,
             maxdepth=maxdepth,
             descend=walked,
@@ -254,7 +255,7 @@ _CHUNK_SIZE = 1000
 
 
 async def _chunks(
-    fs: Any,
+    handler: TreeFileOperationHandler,
     path: str | Entry | Collection[str | Entry],
     *,
     maxdepth: int | None = None,
@@ -284,8 +285,8 @@ async def _chunks(
     ``_expand_path`` walks them.
 
     The parts of a directory come in order, but those of several directories
-    mix, as the listings run at once. Each listing, by ``fs._ils`` with
-    ``ils_kwargs``, holds a permit of ``fs.operation_limit`` while it runs.
+    mix, as the listings run at once. Each listing, by ``handler._ils`` with
+    ``ils_kwargs``, holds a permit of ``handler.operation_limit`` while it runs.
 
     Once ``stopping`` returns true, no new listing starts, and those in flight
     stop after their current part: a directory stopped so has no last part.
@@ -300,7 +301,6 @@ async def _chunks(
     is.
     """
     _check_maxdepth(maxdepth)
-    handler = fs
 
     # Each directory to list by the entry its listing gave, e.g. with the
     # storage's id, else by its path: a root given as a path, verified.

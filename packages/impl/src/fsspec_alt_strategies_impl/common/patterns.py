@@ -30,11 +30,12 @@ from .paths import _trim
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    from .handler import StorageHandler
     from .operation import Operation
 
 
 async def _infos(
-    fs: Any,
+    handler: StorageHandler,
     paths: list[str],
     op: Operation[dict[str, Any], GlobState],
     found: set[str],
@@ -46,7 +47,6 @@ async def _infos(
     as the answers arrive. Once the operation is cancelled, no new ``_info``
     starts, but those running are yielded.
     """
-    handler = fs
     requests: _Queue[str] = _Queue(handler.operation_limit)
     requests.waiting.extend(dict.fromkeys(paths))
 

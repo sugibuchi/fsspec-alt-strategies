@@ -23,9 +23,11 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from .handler import FlatFileOperationHandler
+
 
 def _listing(
-    fs: Any,
+    handler: FlatFileOperationHandler,
     prefix: str,
     root: dict[str, Any] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
@@ -41,10 +43,9 @@ def _listing(
     ``ils_recursive``, but its ``prefix``, which is the listing's own.
     """
     path, _, name = prefix.rpartition("/")
-    handler = fs
     entry = root if root is not None and root["name"] == path else handler.entry(path)
     kwargs = {k: v for k, v in (ils_kwargs or {}).items() if k != "prefix"}
-    return handler.ils_recursive(entry, prefix=name, **kwargs)  # type: ignore[attr-defined, no-any-return]
+    return handler.ils_recursive(entry, prefix=name, **kwargs)
 
 
 def _dir(name: str) -> dict[str, Any]:

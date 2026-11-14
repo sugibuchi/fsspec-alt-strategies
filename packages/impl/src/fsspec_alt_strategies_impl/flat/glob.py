@@ -30,11 +30,13 @@ from ._keys import _close, _dir, _dirs, _listing, _new
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
+    from .handler import FlatFileOperationHandler
+
 __all__: list[str] = []
 
 
 def _flat_glob(
-    fs: Any,
+    handler: FlatFileOperationHandler,
     path: str | Sequence[str],
     *,
     maxdepth: int | None = None,
@@ -72,7 +74,7 @@ def _flat_glob(
     One ``info`` per pattern without wildcards, each holding a permit of the
     filesystem's ``operation_limit``. The listings hold none.
 
-    ``path`` is a pattern, or patterns, of paths on ``fs``, as its ``ils``
+    ``path`` is a pattern, or patterns, of paths on ``handler``, as its ``ils``
     takes them: a trailing "/" matches only directories. ``maxdepth`` is how
     deep a ``**`` goes, and ``withdirs`` whether directories can match, as with
     fsspec's ``_glob``. The listing still lists every key under the prefix.
@@ -100,13 +102,13 @@ def _flat_glob(
         op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any]]:
         found: set[str] = set()
-        async for entry in _infos(fs, literals, op, found):
+        async for entry in _infos(handler, literals, op, found):
             yield entry
 
         for prefix, group in _listings(searches):
             if op.cancelling():
                 return
-            async for match in _matches(fs, prefix, group, op, found, ils_kwargs):
+            async for match in _matches(handler, prefix, group, op, found, ils_kwargs):
                 yield match
 
     return Operation(run, GlobState())
@@ -126,7 +128,7 @@ def _listings(
 
 
 async def _matches(
-    fs: Any,
+    handler: FlatFileOperationHandler,
     prefix: str,
     searches: list[_Search],
     op: Operation[dict[str, Any], GlobState],
@@ -137,7 +139,7 @@ async def _matches(
     # The directories of the key listed last.
     before: list[str] = []
 
-    entries = _listing(fs, prefix, ils_kwargs=ils_kwargs)
+    entries = _listing(handler, prefix, ils_kwargs=ils_kwargs)
     try:
         async for entry in entries:
             name = entry["name"]
