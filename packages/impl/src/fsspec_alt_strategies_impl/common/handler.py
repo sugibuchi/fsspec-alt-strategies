@@ -613,9 +613,9 @@ class StorageHandler(_PathHandler):
             if end is not None:
                 if end < 0:
                     end = f.size + end
-                return await f.read(max(0, end - position))  # type: ignore[no-any-return]
+                return await f.read(max(0, end - position))
             else:
-                return await f.read()  # type: ignore[no-any-return]
+                return await f.read()
 
     async def pipe_file(
         self, path: StoragePath, value: bytes, mode: str = "overwrite", **kwargs: Any

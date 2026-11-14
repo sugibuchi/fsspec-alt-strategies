@@ -247,7 +247,7 @@ class RoutingHandler(_PathHandler):
         made = self._inner.get(key)
         if made is None:
             made = self._inner[key] = make()
-        return made  # type: ignore[no-any-return]
+        return made
 
     async def open(self) -> None:
         """Nothing: each handler made opens as its storage is first used."""
@@ -472,7 +472,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
 
     def _outer(self, fs: AsyncFileSystem, path: str) -> str:
         """The router's path of ``path``, a path of a storage's filesystem."""
-        handler = fs._handler  # type: ignore[attr-defined]
+        handler = fs._handler
         return self._lifted(self._storages[id(handler)].through, path)
 
     @staticmethod
@@ -1224,7 +1224,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
             outer = outer1 if listed else self._one(outer1)
 
             if fs1 is fs2:
-                move = fs1._mv(  # type: ignore[attr-defined]
+                move = fs1._mv(
                     sources, inner2, recursive=recursive, maxdepth=maxdepth, **kwargs
                 )
                 await self._on(fs1, sources, outer, move)

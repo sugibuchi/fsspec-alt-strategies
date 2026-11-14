@@ -136,17 +136,17 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
         return self.fs._strip_protocol(path)
 
     def unstrip_protocol(self, name: str) -> str:
-        return self.fs.unstrip_protocol(name)  # type: ignore[no-any-return]
+        return self.fs.unstrip_protocol(name)
 
     # The primitives.
 
-    async def ils(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:  # type: ignore[override]
+    async def ils(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
         # fsspec has no listing in pages: the wrapped one's ls, all at once.
         for listed in await self.call("ls", entry["name"], detail=True, **kwargs):
             yield listed
 
     async def info(self, entry: Entry, **kwargs: Any) -> Entry:
-        return await self.call("info", entry["name"], **kwargs)  # type: ignore[no-any-return]
+        return await self.call("info", entry["name"], **kwargs)
 
     async def rm_file(self, entry: Entry) -> None:
         await self.call("rm_file", entry["name"])
@@ -201,7 +201,7 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
         **kwargs: Any,
     ) -> bytes:
         async with self.io_limit:
-            return await self.call(  # type: ignore[no-any-return]
+            return await self.call(
                 "cat_file", entry["name"], start=start, end=end, **kwargs
             )
 
@@ -275,7 +275,7 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
     async def sign(self, entry: Entry, expiration: int = 100, **kwargs: Any) -> str:
         sign = self.fs.sign
         name = entry["name"]
-        return await self._run_in_thread(sign, name, expiration=expiration, **kwargs)  # type: ignore[no-any-return]
+        return await self._run_in_thread(sign, name, expiration=expiration, **kwargs)
 
     def invalidate_cache(self, path: str | None = None) -> None:
         self.fs.invalidate_cache(path)

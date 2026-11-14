@@ -217,7 +217,7 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
         key = self._strip_protocol(path)
         entries = None if refresh or kwargs else self.dircache.get(key)
         if entries is None:
-            entries = [entry async for entry in self._ils(path, **kwargs)]  # type: ignore[attr-defined]
+            entries = [entry async for entry in self._ils(path, **kwargs)]
             if not kwargs:
                 self.dircache[key] = entries
         return list(entries) if detail else [e["name"] for e in entries]
@@ -262,7 +262,7 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
     def sign(self, path: str, expiration: int = 100, **kwargs: Any) -> str:
         """A signed URL of a file, as fsspec's ``sign`` answers: the handler's `sign`."""
         entry = self._handler.entry(path)
-        return sync(self.loop, self._handler.sign, entry, expiration, **kwargs)  # type: ignore[no-any-return]
+        return sync(self.loop, self._handler.sign, entry, expiration, **kwargs)
 
     def __enter__(self) -> Self:
         return self

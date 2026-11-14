@@ -70,7 +70,7 @@ class S3fsHandler(FsspecFlatHandler):
     io_concurrency = 8
     rm_batch_size = 1000
 
-    def ils_recursive(  # type: ignore[override]
+    def ils_recursive(
         self, entry: Entry, *, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[Entry]:
         path = entry["name"]

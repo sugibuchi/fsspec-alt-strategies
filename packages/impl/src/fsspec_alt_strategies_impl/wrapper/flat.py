@@ -131,7 +131,7 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
         if mv_batch_size is not None:
             self.mv_batch_size = mv_batch_size
 
-    async def ils_recursive(  # type: ignore[override]
+    async def ils_recursive(
         self, entry: Entry, *, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[Entry]:
         # fsspec has no listing in pages: the wrapped one's find, all at once.

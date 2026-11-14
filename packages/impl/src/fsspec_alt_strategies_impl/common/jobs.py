@@ -147,7 +147,7 @@ class _Job(NamedTuple):
     @property
     def path(self) -> str:
         """The source's path."""
-        return self.source["name"]  # type: ignore[no-any-return]
+        return self.source["name"]
 
 
 class _Roots(NamedTuple):
@@ -395,7 +395,7 @@ class _Jobs(ABC):
         jobs: Any = None
         op: Operation[Any, Any] = Operation(
             lambda _: jobs.outcomes(),
-            None,  # type: ignore[arg-type]  # The jobs' own, set below.
+            None,  # The jobs' own, set below.
         )
         jobs = cls(op=op, **kwargs)
         op.state = jobs.state()

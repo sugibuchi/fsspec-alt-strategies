@@ -712,7 +712,7 @@ class _Reader(AdaptiveReadableFile):
         self.fs = fs
 
     async def _fetch_range(self, start: int, end: int) -> bytes:
-        return await self.fs._cat_file(self.path, start=start, end=end)  # type: ignore[no-any-return]
+        return await self.fs._cat_file(self.path, start=start, end=end)
 
 
 class _Writer(AdaptiveWritableFile):
@@ -858,17 +858,17 @@ class TreeView(_Files, TreeFileOperationHandler):
     def ils(
         self, entry: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
-        return self._dir_ils(entry["name"], **kwargs)  # type: ignore[no-any-return]
+        return self._dir_ils(entry["name"], **kwargs)
 
     def ils_recursive(
         self, entry: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
         if not self.recursive_listing:
             return super().ils_recursive(entry, **kwargs)
-        return self.fs._ils_recursive(entry["name"])  # type: ignore[no-any-return]
+        return self.fs._ils_recursive(entry["name"])
 
     async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-        return await self._info(entry["name"], **kwargs)  # type: ignore[no-any-return]
+        return await self._info(entry["name"], **kwargs)
 
     async def rm_file(self, entry: dict[str, Any]) -> None:
         await self._rm_file(entry["name"])
@@ -1011,10 +1011,10 @@ class FlatView(_Files, FlatFileOperationHandler):
         self, entry: dict[str, Any], *, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
         path = entry["name"]
-        return self._list_prefix(f"{path}/{prefix}" if path else prefix)  # type: ignore[no-any-return]
+        return self._list_prefix(f"{path}/{prefix}" if path else prefix)
 
     async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-        return await self._info(entry["name"], **kwargs)  # type: ignore[no-any-return]
+        return await self._info(entry["name"], **kwargs)
 
     async def rm_file(self, entry: dict[str, Any]) -> None:
         await self._rm_file(entry["name"])

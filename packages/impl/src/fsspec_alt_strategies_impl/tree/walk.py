@@ -400,7 +400,7 @@ def _roots(
     for root in [path] if isinstance(path, (str, dict)) else path:
         if isinstance(root, dict):
             name = _trim(root["name"])
-            listed[name] = {**root, "name": name}  # type: ignore[typeddict-item]
+            listed[name] = {**root, "name": name}
         else:
             name = _trim(root)
         roots.add(name)
@@ -412,7 +412,7 @@ def _entries_of(part: _Listing, subdirs: set[str]) -> dict[str, Entry]:
     found: dict[str, Entry] = {}
     for entry in part.entries:
         if (name := entry["name"].rstrip("/")) in subdirs:
-            found[name] = {**entry, "name": name}  # type: ignore[typeddict-item]
+            found[name] = {**entry, "name": name}
     return found
 
 

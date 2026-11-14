@@ -244,7 +244,7 @@ class _DirListing:
         ):
             return None
         self.subdirectories.add(name)
-        self.ahead.add(name, {**entry, "name": name})  # type: ignore[typeddict-item]
+        self.ahead.add(name, {**entry, "name": name})
         return name
 
     async def close(self) -> None:

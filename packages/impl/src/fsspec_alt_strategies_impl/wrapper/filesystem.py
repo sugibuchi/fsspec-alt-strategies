@@ -63,8 +63,8 @@ class FileSystemWrapper(BaseFileSystem):
         # The wrapped filesystem's paths, which its handler holds.
         self.protocol = handler.protocol
         self.root_marker = handler.root
-        self._strip_protocol = handler.strip_protocol  # type: ignore[method-assign]
+        self._strip_protocol = handler.strip_protocol
 
     def _unwrapped(self) -> AbstractFileSystem:
         """The filesystem wrapped, as a monitor's `Call` names it: the one its user made."""
-        return _unwrapped(self._handler.fs)  # type: ignore[no-any-return]
+        return _unwrapped(self._handler.fs)
