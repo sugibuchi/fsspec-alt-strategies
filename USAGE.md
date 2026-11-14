@@ -346,15 +346,26 @@ The file decides which requests to send, and when. Whether a write is atomic is 
 
 #### Async file support
 
-A handler whose storage gives files of its own, e.g. an SDK's sync handle, opens them by `open_async_file` instead, and
-gives them the API of `open_async`'s files through `SyncFileAdapter`:
+A handler whose storage gives files of its own, e.g. an SDK's sync handle, returns them from `open_file` with the API
+of `open_async`'s files, through `SyncFileAdapter`:
 
 ```python
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
 
 
-async def open_async_file(self, path, mode, **kwargs):
-    return SyncFileAdapter(self.client.open(path, mode))
+async def open_file(self, entry, mode="rb", **kwargs):
+    return SyncFileAdapter(self.client.open(entry["name"], mode))
+```
+
+Its sync `open` then needs the SDK's sync handle itself, by `open_sync_file`, as the next section shows.
+
+A handler reading or writing a file by one request, e.g. one download, overrides `cat_file`, `pipe_file`, `get_file`
+or `put_file`, holding a permit of its `io_limit` around the request:
+
+```python
+async def cat_file(self, entry, start=None, end=None, **kwargs):
+    async with self.io_limit:
+        return await self.client.download(entry["name"], start, end)
 ```
 
 #### Transaction support
@@ -376,14 +387,15 @@ strategy of file-level transactions. The package provides these:
 
 A storage with a way of its own, such as a staged upload, subclasses `FileTransaction`.
 
-A filesystem's `_open` wraps a handler's adaptive writer so when fsspec asks for no autocommit. A handler opening
-files of its own by `open_sync_file` returns a `TransactionFile` itself:
+A handler's default `open_sync_file` wraps its adaptive writer so when fsspec asks for no autocommit. A handler
+opening sync files of its own overrides it, returning a `TransactionFile` itself:
 
 ```python
 from fsspec_alt_strategies_impl.files.fsspec_transaction import LocalBufferTransaction, TransactionFile
 
 
-def open_sync_file(self, path, mode, autocommit=True, **kwargs):
+def open_sync_file(self, entry, mode, *, loop, autocommit=True, **kwargs):
+    path = entry["name"]
     if autocommit:
         return MyFile(self, path, mode)
     return TransactionFile(LocalBufferTransaction(path, lambda p: MyFile(self, p, mode)))

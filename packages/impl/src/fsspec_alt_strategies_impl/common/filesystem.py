@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """What the filesystem classes of the families share, e.g. `TreeFileSystem`'s.
 
-`_BaseFileSystem` holds the two concurrency limits, and moves data through
-file objects: its ``_cat_file``, ``_pipe_file``, ``_get_file`` and
-``_put_file`` open the file with ``open_async``, which a subclass implements.
+`_BaseFileSystem` moves data by its handler: its ``_cat_file``,
+``_pipe_file``, ``_get_file`` and ``_put_file`` call the handler's, which
+move it through the handler's files unless the handler does otherwise.
 Its ``_cp_file`` and ``_mv_file`` ask a path's ``_info``, then copy or move by
 the families' ``_cp_file_entry`` and ``_mv_file_entry``. fsspec's methods on
 many paths, such as ``_cat``, call those on one path ``io_concurrency`` at a
@@ -14,13 +14,11 @@ family's class names.
 The functions below it shape the answers and errors of fsspec's methods, as
 the families' classes give them.
 
-This module depends on `operation` and `handler`, and `fsspec_async` and
-`fsspec_transaction` of `files`.
+This module depends on `operation` and `handler`.
 """
 
 from __future__ import annotations
 
-import io
 import math
 import os
 from collections.abc import Iterable
@@ -32,8 +30,7 @@ from fsspec.callbacks import DEFAULT_CALLBACK
 
 from fsspec_alt_strategies.monitor import Call, Monitored
 
-from ..files.fsspec_async import AsyncFileAdapter
-from ..files.fsspec_transaction import AdaptiveWritableTransaction, TransactionFile
+from .handler import _awaited
 from .operation import _collect_with_monitors
 
 if TYPE_CHECKING:
@@ -52,13 +49,9 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
     """An async filesystem on a handler, moving data through its files.
 
     What the storage does is the handler's alone: its profile, which the
-    strategies read from it, and its limits, ``operation_limit`` and
-    ``io_limit``, which the filesystem holds around the handler's data calls.
-    The filesystem exposes neither.
+    strategies read from it, its limits, ``operation_limit`` and
+    ``io_limit``, and its data methods. The filesystem exposes none.
     """
-
-    transfer_size: int = 8 * _MiB
-    """The bytes read or written at a time by ``_get_file`` and ``_put_file``."""
 
     handler: StorageHandler
     """The storage's handler, whose primitives the filesystem calls."""
@@ -93,33 +86,26 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
 
     def _unwrapped(self) -> AsyncFileSystem:
         """The filesystem a monitor is told of: this one, or the one a wrapper wraps."""
-        wrapped = getattr(self.handler, "wrapped", None)
+        wrapped = self.handler.wrapped
         return wrapped if wrapped is not None else self
 
-    # Files, by the handler: the same file for open_async and the sync open.
-
-    async def _handler_file(self, path: str, mode: str, **kwargs: Any) -> Any:
-        """The handler's file at a caller's path, verified, by its `open_file`: "rb", "wb" or "xb"."""
-        if mode not in ("rb", "wb", "xb"):
-            raise ValueError(f"mode must be 'rb', 'wb' or 'xb': {mode!r}")
-        handler = self.handler
-        entry = handler.entry(path)
-        return await handler.open_file(entry, mode, **kwargs)
+    # Files, by the handler's open_file: the same file for open_async and the sync open.
 
     async def open_async(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        """Open a file whose methods are awaited, as fsspec's ``open_async`` does, by the handler.
+        """Open a file whose methods are awaited, as fsspec's ``open_async`` does, by the handler's `open_file`.
 
-        A handler whose files are another filesystem's, as a wrapper's are,
-        opens its own, by its ``open_async_file``. A file opened to write drops
-        the listings kept, as it opens: the file knows no filesystem.
+        A file of the package's is given fsspec's async API by an
+        `AsyncFileAdapter`. One whose methods are awaited already, e.g. a
+        wrapped filesystem's, is returned as it is. A file opened to write
+        drops the listings kept, as it opens: the file knows no filesystem.
         """
         if kwargs.pop("compression", None):
             raise ValueError("Compression is not supported by open_async")
+        _check_mode(mode)
         if mode != "rb":
             self._drop_listings()
-        if (own := getattr(self.handler, "open_async_file", None)) is not None:
-            return await own(self._strip_protocol(path), mode, **kwargs)
-        return AsyncFileAdapter(await self._handler_file(path, mode, **kwargs))
+        entry = self.handler.entry(path)
+        return _awaited(await self.handler.open_file(entry, mode, **kwargs))
 
     def _open(
         self,
@@ -130,29 +116,24 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         cache_options: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        """Open a file for the sync ``open``, by the handler, on the filesystem's loop.
+        """Open a file for the sync ``open``, by the handler's `open_sync_file`, on the filesystem's loop.
 
         Within a transaction, a file written is committed with it: no reader
-        sees it before. A handler whose files are another filesystem's opens
-        its own, by its ``open_sync_file``. A file opened to write drops the
-        listings kept, as `open_async` does.
+        sees it before. A file opened to write drops the listings kept, as
+        `open_async` does.
         """
+        _check_mode(mode)
         if mode != "rb":
             self._drop_listings()
-        if (own := getattr(self.handler, "open_sync_file", None)) is not None:
-            return own(
-                self._strip_protocol(path),
-                mode,
-                block_size=block_size,
-                autocommit=autocommit,
-                cache_options=cache_options,
-                **kwargs,
-            )
-        file = sync(self.loop, self._handler_file, path, mode, **kwargs)
-        if autocommit or mode == "rb":
-            return file
-        else:
-            return TransactionFile(AdaptiveWritableTransaction(file))
+        return self.handler.open_sync_file(
+            self.handler.entry(path),
+            mode,
+            loop=self.loop,
+            autocommit=autocommit,
+            block_size=block_size,
+            cache_options=cache_options,
+            **kwargs,
+        )
 
     # fsspec's dircache: listings kept by _ls, for fsspec's own methods and callers.
 
@@ -196,8 +177,7 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
                 if key == path or below or above or not key:
                     self.dircache.pop(key, None)
         super().invalidate_cache(path)
-        if (own := getattr(self.handler, "invalidate_cache", None)) is not None:
-            own(path)  # A wrapped filesystem's own listings kept.
+        self.handler.invalidate_cache(path)  # E.g. a wrapped filesystem's own.
 
     def close(self) -> None:
         """Release what the filesystem holds: its handler's, by the handler's sync `close`.
@@ -379,51 +359,22 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
     async def _cat_file(
         self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any
     ) -> bytes:
-        """Read a file, or a range of it, through a file of ``open_async``.
+        """Read a file, or a range of it, by the handler's `cat_file`.
 
-        The file's requests each hold a permit of ``io_limit``. A subclass
-        overriding this, or ``_pipe_file``, ``_get_file`` or ``_put_file``, e.g.
-        with one download, holds a permit for each request it sends itself. It
-        holds none while it calls the filesystem's files, which take their own:
-        held around them, it would wait for itself. fsspec's methods on many
-        paths call it at most ``io_concurrency`` at a time, whatever it does.
-
-        A handler with a ``cat_file`` of its own, e.g. one download, reads by
-        it, under a permit of ``io_limit``.
+        The handler holds the permits of ``io_limit``, as its files or its
+        own requests take them. fsspec's methods on many paths call it at
+        most ``io_concurrency`` at a time.
         """
-        if (own := getattr(self.handler, "cat_file", None)) is not None:
-            entry = self.handler.entry(path)
-            async with self.handler.io_limit:
-                return await own(entry, start=start, end=end, **kwargs)  # type: ignore[no-any-return]
-        f = await self.open_async(path, "rb", **kwargs)
-        async with f:
-            position = 0
-            if start is not None:
-                position = start if start >= 0 else max(0, f.size + start)
-                await _skip(f, position, self.transfer_size)
-
-            if end is not None:
-                if end < 0:
-                    end = f.size + end
-                return await f.read(max(0, end - position))
-            else:
-                return await f.read()
+        entry = self.handler.entry(path)
+        return await self.handler.cat_file(entry, start=start, end=end, **kwargs)
 
     async def _pipe_file(
         self, path: str, value: bytes, mode: str = "overwrite", **kwargs: Any
     ) -> None:
-        """Write a file whole, through a file of ``open_async``, or the handler's own ``pipe_file``: see `_cat_file`."""
+        """Write a file whole, by the handler's `pipe_file`: see `_cat_file`."""
         try:
-            if (own := getattr(self.handler, "pipe_file", None)) is not None:
-                target = self.handler.verified(path)
-                async with self.handler.io_limit:
-                    await own(target, value, mode=mode, **kwargs)
-                return
-            f = await self.open_async(
-                path, "xb" if mode == "create" else "wb", **kwargs
-            )
-            async with f:
-                await f.write(value)
+            target = self.handler.verified(path)
+            await self.handler.pipe_file(target, value, mode=mode, **kwargs)
         finally:
             self._drop_listings()
 
@@ -434,26 +385,11 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
-        """Copy a file to a local path, through a file of ``open_async``, or the handler's own ``get_file``: see `_cat_file`."""
-        if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
+        """Copy a file to a local path, by the handler's `get_file`: see `_cat_file`."""
+        if os.path.isdir(lpath):  # noqa: ASYNC240, local files are short next to requests.
             return  # A directory, which fsspec's get makes itself.
-        if (own := getattr(self.handler, "get_file", None)) is not None:
-            entry = self.handler.entry(rpath)
-            async with self.handler.io_limit:
-                await own(entry, lpath, callback=callback, **kwargs)
-            return
-
-        f = await self.open_async(rpath, "rb", **kwargs)
-        async with f:
-            # The bytes, as fsspec's own filesystems tell them to the callback.
-            callback.set_size(f.size)
-
-            # Local writes are short next to a storage's requests, as in fsspec's
-            # own filesystems.
-            with open(lpath, "wb") as local:  # noqa: ASYNC230
-                while chunk := await f.read(self.transfer_size):
-                    local.write(chunk)
-                    callback.relative_update(len(chunk))
+        entry = self.handler.entry(rpath)
+        await self.handler.get_file(entry, lpath, callback=callback, **kwargs)
 
     async def _put_file(
         self,
@@ -463,33 +399,20 @@ class _BaseFileSystem(AsyncFileSystem, Monitored):
         callback: Callback = DEFAULT_CALLBACK,
         **kwargs: Any,
     ) -> None:
-        """Copy a local file to the storage, through a file of ``open_async``, or the handler's own ``put_file``: see `_cat_file`."""
+        """Copy a local file to the storage, by the handler's `put_file`: see `_cat_file`."""
         try:
-            if os.path.isdir(lpath):  # noqa: ASYNC240, as the local open below.
+            if os.path.isdir(lpath):  # noqa: ASYNC240, local files are short next to requests.
                 return  # A directory: a storage needs none for the files put in it.
-            if (own := getattr(self.handler, "put_file", None)) is not None:
-                target = self.handler.verified(rpath)
-                async with self.handler.io_limit:
-                    await own(lpath, target, mode=mode, callback=callback, **kwargs)
-                return
-
-            f = await self.open_async(
-                rpath, "xb" if mode == "create" else "wb", **kwargs
+            target = self.handler.verified(rpath)
+            await self.handler.put_file(
+                lpath, target, mode=mode, callback=callback, **kwargs
             )
-            async with f:
-                with open(lpath, "rb") as local:  # noqa: ASYNC230
-                    callback.set_size(os.fstat(local.fileno()).st_size)
-                    while chunk := local.read(self.transfer_size):
-                        await f.write(chunk)
-                        callback.relative_update(len(chunk))
         finally:
             self._drop_listings()
 
     # fsspec's methods on many paths call the method on one path for each, up to
-    # batch_size at a time: here by default, io_concurrency. So they bound a
-    # subclass's _cat_file holding no permit, e.g. one download, without
-    # taking a permit around each call, which would wait for itself as
-    # _cat_file says.
+    # batch_size at a time: here by default, io_concurrency. So they bound the
+    # paths in flight, while the handler's permits bound its requests.
 
     def _io_batch_size(self, batch_size: int | None) -> int | None:
         """The paths handled at a time: the call's, else ``io_concurrency``.
@@ -742,26 +665,10 @@ def _strip_only_protocol(fs: Any, path: str | Sequence[str]) -> Any:
     return plain + "/" if path.endswith("/") and not plain.endswith("/") else plain
 
 
-async def _skip(f: Any, start: int, chunk_size: int) -> None:
-    """Move a file just opened to ``start``: by seeking, or else by reading.
-
-    A storage SDK's handle may stream its data, unable to seek. Its bytes up
-    to ``start`` are then read and dropped, a chunk at a time, so that memory
-    stays bounded.
-    """
-    try:
-        if f.seekable():
-            f.seek(start)
-            return
-    except (io.UnsupportedOperation, OSError):
-        pass
-
-    skipped = 0
-    while skipped < start:
-        chunk = await f.read(min(chunk_size, start - skipped))
-        if not chunk:
-            return  # Past the end: the read after answers nothing.
-        skipped += len(chunk)
+def _check_mode(mode: str) -> None:
+    """Refuse a mode `StorageHandler.open_file` does not take, before the handler is asked."""
+    if mode not in ("rb", "wb", "xb"):
+        raise ValueError(f"mode must be 'rb', 'wb' or 'xb': {mode!r}")
 
 
 def _answer(entries: list[dict[str, Any]], detail: bool) -> Any:

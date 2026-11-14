@@ -23,6 +23,7 @@ from fsspec_alt_strategies_impl.common.filesystem import (
     _raise,
     _strip_only_protocol,
 )
+from fsspec_alt_strategies_impl.common.handler import StorageHandler
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
 from fsspec_alt_strategies_impl.wrapper.flat import (
     FlatFileSystemWrapper,
@@ -129,16 +130,18 @@ class _Unseekable(io.BytesIO):
 
 
 class _Streaming(FsspecTreeHandler):
-    """A storage whose files cannot seek, read through them: it has no `cat_file` of its own."""
+    """A storage whose files cannot seek, read through them: by the default `cat_file`."""
 
-    cat_file = None  # type: ignore[assignment]
+    cat_file = StorageHandler.cat_file
 
     def __init__(self, fs: Any, **options: Any) -> None:
         super().__init__(fs, **options)
         self.data = b"0123456789"
         self.opened: list[_Unseekable] = []
 
-    async def open_async_file(self, path: str, mode: str, **kwargs: Any) -> Any:
+    async def open_file(
+        self, entry: dict[str, Any], mode: str = "rb", **kwargs: Any
+    ) -> Any:
         self.opened.append(_Unseekable(self.data))
         return SyncFileAdapter(self.opened[-1], mode=mode, size=len(self.data))
 
@@ -146,7 +149,7 @@ class _Streaming(FsspecTreeHandler):
 async def test_a_range_of_an_unseekable_file_skips_its_start() -> None:
     fs = _tree(MemoryFileSystem(), _Streaming)
     handler = fs.handler
-    fs.transfer_size = 3
+    handler.transfer_size = 3
     cat = _BaseFileSystem._cat_file
     assert await cat(fs, "f", start=7, end=9) == b"78"
     # Read and dropped in chunks no bigger than a transfer.

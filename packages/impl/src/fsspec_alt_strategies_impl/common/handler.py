@@ -12,22 +12,33 @@ its path. An entry is a dict whose ``"name"`` alone is sure: a path given by a
 caller comes as `StorageHandler.entry`'s ``{"name": path}``, and a listing's
 entries come whole.
 
-This module depends on nothing else in the package.
+This module depends on `_async_file`, `fsspec_async` and `fsspec_transaction`
+of `files`, whose files its defaults move data through.
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
+import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, NewType, TypeAlias
 
+from fsspec.asyn import sync
+from fsspec.callbacks import DEFAULT_CALLBACK
 from fsspec.utils import stringify_path
 
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
 
+from ..files._async_file import _AsyncFile, _MiB
+from ..files.fsspec_async import AsyncFileAdapter
+from ..files.fsspec_transaction import AdaptiveWritableTransaction, TransactionFile
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from datetime import datetime
+
+    from fsspec.callbacks import Callback
 
 __all__ = ["Entry", "StorageHandler", "StoragePath"]
 
@@ -234,7 +245,10 @@ class StorageHandler(_PathHandler):
     - ``io_limit``, the reads and writes of data.
 
     The callers hold the permits, never the primitives: the strategies hold
-    one of ``operation_limit`` around each primitive they call.
+    one of ``operation_limit`` around each primitive they call. Data is the
+    exception: a file's requests take ``io_limit``'s, and so does an override
+    of `cat_file`, `pipe_file`, `get_file` or `put_file` around each request
+    it sends.
 
     Parameters
     ----------
@@ -386,6 +400,129 @@ class StorageHandler(_PathHandler):
         """
         raise NotImplementedError(f"{type(self).__name__} opens no file")
 
+    def open_sync_file(
+        self,
+        entry: Entry,
+        mode: str,
+        *,
+        loop: asyncio.AbstractEventLoop,
+        autocommit: bool = True,
+        block_size: int | None = None,
+        cache_options: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Open a file for fsspec's sync ``open``: by default `open_file`'s, awaited on ``loop``, the filesystem's.
+
+        Within a transaction, ``autocommit=False``, a file written is a
+        `TransactionFile` on an `AdaptiveWritableTransaction`: no reader sees
+        it before the transaction commits. ``block_size`` and
+        ``cache_options``, fsspec's, are left to the file's own sizes.
+
+        A handler whose storage gives sync files of its own, e.g. a wrapped
+        filesystem's or an SDK's handle, overrides it. Its files join fsspec's
+        transactions by a `TransactionFile` of its own.
+        """
+        file = sync(loop, self.open_file, entry, mode, **kwargs)
+        if autocommit or mode == "rb":
+            return file
+        else:
+            return TransactionFile(AdaptiveWritableTransaction(file))
+
+    # Data moved whole: by default through `open_file`. A handler sending a
+    # request of its own instead, e.g. one download, overrides one, and holds a
+    # permit of io_limit around each request it sends, as the files do. The
+    # defaults hold none: the files take their own, and held around them, a
+    # permit would wait for itself.
+
+    transfer_size: int = 8 * _MiB
+    """The bytes read or written at a time by the defaults of `get_file` and `put_file`."""
+
+    async def cat_file(
+        self,
+        entry: Entry,
+        start: int | None = None,
+        end: int | None = None,
+        **kwargs: Any,
+    ) -> bytes:
+        """Read a file, or a range of it, as fsspec's ``cat_file`` does: by default through `open_file`.
+
+        A file that cannot seek, e.g. a stream of an SDK, is read up to
+        ``start`` and the bytes dropped, a ``transfer_size`` at a time.
+        """
+        async with _awaited(await self.open_file(entry, "rb", **kwargs)) as f:
+            position = 0
+            if start is not None:
+                position = start if start >= 0 else max(0, f.size + start)
+                await _skip(f, position, self.transfer_size)
+
+            if end is not None:
+                if end < 0:
+                    end = f.size + end
+                return await f.read(max(0, end - position))  # type: ignore[no-any-return]
+            else:
+                return await f.read()  # type: ignore[no-any-return]
+
+    async def pipe_file(
+        self, path: StoragePath, value: bytes, mode: str = "overwrite", **kwargs: Any
+    ) -> None:
+        """Write a file whole, as fsspec's ``pipe_file`` does: by default through `open_file`.
+
+        Mode "create" writes it only if none is there, by `open_file`'s "xb".
+        """
+        opened = await self.open_file({"name": path}, _write_mode(mode), **kwargs)
+        async with _awaited(opened) as f:
+            await f.write(value)
+
+    async def get_file(
+        self,
+        entry: Entry,
+        lpath: str,
+        callback: Callback = DEFAULT_CALLBACK,
+        **kwargs: Any,
+    ) -> None:
+        """Copy a file to a local path, as fsspec's ``get_file`` does: by default through `open_file`."""
+        async with _awaited(await self.open_file(entry, "rb", **kwargs)) as f:
+            # The bytes, as fsspec's own filesystems tell them to the callback.
+            callback.set_size(f.size)
+
+            # Local writes are short next to a storage's requests, as in fsspec's
+            # own filesystems.
+            with open(lpath, "wb") as local:  # noqa: ASYNC230
+                while chunk := await f.read(self.transfer_size):
+                    local.write(chunk)
+                    callback.relative_update(len(chunk))
+
+    async def put_file(
+        self,
+        lpath: str,
+        path: StoragePath,
+        mode: str = "overwrite",
+        callback: Callback = DEFAULT_CALLBACK,
+        **kwargs: Any,
+    ) -> None:
+        """Copy a local file to the storage, as fsspec's ``put_file`` does: by default through `open_file`."""
+        opened = await self.open_file({"name": path}, _write_mode(mode), **kwargs)
+        async with _awaited(opened) as f:
+            with open(lpath, "rb") as local:  # noqa: ASYNC230
+                callback.set_size(os.fstat(local.fileno()).st_size)
+                while chunk := local.read(self.transfer_size):
+                    await f.write(chunk)
+                    callback.relative_update(len(chunk))
+
+    # What a filesystem on the handler keeps, and tells.
+
+    def invalidate_cache(self, path: str | None = None) -> None:
+        """Drop what the handler keeps of the storage's listings, for a filesystem's ``invalidate_cache``: here, nothing.
+
+        A handler keeping ids by path, or a wrapper whose filesystem keeps its
+        own listings, drops them here.
+        """
+
+    @property
+    def wrapped(self) -> Any:
+        """The filesystem a wrapper wraps, which a monitor's `Call` names: None for a storage of its own."""
+        return None
+
     # What fsspec leaves to each filesystem.
 
     async def sign(self, entry: Entry, expiration: int = 100, **kwargs: Any) -> str:
@@ -413,6 +550,42 @@ class StorageHandler(_PathHandler):
         fsspec's ``modified`` does.
         """
         raise NotImplementedError(f"{type(self).__name__} tells no modification time")
+
+
+def _awaited(file: Any) -> Any:
+    """A handler's file, its methods awaited: an `_AsyncFile` through `AsyncFileAdapter`, any other as it is.
+
+    The other is a file whose methods are awaited already, e.g. a wrapped
+    filesystem's of ``open_async``.
+    """
+    return AsyncFileAdapter(file) if isinstance(file, _AsyncFile) else file
+
+
+def _write_mode(mode: str) -> str:
+    """`open_file`'s mode for fsspec's ``pipe_file`` and ``put_file`` mode: "xb" to create, else "wb"."""
+    return "xb" if mode == "create" else "wb"
+
+
+async def _skip(f: Any, start: int, chunk_size: int) -> None:
+    """Move a file just opened to ``start``: by seeking, or else by reading.
+
+    A storage SDK's handle may stream its data, unable to seek. Its bytes up
+    to ``start`` are then read and dropped, a chunk at a time, so that memory
+    stays bounded.
+    """
+    try:
+        if f.seekable():
+            f.seek(start)
+            return
+    except (io.UnsupportedOperation, OSError):
+        pass
+
+    skipped = 0
+    while skipped < start:
+        chunk = await f.read(min(chunk_size, start - skipped))
+        if not chunk:
+            return  # Past the end: the read after answers nothing.
+        skipped += len(chunk)
 
 
 def _limit(concurrency: int | asyncio.Semaphore, name: str) -> asyncio.Semaphore:

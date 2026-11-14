@@ -124,8 +124,9 @@ AsyncFileSystem                    fsspec's
   calls after it, as a closed filesystem does, so `aclose()` never calls it.
 - **Its profile,** `profile`, as the next sections say.
 - **Its limits,** `operation_limit` for the strategies' requests and `io_limit` for reads and writes of data. The
-  callers hold the permits, never the primitives: the strategies hold one of `operation_limit` around each primitive,
-  the filesystem one of `io_limit` around each data call, and the adaptive files one per part.
+  callers hold the permits, never the primitives: the strategies hold one of `operation_limit` around each primitive.
+  Data is the exception: the adaptive files hold one of `io_limit` per part, and a handler's own `cat_file`,
+  `pipe_file`, `get_file` or `put_file` one per request it sends.
 - **Its paths:** its `protocol`, `strip_protocol` and `unstrip_protocol`, its `root`, and the path methods below.
 - **The primitives of single paths:** `ils`, `info`, `rm_file`, `rmdir`, `makedirs`, `cp_file` and `mv_file`, and its
   files, `open_file`.
@@ -137,9 +138,16 @@ Each family's handler class adds what its strategies call:
 | `TreeHandler` | Optional `ils_recursive` with its `recursive_order`, and `rm_tree`, `mv_tree`, `cp_tree`      |
 | `FlatHandler` | Required `ils_recursive(entry, prefix=...)`, and `rm_files` of at most `rm_batch_size` keys   |
 
-A handler's class tells its family, as a router reads it. A handler may also have optional extras, which the
-filesystem uses where they exist: `cat_file`, `pipe_file`, `get_file`, `put_file`, `invalidate_cache`, and a
-wrapper's `open_async_file`, `open_sync_file` and `wrapped`.
+A handler's class tells its family, as a router reads it. The filesystem calls only what `StorageHandler` declares,
+never finding a method by `getattr`. Beside the primitives, it declares methods with defaults a handler may override:
+
+- `cat_file`, `pipe_file`, `get_file` and `put_file` move data whole, by default through `open_file`. A handler
+  sending a request of its own instead, e.g. one download, holds a permit of `io_limit` around it, as the files do.
+  The defaults hold none: the files take their own.
+- `open_sync_file` opens a file for fsspec's sync `open`, by default `open_file`'s on the filesystem's loop, in a
+  transaction wrapped in a `TransactionFile`. A handler with sync files of its own, e.g. a wrapper's, overrides it.
+- `invalidate_cache` drops what the handler keeps of listings, by default nothing, and `wrapped` is the filesystem a
+  wrapper wraps, which monitors name, by default None.
 
 `StorageHandler.sign(entry, expiration)`, `created(entry)` and `modified(entry)` answer fsspec's `sign`, `created`
 and `modified`. They are async, as a storage may need a request, e.g. Azure's user delegation key to sign with. A

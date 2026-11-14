@@ -10,6 +10,7 @@ from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.common.handler import StorageHandler
 from fsspec_alt_strategies_impl.router import RoutingFileSystem
 from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
 from fsspec_alt_strategies_impl.wrapper.tree import (
@@ -35,10 +36,11 @@ _ROUTED = {
     "_rm_file", "_rmdir", "_mkdir", "_makedirs", "_cp_file", "_mv_file",
     "open_async", "_open", "created", "modified", "sign", "invalidate_cache",
 }  # fmt: skip
-# What a handler wrapping a filesystem passes on beside the primitives.
+# What a handler wrapping a filesystem passes on beside the primitives: each a
+# StorageHandler's method, whose default the wrapper replaces.
 _PASSED_ON = {
-    "cat_file", "pipe_file", "get_file", "put_file", "open_async_file",
-    "open_sync_file", "created", "modified", "sign", "invalidate_cache",
+    "cat_file", "pipe_file", "get_file", "put_file", "open_file",
+    "open_sync_file", "created", "modified", "sign", "invalidate_cache", "wrapped",
 }  # fmt: skip
 
 
@@ -46,7 +48,8 @@ _PASSED_ON = {
 def test_every_primitive_is_passed_on(handler: type) -> None:
     assert not handler.__abstractmethods__
     assert set(vars(RoutingFileSystem)) >= _ROUTED
-    assert {n for c in handler.__mro__ for n in vars(c)} >= _PASSED_ON
+    below = handler.__mro__[: handler.__mro__.index(StorageHandler)]
+    assert {n for c in below for n in vars(c)} >= _PASSED_ON
 
 
 def _tree(fs: Any, **options: Any) -> TreeFileSystem:

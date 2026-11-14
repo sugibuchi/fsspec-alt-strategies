@@ -20,16 +20,15 @@ It checks the bytes written against the source's size, the reader's where it
 tells one, else the entry's. A file of another size raises OSError before its
 write completes, so that the destination keeps nothing of it.
 
-This module depends on `handler` of `common`, and `files.fsspec_async`.
+This module depends on `handler` of `common`.
 """
 
 from __future__ import annotations
 
 import secrets
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from ..files._async_file import _AsyncFile
-from ..files.fsspec_async import AsyncFileAdapter
+from .handler import _awaited
 
 if TYPE_CHECKING:
     from .handler import Entry, StorageHandler, StoragePath
@@ -105,9 +104,9 @@ async def _write(
     if not isinstance(expected, int):
         expected = entry.get("size")
 
-    async with _async(opened) as reader:
+    async with _awaited(opened) as reader:
         # A path the strategies placed, verified: its entry holds its name alone.
-        async with _async(await dst.open_file({"name": path}, "wb")) as writer:
+        async with _awaited(await dst.open_file({"name": path}, "wb")) as writer:
             written = 0
             while block := await reader.read(_BLOCK_SIZE):
                 await writer.write(block)
@@ -118,8 +117,3 @@ async def _write(
                     f" {expected}: the file changed, or a read was cut short."
                 )
     return written
-
-
-def _async(file: Any) -> Any:
-    """A handler's file, its methods awaited: an `_AsyncFile` through `AsyncFileAdapter`."""
-    return AsyncFileAdapter(file) if isinstance(file, _AsyncFile) else file

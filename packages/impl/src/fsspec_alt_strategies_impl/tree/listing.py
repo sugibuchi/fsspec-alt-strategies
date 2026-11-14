@@ -23,7 +23,7 @@ import asyncio
 import heapq
 from collections import deque
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ..common.paths import _trim
 
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
 
     from ..common.handler import Entry, StorageHandler
+    from .handler import TreeHandler
 
 __all__: list[str] = []
 
@@ -120,7 +121,7 @@ async def _recursive(
     server refusing ``Depth: infinity``, as it can tell only by asking. Its
     order is depth first, which the strategies take as they take any.
     """
-    if getattr(handler, "recursive_order", None) is None:
+    if cast("TreeHandler", handler).recursive_order is None:
         async with aclosing(
             _tree_ils(handler, entry["name"], entry=entry, **ils_kwargs)
         ) as entries:

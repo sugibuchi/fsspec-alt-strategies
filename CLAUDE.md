@@ -95,7 +95,10 @@ code: read it before adding a strategy or a handler.
   the API enforces it. A storage whose behaviour differs by path, e.g. per bucket or container, is several handlers
   under a router. Never add a hook taking a path to tell them apart.
 - The callers hold the limits' permits, never the primitives: the strategies hold `operation_limit` around each
-  primitive, and the filesystem holds `io_limit` around each data call.
+  primitive. Data holds `io_limit` where its requests are sent: the files per part, and a handler's own `cat_file`,
+  `pipe_file`, `get_file` or `put_file` per request. Their defaults, through `open_file`, hold none.
+- The filesystem calls only what `StorageHandler` declares. Never find a handler's method by `getattr`: declare it
+  on `StorageHandler`, with a default that works.
 - The library never chooses a strategy for the developer. Each docstring says what the strategy assumes of the
   storage, and when it wins or loses.
 - fsspec's `dircache` is for fsspec's own methods and callers only. `_BaseFileSystem._ls` keeps a listing once it has

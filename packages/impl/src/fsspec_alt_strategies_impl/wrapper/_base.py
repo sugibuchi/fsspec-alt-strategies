@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from fsspec.callbacks import DEFAULT_CALLBACK
+
 from ..common.handler import StorageHandler
 from ..common.sync_client import SyncClientSupport
 from ..files.fsspec_async import SyncFileAdapter
@@ -146,7 +148,8 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
             # A sync filesystem's own move, e.g. a local rename, is its mv.
             await self._run_in_thread(self.fs.mv, entry["name"], path2)
 
-    # The data methods and the files, the wrapped filesystem's as they are.
+    # The data methods, the wrapped filesystem's as they are, each under a
+    # permit of io_limit: the wrapped one's requests take none of the handler's.
 
     async def cat_file(
         self,
@@ -155,39 +158,73 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
         end: int | None = None,
         **kwargs: Any,
     ) -> bytes:
-        return await self.call(  # type: ignore[no-any-return]
-            "cat_file", entry["name"], start=start, end=end, **kwargs
-        )
+        async with self.io_limit:
+            return await self.call(  # type: ignore[no-any-return]
+                "cat_file", entry["name"], start=start, end=end, **kwargs
+            )
 
-    async def pipe_file(self, path: StoragePath, value: bytes, **kwargs: Any) -> None:
-        await self.call("pipe_file", path, value, **kwargs)
+    async def pipe_file(
+        self, path: StoragePath, value: bytes, mode: str = "overwrite", **kwargs: Any
+    ) -> None:
+        async with self.io_limit:
+            await self.call("pipe_file", path, value, mode=mode, **kwargs)
 
     async def get_file(
-        self, entry: Entry, lpath: str, callback: Callback, **kwargs: Any
+        self,
+        entry: Entry,
+        lpath: str,
+        callback: Callback = DEFAULT_CALLBACK,
+        **kwargs: Any,
     ) -> None:
-        await self.call("get_file", entry["name"], lpath, callback=callback, **kwargs)
+        async with self.io_limit:
+            await self.call(
+                "get_file", entry["name"], lpath, callback=callback, **kwargs
+            )
 
     async def put_file(
-        self, lpath: str, path: StoragePath, callback: Callback, **kwargs: Any
+        self,
+        lpath: str,
+        path: StoragePath,
+        mode: str = "overwrite",
+        callback: Callback = DEFAULT_CALLBACK,
+        **kwargs: Any,
     ) -> None:
-        await self.call("put_file", lpath, path, callback=callback, **kwargs)
+        async with self.io_limit:
+            await self.call(
+                "put_file", lpath, path, mode=mode, callback=callback, **kwargs
+            )
 
-    async def open_async_file(self, path: str, mode: str, **kwargs: Any) -> Any:
+    # The files, the wrapped filesystem's own: its async ones awaited, and its
+    # sync ones for fsspec's open, with its own transactions. They close as the
+    # wrapped one's do: one left by an exception may keep what was written, so
+    # the profile declares no atomic_writes unless the library's writer aborts.
+
+    async def open_file(self, entry: Entry, mode: str = "rb", **kwargs: Any) -> Any:
+        path = entry["name"]
         if self.asynchronous:
             return await self.fs.open_async(path, mode, **kwargs)
         file = await self._run_in_thread(self.fs.open, path, mode, **kwargs)
         return SyncFileAdapter(file)
 
-    def open_sync_file(self, path: str, mode: str, **kwargs: Any) -> Any:
-        return self.fs._open(path, mode=mode, **kwargs)
-
-    # The strategies' files, e.g. a copy's between two storages: the wrapped
-    # one's own, awaited. They close as the wrapped one's do: one left by an
-    # exception may keep what was written, so the profile declares no
-    # atomic_writes unless the library's writer aborts.
-
-    async def open_file(self, entry: Entry, mode: str = "rb", **kwargs: Any) -> Any:
-        return await self.open_async_file(entry["name"], mode, **kwargs)
+    def open_sync_file(
+        self,
+        entry: Entry,
+        mode: str,
+        *,
+        loop: asyncio.AbstractEventLoop,
+        autocommit: bool = True,
+        block_size: int | None = None,
+        cache_options: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        return self.fs._open(
+            entry["name"],
+            mode=mode,
+            autocommit=autocommit,
+            block_size=block_size,
+            cache_options=cache_options,
+            **kwargs,
+        )
 
     # The sync methods fsspec leaves to each filesystem, the wrapped one's. They
     # are sync, also of an async filesystem: each runs in a thread, as fsspec's
