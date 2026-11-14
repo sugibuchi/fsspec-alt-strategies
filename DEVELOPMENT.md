@@ -65,7 +65,8 @@ The library aims at large cloud storages, such as data lakes holding millions of
 - **Streaming first.** A handler's listing is the primitive every strategy lists with: an async iterator yielding
   entries as the storage is scanned, where fsspec lists every path first with `expand_path`. A strategy acts on each
   part of a listing as it arrives, and never holds a whole directory or tree. Only `_walk` holds a directory whole, as
-  fsspec's `walk` answers a directory at a time.
+  fsspec's `walk` answers a directory at a time. The tree strategies keep only names, where nothing else is right, as
+  "The tree strategies" says.
 - **Hierarchical namespaces, used.** Where a storage lists by directory, the tree strategies scan directories
   recursively, several at once, e.g. to prune a tree by a pattern. A storage's own operations on a whole tree plug in
   as optional primitives, such as `rm_tree`, `mv_tree` and `cp_tree`.
@@ -463,6 +464,17 @@ Its handler's `ils_recursive` then falls back on `_tree_ils` itself.
 
 The strategies walk with a private engine, `tree.walk._chunks`. It streams each directory in parts of at most 1000
 entries. A huge directory is never held whole, except by `_tree_walk`, which answers as fsspec's `walk` does.
+
+A storage may list a directory twice, e.g. as a prefix and as its marker object. `_chunks` yields each subdirectory
+once, keeping the names of those found in each directory being listed. Two more sets of names are kept, as nothing
+else is right:
+
+- A copy or move keeps the names of the files found in each directory being listed, by `_CopyOrMove.names`. Two files
+  of one name, e.g. on Google Drive, would go to one place: the second is refused.
+- A recursive listing keeps names to resume a break, by `_Open.seen`, as below. Parents first, that is every name
+  listed until the listing ends.
+
+Each set holds names alone, never entries. The first two are dropped once their directory is listed to its last part.
 
 - A tree that nothing prunes is listed by one recursive listing per root. Its order tells when each directory is
   done. Where the storage has a recursive listing, that is one paginated request, which usually beats a directory per

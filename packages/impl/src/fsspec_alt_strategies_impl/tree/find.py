@@ -48,7 +48,7 @@ def _tree_find(
 
     It yields each path as its directory's listing arrives, so the paths are not
     in order. fsspec's ``_find`` sorts them, by name. A storage listing a
-    directory twice, e.g. as a prefix and as its marker object, yields it twice.
+    directory twice, e.g. as a prefix and as its marker object, yields it once.
 
     It wins over fsspec's ``_find`` on storages that list one directory per
     request, with many directories: their listings overlap. It gains nothing on

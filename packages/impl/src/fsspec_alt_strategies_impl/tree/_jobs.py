@@ -60,9 +60,9 @@ class _TreeJobs(_Jobs):
         # one name, e.g. on Google Drive, are two, each done on its own.
         self.entries: dict[str, int] = {}
 
-        # The directories whose listing goes on, and the subdirectories counted in
-        # each: a directory is done only once listed to its last part.
-        self.listing: dict[str, set[str]] = {}
+        # The directories whose listing goes on: a directory is done only once
+        # listed to its last part.
+        self.listing: set[str] = set()
 
     @abstractmethod
     def add(self, listing: _Listing) -> list[Any] | None:
@@ -139,35 +139,29 @@ class _TreeJobs(_Jobs):
     def track(self, listing: _Listing) -> None:
         """Count the paths in a part of a directory's listing, for `child_done`.
 
-        A storage may list a directory twice, e.g. as a prefix and as its marker
-        object, maybe in two parts. Each directory counts once, as the walk lists
-        it once. Each file's entry counts, two of one name, e.g. on Google Drive,
+        The walk yields each subdirectory once, though a storage may list one
+        twice. Each file's entry counts, two of one name, e.g. on Google Drive,
         as two.
         """
         directory = listing.directory
         if listing.first:
             self.remaining[directory] = 0
-            self.listing[directory] = set()
+            self.listing.add(directory)
 
-        subdirs = self.listing[directory]
         for entry in listing.entries:
             name = entry["name"].rstrip("/")
-            if entry["type"] == "directory":
-                if name in subdirs:
-                    continue
-                subdirs.add(name)
             self.remaining[directory] += 1
             self.parents[name] = directory
             self.entries[name] = self.entries.get(name, 0) + 1
 
         if listing.last:
-            del self.listing[directory]
+            self.listing.discard(directory)
 
     def child_done(self, path: str) -> str | None:
         """Count a path done, and return its directory if all in it is now done.
 
-        Each entry of a path counts once: a path done more often than listed,
-        as a directory listed twice is, counts no more.
+        Each entry of a path counts once: a path done more often than listed
+        counts no more.
         """
         parent = self.parents.get(path)
         if parent is None:

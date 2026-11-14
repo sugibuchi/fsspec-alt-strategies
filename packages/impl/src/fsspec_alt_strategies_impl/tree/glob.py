@@ -65,7 +65,7 @@ def _tree_glob(
 
     It yields each match as its directory's listing arrives, so the matches are
     not in order. fsspec's ``_glob`` sorts them, by name. A storage listing a
-    directory twice, e.g. as a prefix and as its marker object, yields it twice.
+    directory twice, e.g. as a prefix and as its marker object, yields it once.
 
     Several patterns match what fsspec's globs of each match together, each
     path once. They are matched in one walk per tree, rather than one per

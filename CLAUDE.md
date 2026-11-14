@@ -159,7 +159,10 @@ code: read it before adding a strategy or a handler.
   right on any storage; "depth_first", declared, lets the walk close each directory as the listing passes it.
 - The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
-  A recursive listing keeps only the names of the directories it is in, to resume a break: see `tree.walk._resume`.
+  It yields each subdirectory once, though a storage lists one twice. Names alone are kept in two more places:
+  - a copy's file names per directory, `_CopyOrMove.names`, to refuse a second file of one name;
+  - a recursive listing's, `_Open.seen`, to resume a break: see `tree.walk._resume`. Depth first, those of the
+    directories it is in; parents first, all until it ends.
 - Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
 - The flat strategies list with `flat._keys._listing(handler, prefix)`, the handler's `ils_recursive` of the prefix's

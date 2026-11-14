@@ -246,3 +246,28 @@ async def test_cancel_before_iterating_sends_nothing(
     assert await _collect_with_errors(op) == ([], [])
     assert any_fs.stats.calls == {}
     assert op.cancelled()
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"maxdepth": 3}])
+async def test_a_dir_listed_twice_is_found_once(kwargs: dict[str, Any]) -> None:
+    """A storage listing a directory as a prefix and as its marker object: the walk yields it once.
+
+    Listed recursively, or a directory per request below a ``maxdepth``.
+    """
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _tree(fs)
+
+    async def ils(path: str, **kwargs: Any) -> Any:
+        entries = await fs._ls(path, detail=True)
+        for e in entries:
+            yield e
+        for e in entries:
+            if e["type"] == "directory":
+                yield {**e, "name": e["name"] + "/"}
+
+    found, errors = await _collect_with_errors(
+        _find(fs, "data", withdirs=True, ils=ils, **kwargs)
+    )
+    assert errors == []
+    expected = await _fsspec_find(fs, "data", withdirs=True, **kwargs)
+    assert sorted(e["name"].rstrip("/") for e in found) == sorted(expected)

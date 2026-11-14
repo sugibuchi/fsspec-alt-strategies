@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from fsspec_alt_strategies.states import WalkState
@@ -323,7 +323,8 @@ async def _chunks(
     directories: _Queue[tuple[str, int]] = _Queue(handler.operation_limit)
     # The parts listed, a few at a time: a listing waits while they are full.
     parts: asyncio.Queue[_Listing] = asyncio.Queue(maxsize=16)
-    # The subdirectories found so far in each directory being listed, each listed once.
+    # The subdirectories found so far in each directory being listed: a part
+    # yields each once, though a storage may list one twice.
     found: dict[str, set[str]] = {}
 
     def stopped() -> bool:
@@ -374,10 +375,13 @@ async def _chunks(
                 if part.directory in roots and part.first:
                     raise part.error
                 _note(part.error, part.directory)
-            elif not trees.listed(part.directory) and (
-                maxdepth is None or part.depth < maxdepth
+            else:
+                part = _once(part, found)
+            if part.error is None and (
+                not trees.listed(part.directory)
+                and (maxdepth is None or part.depth < maxdepth)
             ):
-                subdirs = _new_subdirs(part, descend, found)
+                subdirs = _new_subdirs(part, descend)
                 trees.add(name for name, _, _ in subdirs)
                 directories.waiting.extend((name, depth) for name, depth, _ in subdirs)
                 listed.update((name, entry) for name, _, entry in subdirs)
@@ -904,27 +908,41 @@ def _between(directory: str, name: str) -> list[str]:
     return [prefix + "/".join(parts[: i + 1]) for i in range(len(parts))]
 
 
+def _once(part: _Listing, found: dict[str, set[str]]) -> _Listing:
+    """A part without the subdirectories its directory listed before.
+
+    A storage may list a directory twice, e.g. as a prefix and as its marker
+    object, maybe in two parts: each comes once, so that what consumes the
+    parts counts it once. The names kept are a directory's subdirectories, not
+    its files, until its last part.
+    """
+    seen = found.setdefault(part.directory, set())
+    kept: list[dict[str, Any]] = []
+    for entry in part.entries:
+        if entry["type"] == "directory":
+            name = entry["name"].rstrip("/")
+            if name in seen:
+                continue
+            seen.add(name)
+        kept.append(entry)
+    return part if len(kept) == len(part.entries) else replace(part, entries=kept)
+
+
 def _new_subdirs(
     part: _Listing,
     descend: Callable[[dict[str, Any]], bool] | None,
-    found: dict[str, set[str]],
 ) -> list[tuple[str, int, Entry]]:
-    """The subdirectories a part adds to list, each with its depth and its entry, those found before left out.
+    """The subdirectories a part adds to list, each with its depth and its entry, as `_once` left them.
 
-    Each comes once, though a storage may list a directory twice, e.g. with and
-    without its marker object, in two parts. Its entry, as the listing gave it,
-    is what it is listed by, e.g. with the storage's id.
+    Its entry, as the listing gave it, is what it is listed by, e.g. with the
+    storage's id.
     """
-    seen = found.setdefault(part.directory, set())
-    new: list[tuple[str, int, Entry]] = []
-    for entry in part.entries:
-        if entry["type"] != "directory" or (descend is not None and not descend(entry)):
-            continue
-        name = entry["name"].rstrip("/")
-        if name not in seen:
-            seen.add(name)
-            new.append((name, part.depth + 1, {**entry, "name": name}))
-    return new
+    return [
+        (name, part.depth + 1, {**entry, "name": name})
+        for entry in part.entries
+        if entry["type"] == "directory" and (descend is None or descend(entry))
+        for name in [entry["name"].rstrip("/")]
+    ]
 
 
 class _Trees:
