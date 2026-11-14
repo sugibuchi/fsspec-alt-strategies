@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from ..common.jobs import _Jobs
 from ._visit import _Pruned
 from .glob import _tree_glob
-from .walk import _chunks, _FileRoot, _Skipped
+from .walk import _chunks, _FileRoot, _Listing, _Skipped
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from ..common.jobs import _Roots
     from ..common.operation import Operation
     from .handler import TreeFileOperationHandler
-    from .walk import _Event, _Listing
+    from .walk import _Event
 
 
 class _TreeJobs(_Jobs):
@@ -117,6 +117,10 @@ class _TreeJobs(_Jobs):
         elif isinstance(item, _Skipped):
             # Deeper than maxdepth: fsspec finds it, but nothing in it.
             self.at_limit(item.entry["name"])
+            return []
+        elif not isinstance(item, _Listing):
+            # A subtree listed, which the jobs never ask the walk for: they
+            # count their own jobs done in each directory.
             return []
 
         self.current = item.directory

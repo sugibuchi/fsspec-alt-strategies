@@ -184,6 +184,9 @@ code: read it before adding a strategy or a handler.
   - `_tree_ils`'s listing is a `_DepthFirst`, which the walk splits depth first whatever the profile says.
 - The tree strategies walk with `tree.walk._chunks`, which is private: never expose its `_Listing`. It streams each
   directory in parts: never hold a directory's listing whole, except in `_tree_walk`, which answers as fsspec's `walk`.
+- The walk takes a `tree._visit._Visit`: which directories the operation needs, e.g. within `maxdepth`. What it found
+  but did not list, it yields as events: a `_Skipped` subdirectory, a `_FileRoot`, and, when asked, a
+  `_SubtreeListed`. A consumer acts on those, and never checks `maxdepth` or catches a file root again.
 - The walk yields each subdirectory once, by `tree.walk._once`, though a storage may list one twice. Beside it, only
   two places keep names alone:
   - a copy's file names per directory, `tree.cp._CopyOrMove.names`, to refuse a second file of one name;

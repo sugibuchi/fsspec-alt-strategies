@@ -14,6 +14,8 @@ from fsspec_alt_strategies_impl.tree._visit import _Pruned
 from fsspec_alt_strategies_impl.tree.walk import (
     WalkState,
     _chunks,
+    _Listing,
+    _SubtreeListed,
     _tree_walk,
 )
 from fsspec_alt_strategies_impl_testing import (
@@ -385,3 +387,33 @@ async def test_chunks_of_an_empty_dir_are_one_part() -> None:
     async with aclosing(chunks):
         parts = [part async for part in chunks]
     assert [(p.entries, p.first, p.last) for p in parts] == [([], True, True)]
+
+
+@pytest.mark.parametrize("maxdepth", [None, 3])
+async def test_each_subtree_is_told_listed_once_after_all_below_it(
+    any_fs: SimulatedFileSystem, maxdepth: int | None
+) -> None:
+    # Recursively listed without maxdepth, a directory per request with it.
+    _tree(any_fs)
+    view = TreeView(any_fs, recursive_listing=maxdepth is None)
+    events = [
+        e
+        async for e in _chunks(view, "data", _Pruned(maxdepth=maxdepth), subtrees=True)
+    ]
+    last = {
+        e.directory: i
+        for i, e in enumerate(events)
+        if isinstance(e, _Listing) and e.last
+    }
+    told = [e.directory for e in events if isinstance(e, _SubtreeListed)]
+    assert sorted(told) == sorted(last)
+    at = {
+        d: i
+        for i, e in enumerate(events)
+        if isinstance(e, _SubtreeListed)
+        for d in [e.directory]
+    }
+    for directory, index in at.items():
+        assert index > last[directory]
+        below = [d for d in at if d.startswith(directory + "/")]
+        assert all(at[d] < index for d in below)

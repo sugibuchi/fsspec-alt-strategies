@@ -137,41 +137,65 @@ def _tree_walk(
         op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
     ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
         # Each directory's parts, held until its last, as fsspec's walk gives a
-        # directory whole. Bottom up, a directory then waits for those below it.
+        # directory whole. Bottom up, a directory then waits until all below it
+        # is listed.
         held: dict[str, list[dict[str, Any]]] = {}
-        bottom_up = None if topdown else _BottomUp()
-        chunks = _parts(
-            _chunks(handler, path, visit, ils_kwargs=ils_kwargs, stopping=op.cancelling)
+        waiting: dict[str, _Listing] = {}
+        events = _parts(
+            _chunks(
+                handler,
+                path,
+                visit,
+                ils_kwargs=ils_kwargs,
+                stopping=op.cancelling,
+                subtrees=not topdown,
+            )
         )
 
-        async with aclosing(chunks):
-            async for part in chunks:
-                if (listing := _whole(part, held)) is None:
+        async with aclosing(events):
+            async for event in events:
+                if (listing := _ready(event, held, waiting, topdown)) is None:
                     continue
                 if listing.error is not None and on_error == "raise":
                     raise listing.error
-
-                ready = [listing]
-                if bottom_up is not None:
-                    subdirs = _walked_subdirs(listing, visit)
-                    ready = bottom_up.add(listing, subdirs)
-
-                for listing in ready:
-                    op.state = _walk_state(op.state, listing)
-                    if (item := _walked(listing, on_error)) is not None:
-                        yield item
+                op.state = _walk_state(op.state, listing)
+                if (item := _walked(listing, on_error)) is not None:
+                    yield item
 
     return Operation(run, WalkState(directories_listed=0))
 
 
-async def _parts(events: AsyncGenerator[_Event]) -> AsyncGenerator[_Listing]:
-    """A walk's parts, as fsspec's walk takes them: a root that is a file raises, and what is left is not walked."""
+async def _parts(
+    events: AsyncGenerator[_Event],
+) -> AsyncGenerator[_Listing | _SubtreeListed]:
+    """A walk's parts and subtrees, as fsspec's walk takes them: a root that is a file raises, and what is left is not walked."""
     async with aclosing(events):
         async for event in events:
             if isinstance(event, _FileRoot):
                 raise event.error
-            elif isinstance(event, _Listing):
+            elif not isinstance(event, _Skipped):
                 yield event
+
+
+def _ready(
+    event: _Listing | _SubtreeListed,
+    held: dict[str, list[dict[str, Any]]],
+    waiting: dict[str, _Listing],
+    topdown: bool,
+) -> _Listing | None:
+    """The whole listing a walk yields next, if any, as an event makes it ready.
+
+    Top down, a listing is ready once whole. Bottom up, a whole one waits in
+    ``waiting`` until all below its directory is listed, though its error is
+    ready at once to raise.
+    """
+    if isinstance(event, _SubtreeListed):
+        return waiting.pop(event.directory)
+    elif (listing := _whole(event, held)) is None or topdown:
+        return listing
+    else:
+        waiting[listing.directory] = listing
+        return None
 
 
 def _whole(part: _Listing, held: dict[str, list[dict[str, Any]]]) -> _Listing | None:
@@ -211,21 +235,6 @@ def _walk_state(state: WalkState, listing: _Listing) -> WalkState:
         directories_listed=(state.directories_listed or 0) + 1,
         found=state.found + len(listing.entries),
     )
-
-
-def _walked_subdirs(listing: _Listing, visit: _Visit) -> list[str]:
-    """The subdirectories of a whole listing that the walk lists too, each once."""
-    if listing.error is not None:
-        return []
-    else:
-        return list(
-            dict.fromkeys(
-                e["name"].rstrip("/")
-                for e in listing.entries
-                if e["type"] == "directory"
-                and visit.enter(e, listing.depth + 1) != "skip"
-            )
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,8 +288,21 @@ class _FileRoot:
     error: NotADirectoryError
 
 
-_Event = _Listing | _Skipped | _FileRoot
-"""What a walk yields: the parts of each directory's listing, and what it found but did not list."""
+@dataclass(frozen=True, slots=True)
+class _SubtreeListed:
+    """All below a directory is listed: its listing, and those of the subdirectories the walk lists, have ended.
+
+    It comes after the directory's last part, deepest first where several end
+    at once. A listing that failed has ended too. A walk stopped never tells
+    it of a directory with a listing below it left unended. Only a walk asked
+    for them yields these.
+    """
+
+    directory: str
+
+
+_Event = _Listing | _Skipped | _FileRoot | _SubtreeListed
+"""What a walk yields: the parts of each directory's listing, what it found but did not list, and when a subtree is done."""
 
 
 _CHUNK_SIZE = 1000
@@ -295,6 +317,7 @@ async def _chunks(
     ils_kwargs: dict[str, Any] | None = None,
     stopping: Callable[[], object] | None = None,
     chunk_size: int = _CHUNK_SIZE,
+    subtrees: bool = False,
 ) -> AsyncGenerator[_Event]:
     """Walk a directory tree, yielding each directory's listing in parts, as they come.
 
@@ -310,7 +333,10 @@ async def _chunks(
     `_FileRoot`, and the other roots walked. Any other failed listing is
     yielded as its last part, with its error, and its subdirectories not
     listed yet are not walked. A subdirectory the visit leaves is yielded as a
-    `_Skipped`, before the part that found it.
+    `_Skipped`, before the part that found it. With ``subtrees``, a
+    `_SubtreeListed` tells when all below a directory is listed, as a walk
+    bottom up needs: it costs the names of the directories whose subtrees
+    are not done.
 
     ``visit`` says which directories the walk lists: by default all below
     each root. A root starts at the depth it says, e.g. a glob's match one
@@ -333,6 +359,7 @@ async def _chunks(
     # storage's id, else by its path: a root given as a path, verified.
     roots, listed = _roots(path)
     plan = _Plan(visit or _Visit(), listed)
+    done = _Subtrees(plan) if subtrees else None
     # The directories to list, each with its depth.
     directories: _Queue[tuple[str, int]] = _Queue(handler.operation_limit)
     # The parts listed, a few at a time: a listing waits while they are full.
@@ -382,7 +409,7 @@ async def _chunks(
                 continue
 
             # A root's failure is raised here, before another listing starts.
-            events, listing = _taken(part, roots, plan, found)
+            events, listing = _taken(part, roots, plan, found, done)
             directories.waiting.extend(listing)
 
             # Start the next listings before yielding, so that they run while
@@ -395,13 +422,18 @@ async def _chunks(
 
 
 def _taken(
-    part: _Listing, roots: set[str], plan: _Plan, found: dict[str, set[str]]
+    part: _Listing,
+    roots: set[str],
+    plan: _Plan,
+    found: dict[str, set[str]],
+    done: _Subtrees | None,
 ) -> tuple[list[_Event], list[tuple[str, int]]]:
     """What the walk yields of a part, and the subdirectories it adds to list.
 
     A root's failure before its first part raises, as nothing has been done
     yet, but a file's, which is a `_FileRoot`. Any other failure is the part's,
-    noted with its directory.
+    noted with its directory. With ``done``, the subtrees the part ends follow
+    it.
     """
     if part.error is None:
         part = _once(part, found)
@@ -410,14 +442,18 @@ def _taken(
 
     if part.error is None:
         listing, skipped = plan.found(part)
-        return [*skipped, part], listing
+        events: list[_Event] = [*skipped, part]
     elif part.directory in roots and part.first:
         if not isinstance(part.error, NotADirectoryError):
             raise part.error
         return [_FileRoot(part.directory, part.error)], []
     else:
         _note(part.error, part.directory)
-        return [part], []
+        listing, events = [], [part]
+
+    if done is not None:
+        events += done.add(part, listing)
+    return events, listing
 
 
 def _roots(
@@ -1044,43 +1080,65 @@ def _note(error: Exception, directory: str) -> None:
     error.directory = directory  # type: ignore[attr-defined]
 
 
-class _BottomUp:
-    """Holds each listing back until the listings of its subdirectories are out.
+class _Subtrees:
+    """Tells when all below a directory is listed: its own listing, and those of its subdirectories the walk lists.
 
     A subdirectory's listing may end before its parent's: a recursive listing
     passes a directory only after all below it, and a long listing streamed
-    ends after the short ones it found. Such a subdirectory, out already,
-    is not waited for.
+    ends after the short ones it found. Such a subdirectory, done already, is
+    not waited for.
     """
 
-    def __init__(self) -> None:
-        # Each listing held back, with how many of its subdirectories are not out.
-        self.held: dict[str, tuple[_Listing, int]] = {}
+    def __init__(self, plan: _Plan) -> None:
+        self.plan = plan
+        # The subdirectories each directory being listed has shown so far.
+        self.subdirs: dict[str, list[str]] = {}
+        # Each directory listed whose subtree is not done, with how many of its
+        # subdirectories are not, and the directory each of those is in.
+        self.waiting: dict[str, int] = {}
         self.parents: dict[str, str] = {}
-        # The directories out before their parent's listing ended.
-        self.out: set[str] = set()
+        # The directories done before their parent's listing ended.
+        self.done: set[str] = set()
 
-    def add(self, listing: _Listing, subdirs: list[str]) -> list[_Listing]:
-        """The listings ready once this one is in, deepest first."""
-        waiting = [s for s in subdirs if s not in self.out]
-        self.out.difference_update(subdirs)
+    def add(
+        self, part: _Listing, listing: list[tuple[str, int]]
+    ) -> list[_SubtreeListed]:
+        """Note a part's subdirectories, and once it is the last, the subtrees it ends, deepest first.
+
+        A part from a recursive listing shows every subdirectory it holds, each
+        listed in the same listing. Any other shows those the walk lists.
+        """
+        if self.plan.in_subtree(part.directory):
+            names = [
+                e["name"].rstrip("/") for e in part.entries if e["type"] == "directory"
+            ]
+        else:
+            names = [name for name, _ in listing]
+        self.subdirs.setdefault(part.directory, []).extend(names)
+        if not part.last:
+            return []
+        else:
+            return [_SubtreeListed(d) for d in self._ended(part.directory)]
+
+    def _ended(self, directory: str) -> list[str]:
+        """The directories whose subtree is done once this one's listing ended, deepest first."""
+        subdirs = self.subdirs.pop(directory)
+        waiting = [s for s in subdirs if s not in self.done]
+        self.done.difference_update(subdirs)
         if waiting:
-            self.held[listing.directory] = listing, len(waiting)
-            self.parents.update(dict.fromkeys(waiting, listing.directory))
+            self.waiting[directory] = len(waiting)
+            self.parents.update(dict.fromkeys(waiting, directory))
             return []
 
-        ready = [listing]
-        directory = listing.directory
-
+        ready = [directory]
         # A subtree done may complete its parent's, and so on up.
         while (parent := self.parents.pop(directory, None)) is not None:
-            held, remaining = self.held[parent]
-            if remaining > 1:
-                self.held[parent] = held, remaining - 1
+            if self.waiting[parent] > 1:
+                self.waiting[parent] -= 1
                 return ready
-            del self.held[parent]
-            ready.append(held)
+            del self.waiting[parent]
+            ready.append(parent)
             directory = parent
 
-        self.out.add(directory)  # Its parent's listing has not ended yet.
+        self.done.add(directory)  # Its parent's listing has not ended yet.
         return ready

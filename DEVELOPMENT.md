@@ -481,6 +481,19 @@ keeping the default, or falling back on it, needs no `recursive_order`.
 The strategies walk with a private engine, `tree.walk._chunks`. It streams each directory in parts of at most 1000
 entries. A huge directory is never held whole, except by `_tree_walk`, which answers as fsspec's `walk` does.
 
+A walk's plan has two sides:
+
+- Which directories to visit is the operation's, as its arguments say: a `maxdepth`, a glob's pattern, a
+  `descend`. A `_Visit`, in `tree/_visit.py`, tells the walk of each directory it finds whether to leave it, list it
+  alone, or take all below it.
+- How each is listed is the storage's. Only all below a directory may be listed by one recursive listing.
+
+Beside each directory's parts, the walk yields what its consumers would otherwise work out again:
+
+- `_Skipped`, a subdirectory the visit leaves, e.g. deeper than `maxdepth`, before the part that found it;
+- `_FileRoot`, a root that is a file, with its entry as its listing gave it;
+- with `subtrees=True`, `_SubtreeListed`, once all below a directory is listed, as a walk bottom up needs.
+
 - A tree that nothing prunes is listed by one recursive listing per root. Its order tells when each directory is
   done. Where the storage has a recursive listing, that is one paginated request, which usually beats a directory per
   request.
