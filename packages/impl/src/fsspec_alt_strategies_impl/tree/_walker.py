@@ -122,10 +122,10 @@ class _TreeWalk:
         """Walk, yielding each directory's listing in the walk's order."""
         await self.handler.open()
         for name, entry in sorted(self.roots.items(), reverse=True):
-            depth = self.visit.depth(name)
+            depth = self.visit.root_depth(name)
             listed = entry or {"name": name, "type": "directory"}
             self.pending.append(
-                self._pending(name, depth, entry, self.visit.root(listed, depth))
+                self._pending(name, depth, entry, self.visit.enter_root(listed, depth))
             )
         try:
             while await self._start():

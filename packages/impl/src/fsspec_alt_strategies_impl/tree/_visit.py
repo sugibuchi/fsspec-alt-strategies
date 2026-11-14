@@ -8,9 +8,9 @@ decides what the operation answers. How each is listed, one directory per
 request or a whole subtree by one, is the storage's, and decides only what the
 listing costs.
 
-A `_Visit` is the operation's side. The walk asks it of each root, then of each
-subdirectory a listing finds, whether to leave it, list it alone, or take all
-below it. Only all below a directory may be listed by one recursive listing.
+A `_Visit` is the operation's side. The walk asks it of each root of the walk,
+by `enter_root`, then of each subdirectory a listing finds, by `enter`, whether
+to leave it, list it alone, or take all below it. Only all below a directory may be listed by one recursive listing.
 
 This module depends on `handler` and `paths` of `common`.
 """
@@ -39,12 +39,12 @@ class _Visit:
     finds it.
     """
 
-    def depth(self, root: str) -> int:
-        """The depth of a root of the walk: 1, as the directory walked from."""
+    def root_depth(self, path: str) -> int:
+        """The depth a root of the walk starts at, by its path: 1, as the directory walked from."""
         return 1
 
-    def root(self, entry: Entry, depth: int) -> Literal["directory", "subtree"]:
-        """Whether a root is listed alone, or with all below it: a root is never left."""
+    def enter_root(self, entry: Entry, depth: int) -> Literal["directory", "subtree"]:
+        """Whether a root of the walk is listed alone, or with all below it: a root is never left."""
         return "subtree"
 
     def enter(self, entry: dict[str, Any], depth: int) -> _Need:
@@ -82,10 +82,10 @@ class _Pruned(_Visit):
         self.whole = whole
         self.matched = matched
 
-    def depth(self, root: str) -> int:
-        return 2 if root in self.matched else 1
+    def root_depth(self, path: str) -> int:
+        return 2 if path in self.matched else 1
 
-    def root(self, entry: Entry, depth: int) -> Literal["directory", "subtree"]:
+    def enter_root(self, entry: Entry, depth: int) -> Literal["directory", "subtree"]:
         return "subtree" if self._all_below(entry) else "directory"
 
     def enter(self, entry: dict[str, Any], depth: int) -> _Need:
