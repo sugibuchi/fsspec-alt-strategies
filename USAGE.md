@@ -157,24 +157,25 @@ Two mixins in `common/clients.py` hold a handler's clients:
 
 - `SyncClientSupport` runs a sync client's blocking calls in threads of the handler's own, by `_run_in_thread`.
 - `AsyncClientSupport` holds an async client, e.g. an aiohttp session, which belongs to the loop it was made on. A
-  handler implements `create_clients`, returning them, and `close_clients(clients)`. Its requests get them by
-  `await self.ensure_clients()`, which makes them on the running loop, once, and again on another loop. `aclose()`
-  closes them on their loop: awaited there, or sent there as a task from another loop.
+  handler implements `create_clients`, making them in fields of its own, and `close_clients`, closing those. Its
+  requests call `await self.ensure_clients()` first, which makes them on the running loop, once, and again on another
+  loop. `aclose()` closes them on their loop: awaited there, or sent there as a task from another loop.
 
 ```python
 from fsspec_alt_strategies_impl.common.clients import AsyncClientSupport
 
 
-class MyHandler(AsyncClientSupport[aiohttp.ClientSession], TreeHandler):
+class MyHandler(AsyncClientSupport, TreeHandler):
     async def create_clients(self):
-        return aiohttp.ClientSession()
+        self.session = aiohttp.ClientSession()
 
-    async def close_clients(self, clients):
-        await clients.close()
+    async def close_clients(self):
+        await self.session.close()
 
     async def info(self, entry, **kwargs):
-        session = await self.ensure_clients()
-        ...
+        await self.ensure_clients()
+        async with self.session.get(...) as response:
+            ...
 ```
 
 It takes no path: the profile is one for the whole storage. A storage whose behaviour differs by path is several

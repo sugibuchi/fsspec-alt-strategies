@@ -21,13 +21,14 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import contextvars
 import functools
 import weakref
 from abc import abstractmethod
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -35,7 +36,6 @@ if TYPE_CHECKING:
 __all__ = ["AsyncClientSupport", "SyncClientSupport"]
 
 _T = TypeVar("_T")
-_C = TypeVar("_C")
 
 
 class SyncClientSupport:
@@ -116,69 +116,73 @@ class SyncClientSupport:
             close()
 
 
-class AsyncClientSupport(Generic[_C]):
+class AsyncClientSupport:
     """A handler mixin making an async client's clients on the running loop, and closing them on theirs.
 
-    A subclass implements `create_clients`, which makes them, e.g. a session,
-    and `close_clients`, which closes them. Its requests get them by
-    `ensure_clients`:
+    A subclass implements `create_clients`, which makes them in fields of its
+    own, e.g. a session, and `close_clients`, which closes those. Its requests
+    call `ensure_clients` first, then use the fields:
 
     - the first call makes them on the running loop, and notes that loop.
       Calls at once on that loop wait for the one making them;
-    - a call on another loop, e.g. after the first one ended, makes them again
-      on it, and closes the old ones on theirs, as `aclose` does.
+    - a call on another loop, e.g. after the first one ended, closes the old
+      ones on theirs, as `aclose` does, then makes them again on it.
 
     `aclose` closes them, then closes as the next class does. Where their loop
     runs `aclose`, it awaits `close_clients`. Where it runs in another thread,
     e.g. fsspec's own loop, it sends it there as a task, and awaits it. Where
     their loop has ended, they are dropped: nothing can close them now. The
     sync `close` sends it as a task to their loop, without waiting, as it
-    cannot await. Either way, a call after makes them again.
+    cannot await: the next `ensure_clients` awaits it, where it can, before
+    making new ones, so that the closing never sees them. Either way, a call
+    after makes them again.
 
     A failed close is dropped, its error never logged: a storage's message
     may carry credentials.
 
     Examples
     --------
-    >>> class MyHandler(AsyncClientSupport[aiohttp.ClientSession], TreeHandler):
+    >>> class MyHandler(AsyncClientSupport, TreeHandler):
     ...     async def create_clients(self):
-    ...         return aiohttp.ClientSession()
+    ...         self.session = aiohttp.ClientSession()
     ...
-    ...     async def close_clients(self, clients):
-    ...         await clients.close()
+    ...     async def close_clients(self):
+    ...         await self.session.close()
     ...
     ...     async def info(self, entry, **kwargs):
-    ...         session = await self.ensure_clients()
-    ...         ...
+    ...         await self.ensure_clients()
+    ...         async with self.session.get(...) as response:
+    ...             ...
     """
 
-    _clients: _C | None = None
     _clients_loop: asyncio.AbstractEventLoop | None = None
+    """The loop the clients were made on: None while there are none."""
+
+    _closing: asyncio.Future[None] | concurrent.futures.Future[None] | None = None
+    """The closing the sync `close` sent, not yet awaited."""
+
     _clients_lock: asyncio.Lock | None = None
     _lock_loop: asyncio.AbstractEventLoop | None = None
 
     @abstractmethod
-    async def create_clients(self) -> _C:
-        """Make the clients on the running loop, e.g. a session: `ensure_clients` keeps them."""
+    async def create_clients(self) -> None:
+        """Make the clients on the running loop, in fields of the handler's own, e.g. a session."""
 
     @abstractmethod
-    async def close_clients(self, clients: _C) -> None:
-        """Close clients `create_clients` made, on the loop they were made on."""
+    async def close_clients(self) -> None:
+        """Close the clients `create_clients` made, on the loop they were made on."""
 
-    async def ensure_clients(self) -> _C:
-        """The clients of the running loop: made by `create_clients` the first time, and on another loop."""
+    async def ensure_clients(self) -> None:
+        """Make the clients of the running loop by `create_clients`: the first time, and on another loop."""
         loop = asyncio.get_running_loop()
-        clients = self._clients
-        if clients is not None and self._clients_loop is loop:
-            return clients
+        if self._clients_loop is loop:
+            return
         async with self._lock(loop):
-            clients = self._clients
-            if clients is not None and self._clients_loop is loop:
-                return clients  # Made meanwhile, by a call that held the lock.
+            if self._clients_loop is loop:
+                return  # Made meanwhile, by a call that held the lock.
             await self._drop_clients()
-            clients = await self.create_clients()
-            self._clients, self._clients_loop = clients, loop
-            return clients
+            await self.create_clients()
+            self._clients_loop = loop
 
     def _lock(self, loop: asyncio.AbstractEventLoop) -> asyncio.Lock:
         """A lock of ``loop``'s, for the calls making the clients on it: a lock serves one loop only."""
@@ -189,17 +193,26 @@ class AsyncClientSupport(Generic[_C]):
         return lock
 
     async def _drop_clients(self) -> None:
-        """Forget the clients, and close them on their loop: awaited, there or from here."""
-        clients, loop = self._clients, self._clients_loop
-        self._clients = self._clients_loop = None
-        if clients is None or loop is None:
-            return
+        """Close the clients on their loop, awaited, there or from here, and any closing `close` sent."""
+        loop, self._clients_loop = self._clients_loop, None
         if loop is asyncio.get_running_loop():
-            await _quietly(self.close_clients(clients))
-            return
-        sent = _send(loop, self.close_clients(clients))
-        if sent is not None:
-            await asyncio.wrap_future(sent)
+            await _quietly(self.close_clients())
+        elif loop is not None:
+            self._closing = _send(loop, self.close_clients())
+        await self._closed()
+
+    async def _closed(self) -> None:
+        """Await the closing sent to the clients' loop, where this loop can.
+
+        A task of the running loop is awaited, and one of another thread's
+        loop through its future. A task `close` made on another loop, called
+        from inside it, cannot be awaited here: that loop runs it.
+        """
+        closing, self._closing = self._closing, None
+        if isinstance(closing, concurrent.futures.Future):
+            await asyncio.wrap_future(closing)
+        elif closing is not None and closing.get_loop() is asyncio.get_running_loop():
+            await closing
 
     async def aclose(self) -> None:
         """Close the clients on their loop, then close as the next class's `aclose` does, e.g. `StorageHandler`'s."""
@@ -210,10 +223,9 @@ class AsyncClientSupport(Generic[_C]):
 
     def close(self) -> None:
         """Send the clients' closing to their loop, without waiting, then close as the next class's `close` does."""
-        clients, loop = self._clients, self._clients_loop
-        self._clients = self._clients_loop = None
-        if clients is not None and loop is not None:
-            _send(loop, self.close_clients(clients))
+        loop, self._clients_loop = self._clients_loop, None
+        if loop is not None:
+            self._closing = _send(loop, self.close_clients())
         close = getattr(super(), "close", None)
         if close is not None:
             close()
@@ -226,10 +238,13 @@ async def _quietly(closing: Coroutine[Any, Any, None]) -> None:
         await closing
 
 
-def _send(loop: asyncio.AbstractEventLoop, closing: Coroutine[Any, Any, None]) -> Any:
-    """Run a closing on ``loop`` as a task: a future of it from another thread, else None.
+def _send(
+    loop: asyncio.AbstractEventLoop, closing: Coroutine[Any, Any, None]
+) -> asyncio.Task[None] | concurrent.futures.Future[None] | None:
+    """Run a closing on ``loop`` as a task: the task, or a future of it from another thread.
 
-    A loop that has ended runs nothing: the closing is dropped, unstarted.
+    A loop that has ended runs nothing: the closing is dropped, unstarted, and
+    None returned.
     """
     try:
         running = asyncio.get_running_loop()
@@ -242,7 +257,7 @@ def _send(loop: asyncio.AbstractEventLoop, closing: Coroutine[Any, Any, None]) -
         task = loop.create_task(_quietly(closing))
         _tasks.add(task)  # Kept until done: a loop holds its tasks weakly.
         task.add_done_callback(_tasks.discard)
-        return None
+        return task
     return asyncio.run_coroutine_threadsafe(_quietly(closing), loop)
 
 
