@@ -39,6 +39,38 @@ directories. It is a third-party project, not part of fsspec.
   each for its own storage's behaviour.
 - This library declares a storage's behaviour in a profile instead. From the profile declared for a filesystem, its
   operations choose the fitting algorithm.
+- A storage has one profile. Where its behaviour differs by path, e.g. from one bucket to another, it is served as
+  several storages behind a router, each with its own profile. So no operation needs exceptions by path.
+- The same goes for files: one abstract file object class works well across different types of workloads, without
+  parameters fine-tuned for each.
+
+### Observability and control
+
+- Follow a long operation file by file, see which files failed, and stop it at any time, through the familiar fsspec
+  calls.
+
+### AI oriented
+
+- We assume that AI assistants will do much of the work of developing and maintaining fsspec implementations.
+- The library offers material that gives an AI assistant enough context to do that work. That includes its documented
+  design and conventions, the docstrings of the primitives an implementation writes, and a simulated filesystem to test
+  against.
+
+## Offered by this package
+
+### A framework for new filesystem classes
+
+- A new filesystem implements a storage handler: a few basic operations on single files, and the checks of its paths.
+  The library gives the rest of fsspec's API on it.
+- Every path is checked before the storage is accessed. A copy places each file below its destination, so a name
+  holding ".." can never leave it.
+- The library keeps fsspec's conventions for every filesystem: its answers and errors, its listings cache, and the
+  monitoring of each call.
+- A storage changing many files by one request, e.g. a batch delete, plugs that request in. The library sends it the
+  files in batches.
+- A developer chooses another algorithm for one operation by overriding it, e.g. a storage's own glob.
+- A router spans several storages under one filesystem, each served by its own handler. It copies and moves files
+  between them, leaving no part of a file, and checks each file's size.
 
 ### Adaptive file objects
 
@@ -54,24 +86,11 @@ directories. It is a third-party project, not part of fsspec.
 - Some client libraries give file-like objects of their own to read and write a storage's files. So transactions come
   as adapters around any file-like object, with a few predefined transaction strategies to choose from.
 
-### Observability and control
+### Wrappers for existing fsspec implementations
 
-- Follow a long operation file by file, see which files failed, and stop it at any time, through the familiar fsspec
-  calls.
-
-### AI oriented
-
-- We assume that AI assistants will do much of the work of developing and maintaining fsspec implementations.
-- The library offers material that gives an AI assistant enough context to do that work. That includes its documented
-  design and conventions, the docstrings of the primitives an implementation writes, and a simulated filesystem to test
-  against.
-
-## It also offers
-
-- **Copies between storages:** one filesystem can span several storages, and copy or move files between them. A copy
-  leaves no part of a file, and checks each file's size.
-- **Works with what you have:** existing fsspec filesystems, such as s3fs, get these features with a single call. A
-  new one implements a storage handler: a few basic operations, and the checks of its paths.
+- Existing fsspec filesystems, such as s3fs, gcsfs and adlfs, get these features with a single call.
+- Each known one is wrapped with its storage's profile and limits. s3fs, gcsfs and adlfs each get a wrapper of their
+  own, which uses what their library does beyond fsspec's API to save requests.
 
 ## Getting started
 
