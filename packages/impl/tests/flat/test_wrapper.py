@@ -72,9 +72,11 @@ async def test_a_key_gone_meanwhile_is_no_error(inner: SimulatedFileSystem) -> N
     assert not await inner._exists("data/d.txt")
 
 
-def test_rm_batch_size_must_be_positive(inner: SimulatedFileSystem) -> None:
+async def test_rm_batch_size_must_be_positive(inner: SimulatedFileSystem) -> None:
+    # The handler takes any: the strategy batching by it refuses it, as it starts.
+    fs = _flat(inner, **{**_OPTIONS, "rm_batch_size": 0})
     with pytest.raises(ValueError, match="rm_batch_size"):
-        _flat(inner, **{**_OPTIONS, "rm_batch_size": 0})
+        await fs._rm("data", recursive=True)
 
 
 def test_a_sync_filesystem_answers_as_fsspec(tmp_path: Path) -> None:

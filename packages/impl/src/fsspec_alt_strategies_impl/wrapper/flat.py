@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..common.rm_files import _rm_by_request
 from ..flat.handler import FlatFileOperationHandler
-from ._base import _batch_size, _FsspecHandler
+from ._base import _FsspecHandler
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
@@ -85,7 +85,8 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
     Raises
     ------
     ValueError
-        If a concurrency, or a batch size, is less than 1.
+        If a concurrency is less than 1. A batch size less than 1 is refused by
+        the strategy batching by it, as it starts.
     See Also
     --------
     FsspecTreeHandler : The same, for storages with a hierarchical namespace.
@@ -124,11 +125,11 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
         )
         # Its strategies' batches, the Strategy mixin's: the class's where left out.
         if rm_batch_size is not None:
-            self.rm_batch_size = _batch_size(rm_batch_size, "rm_batch_size")
+            self.rm_batch_size = rm_batch_size
         if cp_batch_size is not None:
-            self.cp_batch_size = _batch_size(cp_batch_size, "cp_batch_size")
+            self.cp_batch_size = cp_batch_size
         if mv_batch_size is not None:
-            self.mv_batch_size = _batch_size(mv_batch_size, "mv_batch_size")
+            self.mv_batch_size = mv_batch_size
 
     async def ils_recursive(  # type: ignore[override]
         self, entry: Entry, *, prefix: str = "", **kwargs: Any

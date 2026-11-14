@@ -57,13 +57,6 @@ def _async_impl(fs: AbstractFileSystem) -> bool:
     return True
 
 
-def _batch_size(size: int, name: str) -> int:
-    """A batch size given to a generic handler's strategies, refused below 1, as no batch could be sent."""
-    if size < 1:
-        raise ValueError(f"{name} must be at least 1: {size}")
-    return size
-
-
 class _FsspecHandler(SyncClientSupport, StorageHandler):
     """An fsspec filesystem's primitives, its data methods and its files, as a handler's.
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..tree.handler import TreeFileOperationHandler
-from ._base import _batch_size, _FsspecHandler
+from ._base import _FsspecHandler
 
 if TYPE_CHECKING:
     import asyncio
@@ -69,7 +69,8 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
     Raises
     ------
     ValueError
-        If a concurrency, or a batch size, is less than 1.
+        If a concurrency is less than 1. A batch size less than 1 is refused by
+        the strategy batching by it, as it starts.
 
     See Also
     --------
@@ -108,11 +109,11 @@ class FsspecTreeHandler(_FsspecHandler, TreeFileOperationHandler):
         )
         # Its strategies' batches, the Strategy mixin's: the class's where left out.
         if rm_batch_size is not None:
-            self.rm_batch_size = _batch_size(rm_batch_size, "rm_batch_size")
+            self.rm_batch_size = rm_batch_size
         if cp_batch_size is not None:
-            self.cp_batch_size = _batch_size(cp_batch_size, "cp_batch_size")
+            self.cp_batch_size = cp_batch_size
         if mv_batch_size is not None:
-            self.mv_batch_size = _batch_size(mv_batch_size, "mv_batch_size")
+            self.mv_batch_size = mv_batch_size
 
     async def rm_tree(self, entry: Entry) -> None:
         # The wrapped one's own recursive delete, as deletes_directories declares.

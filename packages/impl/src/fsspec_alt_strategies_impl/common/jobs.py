@@ -260,11 +260,6 @@ def _check_batch_size(batch_size: int, name: str = "rm_batch_size") -> None:
         raise ValueError(f"{name} must be at least 1: {batch_size}")
 
 
-def _batch_size(handler: FileOperationHandler) -> int:
-    """The most paths a handler's ``rm_files`` takes at once."""
-    return handler.rm_batch_size
-
-
 def _keys_of(paths: tuple[str, ...]) -> str:
     """A batch's paths, for its error's note: all of a few, or the first and last."""
     if len(paths) <= 3:

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import MvState
 
-from ..common.jobs import _batch_size, _check_batch_size, _Job, _keys_of, _moves_of
+from ..common.jobs import _check_batch_size, _Job, _keys_of, _moves_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
 from .cp import _Copy, _CopyOrMove
@@ -139,7 +139,7 @@ def _flat_mv(
         "ils_kwargs": ils_kwargs,
     }
 
-    _check_batch_size(_batch_size(src))
+    _check_batch_size(src.rm_batch_size)
 
     async def run(op: Operation[Any, MvState]) -> AsyncGenerator[Any]:
         # A rename wins only where the storage is known to rename: the profile,
@@ -231,7 +231,7 @@ class _Move(_Copy):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
 
-        self.batch_size = _batch_size(self.handler)
+        self.batch_size = self.handler.rm_batch_size
 
         # The keys to delete. Each key moving, from its listing to its
         # deletion, has where it is copied, None for a marker: listed again,

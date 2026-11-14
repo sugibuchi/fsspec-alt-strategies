@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import RmState
 
-from ..common.jobs import _batch_size, _check_batch_size, _Job, _keys_of, _Roots
+from ..common.jobs import _check_batch_size, _Job, _keys_of, _Roots
 from ..common.paths import _check_maxdepth
 from ._jobs import _TreeJobs
 
@@ -124,7 +124,7 @@ def _tree_rm(
     ``rm_batch_size``, is less than 1.
     """
     _check_maxdepth(maxdepth)
-    _check_batch_size(_batch_size(handler))
+    _check_batch_size(handler.rm_batch_size)
     return _Deletion.operation(
         handler=handler, path=path, maxdepth=maxdepth, ils_kwargs=ils_kwargs
     )
@@ -153,7 +153,7 @@ class _Deletion(_TreeJobs):
     async def setup(self) -> None:
         await self.handler.open()
         # A handler may know its batch only once open, e.g. by the account's kind.
-        self.batch_size = _batch_size(self.handler)
+        self.batch_size = self.handler.rm_batch_size
         _check_batch_size(self.batch_size)
         profile = self.handler.profile
         # A directory deleted whole would take what is deeper than maxdepth.
