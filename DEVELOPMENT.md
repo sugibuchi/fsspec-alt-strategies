@@ -181,9 +181,8 @@ An item that exists is named by its entry, a dict as fsspec's `ls` with `detail`
 - The primitives take an entry for an item that exists, and a path for one to be made. A strategy passes the entries
   its listing gave, whole, so that a storage addressing items by id, or needing a size, asks nothing again. A name a
   listing gave is never verified again.
-- `open_file` takes an entry whatever its mode, so that one method opens a file to read or to write, and so do
-  `pipe_file` and `put_file`. A file to write may not exist yet: its entry then holds its name alone, as `entry`
-  makes it from a verified path.
+- `open_file` takes an entry whatever its mode, so that one method opens a file to read or to write. A file to write
+  may not exist yet: its entry then holds its name alone, as `entry` makes it from a verified path.
 
 #### The filesystem
 
