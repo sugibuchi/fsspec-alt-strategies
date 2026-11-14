@@ -392,8 +392,8 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         )
 
         self.handler = handler
-        # The storages routed to, by their handler's id, each kept with it.
-        self._storages: dict[int, _Storage] = {}
+        # The storages routed to, by their handler, each filesystem made once.
+        self._storages: dict[FileOperationHandler, _Storage] = {}
 
     def unstrip_protocol(self, name: str) -> str:
         """A path of the router as a URL: its handler's."""
@@ -455,8 +455,8 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
 
     def _storage(self, handler: FileOperationHandler, through: _Through) -> _Storage:
         """The storage of a handler, its filesystem made once."""
-        storage = self._storages.get(id(handler))
-        if storage is not None and storage.handler is handler:
+        storage = self._storages.get(handler)
+        if storage is not None:
             return storage
 
         # Never cached: the router keeps it, and fsspec would key it by the
@@ -468,13 +468,13 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
             loop=self.loop,
             skip_instance_cache=True,
         )
-        storage = self._storages[id(handler)] = _Storage(handler, fs, through)
+        storage = self._storages[handler] = _Storage(handler, fs, through)
         return storage
 
     def _outer(self, fs: AsyncFileSystem, path: str) -> str:
         """The router's path of ``path``, a path of a storage's filesystem."""
         handler = fs._handler
-        return self._lifted(self._storages[id(handler)].through, path)
+        return self._lifted(self._storages[handler].through, path)
 
     @staticmethod
     def _lifted(through: _Through, path: str) -> str:
