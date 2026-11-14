@@ -35,6 +35,7 @@ from fsspec_alt_strategies.monitor import Call, Monitored, routing
 
 from .common.filesystem import (
     BaseFileSystem,
+    _answer,
     _as_given,
     _copy_errors,
     _raise,
@@ -890,7 +891,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
             # fsspec's copy gives directories too, which each filesystem makes.
             await self._on(fs2, inner2, path2, fs2._makedirs(inner2, exist_ok=True))
         else:
-            copy_file = self._across(self._handler_of(fs1), self._handler_of(fs2))
+            copy_file = self._across(fs1._handler, fs2._handler)
             entry = {**entry, "name": inner1}
             await self._on(fs1, inner1, path1, copy_file(entry, inner2))
 
@@ -902,9 +903,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
             await self._on(fs1, inner1, path1, fs1._mv_file(inner1, inner2, **kwargs))
         else:
             entry = await self._on(fs1, inner1, path1, fs1._info(inner1))
-            mv_file = self._across(
-                self._handler_of(fs1), self._handler_of(fs2), move=True
-            )
+            mv_file = self._across(fs1._handler, fs2._handler, move=True)
             entry = {**entry, "name": inner1}
             await self._on(fs1, inner1, path1, mv_file(entry, inner2))
 
@@ -1018,9 +1017,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
 
     def _found(self, fs: AsyncFileSystem, found: dict[str, Any], detail: bool) -> Any:
         """An inner ``find`` or ``glob``'s answer with details, as the router's."""
-        entries = {self._outer(fs, n): self._entry(fs, e) for n, e in found.items()}
-        names = sorted(entries)
-        return {n: entries[n] for n in names} if detail else names
+        return _answer([self._entry(fs, e) for e in found.values()], detail)
 
     async def _du(
         self, path: str, total: bool = True, maxdepth: int | None = None, **kwargs: Any
@@ -1058,11 +1055,11 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
                     path, maxdepth=maxdepth, detail=detail, **kwargs
                 )
             # Each storage's own glob of what is below it: none other is listed.
-            entries: dict[str, Any] = {}
+            entries: list[dict[str, Any]] = []
             for pattern in spread:
-                entries.update(await self._glob(pattern, detail=True, **kwargs))
-            names = sorted(entries)
-            return {n: entries[n] for n in names} if detail else names
+                found = await self._glob(pattern, detail=True, **kwargs)
+                entries.extend(found.values())
+            return _answer(entries, detail)
 
         fs, inner = target
         found = await self._on(
@@ -1177,7 +1174,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
                     ),
                 )
             elif recursive:
-                op = await self._cross_fs_cp(fs1, sources, fs2, inner2, maxdepth)
+                op = self._cross_fs_cp(fs1, sources, fs2, inner2, maxdepth)
                 errors = await self._transferred(
                     op, fs1, sources, fs2, inner2, outers, path2, callback
                 )
@@ -1229,7 +1226,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
                 )
                 await self._on(fs1, sources, outer, move)
             elif recursive:
-                op = await self._cross_fs_mv(fs1, sources, fs2, inner2, maxdepth)
+                op = self._cross_fs_mv(fs1, sources, fs2, inner2, maxdepth)
                 errors = await self._transferred(
                     op,
                     fs1,
@@ -1250,7 +1247,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
 
         await self._each(await self._grouped(path1), mv, "Moving", clashes)
 
-    async def _cross_fs_cp(
+    def _cross_fs_cp(
         self,
         fs1: AsyncFileSystem,
         path1: str | list[str],
@@ -1263,7 +1260,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         Each file goes by the routing handler's ``cp_across``. The operation is
         returned not yet started.
         """
-        src, dst = self._handler_of(fs1), self._handler_of(fs2)
+        src, dst = fs1._handler, fs2._handler
         return src.cp(
             dst,
             _as_given(src, path1),
@@ -1273,7 +1270,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
             maxdepth=maxdepth,
         )
 
-    async def _cross_fs_mv(
+    def _cross_fs_mv(
         self,
         fs1: AsyncFileSystem,
         path1: str | list[str],
@@ -1287,7 +1284,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         or, where the move copies, e.g. a flat one deleting the keys copied in
         batches, by its ``cp_across``: two storages never rename.
         """
-        src, dst = self._handler_of(fs1), self._handler_of(fs2)
+        src, dst = fs1._handler, fs2._handler
         return src.mv(
             dst,
             _as_given(src, path1),
@@ -1297,11 +1294,6 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
             same_storage=False,
             maxdepth=maxdepth,
         )
-
-    @staticmethod
-    def _handler_of(fs: AsyncFileSystem) -> FileOperationHandler:
-        """The handler of a storage's filesystem, one the router made."""
-        return fs._handler
 
     def _across(
         self, src: StorageHandler, dst: StorageHandler, *, move: bool = False
