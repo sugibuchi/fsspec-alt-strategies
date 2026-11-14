@@ -5,24 +5,24 @@
 The repository is a uv workspace of two packages, each built and published on its own. The root holds the tooling:
 ruff, mypy, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
 
-| Path                                                    | Contents                                                                    |
-|---------------------------------------------------------|-----------------------------------------------------------------------------|
-| `packages/common/src/fsspec_alt_strategies/`            | The interface, installed once per project                                   |
-| `.../monitor.py`                                        | Operations' control, monitors, and the routers a call came through          |
-| `.../profile.py`                                        | `StorageProfile`: what a storage does that fsspec leaves open               |
-| `.../states.py`                                         | The states the strategies report, e.g. `FindState`                          |
-| `.../wrapper.py`                                        | `known_implementations`: how each known filesystem class is wrapped         |
-| `packages/impl/src/fsspec_alt_strategies_impl/`         | The strategies, copied into projects                                        |
-| `.../tree/`, `.../flat/`                                | The two families: each one's handler class and strategies                   |
-| `.../common/`                                           | What the families share, e.g. the base handler, `BaseFileSystem`, the jobs  |
-| `.../files/`                                            | File objects, their async adapters, and transactions                        |
-| `.../wrapper/`, `.../monitor.py`                        | Handlers wrapping fsspec filesystems, `FileSystemWrapper`, `monitored()`    |
-| `.../router.py`                                         | `RoutingHandler` and `RoutingFileSystem`, spanning several storages         |
-| `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem` and its views, apart so that copies leave them out    |
-| `packages/impl/src/fsspec_alt_strategies_impl_cli/`     | The command line copying the strategies, with the `cli` extra               |
-| `packages/*/tests/`                                     | Each package's tests                                                        |
-| `packages/*/hatch_build.py`                             | Gives each package the root README.md as its PyPI readme                    |
-| `.github/workflows/`                                    | CI, CodeQL, and one release workflow per package                            |
+| Path                                                    | Contents                                                 |
+|---------------------------------------------------------|----------------------------------------------------------|
+| `packages/common/src/fsspec_alt_strategies/`            | The interface, installed once per project                |
+| `.../monitor.py`                                        | Operations' control, monitors, the routers of a call     |
+| `.../profile.py`                                        | `StorageProfile`: what fsspec leaves open of a storage   |
+| `.../states.py`                                         | The states the strategies report, e.g. `FindState`       |
+| `.../wrapper.py`                                        | `known_implementations`: how known ones are wrapped      |
+| `packages/impl/src/fsspec_alt_strategies_impl/`         | The strategies, copied into projects                     |
+| `.../tree/`, `.../flat/`                                | Each family's handler class and strategies               |
+| `.../common/`                                           | What the families share, e.g. `BaseFileSystem`, the jobs |
+| `.../files/`                                            | File objects, their async adapters, and transactions     |
+| `.../wrapper/`, `.../monitor.py`                        | Handlers wrapping fsspec filesystems, `monitored()`      |
+| `.../router.py`                                         | `RoutingHandler`, `RoutingFileSystem`: many storages     |
+| `packages/impl/src/fsspec_alt_strategies_impl_testing/` | `SimulatedFileSystem`, views and checks, never copied    |
+| `packages/impl/src/fsspec_alt_strategies_impl_cli/`     | The command line copying the strategies: `cli` extra     |
+| `packages/*/tests/`                                     | Each package's tests                                     |
+| `packages/*/hatch_build.py`                             | Gives each package the root README.md as its PyPI readme |
+| `.github/workflows/`                                    | CI, CodeQL, and one release workflow per package         |
 
 The interface depends on fsspec alone, the strategies on fsspec and the interface. Both take their version from the
 git tag, through hatch-vcs.
