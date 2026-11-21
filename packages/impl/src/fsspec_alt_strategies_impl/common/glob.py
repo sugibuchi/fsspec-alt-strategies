@@ -94,7 +94,7 @@ class _MapEntry(PathTask):
 
 
 class _TraversalTask(PathTask):
-    """What both tasks share: the handler, the action, the patterns pruning, and a directory's items run.
+    """What both tasks share: the handler, the action, the patterns pruning, and a directory's map and reduce of its entries.
 
     Paths are compared by the handler, never as strings: a listing may name a
     directory with a trailing delimiter, as an object store does, or escape
@@ -132,8 +132,8 @@ class _TraversalTask(PathTask):
         """The task traversing a subdirectory to descend into."""
         raise NotImplementedError
 
-    async def _items(
-        self, value: Any, items: list[Entry], errors: list[BaseException]
+    async def _map_reduce(
+        self, value: Any, entries: list[Entry], errors: list[BaseException]
     ) -> Any:
         """Run a task per item of the directory, then reduce: its value, unless anything failed.
 
@@ -144,7 +144,7 @@ class _TraversalTask(PathTask):
             self._subtree(item)
             if item["type"] == "directory" and self._descend(item)
             else _MapEntry(self._engine, item, self.action)
-            for item in items
+            for item in entries
         ]
         values: list[Any] = []
         try:
@@ -184,7 +184,7 @@ class VisitDirectory(_TraversalTask):
             return await self.action.map(entry)
         value = await self.action.map(entry)
 
-        items: list[Entry] = []
+        entries: list[Entry] = []
         # The subdirectories listed, by key: one listed twice, e.g. as a prefix
         # and as its marker object, is traversed once.
         subdirs: set[tuple[str, ...]] = set()
@@ -198,11 +198,11 @@ class VisitDirectory(_TraversalTask):
                     if key in subdirs:
                         continue
                     subdirs.add(key)
-                items.append(found)
+                entries.append(found)
         finally:
             if (aclose := getattr(listing, "aclose", None)) is not None:
                 await aclose()
-        return await self._items(value, items, [])
+        return await self._map_reduce(value, entries, [])
 
     def _subtree(self, entry: Entry) -> PathTask:
         """All below a subdirectory by one listing, where asked and whole, else listed alone."""
@@ -248,8 +248,8 @@ class _HeldDirectory(_TraversalTask):
         if entry.get("type") != "directory":
             return await self.action.map(entry)
         value = await self.action.map(entry)
-        items = list(self._below.pop(self._key(entry["name"]), {}).values())
-        return await self._items(value, items, [])
+        entries = list(self._below.pop(self._key(entry["name"]), {}).values())
+        return await self._map_reduce(value, entries, [])
 
     def _subtree(self, entry: Entry) -> PathTask:
         return _HeldDirectory(
