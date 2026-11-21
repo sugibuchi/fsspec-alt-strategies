@@ -79,18 +79,18 @@ class _Count(PathAction):
         self.calls: list[tuple[str, str]] = []
         self.matched: set[str] = set()
 
-    async def map(self, info: dict[str, Any], match: bool) -> Any:
-        self.calls.append(("map", info["name"]))
+    async def map(self, entry: dict[str, Any], match: bool) -> Any:
+        self.calls.append(("map", entry["name"]))
         if match:
-            self.matched.add(info["name"])
-        return 1 if info["type"] == "file" else 0
+            self.matched.add(entry["name"])
+        return 1 if entry["type"] == "file" else 0
 
     async def reduce(
-        self, info: dict[str, Any], match: bool, value: Any, values: list[Any]
+        self, entry: dict[str, Any], match: bool, value: Any, values: list[Any]
     ) -> Any:
-        assert match == (info["name"] in self.matched)
-        self.calls.append(("reduce", info["name"]))
-        await self._emit_event((info["name"], sum(values)))
+        assert match == (entry["name"] in self.matched)
+        self.calls.append(("reduce", entry["name"]))
+        await self._emit_event((entry["name"], sum(values)))
         return sum(values)
 
 
@@ -198,16 +198,16 @@ async def test_the_items_are_mapped_in_parallel_after_their_directory(
     early: list[str] = []
 
     class _Slow(PathAction):
-        async def map(self, info: dict[str, Any], match: bool) -> Any:
+        async def map(self, entry: dict[str, Any], match: bool) -> Any:
             nonlocal active, peak
-            parent = info["name"].rpartition("/")[0]
+            parent = entry["name"].rpartition("/")[0]
             if parent and parent not in mapped:
-                early.append(info["name"])
+                early.append(entry["name"])
             active += 1
             peak = max(peak, active)
             await asyncio.sleep(0.01)
             active -= 1
-            mapped.add(info["name"])
+            mapped.add(entry["name"])
 
     files = [f"r/{i}" for i in range(6)]
     engine = TreeTraversal(max_running=4)

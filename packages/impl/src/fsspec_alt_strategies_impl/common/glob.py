@@ -62,17 +62,17 @@ class PathAction:
         # waiting while too many are unread.
         self._emit_event = emit_event
 
-    async def map(self, info: Entry, match: bool) -> Any:
+    async def map(self, entry: Entry, match: bool) -> Any:
         """Act on a path, before its subtree is traversed: a value for `reduce`, or None.
 
-        ``info`` is the path's entry, as a listing or ``info`` gave it.
+        ``entry`` is the path's entry, as a listing or ``info`` gave it.
         ``match`` is whether the task's patterns match the path, True where it
         has none: a path visited only on the way to others is not matched.
         """
         return None
 
     async def reduce(
-        self, info: Entry, match: bool, value: Any, values: list[Any]
+        self, entry: Entry, match: bool, value: Any, values: list[Any]
     ) -> Any:
         """Act on a directory, after its subtree is traversed: its value, or None.
 
