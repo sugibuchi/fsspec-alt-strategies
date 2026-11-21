@@ -155,7 +155,8 @@ class TreeTraversal:
             raise RuntimeError("A traversal runs once.")
         self._started = True
         for task in tasks:
-            self._check_new(task)
+            if task in self._pending_tasks:
+                raise ValueError(f"Task {task.path!r} is added twice.")
             # Given up front, they are in memory already: no room is waited for.
             self._initial.add(task)
             self._pending_tasks.add(task)
@@ -247,7 +248,8 @@ class TreeTraversal:
         """Add tasks to start, each waiting for room: once stopping, cancel them instead."""
         async with self._state:
             for task in tasks:
-                self._check_new(task)
+                if task._task is not None or task in self._pending_tasks:
+                    raise ValueError(f"Task {task.path!r} is added twice.")
                 if task.done():
                     continue  # Cancelled already: nothing to run.
                 await self._state.wait_for(
@@ -307,9 +309,3 @@ class TreeTraversal:
         for task in running:
             task.cancel()
         await asyncio.gather(*running, return_exceptions=True)
-
-    def _check_new(self, task: PathTask) -> None:
-        if task._engine is not self:
-            raise ValueError(f"Task {task.path!r} belongs to another traversal.")
-        if task._task is not None or task in self._pending_tasks:
-            raise ValueError(f"Task {task.path!r} is added twice.")
