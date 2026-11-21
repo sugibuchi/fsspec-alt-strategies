@@ -39,7 +39,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Iterable
+    from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable
 
 __all__: list[str] = []
 
@@ -120,8 +120,9 @@ class PathAction:
     writes only those it needs.
     """
 
-    def __init__(self, task: PathTask) -> None:
-        self.task = task
+    def __init__(self, emit_event: Callable[[Any], Coroutine[Any, Any, None]]) -> None:
+        # The traversal's, which a strategy passes: one action serves every task.
+        self._emit_event = emit_event
 
     async def map(self, info: dict[str, Any]) -> Any:
         """Act on a path, before its subtree is traversed: a value for `reduce`, or None.
@@ -139,8 +140,8 @@ class PathAction:
         return None
 
     async def emit_event(self, event: Any) -> None:
-        """Emit an event to the traversal's caller, as the task does."""
-        await self.task._emit_event(event)
+        """Emit an event to the traversal's caller, waiting while too many are unread."""
+        await self._emit_event(event)
 
 
 class _End:
