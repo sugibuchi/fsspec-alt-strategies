@@ -202,21 +202,9 @@ class VisitDirectory(_TraversalTask):
             )
 
 
-class _Open:
-    """A directory `TraverseSubtree` has mapped, and not yet reduced: the values of its items so far."""
-
-    def __init__(
-        self, key: tuple[str, ...], entry: Entry, match: bool, value: Any
-    ) -> None:
-        self.key = key
-        self.entry = entry
-        self.match = match
-        self.value = value
-        self.values: list[Any] = []
-
-    def holds(self, key: tuple[str, ...]) -> bool:
-        """Whether a path is below this directory."""
-        return len(self.key) < len(key) and key[: len(self.key)] == self.key
+def _below(directory: tuple[str, ...], key: tuple[str, ...]) -> bool:
+    """Whether a path's key is below a directory's."""
+    return len(directory) < len(key) and key[: len(directory)] == directory
 
 
 class TraverseSubtree(_TraversalTask):
@@ -224,13 +212,13 @@ class TraverseSubtree(_TraversalTask):
 
     The listing must give each directory's descendants together, as a
     listing in name order does: all below ``a/b/`` lie between two names.
-    Each directory is open from the first path below it to the first path
-    not below it: it is mapped as it opens, and reduced as it closes. Only
-    the directories open, those above the last path, are held.
+    Each directory is a `_Span` of the listing, which maps it, acts on what
+    is below it, and reduces it as the first path not below it comes. Only
+    the directories above the path read are held.
 
     A directory not listed, as an object store lists only files, is made from
-    the paths below it, by the handler's ``join``. A directory listed after
-    it was made, or opened, is not acted on again.
+    the path below it, by `subdir_entry`. A directory's marker listed inside
+    its span is skipped.
 
     So the items are acted on one at a time, in the listing's order. An
     error ends the whole subtree's task: no directory open is reduced.
@@ -251,79 +239,87 @@ class TraverseSubtree(_TraversalTask):
 
     async def run(self) -> Any:
         try:
-            return await self._traverse()
+            first = await anext(self.entries, None)
+            value, _ = await _Span(self, self.entry, first, self.entries).map_reduce()
+            return value
         finally:
             if (aclose := getattr(self.entries, "aclose", None)) is not None:
                 await aclose()
 
-    async def _traverse(self) -> Any:
-        entry = self.entry
-        match = self._matched(entry)
-        value = await self.action.map(entry, match)
-        if entry.get("type") != "directory" or not self._descend(entry):
-            # A file, or a directory kept as matched: reduced with no values.
-            return await self.action.reduce(entry, match, value, [])
+    def subdir_entry(self, root: Entry, entry: Entry) -> Entry:
+        """The entry of the directory in ``root`` that ``entry`` is below, made.
 
-        root = _Open(self._key(entry["name"]), entry, match, value)
-        opened = [root]
-        # A directory pruned: what is below it is skipped.
-        pruned: _Open | None = None
-        async for found in self.entries:
-            key = self._key(found["name"])
-            if not root.holds(key) or (pruned is not None and pruned.holds(key)):
-                continue  # The root's own marker, none of the subtree, or pruned.
-            while not opened[-1].holds(key) and opened[-1].key != key:
-                await self._close(opened)
-            if opened[-1].key != key:  # Else a directory listed once opened.
-                pruned = await self._visit(opened, key, found)
-        while len(opened) > 1:
-            await self._close(opened)
-        return await self.action.reduce(entry, match, value, root.values)
-
-    async def _visit(
-        self, opened: list[_Open], key: tuple[str, ...], found: Entry
-    ) -> _Open | None:
-        """Act on a path below the last directory open: the directory pruned, if any.
-
-        The directories between them, not listed, are made first.
+        E.g. ``{"name": "a/b/c"}`` for ``a/b`` and ``a/b/c/d``.
         """
-        root = opened[0]
-        for depth in range(len(opened[-1].key) + 1, len(key)):
-            name = self.handler.join(root.entry["name"], *key[len(root.key) : depth])
-            made = {"name": name, "size": 0, "type": "directory"}
-            if not await self._open(opened, key[:depth], made):
-                return _Open(key[:depth], made, False, None)
-        if found["type"] == "directory":
-            if not await self._open(opened, key, found):
-                return _Open(key, found, False, None)
-        else:
-            match = self._matched(found)
-            value = await self.action.map(found, match)
-            opened[-1].values.append(await self.action.reduce(found, match, value, []))
-        return None
+        depth = len(self._key(root["name"]))
+        name = self.handler.join(root["name"], self._key(entry["name"])[depth])
+        return {"name": name, "size": 0, "type": "directory"}
 
-    async def _open(
-        self, opened: list[_Open], key: tuple[str, ...], entry: Entry
-    ) -> bool:
-        """Map a directory: open if descended into, reduced at once if matched alone, else pruned.
 
-        It returns whether the paths below it are traversed.
-        """
-        descend = self._descend(entry)
-        match = self._matched(entry)
-        if not (descend or match):
-            return False
-        value = await self.action.map(entry, match)
-        if descend:
-            opened.append(_Open(key, entry, match, value))
-            return True
-        else:
-            opened[-1].values.append(await self.action.reduce(entry, match, value, []))
-            return False
+class _Span:
+    """A directory, and the run of a listing below it, starting at ``next``.
 
-    async def _close(self, opened: list[_Open]) -> None:
-        """Reduce the directory last opened: its value goes to its parent's."""
-        done = opened.pop()
-        opened[-1].values.append(
-            await self.action.reduce(done.entry, done.match, done.value, done.values)
-        )
+    `map_reduce` maps the directory, acts on each path below it, a
+    subdirectory by a span of its own, and reduces it. It returns its value,
+    and the first entry not below it, for its parent to go on from.
+    """
+
+    def __init__(
+        self,
+        task: TraverseSubtree,
+        root: Entry,
+        next: Entry | None,
+        entries: AsyncIterator[Entry],
+    ) -> None:
+        self.task = task
+        self.root = root
+        self.next = next
+        self.entries = entries
+
+    async def map_reduce(self) -> tuple[Any, Entry | None]:
+        task, root = self.task, self.root
+        match = task._matched(root)
+        value = await task.action.map(root, match)
+        if root.get("type") != "directory":
+            return await task.action.reduce(root, match, value, []), self.next
+        if not task._descend(root):
+            # A directory matched alone: reduced with no values, nothing below.
+            return await task.action.reduce(root, match, value, []), await self._skip()
+
+        key = task._key(root["name"])
+        values: list[Any] = []
+        next = self.next
+        while next is not None:
+            found = task._key(next["name"])
+            if found == key:
+                next = await anext(self.entries, None)  # Its own marker.
+                continue
+            if not _below(key, found):
+                break
+            if len(found) == len(key) + 1:
+                if next["type"] != "directory":
+                    item_match = task._matched(next)
+                    item = await task.action.map(next, item_match)
+                    values.append(await task.action.reduce(next, item_match, item, []))
+                    next = await anext(self.entries, None)
+                    continue
+                span = _Span(task, next, await anext(self.entries, None), self.entries)
+            else:
+                span = _Span(task, task.subdir_entry(root, next), next, self.entries)
+            if task._descend(span.root) or task._matched(span.root):
+                item, next = await span.map_reduce()
+                values.append(item)
+            else:
+                next = await span._skip()  # Pruned, with all below it.
+        return await task.action.reduce(root, match, value, values), next
+
+    async def _skip(self) -> Entry | None:
+        """Read past the span unread: the first entry not below the directory."""
+        key = self.task._key(self.root["name"])
+        next = self.next
+        while next is not None:
+            found = self.task._key(next["name"])
+            if found != key and not _below(key, found):
+                break
+            next = await anext(self.entries, None)
+        return next
