@@ -143,6 +143,36 @@ async def test_either_task_traverses_alike() -> None:
     assert sorted(action.calls) == sorted(by_directory.calls)
 
 
+async def test_a_subtree_streams_in_name_order_with_its_markers() -> None:
+    # As an object store lists: by name, so "r/a/b-x/" before "r/a/b/", with
+    # each directory's marker, the root's too, before what is below it.
+    names = ["r/", "r/1", "r/a/", "r/a/2", "r/a/b-x/", "r/a/b-x/4", "r/a/b/"]
+    names += ["r/a/b/3", "r/c/5"]
+
+    async def listing() -> AsyncIterator[dict[str, Any]]:
+        for name in names:
+            kind = "directory" if name.endswith("/") else "file"
+            yield {"name": name, "type": kind, "size": 0 if kind == "directory" else 1}
+
+    _, by_directory, _ = await _run(False)
+    engine = TreeTraversal(max_running=1)
+    action = _Count(engine._emit_event)
+    task = TraverseSubtree(engine, _dir("r"), action, _Handler(_FILES), listing())
+    events = [e async for e in engine.events([task])]
+    assert task.result() == 5
+    # The entries are as listed: a directory listed keeps its slash.
+    assert sorted((n.rstrip("/"), v) for n, v in events) == [
+        ("r", 5),
+        ("r/a", 3),
+        ("r/a/b", 1),
+        ("r/a/b-x", 1),
+        ("r/c", 1),
+    ]
+    # Each directory once, whether listed with a slash or made: r/c is made.
+    calls = sorted((c, n.rstrip("/")) for c, n in action.calls)
+    assert calls == sorted(by_directory.calls)
+
+
 @pytest.mark.parametrize("use_one_listing", [False, True])
 async def test_patterns_prune_the_directories_not_descended_into(
     use_one_listing: bool,

@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Two tasks traversing a tree for a `PathAction`, interchangeably, as glob patterns prune it.
 
-`VisitDirectory` lists one directory by ``ils``. `TraverseSubtree` takes a
-whole subtree's listing, as ``ils(..., recursive=True)`` gives it, and holds
-it. Both call the action alike: `map` on a path before what is below it,
-`reduce` after. Both run each item of a directory as a task, so the items'
-`map` run in parallel, once their directory's `map` is done. So
-either may traverse any subtree, and a `VisitDirectory` hands a subtree the
-patterns take whole to a `TraverseSubtree`, if asked to.
+`VisitDirectory` lists one directory by ``ils``, and runs each item as a
+task: the items' `map` run in parallel, once their directory's `map` is done.
+`TraverseSubtree` takes a whole subtree's listing, as
+``ils(..., recursive=True)`` gives it, and acts on its paths as it streams,
+one at a time. Both call the action alike: `map` on a path before what is
+below it, `reduce` after. So either may traverse any subtree, and a
+`VisitDirectory` hands a subtree the patterns take whole to a
+`TraverseSubtree`, if asked to.
 
 Patterns, `patterns._Search`s, prune: the directories descended into, and
 the subtrees listed whole. A directory not descended into is visited only if
@@ -16,9 +17,10 @@ a pattern matches it, and then not listed: its `reduce` gets no values.
 Every path visited is acted on, and told whether a pattern matches it: a path
 may be visited only on the way to others.
 
-An error, of ``ils`` or of the action, ends the path's task: what is below it
-runs on, then its directory's `reduce` is skipped, and the error goes up in an
-ExceptionGroup, to the strategy running the traversal.
+An error, of ``ils`` or of the action, ends the path's task. Below a
+`VisitDirectory`, the other items run on, then its `reduce` is skipped, and
+the error goes up in an ExceptionGroup, to the strategy running the
+traversal. A `TraverseSubtree` stops at once.
 
 This module depends on `handler`, `patterns` and `tree`.
 """
@@ -200,15 +202,38 @@ class VisitDirectory(_TraversalTask):
             )
 
 
-class TraverseSubtree(_TraversalTask):
-    """A subtree traversed from one listing of all below it, in any order.
+class _Open:
+    """A directory `TraverseSubtree` has mapped, and not yet reduced: the values of its items so far."""
 
-    The listing is read whole before any path is acted on, as a path's
-    descendants may come before it: the subtree is held in memory. A
-    directory not listed, as an object store lists only files, is made from
-    the paths below it, by the handler's ``join``. Then each directory below
-    is a `TraverseSubtree` of its own, with no listing: it runs its entries,
-    as `VisitDirectory` does, from what its root holds.
+    def __init__(
+        self, key: tuple[str, ...], entry: Entry, match: bool, value: Any
+    ) -> None:
+        self.key = key
+        self.entry = entry
+        self.match = match
+        self.value = value
+        self.values: list[Any] = []
+
+    def holds(self, key: tuple[str, ...]) -> bool:
+        """Whether a path is below this directory."""
+        return len(self.key) < len(key) and key[: len(self.key)] == self.key
+
+
+class TraverseSubtree(_TraversalTask):
+    """A subtree traversed from one listing of all below it, as it streams: no task per item.
+
+    The listing must give each directory's descendants together, as a
+    listing in name order does: all below ``a/b/`` lie between two names.
+    Each directory is open from the first path below it to the first path
+    not below it: it is mapped as it opens, and reduced as it closes. Only
+    the directories open, those above the last path, are held.
+
+    A directory not listed, as an object store lists only files, is made from
+    the paths below it, by the handler's ``join``. A directory listed after
+    it was made, or opened, is not acted on again.
+
+    So the items are acted on one at a time, in the listing's order. An
+    error ends the whole subtree's task: no directory open is reduced.
     """
 
     def __init__(
@@ -217,69 +242,88 @@ class TraverseSubtree(_TraversalTask):
         entry: Entry,
         action: PathAction,
         handler: StorageHandler,
-        entries: AsyncIterator[Entry] | None,
+        entries: AsyncIterator[Entry],
         *,
         patterns: Sequence[_Search] | None = None,
-        _held: dict[tuple[str, ...], dict[tuple[str, ...], Entry]] | None = None,
     ) -> None:
         super().__init__(engine, entry, action, handler, patterns=patterns)
-        # The listing, for the subtree's root; None for a directory below it,
-        # which shares the root's entries held.
         self.entries = entries
-        # Each directory's entries held, both by key.
-        self._held = {} if _held is None else _held
 
     async def run(self) -> Any:
+        try:
+            return await self._traverse()
+        finally:
+            if (aclose := getattr(self.entries, "aclose", None)) is not None:
+                await aclose()
+
+    async def _traverse(self) -> Any:
         entry = self.entry
-        if self.entries is not None:
-            try:
-                if entry.get("type") == "directory":
-                    root = self._key(entry["name"])
-                    async for found in self.entries:
-                        self._hold(root, found)
-            finally:
-                if (aclose := getattr(self.entries, "aclose", None)) is not None:
-                    await aclose()
         match = self._matched(entry)
         value = await self.action.map(entry, match)
-        held = self._held.pop(self._key(entry["name"]), {})
         if entry.get("type") != "directory" or not self._descend(entry):
             # A file, or a directory kept as matched: reduced with no values.
-            entries = []
-        else:
-            entries = list(held.values())
-            entries = self.prune(entries)
-        tasks: list[PathTask] = [
-            TraverseSubtree(
-                self._engine,
-                e,
-                self.action,
-                self.handler,
-                None,
-                patterns=self.patterns,
-                _held=self._held,
-            )
-            for e in entries
-        ]
-        values = await self._run_tasks(tasks)
-        return await self.action.reduce(entry, match, value, values)
+            return await self.action.reduce(entry, match, value, [])
 
-    def _hold(self, root: tuple[str, ...], entry: Entry) -> None:
-        """Hold an entry in its directory, making the directories between it and the root."""
-        key = self._key(entry["name"])
-        depth = len(root)
-        if len(key) <= depth or key[:depth] != root:
-            return  # The root's own marker, or none of the subtree.
-        held = self._held.setdefault(key[:-1], {})
-        if entry["type"] == "directory" and key in held:
-            held[key] = {**held[key], **entry}  # Listed after made: listed wins.
+        root = _Open(self._key(entry["name"]), entry, match, value)
+        opened = [root]
+        # A directory pruned: what is below it is skipped.
+        pruned: _Open | None = None
+        async for found in self.entries:
+            key = self._key(found["name"])
+            if not root.holds(key) or (pruned is not None and pruned.holds(key)):
+                continue  # The root's own marker, none of the subtree, or pruned.
+            while not opened[-1].holds(key) and opened[-1].key != key:
+                await self._close(opened)
+            if opened[-1].key != key:  # Else a directory listed once opened.
+                pruned = await self._visit(opened, key, found)
+        while len(opened) > 1:
+            await self._close(opened)
+        return await self.action.reduce(entry, match, value, root.values)
+
+    async def _visit(
+        self, opened: list[_Open], key: tuple[str, ...], found: Entry
+    ) -> _Open | None:
+        """Act on a path below the last directory open: the directory pruned, if any.
+
+        The directories between them, not listed, are made first.
+        """
+        root = opened[0]
+        for depth in range(len(opened[-1].key) + 1, len(key)):
+            name = self.handler.join(root.entry["name"], *key[len(root.key) : depth])
+            made = {"name": name, "size": 0, "type": "directory"}
+            if not await self._open(opened, key[:depth], made):
+                return _Open(key[:depth], made, False, None)
+        if found["type"] == "directory":
+            if not await self._open(opened, key, found):
+                return _Open(key, found, False, None)
         else:
-            held[key] = entry
-        parent = key[:-1]
-        while len(parent) > depth:
-            siblings = self._held.setdefault(parent[:-1], {})
-            if parent in siblings:
-                break
-            name = self.handler.join(self.entry["name"], *parent[depth:])
-            siblings[parent] = {"name": name, "size": 0, "type": "directory"}
-            parent = parent[:-1]
+            match = self._matched(found)
+            value = await self.action.map(found, match)
+            opened[-1].values.append(await self.action.reduce(found, match, value, []))
+        return None
+
+    async def _open(
+        self, opened: list[_Open], key: tuple[str, ...], entry: Entry
+    ) -> bool:
+        """Map a directory: open if descended into, reduced at once if matched alone, else pruned.
+
+        It returns whether the paths below it are traversed.
+        """
+        descend = self._descend(entry)
+        match = self._matched(entry)
+        if not (descend or match):
+            return False
+        value = await self.action.map(entry, match)
+        if descend:
+            opened.append(_Open(key, entry, match, value))
+            return True
+        else:
+            opened[-1].values.append(await self.action.reduce(entry, match, value, []))
+            return False
+
+    async def _close(self, opened: list[_Open]) -> None:
+        """Reduce the directory last opened: its value goes to its parent's."""
+        done = opened.pop()
+        opened[-1].values.append(
+            await self.action.reduce(done.entry, done.match, done.value, done.values)
+        )
