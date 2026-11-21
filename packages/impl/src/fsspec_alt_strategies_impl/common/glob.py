@@ -175,11 +175,6 @@ class VisitDirectory(_TraversalTask):
         else:
             entries = [e async for e in self.handler.ils(entry)]
             entries = self.prune(entries)
-        # Each item's task starts once the directory's `map` is done, e.g.
-        # once it made the directory the items are copied into. If any failed,
-        # `_run_tasks` raises their errors in an ExceptionGroup, and `reduce`
-        # is skipped: a failure deep down comes up nested, a group per
-        # directory.
         values = await self._run_tasks([self._subtree(e) for e in entries])
         return await self.action.reduce(entry, match, value, values)
 
@@ -254,8 +249,6 @@ class TraverseSubtree(_TraversalTask):
         else:
             entries = list(held.values())
             entries = self.prune(entries)
-        # As in `VisitDirectory`: the items after the directory's `map`, and
-        # its `reduce` skipped if any failed.
         tasks: list[PathTask] = [
             TraverseSubtree(
                 self._engine,
