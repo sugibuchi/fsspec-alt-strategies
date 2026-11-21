@@ -118,6 +118,9 @@ class PathAction:
     `reduce` on a directory after. An item's value is what `reduce` returned
     for a directory, or `map` for a file. Each defaults to None, so a subclass
     writes only those it needs.
+
+    Which paths are visited is the task's, e.g. within a ``maxdepth`` or a
+    glob's pattern: an action never prunes.
     """
 
     def __init__(self, emit_event: Callable[[Any], Coroutine[Any, Any, None]]) -> None:
