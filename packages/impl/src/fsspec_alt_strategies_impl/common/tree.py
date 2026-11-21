@@ -119,8 +119,14 @@ class PathAction:
     for a directory, or `map` for a file. Each defaults to None, so a subclass
     writes only those it needs.
 
+    The root is a path like any other: `map` is called on it, and `reduce` too
+    if it is a directory. A root that is a file gets `map` only, and its value
+    is what `map` returned.
+
     Which paths are visited is the task's, e.g. within a ``maxdepth`` or a
-    glob's pattern: an action never prunes.
+    glob's pattern: an action never prunes. So are its errors: where `map`
+    raises, or anything below the path fails, `reduce` is not called, and the
+    task handles the error.
     """
 
     def __init__(self, emit_event: Callable[[Any], Coroutine[Any, Any, None]]) -> None:
@@ -138,7 +144,7 @@ class PathAction:
         """Act on a directory, after its subtree is traversed: its value, or None.
 
         ``value`` is what `map` returned for it, and ``values`` the values of
-        the items in it.
+        the items in it, in no order.
         """
         return None
 
