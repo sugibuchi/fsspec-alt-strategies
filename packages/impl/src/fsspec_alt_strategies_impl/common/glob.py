@@ -10,9 +10,10 @@ so the items' `map` run in parallel, once their directory's `map` is done. So
 either may traverse any subtree, and a `VisitDirectory` hands a subtree the
 patterns take whole to a `TraverseSubtree`, if asked to.
 
-Patterns, `patterns._Search`s, only prune: the directories descended into,
-and the subtrees listed whole. Every path visited is acted on, a directory
-pruned by `map` alone: an action matching paths holds its own patterns.
+Patterns, `patterns._Search`s, prune: the directories descended into, and
+the subtrees listed whole. Every path visited is acted on, a directory pruned
+by `map` alone, and told whether a pattern matches it: a path may be visited
+only on the way to others.
 
 An error, of ``ils`` or of the action, ends the path's task: what is below it
 runs on, then its directory's `reduce` is skipped, and the error goes up in an
@@ -61,18 +62,22 @@ class PathAction:
         # waiting while too many are unread.
         self._emit_event = emit_event
 
-    async def map(self, info: Entry) -> Any:
+    async def map(self, info: Entry, match: bool) -> Any:
         """Act on a path, before its subtree is traversed: a value for `reduce`, or None.
 
         ``info`` is the path's entry, as a listing or ``info`` gave it.
+        ``match`` is whether the task's patterns match the path, True where it
+        has none: a path visited only on the way to others is not matched.
         """
         return None
 
-    async def reduce(self, info: Entry, value: Any, values: list[Any]) -> Any:
+    async def reduce(
+        self, info: Entry, match: bool, value: Any, values: list[Any]
+    ) -> Any:
         """Act on a directory, after its subtree is traversed: its value, or None.
 
-        ``value`` is what `map` returned for it, and ``values`` the values of
-        the items in it, in no order.
+        ``match`` is as `map` was given it. ``value`` is what `map` returned
+        for it, and ``values`` the values of the items in it, in no order.
         """
         return None
 
@@ -84,13 +89,16 @@ class _MapEntry(PathTask):
     the traversal runs tasks, after their directory's own `map`.
     """
 
-    def __init__(self, engine: TreeTraversal, entry: Entry, action: PathAction) -> None:
+    def __init__(
+        self, engine: TreeTraversal, entry: Entry, action: PathAction, match: bool
+    ) -> None:
         super().__init__(engine, entry["name"])
         self.entry = entry
         self.action = action
+        self.match = match
 
     async def run(self) -> Any:
-        return await self.action.map(self.entry)
+        return await self.action.map(self.entry, self.match)
 
 
 class _TraversalTask(PathTask):
@@ -144,6 +152,13 @@ class _TraversalTask(PathTask):
     def _descend(self, entry: Entry) -> bool:
         return self.patterns is None or any(p.descend(entry) for p in self.patterns)
 
+    def _matched(self, entry: Entry) -> bool:
+        """Whether a pattern matches a path: every path does where there is none."""
+        return self.patterns is None or any(p.matched(entry) for p in self.patterns)
+
+    async def _map(self) -> Any:
+        return await self.action.map(self.entry, self._matched(self.entry))
+
     def _whole(self, entry: Entry) -> bool:
         """Whether all below a directory is traversed: no pattern prunes it."""
         return self.patterns is None or any(p.whole(entry) for p in self.patterns)
@@ -163,11 +178,12 @@ class _TraversalTask(PathTask):
         tasks = [
             self._subtree(item)
             if item["type"] == "directory" and self._descend(item)
-            else _MapEntry(self._engine, item, self.action)
+            else _MapEntry(self._engine, item, self.action, self._matched(item))
             for item in entries
         ]
         values = await self._run_tasks(tasks)
-        return await self.action.reduce(self.entry, value, values)
+        match = self._matched(self.entry)
+        return await self.action.reduce(self.entry, match, value, values)
 
 
 class VisitDirectory(_TraversalTask):
@@ -193,8 +209,8 @@ class VisitDirectory(_TraversalTask):
     async def run(self) -> Any:
         entry = self.entry
         if entry.get("type") != "directory":
-            return await self.action.map(entry)
-        value = await self.action.map(entry)
+            return await self._map()
+        value = await self._map()
 
         entries = [e async for e in self.handler.ils(entry)]
         entries = self.prune(entries)
@@ -263,8 +279,8 @@ class TraverseSubtree(_TraversalTask):
                 if (aclose := getattr(self.entries, "aclose", None)) is not None:
                     await aclose()
         if entry.get("type") != "directory":
-            return await self.action.map(entry)
-        value = await self.action.map(entry)
+            return await self._map()
+        value = await self._map()
         entries = list(self._held.pop(self._key(entry["name"]), {}).values())
         return await self._map_reduce(value, entries)
 

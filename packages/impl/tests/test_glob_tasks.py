@@ -77,12 +77,18 @@ class _Count(PathAction):
     def __init__(self, emit_event: Any) -> None:
         super().__init__(emit_event)
         self.calls: list[tuple[str, str]] = []
+        self.matched: set[str] = set()
 
-    async def map(self, info: dict[str, Any]) -> Any:
+    async def map(self, info: dict[str, Any], match: bool) -> Any:
         self.calls.append(("map", info["name"]))
+        if match:
+            self.matched.add(info["name"])
         return 1 if info["type"] == "file" else 0
 
-    async def reduce(self, info: dict[str, Any], value: Any, values: list[Any]) -> Any:
+    async def reduce(
+        self, info: dict[str, Any], match: bool, value: Any, values: list[Any]
+    ) -> Any:
+        assert match == (info["name"] in self.matched)
         self.calls.append(("reduce", info["name"]))
         await self._emit_event((info["name"], sum(values)))
         return sum(values)
@@ -154,6 +160,8 @@ async def test_patterns_only_prune(recursive: bool) -> None:
     ]
     reduced = sorted(n for c, n in action.calls if c == "reduce")
     assert reduced == ["r", "r/a", "r/a/b", "r/a/b-x"]
+    # Only the files below r/a match: the others are on the way, or beside.
+    assert sorted(action.matched) == ["r/a/2", "r/a/b-x/4", "r/a/b/3"]
 
 
 @pytest.mark.parametrize("recursive", [False, True])
@@ -190,7 +198,7 @@ async def test_the_items_are_mapped_in_parallel_after_their_directory(
     early: list[str] = []
 
     class _Slow(PathAction):
-        async def map(self, info: dict[str, Any]) -> Any:
+        async def map(self, info: dict[str, Any], match: bool) -> Any:
             nonlocal active, peak
             parent = info["name"].rpartition("/")[0]
             if parent and parent not in mapped:
