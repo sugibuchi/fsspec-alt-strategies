@@ -11,6 +11,7 @@ from fsspec_alt_strategies_impl.common.glob import (
     TraverseSubtree,
     VisitDirectory,
 )
+from fsspec_alt_strategies_impl.common.handler import _PathHandler
 from fsspec_alt_strategies_impl.common.patterns import _Search
 from fsspec_alt_strategies_impl.common.tree import TreeTraversal
 
@@ -20,18 +21,40 @@ if TYPE_CHECKING:
 _FILES = ["r/1", "r/a/2", "r/a/b/3", "r/a/b-x/4", "r/c/5"]
 
 
-def _ils(files: list[str], *, failing: str | None = None) -> Any:
-    """A storage's ils: a directory's items, or all files below it, last first."""
+class _Handler:
+    """A storage's handler on a dummy tree: a directory's items, or all files below it, last first.
 
-    async def ils(entry: dict[str, Any], recursive: bool = False) -> AsyncIterator[Any]:
-        directory = entry["name"]
-        if directory == failing:
+    With ``slashes``, it lists as an object store may: each subdirectory as a
+    prefix and as its marker, and the directory's own marker.
+    """
+
+    delimiter = "/"
+    equals = _PathHandler.equals
+    _split = _PathHandler._split
+
+    def __init__(
+        self, files: list[str], *, failing: str | None = None, slashes: bool = False
+    ) -> None:
+        self.files = files
+        self.failing = failing
+        self.slashes = slashes
+
+    def join(self, directory: str, *names: str) -> str:
+        return "/".join([directory, *names])
+
+    async def ils(
+        self, entry: dict[str, Any], recursive: bool = False
+    ) -> AsyncIterator[Any]:
+        directory = entry["name"].rstrip("/")
+        if directory == self.failing:
             raise OSError(directory)
-        below = [f for f in files if f.startswith(directory + "/")]
+        below = [f for f in self.files if f.startswith(directory + "/")]
         if recursive:
             for f in reversed(below):  # As an object store: files only.
                 yield {"name": f, "type": "file", "size": 1}
             return
+        if self.slashes:
+            yield {"name": directory + "/", "type": "directory", "size": 0}
         names: dict[str, str] = {}
         for f in below:
             head = f[len(directory) + 1 :].split("/")[0]
@@ -39,8 +62,8 @@ def _ils(files: list[str], *, failing: str | None = None) -> Any:
             names[name] = "file" if name == f else "directory"
         for name, kind in names.items():
             yield {"name": name, "type": kind, "size": 1}
-
-    return ils
+            if self.slashes and kind == "directory":
+                yield {"name": name + "/", "type": "directory", "size": 0}
 
 
 def _dir(name: str) -> dict[str, Any]:
@@ -69,9 +92,9 @@ async def _run(
 ) -> tuple[Any, _Count, list[Any]]:
     engine = TreeTraversal(max_running=2)
     action = _Count(engine._emit_event)
-    ils = kwargs.pop("ils", _ils(_FILES))
+    handler = kwargs.pop("handler", _Handler(_FILES))
     task = VisitDirectory(
-        engine, _dir(root), action, ils, recursive=recursive, **kwargs
+        engine, _dir(root), action, handler, recursive=recursive, **kwargs
     )
     events = [e async for e in engine.events([task])]
     return task.result(), action, events
@@ -102,8 +125,9 @@ async def test_either_task_traverses_alike() -> None:
     _, by_directory, _ = await _run(False)
     engine = TreeTraversal(max_running=1)
     action = _Count(engine._emit_event)
-    ils = _ils(_FILES)
-    task = TraverseSubtree(engine, _dir("r"), action, ils(_dir("r"), recursive=True))
+    handler = _Handler(_FILES)
+    listing = handler.ils(_dir("r"), recursive=True)
+    task = TraverseSubtree(engine, _dir("r"), action, handler, listing)
     [_ async for _ in engine.events([task])]
     assert task.result() == 5
     assert sorted(action.calls) == sorted(by_directory.calls)
@@ -135,10 +159,22 @@ async def test_patterns_only_prune(recursive: bool) -> None:
 async def test_a_failure_below_skips_the_reduce_above(recursive: bool) -> None:
     engine = TreeTraversal(max_running=2)
     action = _Count(engine._emit_event)
-    ils = _ils(_FILES, failing="r/a")  # Listed alone, or whole: it fails either way.
-    task = VisitDirectory(engine, _dir("r"), action, ils, recursive=recursive)
+    handler = _Handler(_FILES, failing="r/a")  # Alone, or whole: it fails either way.
+    task = VisitDirectory(engine, _dir("r"), action, handler, recursive=recursive)
     with pytest.raises(BaseExceptionGroup) as raised:
         [_ async for _ in engine.events([task])]
     assert [type(e) for e in raised.value.exceptions] == [OSError]
     reduced = {n for c, n in action.calls if c == "reduce"}
     assert reduced == {"r/c"}  # Its sibling runs on: r/a and r are not reduced.
+
+
+async def test_a_directory_listed_with_a_slash_is_traversed_once() -> None:
+    _, _, events = await _run(False, handler=_Handler(_FILES, slashes=True))
+    # The prefix and the marker are one directory, and the own marker nothing.
+    assert sorted(events) == [
+        ("r", 5),
+        ("r/a", 3),
+        ("r/a/b", 1),
+        ("r/a/b-x", 1),
+        ("r/c", 1),
+    ]

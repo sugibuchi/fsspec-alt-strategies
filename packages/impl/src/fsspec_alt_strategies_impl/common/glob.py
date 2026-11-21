@@ -29,7 +29,7 @@ from .tree import PathTask
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 
-    from .handler import Entry
+    from .handler import Entry, StorageHandler
     from .patterns import _Search
     from .tree import TreeTraversal
 
@@ -77,21 +77,32 @@ class PathAction:
 
 
 class _TraversalTask(PathTask):
-    """What both tasks share: the action, the patterns pruning, and a directory's reduce."""
+    """What both tasks share: the handler, the action, the patterns pruning, and a directory's reduce.
+
+    Paths are compared by the handler, never as strings: a listing may name a
+    directory with a trailing delimiter, as an object store does, or escape
+    its names. A listing's entries are passed on whole, as the storage gave
+    them.
+    """
 
     def __init__(
         self,
         engine: TreeTraversal,
         entry: Entry,
         action: PathAction,
+        handler: StorageHandler,
         *,
         patterns: Sequence[_Search] | None = None,
     ) -> None:
-        # The path is the entry's, as a listing or an info gave it.
-        super().__init__(engine, entry["name"].rstrip("/"))
+        super().__init__(engine, entry["name"])
         self.entry = entry
         self.action = action
+        self.handler = handler
         self.patterns = patterns
+
+    def _key(self, path: str) -> tuple[str, ...]:
+        """A path's segments, as the handler splits them: equal for two names `equals` matches."""
+        return tuple(self.handler._split(path))
 
     def _descend(self, entry: Entry) -> bool:
         return self.patterns is None or any(p.descend(entry) for p in self.patterns)
@@ -110,7 +121,7 @@ class _TraversalTask(PathTask):
 
 
 class VisitDirectory(_TraversalTask):
-    """A directory listed by one ``ils``, with a task per subdirectory to traverse.
+    """A directory listed by one ``ils`` of its handler, with a task per subdirectory to traverse.
 
     The files in it are mapped here, as the listing gives them. Each
     subdirectory is a `VisitDirectory` of its own, or, with ``recursive``,
@@ -122,13 +133,12 @@ class VisitDirectory(_TraversalTask):
         engine: TreeTraversal,
         entry: Entry,
         action: PathAction,
-        ils: Callable[..., AsyncIterator[Entry]],
+        handler: StorageHandler,
         *,
         patterns: Sequence[_Search] | None = None,
         recursive: bool = False,
     ) -> None:
-        super().__init__(engine, entry, action, patterns=patterns)
-        self.ils = ils
+        super().__init__(engine, entry, action, handler, patterns=patterns)
         self.recursive = recursive
 
     async def run(self) -> Any:
@@ -140,18 +150,19 @@ class VisitDirectory(_TraversalTask):
         values: list[Any] = []
         errors: list[BaseException] = []
         children: list[PathTask] = []
-        subdirs: set[str] = set()
-        listing = self.ils(entry)
+        # The subdirectories listed, by key: one listed twice, e.g. as a prefix
+        # and as its marker object, is traversed once.
+        subdirs: set[tuple[str, ...]] = set()
+        listing = self.handler.ils(entry)
         try:
-            async for listed in listing:
-                name = listed["name"].rstrip("/")
-                if name == self.path:
+            async for found in listing:
+                if self.handler.equals(found["name"], entry["name"]):
                     continue  # A directory's own marker is nothing in it.
-                found = {**listed, "name": name}
                 if found["type"] == "directory":
-                    if name in subdirs:
-                        continue  # Listed twice, e.g. as a prefix and a marker.
-                    subdirs.add(name)
+                    key = self._key(found["name"])
+                    if key in subdirs:
+                        continue
+                    subdirs.add(key)
                     if self._descend(found):
                         children.append(self._child(found))
                         continue
@@ -176,7 +187,8 @@ class VisitDirectory(_TraversalTask):
                 self._engine,
                 entry,
                 self.action,
-                self.ils(entry, recursive=True),
+                self.handler,
+                self.handler.ils(entry, recursive=True),
                 patterns=self.patterns,
             )
         else:
@@ -184,7 +196,7 @@ class VisitDirectory(_TraversalTask):
                 self._engine,
                 entry,
                 self.action,
-                self.ils,
+                self.handler,
                 patterns=self.patterns,
                 recursive=self.recursive,
             )
@@ -196,7 +208,7 @@ class TraverseSubtree(_TraversalTask):
     The listing is read whole before any path is acted on, as a path's
     descendants may come before it: the subtree is held in memory. A
     directory not listed, as an object store lists only files, is made from
-    the paths below it.
+    the paths below it, by the handler's ``join``.
     """
 
     def __init__(
@@ -204,14 +216,16 @@ class TraverseSubtree(_TraversalTask):
         engine: TreeTraversal,
         entry: Entry,
         action: PathAction,
+        handler: StorageHandler,
         entries: AsyncIterator[Entry],
         *,
         patterns: Sequence[_Search] | None = None,
     ) -> None:
-        super().__init__(engine, entry, action, patterns=patterns)
+        super().__init__(engine, entry, action, handler, patterns=patterns)
         self.entries = entries
-        # Each directory's items, by name: a directory listed replaces one made.
-        self._below: dict[str, dict[str, Entry]] = {}
+        self._root = self._key(entry["name"])
+        # Each directory's items, both by key: a directory listed replaces one made.
+        self._below: dict[tuple[str, ...], dict[tuple[str, ...], Entry]] = {}
 
     async def run(self) -> Any:
         entry = self.entry
@@ -219,7 +233,7 @@ class TraverseSubtree(_TraversalTask):
             if entry.get("type") != "directory":
                 return await self.action.map(entry)
             async for found in self.entries:
-                self._hold({**found, "name": found["name"].rstrip("/")})
+                self._hold(found)
         finally:
             if (aclose := getattr(self.entries, "aclose", None)) is not None:
                 await aclose()
@@ -227,30 +241,30 @@ class TraverseSubtree(_TraversalTask):
 
     def _hold(self, entry: Entry) -> None:
         """Hold an entry in its directory, making the directories between it and the root."""
-        name = entry["name"]
-        prefix = self.path + "/" if self.path else ""
-        if name == self.path or not name.startswith(prefix):
+        key = self._key(entry["name"])
+        depth = len(self._root)
+        if len(key) <= depth or key[:depth] != self._root:
             return  # The root's own marker, or none of the subtree.
-        parent, _, _ = name.rpartition("/")
-        items = self._below.setdefault(parent, {})
-        if entry["type"] != "directory" or name not in items:
-            items[name] = entry
+        items = self._below.setdefault(key[:-1], {})
+        if entry["type"] == "directory" and key in items:
+            items[key] = {**items[key], **entry}  # Listed after made: listed wins.
         else:
-            items[name] = {**items[name], **entry}  # Listed after made: listed wins.
-        while parent != self.path:
-            above, _, _ = parent.rpartition("/")
-            siblings = self._below.setdefault(above, {})
+            items[key] = entry
+        parent = key[:-1]
+        while len(parent) > depth:
+            siblings = self._below.setdefault(parent[:-1], {})
             if parent in siblings:
                 break
-            siblings[parent] = {"name": parent, "size": 0, "type": "directory"}
-            parent = above
+            name = self.handler.join(self.entry["name"], *parent[depth:])
+            siblings[parent] = {"name": name, "size": 0, "type": "directory"}
+            parent = parent[:-1]
 
     async def _traverse(self, entry: Entry) -> Any:
         """A directory's value: map, all below it, then reduce, as `VisitDirectory` does."""
         value = await self.action.map(entry)
         values: list[Any] = []
         errors: list[BaseException] = []
-        for item in self._below.pop(entry["name"], {}).values():
+        for item in self._below.pop(self._key(entry["name"]), {}).values():
             try:
                 if item["type"] == "directory" and self._descend(item):
                     values.append(await self._traverse(item))

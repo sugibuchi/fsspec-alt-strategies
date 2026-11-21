@@ -292,6 +292,15 @@ class _PathHandler(ABC):
         """The last name of a path, after its last ``delimiter``."""
         return path.rstrip(self.delimiter).rpartition(self.delimiter)[2]
 
+    def equals(self, path1: str, path2: str) -> bool:
+        """Whether two paths name the same item, e.g. a directory listed as ``"a/b/"`` and ``"a/b"``.
+
+        A listing may give a directory's name with a trailing ``delimiter``, as
+        an object store gives a prefix or a marker object. A storage whose
+        names may end with the delimiter, escaped, overrides it.
+        """
+        return path1.rstrip(self.delimiter) == path2.rstrip(self.delimiter)
+
 
 class StorageHandler(_PathHandler):
     """A storage's primitives, profile, limits and clients, for the strategies.
