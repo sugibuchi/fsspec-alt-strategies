@@ -90,16 +90,16 @@ class _TraversalTask(PathTask):
     def __init__(
         self,
         engine: TreeTraversal,
-        path: str,
+        entry: Entry,
         action: PathAction,
         *,
         patterns: Sequence[_Search] | None = None,
-        entry: Entry | None = None,
     ) -> None:
-        super().__init__(engine, path)
+        # The path is the entry's, as a listing or an info gave it.
+        super().__init__(engine, entry["name"].rstrip("/"))
+        self.entry = entry
         self.action = action
         self.patterns = patterns
-        self.entry = entry or {"name": path, "type": "directory"}
 
     def _matched(self, entry: Entry) -> bool:
         return self.patterns is None or any(p.matched(entry) for p in self.patterns)
@@ -148,15 +148,14 @@ class VisitDirectory(_TraversalTask):
     def __init__(
         self,
         engine: TreeTraversal,
-        path: str,
+        entry: Entry,
         action: PathAction,
         ils: Callable[..., AsyncIterator[Entry]],
         *,
         patterns: Sequence[_Search] | None = None,
-        entry: Entry | None = None,
         recursive: bool = False,
     ) -> None:
-        super().__init__(engine, path, action, patterns=patterns, entry=entry)
+        super().__init__(engine, entry, action, patterns=patterns)
         self.ils = ils
         self.recursive = recursive
 
@@ -203,20 +202,18 @@ class VisitDirectory(_TraversalTask):
         if self.recursive and self._whole(entry):
             return TraverseSubtree(
                 self._engine,
-                entry["name"],
+                entry,
                 self.action,
                 self.ils(entry, recursive=True),
                 patterns=self.patterns,
-                entry=entry,
             )
         else:
             return VisitDirectory(
                 self._engine,
-                entry["name"],
+                entry,
                 self.action,
                 self.ils,
                 patterns=self.patterns,
-                entry=entry,
                 recursive=self.recursive,
             )
 
@@ -233,14 +230,13 @@ class TraverseSubtree(_TraversalTask):
     def __init__(
         self,
         engine: TreeTraversal,
-        path: str,
+        entry: Entry,
         action: PathAction,
         entries: AsyncIterator[Entry],
         *,
         patterns: Sequence[_Search] | None = None,
-        entry: Entry | None = None,
     ) -> None:
-        super().__init__(engine, path, action, patterns=patterns, entry=entry)
+        super().__init__(engine, entry, action, patterns=patterns)
         self.entries = entries
         # Each directory's items, by name: a directory listed replaces one made.
         self._below: dict[str, dict[str, Entry]] = {}

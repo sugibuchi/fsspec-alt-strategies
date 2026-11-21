@@ -44,6 +44,10 @@ def _ils(files: list[str], *, failing: str | None = None) -> Any:
     return ils
 
 
+def _dir(name: str) -> dict[str, Any]:
+    return {"name": name, "type": "directory"}
+
+
 class _Count(PathAction):
     """Counts the files below each directory, and records the calls."""
 
@@ -67,7 +71,9 @@ async def _run(
     engine = TreeTraversal(max_running=2)
     action = _Count(engine._emit_event)
     ils = kwargs.pop("ils", _ils(_FILES))
-    task = VisitDirectory(engine, root, action, ils, recursive=recursive, **kwargs)
+    task = VisitDirectory(
+        engine, _dir(root), action, ils, recursive=recursive, **kwargs
+    )
     events = [e async for e in engine.events([task])]
     return task.result(), action, events
 
@@ -98,7 +104,7 @@ async def test_either_task_traverses_alike() -> None:
     engine = TreeTraversal(max_running=1)
     action = _Count(engine._emit_event)
     ils = _ils(_FILES)
-    task = TraverseSubtree(engine, "r", action, ils({"name": "r"}, recursive=True))
+    task = TraverseSubtree(engine, _dir("r"), action, ils(_dir("r"), recursive=True))
     [_ async for _ in engine.events([task])]
     assert task.result() == 5
     assert sorted(action.calls) == sorted(by_directory.calls)
@@ -121,7 +127,7 @@ async def test_a_failure_below_skips_the_reduce_above(recursive: bool) -> None:
     engine = TreeTraversal(max_running=2)
     action = _Count(engine._emit_event)
     ils = _ils(_FILES, failing="r/a")  # Listed alone, or whole: it fails either way.
-    task = VisitDirectory(engine, "r", action, ils, recursive=recursive)
+    task = VisitDirectory(engine, _dir("r"), action, ils, recursive=recursive)
     with pytest.raises(BaseExceptionGroup) as raised:
         [_ async for _ in engine.events([task])]
     assert [type(e) for e in raised.value.exceptions] == [OSError]
