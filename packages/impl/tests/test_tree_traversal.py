@@ -1,0 +1,214 @@
+"""Tests of the scheduling of `common.tree`: no node is visited, the tasks are dummies."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING, Any
+
+import pytest
+
+from fsspec_alt_strategies_impl.common.tree import PathTask, TreeTraversal
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+
+class _Node(PathTask):
+    """A task on a dummy tree: it emits its path before or after running its children."""
+
+    def __init__(
+        self,
+        engine: TreeTraversal,
+        path: str,
+        tree: dict[str, list[str]],
+        *,
+        after: bool = False,
+    ) -> None:
+        super().__init__(engine, path)
+        self.tree = tree
+        self.after = after
+
+    async def run(self) -> Any:
+        if not self.after:
+            await self._emit_event(self.path)
+        children = [
+            _Node(self._engine, c, self.tree, after=self.after)
+            for c in self.tree.get(self.path, [])
+        ]
+        if children:
+            await self._run_tasks(children)
+        if self.after:
+            await self._emit_event(self.path)
+        return self.path
+
+
+class _Call(PathTask):
+    """A task running a function of itself."""
+
+    def __init__(
+        self, engine: TreeTraversal, path: str, body: Callable[[_Call], Any]
+    ) -> None:
+        super().__init__(engine, path)
+        self.body = body
+
+    async def run(self) -> Any:
+        return await self.body(self)
+
+
+async def _all(engine: TreeTraversal, tasks: list[PathTask]) -> list[Any]:
+    return [e async for e in engine.events(tasks)]
+
+
+_TREE = {"r": ["r/b", "r/a"], "r/a": ["r/a/x"]}
+
+
+async def test_the_leftmost_pending_task_starts_first() -> None:
+    engine = TreeTraversal(max_running=1)
+    tasks = [_Node(engine, p, {}) for p in ["c", "a", "b"]]
+    assert await _all(engine, tasks) == ["a", "b", "c"]
+
+
+@pytest.mark.parametrize(
+    ("after", "expected"),
+    [
+        (False, ["r", "r/a", "r/a/x", "r/b"]),
+        (True, ["r/a/x", "r/a", "r/b", "r"]),
+    ],
+)
+async def test_depth_first_top_down_or_bottom_up(
+    after: bool, expected: list[str]
+) -> None:
+    # A parent waiting holds no slot: with one, the tree is still walked.
+    engine = TreeTraversal(max_running=1)
+    assert await _all(engine, [_Node(engine, "r", _TREE, after=after)]) == expected
+
+
+async def test_results_in_the_order_given() -> None:
+    async def leaf(task: _Call) -> str:
+        await asyncio.sleep(0.01 * (3 - int(task.path)))  # The last ends first.
+        return task.path
+
+    async def parent(task: _Call) -> None:
+        children: list[PathTask] = [_Call(engine, str(i), leaf) for i in range(3)]
+        await task._emit_event(await task._run_tasks(children))
+
+    engine = TreeTraversal(max_running=3)
+    assert await _all(engine, [_Call(engine, "p", parent)]) == [["0", "1", "2"]]
+
+
+async def test_the_limits_hold() -> None:
+    active = peak = pending = 0
+
+    async def leaf(task: _Call) -> None:
+        nonlocal active, peak, pending
+        active += 1
+        peak = max(peak, active)
+        pending = max(pending, len(engine._pending_tasks))
+        await asyncio.sleep(0.001)
+        active -= 1
+
+    async def parent(task: _Call) -> None:
+        await task._run_tasks([_Call(engine, f"p/{i:02}", leaf) for i in range(20)])
+
+    engine = TreeTraversal(max_running=3, max_pending=2)
+    await _all(engine, [_Call(engine, "p", parent)])
+    assert peak == 3
+    assert pending <= 2
+
+
+async def test_failed_children_raise_an_exception_group_after_all_ran() -> None:
+    ran = []
+
+    async def leaf(task: _Call) -> None:
+        ran.append(task.path)
+        if task.path != "b":
+            raise ValueError(task.path)
+
+    async def parent(task: _Call) -> None:
+        try:
+            await task._run_tasks([_Call(engine, p, leaf) for p in "cab"])
+        except ExceptionGroup as group:
+            await task._emit_event([str(e) for e in group.exceptions])
+
+    engine = TreeTraversal(max_running=1)
+    assert await _all(engine, [_Call(engine, "p", parent)]) == [["c", "a"]]
+    assert sorted(ran) == ["a", "b", "c"]
+
+
+async def test_a_child_cancelled_before_it_starts_raises_cancelled() -> None:
+    async def leaf(task: _Call) -> None:
+        await task._emit_event(task.path)
+
+    async def parent(task: _Call) -> None:
+        children: list[PathTask] = [_Call(engine, p, leaf) for p in "ab"]
+        children[0].cancel()
+        try:
+            await task._run_tasks(children)
+        except asyncio.CancelledError:
+            await task._emit_event("cancelled")
+
+    engine = TreeTraversal(max_running=1)
+    assert await _all(engine, [_Call(engine, "p", parent)]) == ["b", "cancelled"]
+
+
+async def test_an_initial_task_failing_ends_the_traversal() -> None:
+    async def fail(task: _Call) -> None:
+        raise OSError(task.path)
+
+    engine = TreeTraversal(max_running=1)
+    with pytest.raises(OSError, match="x"):
+        await _all(engine, [_Call(engine, "x", fail)])
+
+
+async def test_an_error_emitted_is_yielded() -> None:
+    async def emit(task: _Call) -> None:
+        await task._emit_event(OSError(task.path))
+
+    engine = TreeTraversal(max_running=1)
+    [error] = await _all(engine, [_Call(engine, "x", emit)])
+    assert isinstance(error, OSError)
+
+
+async def test_cancel_starts_nothing_more() -> None:
+    async def leaf(task: _Call) -> None:
+        await asyncio.sleep(0.01)
+        await task._emit_event(task.path)
+
+    engine = TreeTraversal(max_running=1)
+    seen = []
+    async for event in engine.events([_Call(engine, p, leaf) for p in "abcd"]):
+        seen.append(event)
+        engine.cancel()
+    # The task running as it was cancelled may still emit: no later one does.
+    assert seen[0] == "a"
+    assert len(seen) <= 2
+
+
+async def test_closing_early_cancels_the_tasks_running() -> None:
+    cancelled = []
+
+    async def forever(task: _Call) -> None:
+        await task._emit_event(task.path)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(task.path)
+            raise
+
+    engine = TreeTraversal(max_running=2)
+    events = engine.events([_Call(engine, p, forever) for p in "ab"])
+    assert await anext(events) == "a"
+    await events.aclose()
+    assert sorted(cancelled) == ["a", "b"]
+
+
+async def test_a_traversal_runs_once() -> None:
+    engine = TreeTraversal(max_running=1)
+    await _all(engine, [])
+    with pytest.raises(RuntimeError):
+        await _all(engine, [])
+
+
+def test_limits_are_checked() -> None:
+    with pytest.raises(ValueError, match="max_pending"):
+        TreeTraversal(max_running=1, max_pending=0)
