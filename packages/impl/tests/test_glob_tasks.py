@@ -135,9 +135,7 @@ async def test_either_task_traverses_alike() -> None:
     _, by_directory, _ = await _run(False)
     engine = TreeTraversal(max_running=1)
     action = _Count(engine._emit_event)
-    handler = _Handler(_FILES)
-    listing = handler.ils(_dir("r"), recursive=True)
-    task = TraverseSubtree(engine, _dir("r"), action, handler, listing)
+    task = TraverseSubtree(engine, _dir("r"), action, _Handler(_FILES))
     [_ async for _ in engine.events([task])]
     assert task.result() == 5
     assert sorted(action.calls) == sorted(by_directory.calls)
@@ -149,15 +147,19 @@ async def test_a_subtree_streams_in_name_order_with_its_markers() -> None:
     names = ["r/", "r/1", "r/a/", "r/a/2", "r/a/b-x/", "r/a/b-x/4", "r/a/b/"]
     names += ["r/a/b/3", "r/c/5"]
 
-    async def listing() -> AsyncIterator[dict[str, Any]]:
-        for name in names:
-            kind = "directory" if name.endswith("/") else "file"
-            yield {"name": name, "type": kind, "size": 0 if kind == "directory" else 1}
+    class _InNameOrder(_Handler):
+        async def ils(
+            self, entry: dict[str, Any], recursive: bool = False
+        ) -> AsyncIterator[Any]:
+            assert recursive
+            for name in names:
+                kind = "directory" if name.endswith("/") else "file"
+                yield {"name": name, "type": kind, "size": int(kind == "file")}
 
     _, by_directory, _ = await _run(False)
     engine = TreeTraversal(max_running=1)
     action = _Count(engine._emit_event)
-    task = TraverseSubtree(engine, _dir("r"), action, _Handler(_FILES), listing())
+    task = TraverseSubtree(engine, _dir("r"), action, _InNameOrder(_FILES))
     events = [e async for e in engine.events([task])]
     assert task.result() == 5
     # The entries are as listed: a directory listed keeps its slash.

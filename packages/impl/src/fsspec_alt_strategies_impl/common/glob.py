@@ -188,7 +188,6 @@ class VisitDirectory(_TraversalTask):
                 entry,
                 self.action,
                 self.handler,
-                self.handler.ils(entry, recursive=True),
                 patterns=self.patterns,
             )
         else:
@@ -208,7 +207,7 @@ def _below(directory: tuple[str, ...], key: tuple[str, ...]) -> bool:
 
 
 class TraverseSubtree(_TraversalTask):
-    """A subtree traversed from one listing of all below it, as it streams: no task per item.
+    """A subtree traversed from one listing of all below it, its handler's ``ils(..., recursive=True)``, as it streams: no task per item.
 
     The listing must give each directory's descendants together, as a
     listing in name order does: all below ``a/b/`` lie between two names.
@@ -230,20 +229,20 @@ class TraverseSubtree(_TraversalTask):
         entry: Entry,
         action: PathAction,
         handler: StorageHandler,
-        entries: AsyncIterator[Entry],
         *,
         patterns: Sequence[_Search] | None = None,
     ) -> None:
         super().__init__(engine, entry, action, handler, patterns=patterns)
-        self.entries = entries
 
     async def run(self) -> Any:
+        # Listed as the task starts: one pending, or cancelled, holds nothing.
+        entries = self.handler.ils(self.entry, recursive=True)
         try:
-            first = await anext(self.entries, None)
-            value, _ = await _Span(self, self.entry, first, self.entries).map_reduce()
+            first = await anext(entries, None)
+            value, _ = await _Span(self, self.entry, first, entries).map_reduce()
             return value
         finally:
-            if (aclose := getattr(self.entries, "aclose", None)) is not None:
+            if (aclose := getattr(entries, "aclose", None)) is not None:
                 await aclose()
 
     def subdir_entry(self, root: Entry, entry: Entry) -> Entry:
