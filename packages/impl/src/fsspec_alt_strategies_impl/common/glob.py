@@ -9,10 +9,9 @@ the action alike: `map` on a path before what is below it, `reduce` on a
 directory after. So either may traverse any subtree, and a `VisitDirectory`
 hands a subtree the patterns take whole to a `TraverseSubtree`, if asked to.
 
-Patterns, `patterns._Search`s, prune the traversal and choose the paths acted
-on. A path no pattern matches gets no `map` nor `reduce`: a directory's
-passes the values of the items below it on to its parent. Without patterns,
-every path is acted on.
+Patterns, `patterns._Search`s, only prune: the directories descended into,
+and the subtrees listed whole. Every path visited is acted on, a directory
+pruned by `map` alone: an action matching paths holds its own patterns.
 
 An error, of ``ils`` or of the action, ends the path's task: what is below it
 runs on, then its directory's `reduce` is skipped, and the error goes up in an
@@ -77,15 +76,8 @@ class PathAction:
         return None
 
 
-class _Through:
-    """The value of a directory no pattern matched: the values below it, for its parent."""
-
-    def __init__(self, values: list[Any]) -> None:
-        self.values = values
-
-
 class _TraversalTask(PathTask):
-    """What both tasks share: the action, the patterns, and a path's map and reduce."""
+    """What both tasks share: the action, the patterns pruning, and a directory's reduce."""
 
     def __init__(
         self,
@@ -101,9 +93,6 @@ class _TraversalTask(PathTask):
         self.action = action
         self.patterns = patterns
 
-    def _matched(self, entry: Entry) -> bool:
-        return self.patterns is None or any(p.matched(entry) for p in self.patterns)
-
     def _descend(self, entry: Entry) -> bool:
         return self.patterns is None or any(p.descend(entry) for p in self.patterns)
 
@@ -111,30 +100,13 @@ class _TraversalTask(PathTask):
         """Whether all below a directory is traversed: no pattern prunes it."""
         return self.patterns is None or any(p.whole(entry) for p in self.patterns)
 
-    async def _map(self, entry: Entry) -> Any:
-        """A path's value before what is below it: what `map` returns, if matched."""
-        return await self.action.map(entry) if self._matched(entry) else None
-
-    async def _leaf(self, entry: Entry) -> Any:
-        """The value of a path not traversed below: a file, or a directory pruned."""
-        return await self._map(entry) if self._matched(entry) else _Through([])
-
     async def _reduce(
-        self, entry: Entry, value: Any, results: list[Any], errors: list[BaseException]
+        self, entry: Entry, value: Any, values: list[Any], errors: list[BaseException]
     ) -> Any:
         """A directory's value once all below it is done: its `reduce`, unless anything failed."""
         if errors:
             raise BaseExceptionGroup(f"Traversing {entry['name']!r} failed", errors)
-        values: list[Any] = []
-        for result in results:
-            if isinstance(result, _Through):
-                values.extend(result.values)
-            else:
-                values.append(result)
-        if self._matched(entry):
-            return await self.action.reduce(entry, value, values)
-        else:
-            return _Through(values)
+        return await self.action.reduce(entry, value, values)
 
 
 class VisitDirectory(_TraversalTask):
@@ -162,10 +134,10 @@ class VisitDirectory(_TraversalTask):
     async def run(self) -> Any:
         entry = self.entry
         if entry.get("type") != "directory":
-            return await self._leaf(entry)
-        value = await self._map(entry)
+            return await self.action.map(entry)
+        value = await self.action.map(entry)
 
-        results: list[Any] = []
+        values: list[Any] = []
         errors: list[BaseException] = []
         children: list[PathTask] = []
         subdirs: set[str] = set()
@@ -184,7 +156,7 @@ class VisitDirectory(_TraversalTask):
                         children.append(self._child(found))
                         continue
                 try:
-                    results.append(await self._leaf(found))
+                    values.append(await self.action.map(found))
                 except Exception as e:
                     errors.append(e)
         finally:
@@ -192,10 +164,10 @@ class VisitDirectory(_TraversalTask):
                 await aclose()
 
         try:
-            results += await self._run_tasks(children)
+            values += await self._run_tasks(children)
         except BaseExceptionGroup as group:
             errors += group.exceptions
-        return await self._reduce(entry, value, results, errors)
+        return await self._reduce(entry, value, values, errors)
 
     def _child(self, entry: Entry) -> PathTask:
         """The task traversing a subdirectory: all below it by one listing, where asked and whole."""
@@ -245,7 +217,7 @@ class TraverseSubtree(_TraversalTask):
         entry = self.entry
         try:
             if entry.get("type") != "directory":
-                return await self._leaf(entry)
+                return await self.action.map(entry)
             async for found in self.entries:
                 self._hold({**found, "name": found["name"].rstrip("/")})
         finally:
@@ -275,17 +247,17 @@ class TraverseSubtree(_TraversalTask):
 
     async def _traverse(self, entry: Entry) -> Any:
         """A directory's value: map, all below it, then reduce, as `VisitDirectory` does."""
-        value = await self._map(entry)
-        results: list[Any] = []
+        value = await self.action.map(entry)
+        values: list[Any] = []
         errors: list[BaseException] = []
         for item in self._below.pop(entry["name"], {}).values():
             try:
                 if item["type"] == "directory" and self._descend(item):
-                    results.append(await self._traverse(item))
+                    values.append(await self._traverse(item))
                 else:
-                    results.append(await self._leaf(item))
+                    values.append(await self.action.map(item))
             except BaseExceptionGroup as group:
                 errors += group.exceptions
             except Exception as e:
                 errors.append(e)
-        return await self._reduce(entry, value, results, errors)
+        return await self._reduce(entry, value, values, errors)
