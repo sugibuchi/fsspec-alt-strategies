@@ -5,15 +5,15 @@
 `VisitDirectory` lists one directory by ``ils``. `TraverseSubtree` takes a
 whole subtree's listing, as ``ils(..., recursive=True)`` gives it, and holds
 it. Both call the action alike: `map` on a path before what is below it,
-`reduce` after. Both run each item of a directory as a task,
-so the items' `map` run in parallel, once their directory's `map` is done. So
+`reduce` after. Both run each item of a directory as a task, so the items'
+`map` run in parallel, once their directory's `map` is done. So
 either may traverse any subtree, and a `VisitDirectory` hands a subtree the
 patterns take whole to a `TraverseSubtree`, if asked to.
 
 Patterns, `patterns._Search`s, prune: the directories descended into, and
-the subtrees listed whole. Every path visited is acted on, a directory pruned
-by `map` alone, and told whether a pattern matches it: a path may be visited
-only on the way to others.
+the subtrees listed whole. A directory not descended into is not visited.
+Every path visited is acted on, and told whether a pattern matches it: a path
+may be visited only on the way to others.
 
 An error, of ``ils`` or of the action, ends the path's task: what is below it
 runs on, then its directory's `reduce` is skipped, and the error goes up in an
@@ -45,10 +45,6 @@ class PathAction:
     `reduce` after: on a file at once, with no values. An item's value is what
     `reduce` returned for it. Each defaults to None, so a subclass writes only
     those it needs.
-
-    A directory the task does not descend into is the exception: it gets
-    `map` alone, and its value is what `map` returned. Its `reduce` would be
-    given no values, as an empty directory's is, though it may hold some.
 
     The root is a path like any other: `map` and `reduce` are called on it,
     whether a file or a directory.
@@ -86,25 +82,6 @@ class PathAction:
         return None
 
 
-class _MapEntry(PathTask):
-    """A directory not descended into: its `map` alone, as a task.
-
-    So it is mapped in parallel with the other items of its directory, after
-    their directory's own `map`.
-    """
-
-    def __init__(
-        self, engine: TreeTraversal, entry: Entry, action: PathAction, match: bool
-    ) -> None:
-        super().__init__(engine, entry["name"])
-        self.entry = entry
-        self.action = action
-        self.match = match
-
-    async def run(self) -> Any:
-        return await self.action.map(self.entry, self.match)
-
-
 class _TraversalTask(PathTask):
     """What both tasks share: the handler, the action, the patterns pruning, and a directory's map and reduce of its entries.
 
@@ -134,11 +111,12 @@ class _TraversalTask(PathTask):
         return tuple(self.handler._split(path))
 
     def prune(self, entries: list[Entry]) -> list[Entry]:
-        """A directory's listing as traversed: without its own marker, each subdirectory once.
+        """A directory's listing as traversed: without its own marker, each subdirectory once, and only those to descend into.
 
         A storage may list a directory's marker object in it, and a
-        subdirectory twice, e.g. as a prefix and as its marker. The entries
-        kept are as the listing gave them.
+        subdirectory twice, e.g. as a prefix and as its marker. A
+        subdirectory the patterns do not descend into is dropped, with all
+        below it. The entries kept are as the listing gave them.
         """
         kept: list[Entry] = []
         subdirs: set[tuple[str, ...]] = set()
@@ -147,7 +125,7 @@ class _TraversalTask(PathTask):
                 continue
             if found["type"] == "directory":
                 key = self._key(found["name"])
-                if key in subdirs:
+                if key in subdirs or not self._descend(found):
                     continue
                 subdirs.add(key)
             kept.append(found)
@@ -168,7 +146,7 @@ class _TraversalTask(PathTask):
         return self.patterns is None or any(p.whole(entry) for p in self.patterns)
 
     def _subtree(self, entry: Entry) -> PathTask:
-        """The task traversing an item: a file, or a subdirectory to descend into."""
+        """The task traversing an item of the directory, a file or a subdirectory."""
         raise NotImplementedError
 
     async def _map_reduce(self, value: Any, entries: list[Entry]) -> Any:
@@ -179,13 +157,7 @@ class _TraversalTask(PathTask):
         `_run_tasks` raises their errors in an ExceptionGroup, and `reduce` is
         skipped: a failure deep down comes up nested, a group per directory.
         """
-        tasks = [
-            self._subtree(item)
-            if item["type"] != "directory" or self._descend(item)
-            else _MapEntry(self._engine, item, self.action, self._matched(item))
-            for item in entries
-        ]
-        values = await self._run_tasks(tasks)
+        values = await self._run_tasks([self._subtree(item) for item in entries])
         match = self._matched(self.entry)
         return await self.action.reduce(self.entry, match, value, values)
 
@@ -287,6 +259,7 @@ class TraverseSubtree(_TraversalTask):
             entries = []  # A file: reduced at once, with no values.
         else:
             entries = list(self._held.pop(self._key(entry["name"]), {}).values())
+            entries = self.prune(entries)
         return await self._map_reduce(value, entries)
 
     def _subtree(self, entry: Entry) -> PathTask:

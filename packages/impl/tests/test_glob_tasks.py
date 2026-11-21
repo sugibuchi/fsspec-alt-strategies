@@ -144,10 +144,12 @@ async def test_either_task_traverses_alike() -> None:
 
 
 @pytest.mark.parametrize("recursive", [False, True])
-async def test_patterns_only_prune(recursive: bool) -> None:
+async def test_patterns_prune_the_directories_not_descended_into(
+    recursive: bool,
+) -> None:
     patterns = [_Search("r/a/**", ends_with_sep=False, withdirs=False, maxdepth=None)]
     value, action, _ = await _run(recursive, patterns=patterns)
-    # Every path visited is acted on: r/c is found, and mapped, but not entered.
+    # r/c is not descended into, so not visited: every other path is.
     assert value == 4
     mapped = sorted(n for c, n in action.calls if c == "map")
     assert mapped == [
@@ -159,11 +161,9 @@ async def test_patterns_only_prune(recursive: bool) -> None:
         "r/a/b-x",
         "r/a/b-x/4",
         "r/a/b/3",
-        "r/c",
     ]
     reduced = sorted(n for c, n in action.calls if c == "reduce")
-    # Every file too: only the directory not entered is not reduced.
-    assert reduced == [n for n in mapped if n != "r/c"]
+    assert reduced == mapped
     # Only the files below r/a match: the others are on the way, or beside.
     assert sorted(action.matched) == ["r/a/2", "r/a/b-x/4", "r/a/b/3"]
 
