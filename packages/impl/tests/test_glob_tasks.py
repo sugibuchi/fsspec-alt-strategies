@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -178,3 +179,37 @@ async def test_a_directory_listed_with_a_slash_is_traversed_once() -> None:
         ("r/a/b-x", 1),
         ("r/c", 1),
     ]
+
+
+@pytest.mark.parametrize("recursive", [False, True])
+async def test_the_items_are_mapped_in_parallel_after_their_directory(
+    recursive: bool,
+) -> None:
+    active = peak = 0
+    mapped: set[str] = set()
+    early: list[str] = []
+
+    class _Slow(PathAction):
+        async def map(self, info: dict[str, Any]) -> Any:
+            nonlocal active, peak
+            parent = info["name"].rpartition("/")[0]
+            if parent and parent not in mapped:
+                early.append(info["name"])
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            mapped.add(info["name"])
+
+    files = [f"r/{i}" for i in range(6)]
+    engine = TreeTraversal(max_running=4)
+    task = VisitDirectory(
+        engine,
+        _dir("r"),
+        _Slow(engine._emit_event),
+        _Handler(files),
+        recursive=recursive,
+    )
+    [_ async for _ in engine.events([task])]
+    assert peak == 4
+    assert early == []
