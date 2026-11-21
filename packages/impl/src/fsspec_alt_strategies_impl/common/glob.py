@@ -5,7 +5,7 @@
 `VisitDirectory` lists one directory by ``ils``. `TraverseSubtree` takes a
 whole subtree's listing, as ``ils(..., recursive=True)`` gives it, and holds
 it. Both call the action alike: `map` on a path before what is below it,
-`reduce` on a directory after. Both run each item of a directory as a task,
+`reduce` after. Both run each item of a directory as a task,
 so the items' `map` run in parallel, once their directory's `map` is done. So
 either may traverse any subtree, and a `VisitDirectory` hands a subtree the
 patterns take whole to a `TraverseSubtree`, if asked to.
@@ -42,13 +42,16 @@ class PathAction:
     """What an operation does on each path a traversal visits: the strategy is the task's.
 
     A task calls `map` on a path before traversing what is below it, and
-    `reduce` on a directory after. An item's value is what `reduce` returned
-    for a directory, or `map` for a file. Each defaults to None, so a subclass
-    writes only those it needs.
+    `reduce` after: on a file at once, with no values. An item's value is what
+    `reduce` returned for it. Each defaults to None, so a subclass writes only
+    those it needs.
 
-    The root is a path like any other: `map` is called on it, and `reduce` too
-    if it is a directory. A root that is a file gets `map` only, and its value
-    is what `map` returned.
+    A directory the task does not descend into is the exception: it gets
+    `map` alone, and its value is what `map` returned. Its `reduce` would be
+    given no values, as an empty directory's is, though it may hold some.
+
+    The root is a path like any other: `map` and `reduce` are called on it,
+    whether a file or a directory.
 
     Which paths are visited is the task's, e.g. within a ``maxdepth`` or a
     glob's pattern: an action never prunes. So are its errors: where `map`
@@ -74,16 +77,17 @@ class PathAction:
     async def reduce(
         self, entry: Entry, match: bool, value: Any, values: list[Any]
     ) -> Any:
-        """Act on a directory, after its subtree is traversed: its value, or None.
+        """Act on a path, after its subtree is traversed: its value, or None.
 
         ``match`` is as `map` was given it. ``value`` is what `map` returned
-        for it, and ``values`` the values of the items in it, in no order.
+        for it, and ``values`` the values of the items in it, in no order:
+        none for a file.
         """
         return None
 
 
 class _MapEntry(PathTask):
-    """A path not traversed below, a file or a directory pruned: its `map` alone, as a task.
+    """A path not traversed below, as a task: a file's `map` and `reduce`, a pruned directory's `map` alone.
 
     So the items in a directory are mapped in parallel, as many at once as
     the traversal runs tasks, after their directory's own `map`.
@@ -98,7 +102,11 @@ class _MapEntry(PathTask):
         self.match = match
 
     async def run(self) -> Any:
-        return await self.action.map(self.entry, self.match)
+        value = await self.action.map(self.entry, self.match)
+        if self.entry["type"] == "directory":
+            return value
+        else:
+            return await self.action.reduce(self.entry, self.match, value, [])
 
 
 class _TraversalTask(PathTask):
@@ -209,7 +217,7 @@ class VisitDirectory(_TraversalTask):
     async def run(self) -> Any:
         entry = self.entry
         if entry.get("type") != "directory":
-            return await self._map()
+            return await self._map_reduce(await self._map(), [])
         value = await self._map()
 
         entries = [e async for e in self.handler.ils(entry)]
@@ -279,7 +287,7 @@ class TraverseSubtree(_TraversalTask):
                 if (aclose := getattr(self.entries, "aclose", None)) is not None:
                     await aclose()
         if entry.get("type") != "directory":
-            return await self._map()
+            return await self._map_reduce(await self._map(), [])
         value = await self._map()
         entries = list(self._held.pop(self._key(entry["name"]), {}).values())
         return await self._map_reduce(value, entries)

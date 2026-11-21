@@ -90,8 +90,11 @@ class _Count(PathAction):
     ) -> Any:
         assert match == (entry["name"] in self.matched)
         self.calls.append(("reduce", entry["name"]))
-        await self._emit_event((entry["name"], sum(values)))
-        return sum(values)
+        if entry["type"] == "file":
+            assert values == []
+        else:
+            await self._emit_event((entry["name"], sum(values)))
+        return value + sum(values)
 
 
 async def _run(
@@ -159,7 +162,8 @@ async def test_patterns_only_prune(recursive: bool) -> None:
         "r/c",
     ]
     reduced = sorted(n for c, n in action.calls if c == "reduce")
-    assert reduced == ["r", "r/a", "r/a/b", "r/a/b-x"]
+    # Every file too: only the directory not entered is not reduced.
+    assert reduced == [n for n in mapped if n != "r/c"]
     # Only the files below r/a match: the others are on the way, or beside.
     assert sorted(action.matched) == ["r/a/2", "r/a/b-x/4", "r/a/b/3"]
 
@@ -174,7 +178,8 @@ async def test_a_failure_below_skips_the_reduce_above(recursive: bool) -> None:
         [_ async for _ in engine.events([task])]
     assert [type(e) for e in raised.value.exceptions] == [OSError]
     reduced = {n for c, n in action.calls if c == "reduce"}
-    assert reduced == {"r/c"}  # Its sibling runs on: r/a and r are not reduced.
+    # Its siblings run on: r/a and r are not reduced.
+    assert reduced == {"r/1", "r/c", "r/c/5"}
 
 
 async def test_a_directory_listed_with_a_slash_is_traversed_once() -> None:
