@@ -305,12 +305,13 @@ class _Span:
                 # A subdirectory listed, or made from a path below it. Its span
                 # starts at next either way: a subdirectory listed is its marker.
                 subdir = next if in_root else task.subdir_entry(root, next)
-                span = _Span(task, subdir, next, self.entries)
                 if task._descend(subdir) or task._matched(subdir):
+                    span = _Span(task, subdir, next, self.entries)
                     item, next = await span.map_reduce()
                     values.append(item)
                 else:
-                    next = await span._skip()  # Pruned, with all below it.
+                    # Pruned, with all below it.
+                    next = await _Span(task, subdir, next, self.entries)._skip()
         return await task.action.reduce(root, match, value, values), next
 
     async def _skip(self) -> Entry | None:
