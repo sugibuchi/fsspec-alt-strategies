@@ -131,6 +131,8 @@ class PathAction:
 
     def __init__(self, emit_event: Callable[[Any], Coroutine[Any, Any, None]]) -> None:
         # The traversal's, which a strategy passes: one action serves every task.
+        # `map` and `reduce` emit events to the traversal's caller by it,
+        # waiting while too many are unread.
         self._emit_event = emit_event
 
     async def map(self, info: dict[str, Any]) -> Any:
@@ -147,10 +149,6 @@ class PathAction:
         the items in it, in no order.
         """
         return None
-
-    async def emit_event(self, event: Any) -> None:
-        """Emit an event to the traversal's caller, waiting while too many are unread."""
-        await self._emit_event(event)
 
 
 class _End:
