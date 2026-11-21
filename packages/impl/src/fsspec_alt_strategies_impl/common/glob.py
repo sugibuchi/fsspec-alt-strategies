@@ -218,50 +218,15 @@ class VisitDirectory(_TraversalTask):
             )
 
 
-class _HeldDirectory(_TraversalTask):
-    """A directory of a subtree held by a `TraverseSubtree`: a task per item, as `VisitDirectory` runs."""
-
-    def __init__(
-        self,
-        engine: TreeTraversal,
-        entry: Entry,
-        action: PathAction,
-        handler: StorageHandler,
-        below: dict[tuple[str, ...], dict[tuple[str, ...], Entry]],
-        *,
-        patterns: Sequence[_Search] | None = None,
-    ) -> None:
-        super().__init__(engine, entry, action, handler, patterns=patterns)
-        # Each directory's items, both by key, shared by the whole subtree.
-        self._below = below
-
-    async def run(self) -> Any:
-        entry = self.entry
-        if entry.get("type") != "directory":
-            return await self.action.map(entry)
-        value = await self.action.map(entry)
-        entries = list(self._below.pop(self._key(entry["name"]), {}).values())
-        return await self._map_reduce(value, entries)
-
-    def _subtree(self, entry: Entry) -> PathTask:
-        return _HeldDirectory(
-            self._engine,
-            entry,
-            self.action,
-            self.handler,
-            self._below,
-            patterns=self.patterns,
-        )
-
-
-class TraverseSubtree(_HeldDirectory):
+class TraverseSubtree(_TraversalTask):
     """A subtree traversed from one listing of all below it, in any order.
 
     The listing is read whole before any path is acted on, as a path's
     descendants may come before it: the subtree is held in memory. A
     directory not listed, as an object store lists only files, is made from
-    the paths below it, by the handler's ``join``. Then each directory runs
-    its items as `VisitDirectory` does, from what is held.
+    the paths below it, by the handler's ``join``. Then each directory below
+    is a `TraverseSubtree` of its own, with no listing: it runs its entries,
+    as `VisitDirectory` does, from what its root holds.
     """
 
     def __init__(
@@ -270,38 +235,60 @@ class TraverseSubtree(_HeldDirectory):
         entry: Entry,
         action: PathAction,
         handler: StorageHandler,
-        entries: AsyncIterator[Entry],
+        entries: AsyncIterator[Entry] | None,
         *,
         patterns: Sequence[_Search] | None = None,
+        _held: dict[tuple[str, ...], dict[tuple[str, ...], Entry]] | None = None,
     ) -> None:
-        super().__init__(engine, entry, action, handler, {}, patterns=patterns)
+        super().__init__(engine, entry, action, handler, patterns=patterns)
+        # The listing, for the subtree's root; None for a directory below it,
+        # which shares the root's entries held.
         self.entries = entries
-        self._root = self._key(entry["name"])
+        # Each directory's entries held, both by key.
+        self._held = {} if _held is None else _held
 
     async def run(self) -> Any:
-        try:
-            if self.entry.get("type") == "directory":
-                async for found in self.entries:
-                    self._hold(found)
-        finally:
-            if (aclose := getattr(self.entries, "aclose", None)) is not None:
-                await aclose()
-        return await super().run()
+        entry = self.entry
+        if self.entries is not None:
+            try:
+                if entry.get("type") == "directory":
+                    root = self._key(entry["name"])
+                    async for found in self.entries:
+                        self._hold(root, found)
+            finally:
+                if (aclose := getattr(self.entries, "aclose", None)) is not None:
+                    await aclose()
+        if entry.get("type") != "directory":
+            return await self.action.map(entry)
+        value = await self.action.map(entry)
+        entries = list(self._held.pop(self._key(entry["name"]), {}).values())
+        return await self._map_reduce(value, entries)
 
-    def _hold(self, entry: Entry) -> None:
+    def _subtree(self, entry: Entry) -> PathTask:
+        return TraverseSubtree(
+            self._engine,
+            entry,
+            self.action,
+            self.handler,
+            None,
+            patterns=self.patterns,
+            _held=self._held,
+        )
+
+    def _hold(self, root: tuple[str, ...], entry: Entry) -> None:
         """Hold an entry in its directory, making the directories between it and the root."""
         key = self._key(entry["name"])
-        depth = len(self._root)
-        if len(key) <= depth or key[:depth] != self._root:
+        depth = len(root)
+        if len(key) <= depth or key[:depth] != root:
             return  # The root's own marker, or none of the subtree.
-        items = self._below.setdefault(key[:-1], {})
-        if entry["type"] == "directory" and key in items:
-            items[key] = {**items[key], **entry}  # Listed after made: listed wins.
+        held = self._held.setdefault(key[:-1], {})
+        if entry["type"] == "directory" and key in held:
+            held[key] = {**held[key], **entry}  # Listed after made: listed wins.
         else:
-            items[key] = entry
+            held[key] = entry
         parent = key[:-1]
         while len(parent) > depth:
-            siblings = self._below.setdefault(parent[:-1], {})
+            siblings = self._held.setdefault(parent[:-1], {})
             if parent in siblings:
                 break
             name = self.handler.join(self.entry["name"], *parent[depth:])
