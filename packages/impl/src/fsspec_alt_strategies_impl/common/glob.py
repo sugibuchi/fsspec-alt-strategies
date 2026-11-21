@@ -167,7 +167,7 @@ class _TraversalTask(PathTask):
 class VisitDirectory(_TraversalTask):
     """A directory listed by one ``ils`` of its handler, with a task per item.
 
-    Each subdirectory is a `VisitDirectory` of its own, or, with ``recursive``,
+    Each subdirectory is a `VisitDirectory` of its own, or, with ``use_one_listing``,
     a `TraverseSubtree` where the patterns take all below it.
     """
 
@@ -179,10 +179,10 @@ class VisitDirectory(_TraversalTask):
         handler: StorageHandler,
         *,
         patterns: Sequence[_Search] | None = None,
-        recursive: bool = False,
+        use_one_listing: bool = False,
     ) -> None:
         super().__init__(engine, entry, action, handler, patterns=patterns)
-        self.recursive = recursive
+        self.use_one_listing = use_one_listing
 
     async def run(self) -> Any:
         entry = self.entry
@@ -197,7 +197,7 @@ class VisitDirectory(_TraversalTask):
 
     def _subtree(self, entry: Entry) -> PathTask:
         """All below a subdirectory by one listing, where asked and whole, else listed alone."""
-        if self.recursive and entry["type"] == "directory" and self._whole(entry):
+        if self.use_one_listing and entry["type"] == "directory" and self._whole(entry):
             return TraverseSubtree(
                 self._engine,
                 entry,
@@ -213,7 +213,7 @@ class VisitDirectory(_TraversalTask):
                 self.action,
                 self.handler,
                 patterns=self.patterns,
-                recursive=self.recursive,
+                use_one_listing=self.use_one_listing,
             )
 
 

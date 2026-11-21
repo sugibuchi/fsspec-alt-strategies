@@ -98,23 +98,23 @@ class _Count(PathAction):
 
 
 async def _run(
-    recursive: bool, root: str = "r", **kwargs: Any
+    use_one_listing: bool, root: str = "r", **kwargs: Any
 ) -> tuple[Any, _Count, list[Any]]:
     engine = TreeTraversal(max_running=2)
     action = _Count(engine._emit_event)
     handler = kwargs.pop("handler", _Handler(_FILES))
     task = VisitDirectory(
-        engine, _dir(root), action, handler, recursive=recursive, **kwargs
+        engine, _dir(root), action, handler, use_one_listing=use_one_listing, **kwargs
     )
     events = [e async for e in engine.events([task])]
     return task.result(), action, events
 
 
-@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("use_one_listing", [False, True])
 async def test_each_path_mapped_before_and_reduced_after_its_subtree(
-    recursive: bool,
+    use_one_listing: bool,
 ) -> None:
-    value, action, events = await _run(recursive)
+    value, action, events = await _run(use_one_listing)
     assert value == 5
     assert sorted(events) == [
         ("r", 5),
@@ -143,12 +143,12 @@ async def test_either_task_traverses_alike() -> None:
     assert sorted(action.calls) == sorted(by_directory.calls)
 
 
-@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("use_one_listing", [False, True])
 async def test_patterns_prune_the_directories_not_descended_into(
-    recursive: bool,
+    use_one_listing: bool,
 ) -> None:
     patterns = [_Search("r/a/**", ends_with_sep=False, withdirs=False, maxdepth=None)]
-    value, action, _ = await _run(recursive, patterns=patterns)
+    value, action, _ = await _run(use_one_listing, patterns=patterns)
     # r/c is not descended into, so not visited: every other path is.
     assert value == 4
     mapped = sorted(n for c, n in action.calls if c == "map")
@@ -168,23 +168,25 @@ async def test_patterns_prune_the_directories_not_descended_into(
     assert sorted(action.matched) == ["r/a/2", "r/a/b-x/4", "r/a/b/3"]
 
 
-@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("use_one_listing", [False, True])
 async def test_a_directory_matched_but_not_descended_into_is_visited_not_listed(
-    recursive: bool,
+    use_one_listing: bool,
 ) -> None:
     patterns = [_Search("r/*", ends_with_sep=False, withdirs=True, maxdepth=None)]
-    _, action, _ = await _run(recursive, patterns=patterns)
+    _, action, _ = await _run(use_one_listing, patterns=patterns)
     mapped = sorted(n for c, n in action.calls if c == "map")
     assert mapped == ["r", "r/1", "r/a", "r/c"]
     assert sorted(action.matched) == ["r/1", "r/a", "r/c"]
 
 
-@pytest.mark.parametrize("recursive", [False, True])
-async def test_a_failure_below_skips_the_reduce_above(recursive: bool) -> None:
+@pytest.mark.parametrize("use_one_listing", [False, True])
+async def test_a_failure_below_skips_the_reduce_above(use_one_listing: bool) -> None:
     engine = TreeTraversal(max_running=2)
     action = _Count(engine._emit_event)
     handler = _Handler(_FILES, failing="r/a")  # Alone, or whole: it fails either way.
-    task = VisitDirectory(engine, _dir("r"), action, handler, recursive=recursive)
+    task = VisitDirectory(
+        engine, _dir("r"), action, handler, use_one_listing=use_one_listing
+    )
     with pytest.raises(BaseExceptionGroup) as raised:
         [_ async for _ in engine.events([task])]
     assert [type(e) for e in raised.value.exceptions] == [OSError]
@@ -205,9 +207,9 @@ async def test_a_directory_listed_with_a_slash_is_traversed_once() -> None:
     ]
 
 
-@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("use_one_listing", [False, True])
 async def test_the_items_are_mapped_in_parallel_after_their_directory(
-    recursive: bool,
+    use_one_listing: bool,
 ) -> None:
     active = peak = 0
     mapped: set[str] = set()
@@ -232,7 +234,7 @@ async def test_the_items_are_mapped_in_parallel_after_their_directory(
         _dir("r"),
         _Slow(engine._emit_event),
         _Handler(files),
-        recursive=recursive,
+        use_one_listing=use_one_listing,
     )
     [_ async for _ in engine.events([task])]
     assert peak == 4
