@@ -18,10 +18,11 @@ Three limits bound it:
 - ``max_events``: the events not yet read. A task emitting more waits, so a
   slow caller slows the traversal.
 
-The task taken next is the pending one with the first path. So the tasks
-under the leftmost subtree go before its siblings', and the traversal goes
-quasi depth first: it finishes subtrees, instead of spreading over siblings.
-It needs no precise order, so paths are compared as strings.
+The task taken next is the pending one with the first path, compared by its
+segments as ``split`` gives them. So the tasks under the leftmost subtree go
+before its siblings', and the traversal goes quasi depth first: it finishes
+subtrees, instead of spreading over siblings. Only quasi, as the tasks
+running at once may be siblings, and a task running is never put back.
 
 This module depends on nothing else in the package.
 """
@@ -34,7 +35,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterable
+    from collections.abc import AsyncGenerator, Callable, Iterable
 
 __all__: list[str] = []
 
@@ -126,17 +127,25 @@ class TreeTraversal:
     """
 
     def __init__(
-        self, *, max_running: int, max_pending: int = 1000, max_events: int = 16
+        self,
+        *,
+        max_running: int,
+        max_pending: int = 1000,
+        max_events: int = 16,
+        split: Callable[[str], list[str]] | None = None,
     ) -> None:
         assert max_running >= 1
         assert max_pending >= 1
         assert max_events >= 1
         self.max_running = max_running
         self.max_pending = max_pending
+        # A path's segments, e.g. a handler's _split: by "/" by default.
+        self.split = split or (lambda path: path.split("/"))
         # One condition over all the state: every change notifies, and each
         # waiter checks its own predicate.
         self._state = asyncio.Condition()
-        self._pending_tasks: set[PathTask] = set()
+        # The tasks waiting to start, each with its path's segments, its key.
+        self._pending_tasks: dict[PathTask, list[str]] = {}
         self._running_tasks: set[PathTask] = set()
         self._waiting_tasks: set[PathTask] = set()
         self._events: asyncio.Queue[Any] = asyncio.Queue(maxsize=max_events)
@@ -161,7 +170,7 @@ class TreeTraversal:
                 raise ValueError(f"Task {task.path!r} is added twice.")
             # Given up front, they are in memory already: no room is waited for.
             self._initial.add(task)
-            self._pending_tasks.add(task)
+            self._pending_tasks[task] = self.split(task.path)
 
         scheduler = asyncio.create_task(self._schedule())
         try:
@@ -204,11 +213,10 @@ class TreeTraversal:
                     self._stopping or not self._pending_tasks
                 ):
                     break
-                # Quasi depth first: the tasks under the leftmost subtree go
-                # before its siblings'. Raw strings are close enough, e.g.
-                # "a/b-x" may come in the middle of "a/b"'s subtree.
-                task = min(self._pending_tasks, key=lambda t: t.path)
-                self._pending_tasks.remove(task)
+                # Depth first among those pending: segments compare as a walk
+                # visits them, "a/b/c" between "a/b" and "a/b-x".
+                task = min(self._pending_tasks, key=self._pending_tasks.__getitem__)
+                del self._pending_tasks[task]
                 if not task.cancelled():
                     running = asyncio.create_task(task.run())
                     running.add_done_callback(partial(self._on_done, task))
@@ -244,7 +252,7 @@ class TreeTraversal:
             await self._emit_event(_Failed(error))
         async with self._state:
             self._running_tasks.discard(task)
-            self._pending_tasks.discard(task)
+            self._pending_tasks.pop(task, None)
             self._state.notify_all()
 
     async def _add_tasks(self, tasks: list[PathTask]) -> None:
@@ -263,7 +271,7 @@ class TreeTraversal:
                 if self._stopping:
                     task._cancelled = True  # Never runs: its parent sees it done.
                 else:
-                    self._pending_tasks.add(task)
+                    self._pending_tasks[task] = self.split(task.path)
                 self._state.notify_all()
 
     async def _run_tasks(self, caller: PathTask, tasks: list[PathTask]) -> list[Any]:

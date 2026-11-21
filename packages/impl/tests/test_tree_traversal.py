@@ -68,6 +68,19 @@ async def test_the_leftmost_pending_task_starts_first() -> None:
     assert await _all(engine, tasks) == ["a", "b", "c"]
 
 
+async def test_paths_compare_by_segments() -> None:
+    # As strings, "a/b-x" comes before "a/b/c": by segments, after all below "a/b".
+    engine = TreeTraversal(max_running=1)
+    tasks = [_Node(engine, p, {}) for p in ["a/b-x", "a/b/c", "a/b"]]
+    assert await _all(engine, tasks) == ["a/b", "a/b/c", "a/b-x"]
+
+
+async def test_paths_split_as_given() -> None:
+    engine = TreeTraversal(max_running=1, split=lambda path: path.split("."))
+    tasks = [_Node(engine, p, {}) for p in ["a.b-x", "a.b.c", "a.b"]]
+    assert await _all(engine, tasks) == ["a.b", "a.b.c", "a.b-x"]
+
+
 @pytest.mark.parametrize(
     ("after", "expected"),
     [
