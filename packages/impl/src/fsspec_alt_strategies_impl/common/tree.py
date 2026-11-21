@@ -126,13 +126,9 @@ class TreeTraversal:
     def __init__(
         self, *, max_running: int, max_pending: int = 1000, max_events: int = 16
     ) -> None:
-        for name, value in [
-            ("max_running", max_running),
-            ("max_pending", max_pending),
-            ("max_events", max_events),
-        ]:
-            if value < 1:
-                raise ValueError(f"{name} must be at least 1: {value!r}")
+        assert max_running >= 1
+        assert max_pending >= 1
+        assert max_events >= 1
         self.max_running = max_running
         self.max_pending = max_pending
         # One condition over all the state: every change notifies, and each

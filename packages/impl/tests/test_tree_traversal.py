@@ -210,5 +210,5 @@ async def test_a_traversal_runs_once() -> None:
 
 
 def test_limits_are_checked() -> None:
-    with pytest.raises(ValueError, match="max_pending"):
+    with pytest.raises(AssertionError):
         TreeTraversal(max_running=1, max_pending=0)
