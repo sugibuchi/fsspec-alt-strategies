@@ -121,6 +121,26 @@ class _TraversalTask(PathTask):
         """A path's segments, as the handler splits them: equal for two names `equals` matches."""
         return tuple(self.handler._split(path))
 
+    def prune(self, entries: list[Entry]) -> list[Entry]:
+        """A directory's listing as traversed: without its own marker, each subdirectory once.
+
+        A storage may list a directory's marker object in it, and a
+        subdirectory twice, e.g. as a prefix and as its marker. The entries
+        kept are as the listing gave them.
+        """
+        kept: list[Entry] = []
+        subdirs: set[tuple[str, ...]] = set()
+        for found in entries:
+            if self.handler.equals(found["name"], self.entry["name"]):
+                continue
+            if found["type"] == "directory":
+                key = self._key(found["name"])
+                if key in subdirs:
+                    continue
+                subdirs.add(key)
+            kept.append(found)
+        return kept
+
     def _descend(self, entry: Entry) -> bool:
         return self.patterns is None or any(p.descend(entry) for p in self.patterns)
 
@@ -176,24 +196,8 @@ class VisitDirectory(_TraversalTask):
             return await self.action.map(entry)
         value = await self.action.map(entry)
 
-        entries: list[Entry] = []
-        # The subdirectories listed, by key: one listed twice, e.g. as a prefix
-        # and as its marker object, is traversed once.
-        subdirs: set[tuple[str, ...]] = set()
-        listing = self.handler.ils(entry)
-        try:
-            async for found in listing:
-                if self.handler.equals(found["name"], entry["name"]):
-                    continue  # A directory's own marker is nothing in it.
-                if found["type"] == "directory":
-                    key = self._key(found["name"])
-                    if key in subdirs:
-                        continue
-                    subdirs.add(key)
-                entries.append(found)
-        finally:
-            if (aclose := getattr(listing, "aclose", None)) is not None:
-                await aclose()
+        entries = [e async for e in self.handler.ils(entry)]
+        entries = self.prune(entries)
         return await self._map_reduce(value, entries)
 
     def _subtree(self, entry: Entry) -> PathTask:
