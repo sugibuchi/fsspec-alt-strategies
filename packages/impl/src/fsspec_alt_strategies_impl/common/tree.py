@@ -7,6 +7,10 @@ e.g. a directory's task its subdirectories', and wait for their results. It
 may emit any object as an event, which the traversal's caller reads in the
 order emitted. Nothing here lists or visits: the tasks do.
 
+The tasks are the strategy: how a tree is listed and in what order. What is
+done on each path is a `PathAction`'s: its `map` on a path before what is below
+it, its `reduce` on a directory after.
+
 Three limits bound it:
 
 - ``max_running``: the tasks running at once. A task waiting for those it
@@ -105,6 +109,38 @@ class PathTask(ABC):
     def _set_task(self, task: asyncio.Task[Any]) -> None:
         assert self._task is None and not self._cancelled
         self._task = task
+
+
+class PathAction:
+    """What an operation does on each path a traversal visits: the strategy is the `PathTask`'s.
+
+    A task calls `map` on a path before traversing what is below it, and
+    `reduce` on a directory after. An item's value is what `reduce` returned
+    for a directory, or `map` for a file. Each defaults to None, so a subclass
+    writes only those it needs.
+    """
+
+    def __init__(self, task: PathTask) -> None:
+        self.task = task
+
+    async def map(self, info: dict[str, Any]) -> Any:
+        """Act on a path, before its subtree is traversed: a value for `reduce`, or None.
+
+        ``info`` is the path's entry, as a listing or ``info`` gave it.
+        """
+        return None
+
+    async def reduce(self, info: dict[str, Any], value: Any, values: list[Any]) -> Any:
+        """Act on a directory, after its subtree is traversed: its value, or None.
+
+        ``value`` is what `map` returned for it, and ``values`` the values of
+        the items in it.
+        """
+        return None
+
+    async def emit_event(self, event: Any) -> None:
+        """Emit an event to the traversal's caller, as the task does."""
+        await self.task._emit_event(event)
 
 
 class _End:
