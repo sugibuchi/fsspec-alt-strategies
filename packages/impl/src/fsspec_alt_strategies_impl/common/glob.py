@@ -11,7 +11,8 @@ either may traverse any subtree, and a `VisitDirectory` hands a subtree the
 patterns take whole to a `TraverseSubtree`, if asked to.
 
 Patterns, `patterns._Search`s, prune: the directories descended into, and
-the subtrees listed whole. A directory not descended into is not visited.
+the subtrees listed whole. A directory not descended into is visited only if
+a pattern matches it, and then not listed: its `reduce` gets no values.
 Every path visited is acted on, and told whether a pattern matches it: a path
 may be visited only on the way to others.
 
@@ -111,12 +112,13 @@ class _TraversalTask(PathTask):
         return tuple(self.handler._split(path))
 
     def prune(self, entries: list[Entry]) -> list[Entry]:
-        """A directory's listing as traversed: without its own marker, each subdirectory once, and only those to descend into.
+        """A directory's listing as traversed: without its own marker, each subdirectory once, and only those to descend into or matched.
 
         A storage may list a directory's marker object in it, and a
         subdirectory twice, e.g. as a prefix and as its marker. A
-        subdirectory the patterns do not descend into is dropped, with all
-        below it. The entries kept are as the listing gave them.
+        subdirectory the patterns neither descend into nor match is dropped,
+        with all below it: one matched alone is kept, as a glob reports it,
+        but not listed. The entries kept are as the listing gave them.
         """
         kept: list[Entry] = []
         subdirs: set[tuple[str, ...]] = set()
@@ -125,7 +127,7 @@ class _TraversalTask(PathTask):
                 continue
             if found["type"] == "directory":
                 key = self._key(found["name"])
-                if key in subdirs or not self._descend(found):
+                if key in subdirs or not (self._descend(found) or self._matched(found)):
                     continue
                 subdirs.add(key)
             kept.append(found)
@@ -185,8 +187,9 @@ class VisitDirectory(_TraversalTask):
     async def run(self) -> Any:
         entry = self.entry
         value = await self._map()
-        if entry.get("type") != "directory":
-            entries = []  # A file: reduced at once, with no values.
+        if entry.get("type") != "directory" or not self._descend(entry):
+            # A file, or a directory kept as matched: reduced with no values.
+            entries = []
         else:
             entries = [e async for e in self.handler.ils(entry)]
             entries = self.prune(entries)
@@ -255,10 +258,12 @@ class TraverseSubtree(_TraversalTask):
                 if (aclose := getattr(self.entries, "aclose", None)) is not None:
                     await aclose()
         value = await self._map()
-        if entry.get("type") != "directory":
-            entries = []  # A file: reduced at once, with no values.
+        held = self._held.pop(self._key(entry["name"]), {})
+        if entry.get("type") != "directory" or not self._descend(entry):
+            # A file, or a directory kept as matched: reduced with no values.
+            entries = []
         else:
-            entries = list(self._held.pop(self._key(entry["name"]), {}).values())
+            entries = list(held.values())
             entries = self.prune(entries)
         return await self._map_reduce(value, entries)
 

@@ -169,6 +169,17 @@ async def test_patterns_prune_the_directories_not_descended_into(
 
 
 @pytest.mark.parametrize("recursive", [False, True])
+async def test_a_directory_matched_but_not_descended_into_is_visited_not_listed(
+    recursive: bool,
+) -> None:
+    patterns = [_Search("r/*", ends_with_sep=False, withdirs=True, maxdepth=None)]
+    _, action, _ = await _run(recursive, patterns=patterns)
+    mapped = sorted(n for c, n in action.calls if c == "map")
+    assert mapped == ["r", "r/1", "r/a", "r/c"]
+    assert sorted(action.matched) == ["r/1", "r/a", "r/c"]
+
+
+@pytest.mark.parametrize("recursive", [False, True])
 async def test_a_failure_below_skips_the_reduce_above(recursive: bool) -> None:
     engine = TreeTraversal(max_running=2)
     action = _Count(engine._emit_event)
