@@ -7,12 +7,13 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from fsspec_alt_strategies_impl.common.glob import (
+    PathAction,
     TraverseSubtree,
     VisitDirectory,
     _Through,
 )
 from fsspec_alt_strategies_impl.common.patterns import _Search
-from fsspec_alt_strategies_impl.common.tree import PathAction, TreeTraversal
+from fsspec_alt_strategies_impl.common.tree import TreeTraversal
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

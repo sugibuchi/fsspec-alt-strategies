@@ -8,7 +8,7 @@ may emit any object as an event, which the traversal's caller reads in the
 order emitted. Nothing here lists or visits: the tasks do.
 
 The tasks are the strategy: how a tree is listed and in what order. What is
-done on each path is a `PathAction`'s: its `map` on a path before what is below
+done on each path is `glob.PathAction`'s: its `map` on a path before what is below
 it, its `reduce` on a directory after.
 
 Three limits bound it:
@@ -39,7 +39,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable
+    from collections.abc import AsyncGenerator, Callable, Iterable
 
 __all__: list[str] = []
 
@@ -109,46 +109,6 @@ class PathTask(ABC):
     def _set_task(self, task: asyncio.Task[Any]) -> None:
         assert self._task is None and not self._cancelled
         self._task = task
-
-
-class PathAction:
-    """What an operation does on each path a traversal visits: the strategy is the `PathTask`'s.
-
-    A task calls `map` on a path before traversing what is below it, and
-    `reduce` on a directory after. An item's value is what `reduce` returned
-    for a directory, or `map` for a file. Each defaults to None, so a subclass
-    writes only those it needs.
-
-    The root is a path like any other: `map` is called on it, and `reduce` too
-    if it is a directory. A root that is a file gets `map` only, and its value
-    is what `map` returned.
-
-    Which paths are visited is the task's, e.g. within a ``maxdepth`` or a
-    glob's pattern: an action never prunes. So are its errors: where `map`
-    raises, or anything below the path fails, `reduce` is not called, and the
-    task handles the error.
-    """
-
-    def __init__(self, emit_event: Callable[[Any], Coroutine[Any, Any, None]]) -> None:
-        # The traversal's, which a strategy passes: one action serves every task.
-        # `map` and `reduce` emit events to the traversal's caller by it,
-        # waiting while too many are unread.
-        self._emit_event = emit_event
-
-    async def map(self, info: dict[str, Any]) -> Any:
-        """Act on a path, before its subtree is traversed: a value for `reduce`, or None.
-
-        ``info`` is the path's entry, as a listing or ``info`` gave it.
-        """
-        return None
-
-    async def reduce(self, info: dict[str, Any], value: Any, values: list[Any]) -> Any:
-        """Act on a directory, after its subtree is traversed: its value, or None.
-
-        ``value`` is what `map` returned for it, and ``values`` the values of
-        the items in it, in no order.
-        """
-        return None
 
 
 class _End:
