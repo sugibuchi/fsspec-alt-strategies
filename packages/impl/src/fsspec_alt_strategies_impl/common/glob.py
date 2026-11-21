@@ -296,17 +296,18 @@ class _Span:
                 continue
             if not _below(key, found):
                 break
-            if len(found) == len(key) + 1:
-                if next["type"] != "directory":
-                    item_match = task._matched(next)
-                    item = await task.action.map(next, item_match)
-                    values.append(await task.action.reduce(next, item_match, item, []))
-                    next = await anext(self.entries, None)
-                    continue
-                span = _Span(task, next, await anext(self.entries, None), self.entries)
-            else:
-                span = _Span(task, task.subdir_entry(root, next), next, self.entries)
-            if task._descend(span.root) or task._matched(span.root):
+            in_root = len(found) == len(key) + 1
+            if in_root and next["type"] != "directory":
+                item_match = task._matched(next)
+                item = await task.action.map(next, item_match)
+                values.append(await task.action.reduce(next, item_match, item, []))
+                next = await anext(self.entries, None)
+                continue
+            # A subdirectory listed, or made from a path below it. Its span
+            # starts at next either way: a subdirectory listed is its marker.
+            subdir = next if in_root else task.subdir_entry(root, next)
+            span = _Span(task, subdir, next, self.entries)
+            if task._descend(subdir) or task._matched(subdir):
                 item, next = await span.map_reduce()
                 values.append(item)
             else:
