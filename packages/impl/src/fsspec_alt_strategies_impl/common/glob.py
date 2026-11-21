@@ -87,24 +87,22 @@ class PathAction:
 
 
 class _MapEntry(PathTask):
-    """A path not traversed below, as a task: its directory's task's `_visit_leaf` of it.
+    """A directory not descended into: its `map` alone, as a task.
 
-    So the items in a directory are mapped in parallel, as many at once as
-    the traversal runs tasks, after their directory's own `map`.
+    So it is mapped in parallel with the other items of its directory, after
+    their directory's own `map`.
     """
 
     def __init__(
-        self,
-        engine: TreeTraversal,
-        entry: Entry,
-        visit: Callable[[Entry], Coroutine[Any, Any, Any]],
+        self, engine: TreeTraversal, entry: Entry, action: PathAction, match: bool
     ) -> None:
         super().__init__(engine, entry["name"])
         self.entry = entry
-        self.visit = visit
+        self.action = action
+        self.match = match
 
     async def run(self) -> Any:
-        return await self.visit(self.entry)
+        return await self.action.map(self.entry, self.match)
 
 
 class _TraversalTask(PathTask):
@@ -165,21 +163,12 @@ class _TraversalTask(PathTask):
     async def _map(self) -> Any:
         return await self.action.map(self.entry, self._matched(self.entry))
 
-    async def _visit_leaf(self, entry: Entry) -> Any:
-        """Act on a path not traversed below: a file's `map` and `reduce`, a pruned directory's `map` alone."""
-        match = self._matched(entry)
-        value = await self.action.map(entry, match)
-        if entry["type"] == "directory":
-            return value
-        else:
-            return await self.action.reduce(entry, match, value, [])
-
     def _whole(self, entry: Entry) -> bool:
         """Whether all below a directory is traversed: no pattern prunes it."""
         return self.patterns is None or any(p.whole(entry) for p in self.patterns)
 
     def _subtree(self, entry: Entry) -> PathTask:
-        """The task traversing a subdirectory to descend into."""
+        """The task traversing an item: a file, or a subdirectory to descend into."""
         raise NotImplementedError
 
     async def _map_reduce(self, value: Any, entries: list[Entry]) -> Any:
@@ -192,8 +181,8 @@ class _TraversalTask(PathTask):
         """
         tasks = [
             self._subtree(item)
-            if item["type"] == "directory" and self._descend(item)
-            else _MapEntry(self._engine, item, self._visit_leaf)
+            if item["type"] != "directory" or self._descend(item)
+            else _MapEntry(self._engine, item, self.action, self._matched(item))
             for item in entries
         ]
         values = await self._run_tasks(tasks)
@@ -223,17 +212,17 @@ class VisitDirectory(_TraversalTask):
 
     async def run(self) -> Any:
         entry = self.entry
-        if entry.get("type") != "directory":
-            return await self._visit_leaf(entry)
         value = await self._map()
-
-        entries = [e async for e in self.handler.ils(entry)]
-        entries = self.prune(entries)
+        if entry.get("type") != "directory":
+            entries = []  # A file: reduced at once, with no values.
+        else:
+            entries = [e async for e in self.handler.ils(entry)]
+            entries = self.prune(entries)
         return await self._map_reduce(value, entries)
 
     def _subtree(self, entry: Entry) -> PathTask:
         """All below a subdirectory by one listing, where asked and whole, else listed alone."""
-        if self.recursive and self._whole(entry):
+        if self.recursive and entry["type"] == "directory" and self._whole(entry):
             return TraverseSubtree(
                 self._engine,
                 entry,
@@ -293,10 +282,11 @@ class TraverseSubtree(_TraversalTask):
             finally:
                 if (aclose := getattr(self.entries, "aclose", None)) is not None:
                     await aclose()
-        if entry.get("type") != "directory":
-            return await self._visit_leaf(entry)
         value = await self._map()
-        entries = list(self._held.pop(self._key(entry["name"]), {}).values())
+        if entry.get("type") != "directory":
+            entries = []  # A file: reduced at once, with no values.
+        else:
+            entries = list(self._held.pop(self._key(entry["name"]), {}).values())
         return await self._map_reduce(value, entries)
 
     def _subtree(self, entry: Entry) -> PathTask:
