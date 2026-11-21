@@ -132,13 +132,13 @@ class _TraversalTask(PathTask):
         """The task traversing a subdirectory to descend into."""
         raise NotImplementedError
 
-    async def _map_reduce(
-        self, value: Any, entries: list[Entry], errors: list[BaseException]
-    ) -> Any:
+    async def _map_reduce(self, value: Any, entries: list[Entry]) -> Any:
         """Run a task per item of the directory, then reduce: its value, unless anything failed.
 
         Each item's task starts once the directory's `map` is done, e.g. once
-        it made the directory the items are copied into.
+        it made the directory the items are copied into. If any failed,
+        `_run_tasks` raises their errors in an ExceptionGroup, and `reduce` is
+        skipped: a failure deep down comes up nested, a group per directory.
         """
         tasks = [
             self._subtree(item)
@@ -146,15 +146,7 @@ class _TraversalTask(PathTask):
             else _MapEntry(self._engine, item, self.action)
             for item in entries
         ]
-        values: list[Any] = []
-        try:
-            values = await self._run_tasks(tasks)
-        except BaseExceptionGroup as group:
-            errors += group.exceptions
-        if errors:
-            raise BaseExceptionGroup(
-                f"Traversing {self.entry['name']!r} failed", errors
-            )
+        values = await self._run_tasks(tasks)
         return await self.action.reduce(self.entry, value, values)
 
 
@@ -202,7 +194,7 @@ class VisitDirectory(_TraversalTask):
         finally:
             if (aclose := getattr(listing, "aclose", None)) is not None:
                 await aclose()
-        return await self._map_reduce(value, entries, [])
+        return await self._map_reduce(value, entries)
 
     def _subtree(self, entry: Entry) -> PathTask:
         """All below a subdirectory by one listing, where asked and whole, else listed alone."""
@@ -249,7 +241,7 @@ class _HeldDirectory(_TraversalTask):
             return await self.action.map(entry)
         value = await self.action.map(entry)
         entries = list(self._below.pop(self._key(entry["name"]), {}).values())
-        return await self._map_reduce(value, entries, [])
+        return await self._map_reduce(value, entries)
 
     def _subtree(self, entry: Entry) -> PathTask:
         return _HeldDirectory(
