@@ -18,7 +18,7 @@ An error, of ``ils`` or of the action, ends the path's task: what is below it
 runs on, then its directory's `reduce` is skipped, and the error goes up in an
 ExceptionGroup, to the strategy running the traversal.
 
-This module depends on `patterns` and `tree`.
+This module depends on `handler`, `patterns` and `tree`.
 """
 
 from __future__ import annotations
@@ -30,12 +30,11 @@ from .tree import PathTask
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 
+    from .handler import Entry
     from .patterns import _Search
     from .tree import TreeTraversal
 
 __all__: list[str] = []
-
-_Entry = dict[str, Any]
 
 
 class PathAction:
@@ -62,14 +61,14 @@ class PathAction:
         # waiting while too many are unread.
         self._emit_event = emit_event
 
-    async def map(self, info: dict[str, Any]) -> Any:
+    async def map(self, info: Entry) -> Any:
         """Act on a path, before its subtree is traversed: a value for `reduce`, or None.
 
         ``info`` is the path's entry, as a listing or ``info`` gave it.
         """
         return None
 
-    async def reduce(self, info: dict[str, Any], value: Any, values: list[Any]) -> Any:
+    async def reduce(self, info: Entry, value: Any, values: list[Any]) -> Any:
         """Act on a directory, after its subtree is traversed: its value, or None.
 
         ``value`` is what `map` returned for it, and ``values`` the values of
@@ -95,33 +94,33 @@ class _TraversalTask(PathTask):
         action: PathAction,
         *,
         patterns: Sequence[_Search] | None = None,
-        entry: _Entry | None = None,
+        entry: Entry | None = None,
     ) -> None:
         super().__init__(engine, path)
         self.action = action
         self.patterns = patterns
         self.entry = entry or {"name": path, "type": "directory"}
 
-    def _matched(self, entry: _Entry) -> bool:
+    def _matched(self, entry: Entry) -> bool:
         return self.patterns is None or any(p.matched(entry) for p in self.patterns)
 
-    def _descend(self, entry: _Entry) -> bool:
+    def _descend(self, entry: Entry) -> bool:
         return self.patterns is None or any(p.descend(entry) for p in self.patterns)
 
-    def _whole(self, entry: _Entry) -> bool:
+    def _whole(self, entry: Entry) -> bool:
         """Whether all below a directory is traversed: no pattern prunes it."""
         return self.patterns is None or any(p.whole(entry) for p in self.patterns)
 
-    async def _map(self, entry: _Entry) -> Any:
+    async def _map(self, entry: Entry) -> Any:
         """A path's value before what is below it: what `map` returns, if matched."""
         return await self.action.map(entry) if self._matched(entry) else None
 
-    async def _leaf(self, entry: _Entry) -> Any:
+    async def _leaf(self, entry: Entry) -> Any:
         """The value of a path not traversed below: a file, or a directory pruned."""
         return await self._map(entry) if self._matched(entry) else _Through([])
 
     async def _reduce(
-        self, entry: _Entry, value: Any, results: list[Any], errors: list[BaseException]
+        self, entry: Entry, value: Any, results: list[Any], errors: list[BaseException]
     ) -> Any:
         """A directory's value once all below it is done: its `reduce`, unless anything failed."""
         if errors:
@@ -151,10 +150,10 @@ class VisitDirectory(_TraversalTask):
         engine: TreeTraversal,
         path: str,
         action: PathAction,
-        ils: Callable[..., AsyncIterator[_Entry]],
+        ils: Callable[..., AsyncIterator[Entry]],
         *,
         patterns: Sequence[_Search] | None = None,
-        entry: _Entry | None = None,
+        entry: Entry | None = None,
         recursive: bool = False,
     ) -> None:
         super().__init__(engine, path, action, patterns=patterns, entry=entry)
@@ -199,7 +198,7 @@ class VisitDirectory(_TraversalTask):
             errors += group.exceptions
         return await self._reduce(entry, value, results, errors)
 
-    def _child(self, entry: _Entry) -> PathTask:
+    def _child(self, entry: Entry) -> PathTask:
         """The task traversing a subdirectory: all below it by one listing, where asked and whole."""
         if self.recursive and self._whole(entry):
             return TraverseSubtree(
@@ -236,15 +235,15 @@ class TraverseSubtree(_TraversalTask):
         engine: TreeTraversal,
         path: str,
         action: PathAction,
-        entries: AsyncIterator[_Entry],
+        entries: AsyncIterator[Entry],
         *,
         patterns: Sequence[_Search] | None = None,
-        entry: _Entry | None = None,
+        entry: Entry | None = None,
     ) -> None:
         super().__init__(engine, path, action, patterns=patterns, entry=entry)
         self.entries = entries
         # Each directory's items, by name: a directory listed replaces one made.
-        self._below: dict[str, dict[str, _Entry]] = {}
+        self._below: dict[str, dict[str, Entry]] = {}
 
     async def run(self) -> Any:
         entry = self.entry
@@ -258,7 +257,7 @@ class TraverseSubtree(_TraversalTask):
                 await aclose()
         return await self._traverse(entry)
 
-    def _hold(self, entry: _Entry) -> None:
+    def _hold(self, entry: Entry) -> None:
         """Hold an entry in its directory, making the directories between it and the root."""
         name = entry["name"]
         prefix = self.path + "/" if self.path else ""
@@ -278,7 +277,7 @@ class TraverseSubtree(_TraversalTask):
             siblings[parent] = {"name": parent, "size": 0, "type": "directory"}
             parent = above
 
-    async def _traverse(self, entry: _Entry) -> Any:
+    async def _traverse(self, entry: Entry) -> Any:
         """A directory's value: map, all below it, then reduce, as `VisitDirectory` does."""
         value = await self._map(entry)
         results: list[Any] = []
