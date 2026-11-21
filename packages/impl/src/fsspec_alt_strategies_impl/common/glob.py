@@ -140,7 +140,7 @@ class _TraversalTask(PathTask):
         """Whether a pattern matches a path: every path does where there is none."""
         return self.patterns is None or any(p.matched(entry) for p in self.patterns)
 
-    async def _map(self) -> Any:
+    async def _map_self(self) -> Any:
         return await self.action.map(self.entry, self._matched(self.entry))
 
     def _whole(self, entry: Entry) -> bool:
@@ -186,7 +186,7 @@ class VisitDirectory(_TraversalTask):
 
     async def run(self) -> Any:
         entry = self.entry
-        value = await self._map()
+        value = await self._map_self()
         if entry.get("type") != "directory" or not self._descend(entry):
             # A file, or a directory kept as matched: reduced with no values.
             entries = []
@@ -257,7 +257,7 @@ class TraverseSubtree(_TraversalTask):
             finally:
                 if (aclose := getattr(self.entries, "aclose", None)) is not None:
                     await aclose()
-        value = await self._map()
+        value = await self._map_self()
         held = self._held.pop(self._key(entry["name"]), {})
         if entry.get("type") != "directory" or not self._descend(entry):
             # A file, or a directory kept as matched: reduced with no values.
