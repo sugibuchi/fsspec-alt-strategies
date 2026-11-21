@@ -18,8 +18,10 @@ Three limits bound it:
 - ``max_events``: the events not yet read. A task emitting more waits, so a
   slow caller slows the traversal.
 
-The task taken next is the pending one with the first path, the leftmost
-branch of the tree, so the traversal goes depth first.
+The task taken next is the pending one with the first path. So the tasks
+under the leftmost subtree go before its siblings', and the traversal goes
+quasi depth first: it finishes subtrees, instead of spreading over siblings.
+It needs no precise order, so paths are compared as strings.
 
 This module depends on nothing else in the package.
 """
@@ -202,8 +204,9 @@ class TreeTraversal:
                     self._stopping or not self._pending_tasks
                 ):
                     break
-                # Postponed: comparing raw strings puts "a/b-x" inside "a/b"'s
-                # subtree. Paths are to be compared by parts, from a heap.
+                # Quasi depth first: the tasks under the leftmost subtree go
+                # before its siblings'. Raw strings are close enough, e.g.
+                # "a/b-x" may come in the middle of "a/b"'s subtree.
                 task = min(self._pending_tasks, key=lambda t: t.path)
                 self._pending_tasks.remove(task)
                 if not task.cancelled():
