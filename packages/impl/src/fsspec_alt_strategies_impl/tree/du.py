@@ -23,7 +23,7 @@ from ..common.glob import PathAction
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.tree import TreeTraversal
-from .walk import _MAX_RUNNING, _bottom_up, _unlisted
+from .walk import _MAX_RUNNING, _root_task, _unlisted
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -82,9 +82,9 @@ def _tree_du(
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         engine = TreeTraversal(max_running=max_running, split=handler.segments)
         op._on_cancel = engine.cancel
-        await handler.open()  # Its profile, read by _bottom_up.
+        await handler.open()  # Its profile, read by _root_task.
         top = len(tuple(handler.segments(path)))
-        root = _bottom_up(
+        root = _root_task(
             engine,
             {"name": path, "type": "directory"},
             _Du(engine._emit_event, handler, top, maxdepth),

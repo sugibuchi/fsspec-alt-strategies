@@ -127,7 +127,7 @@ def _tree_walk(
             return _WalkTopDown(engine, entry, action, handler, **options)
         top = len(tuple(handler.segments(path)))
         action = _WalkBottomUp(engine._emit_event, handler, top, maxdepth)
-        return _bottom_up(engine, entry, action, handler, **options)
+        return _root_task(engine, entry, action, handler, **options)
 
     async def run(
         op: Operation[_Walked, WalkState],
@@ -164,7 +164,7 @@ def _tree_walk(
     return Operation(run, WalkState(directories_listed=0))
 
 
-def _bottom_up(
+def _root_task(
     engine: TreeTraversal,
     entry: Entry,
     action: PathAction,
