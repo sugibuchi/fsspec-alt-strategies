@@ -96,7 +96,7 @@ def _tree_rm(
     unknown. Iterating it raises FileNotFoundError if ``path`` does not exist,
     or matches nothing.
 
-    Requests: one ``ils_recursive`` per root, which a storage without a
+    Requests: one recursive ``ils`` per root, which a storage without a
     recursive listing answers with one per directory, or one ``ils`` per
     directory with ``maxdepth``. One ``rm_files`` per batch of
     ``rm_batch_size`` files, by default one ``rm_file`` each, and one ``rm_dir`` per

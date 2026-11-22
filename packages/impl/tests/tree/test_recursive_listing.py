@@ -19,6 +19,7 @@ from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl.tree.du import _tree_du
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.glob import _tree_glob
+from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
 from fsspec_alt_strategies_impl.tree.walk import _tree_walk
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
@@ -76,17 +77,17 @@ async def test_find_lists_once(any_fs: SimulatedFileSystem) -> None:
 class _Refusing(TreeView):
     """A storage refusing its recursive listing, as only asking tells.
 
-    As a handler does, it falls back on `ils_by_directory` itself, and asks no more.
+    As a handler does, it falls back on its family's default itself, a
+    directory per request by ``super().ils``, and asks no more.
     """
 
     refused = 0
 
-    async def ils_recursive(self, entry: Any, **kwargs: Any) -> Any:  # type: ignore[override]
-        if self.recursive_listing:
+    def ils(self, entry: Any, recursive: bool = False, **kwargs: Any) -> Any:
+        if recursive and self.recursive_listing:
             self.refused += 1  # Asked, and refused.
             self.recursive_listing = False
-        async for found in self.ils_by_directory(entry, **kwargs):
-            yield found
+        return super().ils(entry, recursive, **kwargs)
 
 
 async def test_a_refused_recursive_listing_lists_each_directory(
@@ -312,8 +313,15 @@ class _OwnDepthFirst(TreeView):
         profile = StorageProfile(recursive_order="depth_first")
         super().__init__(fs, storage_profile=profile, **kwargs)
 
-    async def ils_recursive(self, entry: dict[str, Any], **kwargs: Any) -> Any:
-        async for found in self.ils_by_directory(entry, **kwargs):
+    def ils(self, entry: dict[str, Any], recursive: bool = False, **kwargs: Any) -> Any:
+        if recursive:
+            return self._own(entry, **kwargs)
+        else:
+            return super().ils(entry, **kwargs)
+
+    async def _own(self, entry: dict[str, Any], **kwargs: Any) -> Any:
+        # The family's default, wrapped: the walk no longer tells it apart.
+        async for found in super().ils(entry, recursive=True, **kwargs):
             yield found
 
 
@@ -383,7 +391,12 @@ async def test_a_file_root_fails_with_its_entry(any_fs: SimulatedFileSystem) -> 
 
 
 class _Choosing(TreeView):
-    """A storage listing a subtree whole only from a given depth of its paths, as a handler may choose."""
+    """A storage listing a subtree whole only from a given depth of its paths, as a handler may choose.
+
+    Above it, its recursive ``ils`` is its family's default, a directory per
+    request: the walk then lists each directory alone, and asks again of each
+    subdirectory.
+    """
 
     def __init__(
         self, fs: SimulatedFileSystem, below: int | None, **kwargs: Any
@@ -391,8 +404,12 @@ class _Choosing(TreeView):
         super().__init__(fs, recursive_listing=True, **kwargs)
         self.below = below
 
-    def lists_subtree(self, entry: dict[str, Any]) -> bool:
-        return self.below is not None and entry["name"].count("/") >= self.below
+    def ils(self, entry: dict[str, Any], recursive: bool = False, **kwargs: Any) -> Any:
+        whole = self.below is not None and entry["name"].count("/") >= self.below
+        if recursive and not whole:
+            return TreeFileOperationHandler.ils(self, entry, recursive=True, **kwargs)
+        else:
+            return super().ils(entry, recursive, **kwargs)
 
 
 @pytest.mark.parametrize(

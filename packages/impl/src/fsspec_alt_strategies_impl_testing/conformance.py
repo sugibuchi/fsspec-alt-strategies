@@ -6,12 +6,12 @@ The library never detects what a storage does: the developer declares it, and a
 wrong declaration gives wrong answers. These checks catch one before it does,
 in a handler's tests, on a dummy or a live storage.
 
-`check_recursive_order` checks the order of a tree handler's ``ils_recursive``
+`check_recursive_order` checks the order of a tree handler's recursive ``ils``
 against the profile's ``recursive_order``. Unknown, the order is taken as
 parents first, right on any storage: "depth_first" is the declaration a wrong
 listing would break, a directory then taken as done too early. A handler
-keeping the default listing, ``ils_by_directory``, needs no check: the walk
-reads such a subtree a directory at a time itself.
+keeping its family's default, a directory per request by ``super().ils``,
+needs no check: the walk reads such a subtree a directory at a time itself.
 
 This module depends on the strategies' `handler` and `operation` of `common`,
 and `handler` of `tree`.
@@ -39,11 +39,11 @@ Level by level, a listing leaves "a/b-x" for "a/b", then comes back to "a/b-x/d"
 
 
 async def check_recursive_order(handler: TreeFileOperationHandler, root: str) -> None:
-    """Check that a tree handler's ``ils_recursive`` keeps the order its profile declares, on its storage.
+    """Check that a tree handler's recursive ``ils`` keeps the order its profile declares, on its storage.
 
     It writes a few files in a new directory below ``root``, chosen so that
     name order and depth-first order differ, lists the directory by the
-    handler's own ``ils_recursive``, then deletes it. The listing must give
+    handler's own recursive ``ils``, then deletes it. The listing must give
     each file once, and keep the order of the profile's ``recursive_order``,
     as `recursive_order_errors` checks it.
 
@@ -68,7 +68,7 @@ async def check_recursive_order(handler: TreeFileOperationHandler, root: str) ->
             await handler.makedirs(handler.parent(path), exist_ok=True)
             await handler.pipe_file(path, b"x")
 
-        listing = handler.ils_recursive(handler.entry(base))
+        listing = handler.ils(handler.entry(base), recursive=True)
         entries = [entry async for entry in listing]
         order = handler.profile.recursive_order
         errors = recursive_order_errors(entries, base, order)

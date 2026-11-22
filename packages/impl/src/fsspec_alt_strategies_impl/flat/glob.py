@@ -70,7 +70,7 @@ def _flat_glob(
     Once cancelled, it takes nothing more from the listings. An error from a
     listing ends the operation, raised by its iteration.
 
-    Requests: the pages of one ``ils_recursive`` per listing, one after
+    Requests: the pages of one recursive ``ils`` per listing, one after
     another: of the prefix's directory, narrowed to the rest of the prefix.
     One ``info`` per pattern without wildcards, each holding a permit of the
     handler's ``operation_limit``. The listings hold none.
@@ -79,7 +79,7 @@ def _flat_glob(
     takes them: a trailing "/" matches only directories. ``maxdepth`` is how
     deep a ``**`` goes, and ``withdirs`` whether directories can match, as with
     fsspec's ``_glob``. The listing still lists every key under the prefix.
-    ``ils_kwargs`` go to each ``ils_recursive``, as fsspec's ``_glob`` passes
+    ``ils_kwargs`` go to each recursive ``ils``, as fsspec's ``_glob`` passes
     its own on.
 
     The operation yields the entry of each path matched, and its state is a

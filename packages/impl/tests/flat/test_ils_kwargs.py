@@ -1,4 +1,4 @@
-"""Tests that every flat strategy passes its ``ils_kwargs`` on to each ``ils_recursive``."""
+"""Tests that every flat strategy passes its ``ils_kwargs`` on to each recursive ``ils``."""
 
 from __future__ import annotations
 
@@ -21,17 +21,25 @@ if TYPE_CHECKING:
 
 
 class _Recording(FlatView):
-    """A view noting the options of each ``ils_recursive``."""
+    """A view noting the options of each recursive ``ils``."""
 
     def __init__(self, fs: Any) -> None:
         super().__init__(fs)
         self.options: list[dict[str, Any]] = []
 
-    def ils_recursive(
-        self, entry: dict[str, Any], *, prefix: str = "", **kwargs: Any
+    def ils(
+        self,
+        entry: dict[str, Any],
+        recursive: bool = False,
+        *,
+        prefix: str = "",
+        **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        self.options.append(kwargs)
-        return super().ils_recursive(entry, prefix=prefix)
+        if recursive:
+            self.options.append(kwargs)
+            return super().ils(entry, recursive=True, prefix=prefix)
+        else:
+            return super().ils(entry, **kwargs)
 
 
 _STRATEGIES: dict[str, Callable[..., Any]] = {

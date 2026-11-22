@@ -59,7 +59,7 @@ def _tree_walk(
     it, so each is listed on its own, its subdirectories found once its
     listing is whole: a recursive listing passes a directory only after all
     below it. Without, a directory comes after all of those below
-    it, and the tree is listed by one ``ils_recursive``, unless ``maxdepth`` or
+    it, and the tree is listed by one recursive ``ils``, unless ``maxdepth`` or
     ``descend`` prunes it. A listing broken off part way yields its error, as
     soon as it comes, and leaves out the directories it had not passed whole,
     as a walk bottom up that is cancelled does.
@@ -78,7 +78,7 @@ def _tree_walk(
 
     Requests: top down, or when pruned, one ``ils`` per directory walked, as
     the handler's ``operation_limit`` allows. Bottom up otherwise, one
-    ``ils_recursive`` of ``path``, which a storage without a recursive listing
+    recursive ``ils`` of ``path``, which a storage without a recursive listing
     answers with one per directory.
 
     ``path`` is the directory the walk starts from, listed by the ``ils`` of

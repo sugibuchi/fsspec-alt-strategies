@@ -38,7 +38,7 @@ def _flat_du(
 ) -> Operation[dict[str, Any], DuState]:
     """Measure the files under a prefix, from one listing streamed as it comes.
 
-    It assumes that the ``ils_recursive`` gives each file's size, as listings
+    It assumes that the recursive ``ils`` gives each file's size, as listings
     of object stores do. It yields the entry of each file counted, with its ``size``, as
     fsspec's ``_du`` gives with ``total=False``. Its state's ``size`` is their
     total, as fsspec's ``_du`` gives by default.
@@ -53,14 +53,14 @@ def _flat_du(
     Once cancelled, it takes nothing more from the listing. An error from the
     listing ends the operation, raised by its iteration.
 
-    Requests: the pages of one ``ils_recursive`` of ``path``, one after
+    Requests: the pages of one recursive ``ils`` of ``path``, one after
     another. One ``info`` for ``path``, if nothing is under it, holding a
     permit of the handler's ``operation_limit``. The listing holds none.
 
-    ``path`` is the directory measured on ``handler``. Its ``ils_recursive`` lists
+    ``path`` is the directory measured on ``handler``. Its recursive ``ils`` lists
     every key below a directory, in name order, each key once. ``maxdepth`` of
     1 counts only the files in ``path``, though the listing still lists every
-    key under it. ``ils_kwargs`` go to the ``ils_recursive``, as fsspec's
+    key under it. ``ils_kwargs`` go to the recursive ``ils``, as fsspec's
     ``_du`` passes its own on.
 
     The operation yields the entry of each file counted, and its state is a

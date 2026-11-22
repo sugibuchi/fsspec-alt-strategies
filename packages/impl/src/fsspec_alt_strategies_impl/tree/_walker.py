@@ -4,10 +4,10 @@
 
 `_TreeWalk` lists the directories below one or more roots, several at once,
 and yields each directory's listing whole: its entries, or its error. It asks
-a `_Visit` which directories the operation needs, and the handler how to list
-them, by its ``lists_subtree``. A directory is listed alone by ``ils``, or a
-subtree whole by one ``ils_recursive``, which `_SubtreeReader` splits into
-each directory's listing.
+a `_Visit` which directories the operation needs. A directory is listed alone
+by ``ils``, or a subtree the visit takes whole by one recursive ``ils``, which
+`_SubtreeReader` splits into each directory's listing. How the handler lists
+it recursively is its own: in one request, or a directory per request.
 
 The caller chooses the order, as with a standard walk:
 
@@ -84,8 +84,8 @@ class _TreeWalk:
     listing like any other: the caller decides what it means.
 
     ``visit`` says which directories the walk lists: by default all below
-    each root. The handler's ``lists_subtree`` says whether a subtree the visit
-    takes whole is listed by one ``ils_recursive``, where ``order`` allows it.
+    each root. A subtree the visit takes whole is listed by one recursive
+    ``ils`` of the handler, where ``order`` allows it.
 
     Each listing holds a permit of the handler's ``operation_limit`` until it
     ends: the walk takes one before it starts a listing, while one is free, or,
@@ -212,13 +212,13 @@ class _TreeWalk:
     ) -> _SubtreeReader | None:
         """The reader of a subtree listed whole, or None to list it alone.
 
-        Where the handler's ``ils_recursive`` is the library's default, a
+        Where the handler's recursive ``ils`` is its family's default, a
         directory per request, the walk lists the subtree so itself, depth
         first and concurrently, as it lists any other directory.
         """
         try:
             listed = entry or self.handler.entry(name)
-            entries = self.handler.ils_recursive(listed, **self.ils_kwargs)
+            entries = self.handler.ils(listed, recursive=True, **self.ils_kwargs)
         except Exception as e:
             entries = _raising(e)  # Its read fails as the subtree's.
         if isinstance(entries, _DepthFirst):
@@ -266,12 +266,8 @@ class _TreeWalk:
         entry: Entry | None,
         need: Literal["directory", "subtree"],
     ) -> _Pending:
-        """A directory to list: with all below it where the visit takes it whole, the handler agrees, and the order allows."""
-        whole = (
-            need == "subtree"
-            and self.order != "topdown"
-            and self.handler.lists_subtree(entry or {"name": name, "type": "directory"})
-        )
+        """A directory to list: with all below it where the visit takes it whole, and the order allows."""
+        whole = need == "subtree" and self.order != "topdown"
         return name, depth, entry, whole
 
     def _take(
@@ -450,7 +446,7 @@ def _depth_first(entries: AsyncIterator[Entry], profile: StorageProfile) -> bool
 
 
 async def _close(entries: AsyncIterator[Entry]) -> None:
-    """Close a listing, where it can be: an ``ils_recursive`` gives any async iterator."""
+    """Close a listing, where it can be: a recursive ``ils`` gives any async iterator."""
     if (aclose := getattr(entries, "aclose", None)) is not None:
         await aclose()
 

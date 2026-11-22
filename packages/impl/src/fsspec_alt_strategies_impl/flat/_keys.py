@@ -8,7 +8,7 @@ whose key ends with "/". fsspec's ``_find`` and ``_glob`` answer with
 directories too, so the strategies derive them from the keys, as `_dirs` does.
 
 The strategies list by a raw prefix, e.g. "data/2024-", as `_listing` lists
-it: an ``ils_recursive`` of its directory, narrowed to the rest of its name.
+it: a recursive ``ils`` of its directory, narrowed to the rest of its name.
 The listing holds no permit of the handler's ``operation_limit``: its pages
 come one after another, and the strategy never sees them. Only the other
 requests, such as an ``info``, hold one.
@@ -34,18 +34,21 @@ def _listing(
 ) -> AsyncIterator[dict[str, Any]]:
     """Every key starting with ``prefix``, raw text, in name order.
 
-    It is the ``ils_recursive`` of the prefix's directory, narrowed to the rest
+    It is the recursive ``ils`` of the prefix's directory, narrowed to the rest
     of its name: "data/2024-" lists "data" with the prefix "2024-", and "data/"
     all of "data".
 
     The prefix's directory is listed by ``root``, its entry, where given, e.g.
     as a glob found it, else by its path. ``ils_kwargs`` go to the
-    ``ils_recursive``, but its ``prefix``, which is the listing's own.
+    recursive ``ils``, but its ``prefix`` and ``recursive``, which are the
+    listing's own.
     """
     path, _, name = prefix.rpartition("/")
     entry = root if root is not None and root["name"] == path else handler.entry(path)
-    kwargs = {k: v for k, v in (ils_kwargs or {}).items() if k != "prefix"}
-    return handler.ils_recursive(entry, prefix=name, **kwargs)
+    kwargs = {
+        k: v for k, v in (ils_kwargs or {}).items() if k not in ("prefix", "recursive")
+    }
+    return handler.ils(entry, recursive=True, prefix=name, **kwargs)
 
 
 def _dir(name: str) -> dict[str, Any]:

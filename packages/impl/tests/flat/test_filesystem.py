@@ -101,16 +101,22 @@ class _FlatHandler(FlatFileOperationHandler):
     def verify_path(self, path: str) -> None:
         """Nothing: the simulated storage takes any path."""
 
-    def ils_recursive(  # type: ignore[override]
-        self, entry: dict[str, Any], *, prefix: str = "", **kwargs: Any
+    def ils(  # type: ignore[override]
+        self,
+        entry: dict[str, Any],
+        recursive: bool = False,
+        *,
+        prefix: str = "",
+        **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         path = entry["name"]
-        return self.inner._list_prefix(f"{path}/{prefix}" if path else prefix)  # type: ignore[no-any-return]
+        if recursive:
+            return self.inner._list_prefix(f"{path}/{prefix}" if path else prefix)  # type: ignore[no-any-return]
+        else:
+            return self._ls(path)
 
-    async def ils(  # type: ignore[override]
-        self, entry: dict[str, Any], **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        for listed in await self.inner._ls(entry["name"], detail=True):
+    async def _ls(self, path: str) -> AsyncIterator[dict[str, Any]]:
+        for listed in await self.inner._ls(path, detail=True):
             yield listed
 
     def rm_files(self, entries: list[dict[str, Any]]) -> Any:

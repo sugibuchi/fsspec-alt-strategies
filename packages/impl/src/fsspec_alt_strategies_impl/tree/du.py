@@ -56,7 +56,7 @@ def _tree_du(
 
     Once cancelled, it lists no new directory, and counts the listings in flight.
 
-    Requests: one ``ils_recursive`` of ``path``, which a storage without a
+    Requests: one recursive ``ils`` of ``path``, which a storage without a
     recursive listing answers with one per directory. With ``maxdepth``, one
     ``ils`` per directory instead, as the handler's ``operation_limit``
     allows. One ``info`` for ``path``, if a file.

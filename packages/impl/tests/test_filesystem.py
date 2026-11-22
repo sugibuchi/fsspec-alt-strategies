@@ -244,11 +244,19 @@ def test_a_dir_failing_to_list_is_raised_reported_or_empty() -> None:
 class _Flat(FsspecFlatHandler):
     """A simulated storage as a flat handler, listed by its own prefix listing."""
 
-    def ils_recursive(  # type: ignore[override]
-        self, entry: dict[str, Any], *, prefix: str = "", **kwargs: Any
+    def ils(  # type: ignore[override]
+        self,
+        entry: dict[str, Any],
+        recursive: bool = False,
+        *,
+        prefix: str = "",
+        **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        path = entry["name"]
-        return self.fs._list_prefix(f"{path}/{prefix}" if path else prefix)
+        if recursive:
+            path = entry["name"]
+            return self.fs._list_prefix(f"{path}/{prefix}" if path else prefix)
+        else:
+            return super().ils(entry, **kwargs)
 
 
 @pytest.mark.parametrize("family", ["tree", "flat"])

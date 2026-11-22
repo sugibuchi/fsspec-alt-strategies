@@ -59,16 +59,16 @@ def _flat_find(
     Once cancelled, it takes nothing more from the listing. An error from the
     listing ends the operation, raised by its iteration.
 
-    Requests: the pages of one ``ils_recursive`` of ``path``, one after
+    Requests: the pages of one recursive ``ils`` of ``path``, one after
     another. One ``info`` for ``path`` itself, if nothing is under it, or
     with ``withdirs``, holding a permit of the handler's
     ``operation_limit``. The listing holds none.
 
-    ``path`` is the directory searched on ``handler``. Its ``ils_recursive`` lists
+    ``path`` is the directory searched on ``handler``. Its recursive ``ils`` lists
     every key below a directory, in name order, each key once. ``maxdepth`` of
     1 finds only the files in ``path``, though the listing still lists every
     key under it. ``withdirs`` finds directories too, ``path`` included.
-    ``ils_kwargs`` go to the ``ils_recursive``, as fsspec's ``_find`` passes
+    ``ils_kwargs`` go to the recursive ``ils``, as fsspec's ``_find`` passes
     its own on.
 
     The operation yields the entry of each path found, and its state is a

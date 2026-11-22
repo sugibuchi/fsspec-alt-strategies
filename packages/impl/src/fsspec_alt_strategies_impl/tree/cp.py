@@ -133,7 +133,7 @@ def _tree_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests of
-    their `_tree_glob`. One ``ils_recursive`` per root, which a storage
+    their `_tree_glob`. One recursive ``ils`` per root, which a storage
     without a recursive listing answers with one per directory, or one
     ``ils`` per directory with ``maxdepth``. One ``cp_entry`` per file, and
     one ``dst_makedirs`` per destination directory with files or empty. A

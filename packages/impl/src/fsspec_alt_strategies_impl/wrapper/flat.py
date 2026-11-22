@@ -7,7 +7,7 @@
 strategies.
 
 fsspec has no listing by prefix in pages, which the flat strategies list with.
-The handler's ``ils_recursive`` lists with the wrapped filesystem's ``find``
+The handler's recursive ``ils`` lists with the wrapped filesystem's ``find``
 of the directory, which object stores answer in one paginated listing. That
 costs twice:
 
@@ -16,7 +16,7 @@ costs twice:
 - It lists the whole directory: for "data" with the prefix "2024-", all of
   "data/", the keys not starting with the prefix then left out.
 
-A subclass overriding ``ils_recursive`` with the storage's own listing by
+A subclass overriding recursive ``ils`` with the storage's own listing by
 prefix, e.g. from its SDK, streams it page by page, and lists only the prefix.
 
 This module depends on `_base`, `rm_files` of `common`, and `handler` of `flat`.
@@ -54,7 +54,7 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
     ``async_impl`` says it has them, else its sync ones, each in a thread. So
     are its data methods, such as ``cat_file``, and its files.
 
-    Its ``ils_recursive`` lists with the wrapped one's ``find`` of the
+    Its recursive ``ils`` lists with the wrapped one's ``find`` of the
     directory. Its ``rm_files`` gives a batch, of ``rm_batch_size``, to the wrapped one's ``rm``,
     which s3fs, e.g., deletes in one request. That ``rm`` tells no key apart,
     so any failure but a missing key fails the whole batch.
@@ -131,8 +131,16 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
         if mv_batch_size is not None:
             self.mv_batch_size = mv_batch_size
 
-    async def ils_recursive(
-        self, entry: Entry, *, prefix: str = "", **kwargs: Any
+    def ils(
+        self, entry: Entry, recursive: bool = False, *, prefix: str = "", **kwargs: Any
+    ) -> AsyncIterator[Entry]:
+        if recursive:
+            return self._find(entry, prefix, **kwargs)
+        else:
+            return super().ils(entry, **kwargs)
+
+    async def _find(
+        self, entry: Entry, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[Entry]:
         # fsspec has no listing in pages: the wrapped one's find, all at once.
         path = entry["name"]
@@ -163,7 +171,7 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
 def _starting(
     listing: list[dict[str, Any]], path: str, prefix: str
 ) -> list[dict[str, Any]]:
-    """A listing's entries starting with ``path/prefix``, in name order, as ``ils_recursive`` yields them."""
+    """A listing's entries starting with ``path/prefix``, in name order, as recursive ``ils`` yields them."""
     if not prefix:
         return sorted(listing, key=lambda e: e["name"])
     start = f"{path}/{prefix}" if path else prefix

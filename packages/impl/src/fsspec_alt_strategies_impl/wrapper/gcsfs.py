@@ -4,7 +4,7 @@
 
 `GcsfsHandler` uses what gcsfs has beside fsspec's API:
 
-- its ``ils_recursive`` gives gcsfs's ``_find`` the prefix, which lists only
+- its recursive ``ils`` gives gcsfs's ``_find`` the prefix, which lists only
   the objects starting with it: for the glob "data/2024-*", those of
   "data/2024-", not all of "data/". gcsfs still gathers every page before
   answering, so the listing is held whole, not streamed.
@@ -86,16 +86,22 @@ class GcsfsHandler(FsspecFlatHandler):
     io_concurrency = 8
     rm_batch_size = _BATCH
 
-    def ils_recursive(
-        self, entry: Entry, *, prefix: str = "", **kwargs: Any
+    def ils(
+        self, entry: Entry, recursive: bool = False, *, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[Entry]:
         path = entry["name"]
-        if path and not kwargs and self.asynchronous and _takes_prefix(self.fs._find):
+        if (
+            recursive
+            and path
+            and not kwargs
+            and self.asynchronous
+            and _takes_prefix(self.fs._find)
+        ):
             return self._objects(path, prefix)
         else:
-            # The buckets, or a caller's options, which gcsfs's find takes: as the
-            # generic handler lists them.
-            return super().ils_recursive(entry, prefix=prefix, **kwargs)
+            # A directory, the buckets, or a caller's options, which gcsfs's find
+            # takes: as the generic handler lists them.
+            return super().ils(entry, recursive, prefix=prefix, **kwargs)
 
     async def _objects(self, path: str, prefix: str) -> AsyncIterator[Entry]:
         """Every object starting with ``path/prefix``, in name order, listed by that prefix."""

@@ -175,9 +175,11 @@ code: read it before adding a strategy or a handler.
 
 #### The tree family
 
-- A tree handler's `ils_recursive` defaults to its `ils_by_directory`, `tree.listing._tree_ils`: a directory per
-  request by `ils`. A storage listing a tree in one request overrides it, and falls back on `ils_by_directory` where
-  its storage refuses. Outside `tree/`, call the method, never `_tree_ils`.
+- A handler's one listing primitive is `ils(entry, recursive=False)`: a directory's items, or with `recursive` all
+  below it. A tree handler's recursive `ils` defaults to `TreeFileOperationHandler.ils`, `tree.listing._tree_ils`: a
+  directory per request. A handler listing a directory alone reaches it by `super().ils(entry, recursive=True)`.
+- A storage listing a tree in one request answers `recursive` itself. It falls back on `super().ils` where its
+  storage refuses, or where its own listing costs more. Outside `tree/`, call the method, never `_tree_ils`.
 - The profile's `recursive_order` says the order of a storage's own listing: the walk can never tell it.
   - Unknown is taken as "parents_first", right on any storage.
   - "depth_first", declared, covers name order too. It lets the walk close each directory as the listing passes it.
@@ -188,10 +190,9 @@ code: read it before adding a strategy or a handler.
 - Its directories to list wait on a stack, depth first. A listing holds one permit until it ends, taken by the walk
   before it starts. Keep it so: a queue or a task per directory would list beyond the walk's control, and past a
   cancel.
-- The walk takes a `tree._visit._Visit`: which directories the operation needs, e.g. within `maxdepth`. How each is
-  listed is the handler's, by the tree handler's `lists_subtree(entry)`: a subtree needed whole by one
-  `ils_recursive`, unless it says no or the order is "topdown". Never decide it in a visit, nor by the storage in a
-  strategy.
+- The walk takes a `tree._visit._Visit`: which directories the operation needs, e.g. within `maxdepth`. A subtree
+  needed whole is listed by one recursive `ils`, unless the order is "topdown". How it is listed is the handler's, in
+  its `ils`: never decide it in a visit, nor by the storage in a strategy.
 - A root's failure is a failed listing like any other. Each strategy decides what it means, as its fsspec method does.
 - A recursive listing that breaks off is a failed listing: its root's. Nothing is listed again: a storage resumes its
   own listing, e.g. a page by its continuation token.
@@ -200,8 +201,8 @@ code: read it before adding a strategy or a handler.
 
 #### The flat family
 
-- The flat strategies list with `flat._keys._listing(handler, prefix)`, the handler's `ils_recursive` of the prefix's
-  directory. It is an async iterator of entries in name order, never pages: see DEVELOPMENT.md's "The flat
+- The flat strategies list with `flat._keys._listing(handler, prefix)`, the handler's recursive `ils` of the
+  prefix's directory, narrowed by its `prefix`. It is an async iterator of entries in name order, never pages: see DEVELOPMENT.md's "The flat
   strategies". It holds no permit of `operation_limit`.
 - Those that only read derive directories with `flat._keys`. Those changing the storage build on
   `flat._jobs._FlatJobs`.

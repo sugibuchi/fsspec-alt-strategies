@@ -107,7 +107,15 @@ class _TreeHandler(TreeFileOperationHandler):
     def verify_path(self, path: str) -> None:
         """Nothing: the simulated storage takes any path."""
 
-    async def ils(  # type: ignore[override]
+    def ils(
+        self, entry: dict[str, Any], recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if recursive:
+            return super().ils(entry, recursive=True, **kwargs)
+        else:
+            return self._ls(entry, **kwargs)
+
+    async def _ls(
         self, entry: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
         self.ls_kwargs.append(kwargs)

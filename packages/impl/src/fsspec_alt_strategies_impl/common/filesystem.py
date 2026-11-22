@@ -299,13 +299,13 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
 
         The entries are as fsspec's ``_ls`` gives them with ``detail``. With
         ``recursive=True``, all below ``path`` come by the handler's
-        ``ils_recursive``, in its family's order, e.g. a flat handler's by
+        recursive ``ils``, in its family's order, e.g. a flat handler's by
         name, narrowed by its ``prefix``.
         """
         handler = self._handler
         entry = handler.entry(path)
         if recursive:
-            return handler.ils_recursive(entry, **kwargs)
+            return handler.ils(entry, recursive=True, **kwargs)
         else:
             return handler.ils(entry, **kwargs)
 

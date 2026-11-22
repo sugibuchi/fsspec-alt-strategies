@@ -405,21 +405,22 @@ class StorageHandler(_PathHandler):
     # The primitives of single paths, which every handler has.
 
     @abstractmethod
-    def ils(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
-        """List a directory, as an async iterator of its entries, a page at a time.
+    def ils(
+        self, entry: Entry, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[Entry]:
+        """List a directory, or all below it, as an async iterator of entries, a page at a time.
 
-        A file lists itself, as fsspec's ``_ls`` lists it. A missing directory
-        raises FileNotFoundError, when the iteration starts. The entries come
-        in any order: the listing is done when it ends.
-        """
+        Without ``recursive``, it lists the directory's items. A file lists
+        itself, as fsspec's ``_ls`` lists it. A missing directory raises
+        FileNotFoundError, when the iteration starts. The entries come in any
+        order: the listing is done when it ends.
 
-    def ils_recursive(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
-        """List all below a directory, at any depth, as an async iterator of entries.
-
-        Each family says its order and its options: a tree handler lists a
+        With ``recursive``, it lists all below the directory, at any depth.
+        Each family says the order and the options: a tree handler lists a
         tree depth first or by name, and a flat handler lists keys by name,
-        narrowed by a ``prefix``. The filesystem's recursive ``_ils`` calls it.
-        Here, it raises NotImplementedError.
+        narrowed by a ``prefix``. The filesystem's recursive ``_ils`` calls it
+        so. Here, it raises NotImplementedError: a family's handler gives its
+        default, which a subclass reaches by ``super().ils``.
         """
         raise NotImplementedError(f"{type(self).__name__} lists nothing recursively")
 

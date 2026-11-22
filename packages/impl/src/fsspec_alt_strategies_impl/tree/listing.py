@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """A recursive listing made of one listing per directory, several at a time.
 
-A `TreeFileOperationHandler`'s ``ils_recursive`` lists all below a directory,
+A `TreeFileOperationHandler`'s recursive ``ils`` lists all below a directory,
 in the order the profile's ``recursive_order`` declares: depth first, which
 covers name order, or parents first. A storage with a recursive listing of its
 own implements it so. One without has `_tree_ils`, its default, which lists a
@@ -51,7 +51,7 @@ def _tree_ils(
 ) -> _DepthFirst:
     """List all below a directory depth first, by one ``ils`` per directory.
 
-    It yields what an ``ils_recursive`` yields: each entry below ``entry``, at
+    It yields what a recursive ``ils`` yields: each entry below ``entry``, at
     any depth, depth first. A directory's entries come in the order its
     ``ils`` gives them, each subdirectory's followed by all below it. A file
     lists itself, as ``ils`` lists it. A directory listed twice, e.g. as a
@@ -90,7 +90,7 @@ class _DepthFirst:
     """A listing depth first by construction, `_tree_ils`'s: the walk reads such a subtree a directory at a time itself.
 
     It is the listing's own type that tells the walk, not the handler's class:
-    a handler overriding ``ils_recursive`` may still answer with `_tree_ils`,
+    a handler overriding recursive ``ils`` may still answer with `_tree_ils`,
     e.g. where its storage refuses its own listing.
     """
 

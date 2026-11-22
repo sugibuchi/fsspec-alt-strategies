@@ -61,7 +61,7 @@ def _tree_find(
     Once cancelled, it lists no new directory, and yields the paths of the
     listings in flight.
 
-    Requests: one ``ils_recursive`` of ``path``, which a storage without a
+    Requests: one recursive ``ils`` of ``path``, which a storage without a
     recursive listing answers with one per directory. With ``maxdepth``, one
     ``ils`` per directory instead, as the handler's ``operation_limit``
     allows. One ``info`` more for ``path`` itself, if a file, or a directory

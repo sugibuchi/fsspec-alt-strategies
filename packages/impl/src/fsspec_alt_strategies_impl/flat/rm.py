@@ -71,7 +71,7 @@ def _flat_rm(
     without yielding them. Iterating it raises FileNotFoundError if ``path``
     does not exist, or matches nothing. An error from the listing ends it too.
 
-    Requests: the pages of one ``ils_recursive`` per root, one after another,
+    Requests: the pages of one recursive ``ils`` per root, one after another,
     and one ``rm_files`` per batch. One ``info`` for ``path`` if nothing is
     under it. Patterns, or a list, add the requests of their `_flat_glob`.
     Each request but the listing holds a permit of the handler's
@@ -83,7 +83,7 @@ def _flat_rm(
     right in ``path``. The handler's ``rm_files`` takes a key missing as
     deleted, and yields each key deleted or the error of each it could not
     delete. ``ils_kwargs`` go to
-    each ``ils_recursive``, a pattern's glob's too.
+    each recursive ``ils``, a pattern's glob's too.
 
     The operation yields each key deleted, or an error, and its state is an
     `RmState`. The call raises ValueError if ``maxdepth`` is less than 1, and

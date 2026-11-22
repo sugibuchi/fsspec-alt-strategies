@@ -797,7 +797,7 @@ class TreeView(_Files, TreeFileOperationHandler):
     `SimulatedFileSystem` has none.
 
     It has no recursive listing of its own, so the strategies list a tree a
-    directory per request, by the default ``ils_recursive``. With
+    directory per request, by the default recursive ``ils``. With
     ``recursive_listing``, it lists by the filesystem's own recursive listing
     instead, a page per request, in name order.
 
@@ -856,16 +856,14 @@ class TreeView(_Files, TreeFileOperationHandler):
         """Nothing: the simulated storage takes any path."""
 
     def ils(
-        self, entry: dict[str, Any], **kwargs: Any
+        self, entry: dict[str, Any], recursive: bool = False, **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
-        return self._dir_ils(entry["name"], **kwargs)
-
-    def ils_recursive(
-        self, entry: dict[str, Any], **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        if not self.recursive_listing:
-            return super().ils_recursive(entry, **kwargs)
-        return self.fs._ils_recursive(entry["name"])
+        if not recursive:
+            return self._dir_ils(entry["name"], **kwargs)
+        elif self.recursive_listing:
+            return self.fs._ils_recursive(entry["name"])
+        else:
+            return super().ils(entry, recursive=True, **kwargs)
 
     async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         return await self._info(entry["name"], **kwargs)
@@ -947,12 +945,12 @@ class TreeView(_Files, TreeFileOperationHandler):
 class FlatView(_Files, FlatFileOperationHandler):
     """A simulated storage as a flat handler, its primitives replaceable.
 
-    The flat strategies take a handler, and call its ``ils_recursive``,
+    The flat strategies take a handler, and call its recursive ``ils``,
     ``info``, ``rm_files``, ``cp_file``, ``mv_file``, ``makedirs`` and
     ``rm_file``. Each calls the filesystem's own method with the entries'
     names, unless a test gives one, e.g. one that fails. ``list_prefix``, a
     listing of every key starting with a raw prefix, e.g. "data/2024-",
-    answers ``ils_recursive``: the filesystem's own unless given. A
+    answers recursive ``ils``: the filesystem's own unless given. A
     ``cp_file`` or ``mv_file`` given takes paths, the entry's name. ``fs`` may
     be None when all that a test calls is given.
 
@@ -1001,15 +999,18 @@ class FlatView(_Files, FlatFileOperationHandler):
         """Nothing: the simulated storage takes any path."""
 
     def ils(
-        self, entry: dict[str, Any], **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        return dir_ils(self.fs)(entry["name"], **kwargs)
-
-    def ils_recursive(
-        self, entry: dict[str, Any], *, prefix: str = "", **kwargs: Any
+        self,
+        entry: dict[str, Any],
+        recursive: bool = False,
+        *,
+        prefix: str = "",
+        **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         path = entry["name"]
-        return self._list_prefix(f"{path}/{prefix}" if path else prefix)
+        if recursive:
+            return self._list_prefix(f"{path}/{prefix}" if path else prefix)
+        else:
+            return dir_ils(self.fs)(path, **kwargs)
 
     async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         return await self._info(entry["name"], **kwargs)

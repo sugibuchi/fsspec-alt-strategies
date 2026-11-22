@@ -100,7 +100,7 @@ class StorageProfile:
         name beside the destination, then moves it there, so that no reader
         sees part of a file.
     recursive_order : {"depth_first", "parents_first"}, optional
-        The order of a tree handler's own ``ils_recursive``, its storage's
+        The order of a tree handler's own recursive ``ils``, its storage's
         listing of all below a directory. "depth_first" gives a directory's
         entry, then all below it, before any other entry, and covers name
         order too, as object stores list keys: the strategies take a

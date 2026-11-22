@@ -93,17 +93,14 @@ def _tree_glob(
     it never lists a subtree whole by itself: listing all below the
     directories of ``*/year=2024/month=03`` that way took 3.4 s against
     0.16 s. A caller who knows the subtree is small writes ``**`` there, e.g.
-    ``t007/year=2024/**/part-0.parquet``, which lists it whole. A handler
-    knowing it of its storage, e.g. below a given depth of its paths, lists
-    it whole by its ``lists_subtree`` with ``pruned``: the walk then drops
-    what the pattern cannot match in.
+    ``t007/year=2024/**/part-0.parquet``, which lists it whole.
 
     Once cancelled, it lists no new directory, and yields the matches of the
     listings in flight.
 
     Requests: one ``ils`` per directory a pattern can match in, as the
     handler's ``operation_limit`` allows. Without ``maxdepth``, a directory
-    at the pattern's first ``**`` is listed by one ``ils_recursive``, with all
+    at the pattern's first ``**`` is listed by one recursive ``ils``, with all
     below it: ``data/*/**/*.csv`` lists ``data``, then each directory in it.
     One ``info`` per pattern without wildcards, and per literal root directory
     walked that a pattern matches, e.g. that of ``data/**``.

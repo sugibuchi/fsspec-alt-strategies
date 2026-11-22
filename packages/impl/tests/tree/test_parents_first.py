@@ -144,7 +144,7 @@ async def test_the_default_listing_is_depth_first(order: Any) -> None:
     # storage's: a handler keeping it declares nothing, and pays no more.
     fs = _fs()
     view = TreeView(fs, storage_profile=StorageProfile(recursive_order=order))
-    entries = view.ils_recursive(view.entry("data"))
+    entries = view.ils(view.entry("data"), recursive=True)
     await view.open()
     assert _depth_first(entries, view.profile)
     await entries.aclose()  # type: ignore[attr-defined]  # A _DepthFirst.
@@ -154,6 +154,6 @@ async def test_the_default_listing_is_depth_first(order: Any) -> None:
         recursive_listing=True,
         storage_profile=StorageProfile(recursive_order=order),
     )
-    entries = own.ils_recursive(own.entry("data"))
+    entries = own.ils(own.entry("data"), recursive=True)
     await own.open()
     assert not _depth_first(entries, own.profile)

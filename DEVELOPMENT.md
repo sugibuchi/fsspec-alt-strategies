@@ -169,10 +169,12 @@ handler, `dst`. The mixin also declares how its batch strategies run in bulk: `r
 Each family's handler class implements the strategy methods by its strategies, but the batch ones, whose defaults are
 the mixin's. It adds the primitives its strategies call:
 
-| Class                      | Adds                                                                                  |
-|----------------------------|---------------------------------------------------------------------------------------|
-| `TreeFileOperationHandler` | `ils_recursive`, by default `ils_by_directory`, and optional `rm_tree`, `mv_tree`, `cp_tree` |
-| `FlatFileOperationHandler` | Required `ils_recursive(entry, prefix=...)`                                           |
+| Class                      | Adds                                                                                          |
+|----------------------------|-----------------------------------------------------------------------------------------------|
+| `TreeFileOperationHandler` | `ils(entry, recursive=True)`, by default a directory per request, and optional `rm_tree`, `mv_tree`, `cp_tree` |
+| `FlatFileOperationHandler` | Required `ils(entry, recursive=True, prefix=...)`                                             |
+
+`ils` is a handler's one listing primitive: a directory's items, or with `recursive` all below it.
 
 A handler's class tells its family. A storage's handler overrides a strategy method to choose another strategy, e.g.
 its own.
@@ -322,8 +324,7 @@ A developer chooses, per storage:
 
 - a family, by the handler class a handler subclasses, whose strategy methods run the family's strategies;
 - another strategy for one method, by overriding it, e.g. `glob` with one of the storage's own;
-- a storage's recursive listing, by implementing `ils_recursive`;
-- whether a subtree an operation needs whole is listed by it, by overriding `lists_subtree`;
+- a storage's recursive listing, by answering `recursive` in its `ils`, or a directory per request, by `super().ils`;
 - a storage's recursive delete, by implementing `rm_tree`, which `deletes_directories=True` declares;
 - a storage's rename of a directory, by implementing `mv_tree`, which `renames_directories=True` declares;
 - a storage's copy of a directory, by implementing `cp_tree`, which `copies_directories=True` declares.
@@ -449,14 +450,15 @@ so it is not atomic across storages.
 ### The tree strategies
 
 The tree strategies list a directory with the handler's `ils`, its entries in any order, and a tree with its
-`ils_recursive`. A recursive listing may leave a directory out, as object stores list only files: the walk tells it
-from the paths below it.
+`ils(entry, recursive=True)`. A recursive listing may leave a directory out, as object stores list only files: the walk
+tells it from the paths below it.
 
-By default, `ils_recursive` is `ils_by_directory`, which runs `tree/listing.py`'s `_tree_ils`: depth first, a directory
-per request. The walk recognises that listing, a `_DepthFirst`, and reads such a subtree a directory at a time itself,
-under its own control. The generic tree handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing.
-A storage may refuse a recursive listing in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`.
-Its handler's `ils_recursive` then falls back on `ils_by_directory` itself.
+By default, a tree handler's recursive `ils` runs `tree/listing.py`'s `_tree_ils`: depth first, a directory per
+request. A handler listing a directory alone reaches it by `super().ils(entry, recursive=True)`. The walk recognises
+that listing, a `_DepthFirst`, and reads such a subtree a directory at a time itself, under its own control. The
+generic tree handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing. A storage may refuse a
+recursive listing in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`. Its handler's `ils`
+then falls back on `super().ils` itself.
 
 A storage's own recursive listing keeps one of two orders, which tell the walk when a directory is done:
 
@@ -495,8 +497,9 @@ A walk's plan has two sides:
 - Which directories to visit is the operation's, as its arguments say: a `maxdepth`, a glob's pattern, a
   `descend`. A `_Visit`, in `tree/_visit.py`, tells the walk of each directory it finds whether to leave it, list it
   alone, or take all below it.
-- How each is listed is the storage's, by the tree handler's `lists_subtree`. All below a directory the visit takes
-  whole is listed by one recursive listing, unless the handler says no: it is then asked again of each subdirectory.
+- How each is listed is the storage's, in its handler's `ils`. All below a directory the visit takes whole is asked of
+  one recursive `ils`. A handler answering with the default, a directory per request, is asked again of each
+  subdirectory, so it may list a subtree whole once it knows it is small.
 - A recursive listing serves only an order it gives: "any" or "bottomup". A walk top down lists each directory alone.
 
 How the walk reads:
@@ -522,7 +525,7 @@ What it lists, and when:
 - A tree pruned, by `maxdepth` or a glob's pattern, is listed a directory per request, many at once. Below a glob's
   `**`, nothing is pruned, so it is listed recursively again. Pruning wins on a large tree, and loses on a small
   subtree that one recursive listing would cover. The library cannot tell which without guessing the tree's size, so
-  it prunes, unless the handler's `lists_subtree` chooses otherwise.
+  it prunes.
 - A recursive listing broken off is a failed listing: its root's, noted with the root, after the directories it
   completed. The walk goes on with its other directories. Nothing is listed again: a storage resumes its own listing
   where it can, e.g. a page by its continuation token, as s3fs, gcsfs and adlfs do through their SDKs.
@@ -544,9 +547,9 @@ The tree strategies come in two layers:
 
 ### The flat strategies
 
-The flat strategies list with the handler's `ils_recursive(entry, prefix=...)`: every key below the directory starting
-with the prefix, at any depth, in name order, as object stores list them. `ils` lists one directory, for fsspec's own
-methods. The two are one request with or without a delimiter, as on S3, GCS and Azure.
+The flat strategies list with the handler's `ils(entry, recursive=True, prefix=...)`: every key below the directory
+starting with the prefix, at any depth, in name order, as object stores list them. Without `recursive`, `ils` lists one
+directory, for fsspec's own methods. The two are one request with or without a delimiter, as on S3, GCS and Azure.
 
 - The strategies list by a raw prefix, split at its last "/" by `flat._keys._listing`. So `_flat_glob` lists only keys
   starting as its pattern does, e.g. `data` with the prefix `2024-` for `data/2024-*`.
@@ -588,7 +591,7 @@ profile only saves requests or data:
   `copies_directories` and `case_sensitive` count only within one storage, and `atomic_writes` only between two.
 - Between two storages, a file copied is written: `parents_required` counts. Within one, it goes by the storage's own
   copy, which may make no parent where a write does, as on Microsoft Graph: `copy_parents_required` counts.
-- `recursive_order` tells of a tree handler's own `ils_recursive` only, as "The tree strategies" says.
+- `recursive_order` tells of a tree handler's own recursive `ils` only, as "The tree strategies" says.
 - A field left None is unknown, and the strategy takes the way right on any storage.
 - `case_sensitive` is the exception: no way is right on both kinds of names. Unknown, paths are compared as fsspec
   compares them, as strings. On a storage whose names are not case-sensitive, a path copied or moved onto itself in

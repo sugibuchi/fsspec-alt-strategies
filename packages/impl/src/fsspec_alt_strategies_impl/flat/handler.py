@@ -54,8 +54,8 @@ class FlatFileOperationHandler(FileOperationHandler):
     ``renames_files=True``, a move renames each key. Otherwise it copies each
     key, and deletes them in batches.
 
-    A subclass implements the storage's primitives, `StorageHandler`'s, and
-    ``ils_recursive``. One deleting several keys by one request, as object
+    A subclass implements the storage's primitives, `StorageHandler`'s, its
+    ``ils`` with ``recursive`` too. One deleting several keys by one request, as object
     stores do, overrides ``rm_files`` and declares ``rm_batch_size``. It may
     override a strategy, e.g. with one of its own.
 
@@ -71,14 +71,16 @@ class FlatFileOperationHandler(FileOperationHandler):
     """
 
     @abstractmethod
-    def ils_recursive(
-        self, entry: Entry, *, prefix: str = "", **kwargs: Any
+    def ils(
+        self, entry: Entry, recursive: bool = False, *, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[Entry]:
-        """List the keys below a directory whose names below it start with ``prefix``, in name order.
+        """List a directory, or the keys below it whose names below it start with ``prefix``, in name order.
 
-        It yields the keys' entries, sorted by the whole name, a page at a
-        time. A directory's own marker, if the storage keeps one, comes as an
-        entry whose name ends with "/".
+        Without ``recursive``, it lists the directory's items, as
+        `StorageHandler.ils` says: ``prefix`` is for a recursive listing only.
+        With ``recursive``, it yields the keys' entries, sorted by the whole
+        name, a page at a time. A directory's own marker, if the storage keeps
+        one, comes as an entry whose name ends with "/".
         """
 
     # The flat strategies, as the methods of Strategy.

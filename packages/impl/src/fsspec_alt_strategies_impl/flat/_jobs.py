@@ -36,8 +36,8 @@ if TYPE_CHECKING:
 class _FlatJobs(_Jobs):
     """The jobs of one operation, run while the keys under its roots are listed.
 
-    ``handler`` is the handler listed, by its ``ils_recursive`` and ``info``.
-    ``ils_kwargs`` go to each ``ils_recursive``, a pattern's glob's too. With ``maxdepth``, the keys deeper than it are listed, as a prefix lists
+    ``handler`` is the handler listed, by its recursive ``ils`` and ``info``.
+    ``ils_kwargs`` go to each recursive ``ils``, a pattern's glob's too. With ``maxdepth``, the keys deeper than it are listed, as a prefix lists
     every key under it, but left out, as fsspec's ``_expand_path`` finds paths.
 
     A batch deletion runs by `_Jobs`'s `delete`, by the handler's ``rm_files``.

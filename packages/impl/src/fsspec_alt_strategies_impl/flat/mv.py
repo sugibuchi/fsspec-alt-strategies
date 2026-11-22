@@ -116,7 +116,7 @@ def _flat_mv(
     batches instead. ``same_storage`` is whether ``dst`` is ``src``,
     unless given. ``maxdepth`` of 1 moves
     only the keys right in ``path1``. ``path1_entry`` is as `_flat_cp` takes it.
-    ``ils_kwargs`` go to each of the source's ``ils_recursive``, a pattern's
+    ``ils_kwargs`` go to each of the source's recursive ``ils``, a pattern's
     glob's too.
 
     The operation yields ``(source, destination)`` for each key moved, or an

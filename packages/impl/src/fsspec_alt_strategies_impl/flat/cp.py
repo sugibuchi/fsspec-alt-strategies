@@ -99,7 +99,7 @@ def _flat_cp(
 
     Requests: one ``dst_info`` for ``path2``, unless it ends with "/" or
     ``path1`` is a pattern or a list. Patterns, or a list, add the requests
-    of their `_flat_glob`. The pages of one ``ils_recursive`` per root, one
+    of their `_flat_glob`. The pages of one recursive ``ils`` per root, one
     after another, one ``cp_entry`` per key, and one ``dst_makedirs`` per
     destination directory with keys or a marker. A destination refusing to
     overwrite costs a ``dst_info``, a ``dst_rm_file`` and a ``cp_entry`` more
@@ -119,7 +119,7 @@ def _flat_cp(
     listing of a single file: it is copied as the entry says.
 
     The primitives are named above as the handlers' own: ``ils`` is the
-    source's ``ils_recursive``, and ``dst_info``, ``dst_makedirs`` and
+    source's recursive ``ils``, and ``dst_info``, ``dst_makedirs`` and
     ``dst_rm_file`` the destination's ``info``, ``makedirs`` and ``rm_file``.
 
     ``src`` is the handler copied from, and ``dst`` the one copied
@@ -130,7 +130,7 @@ def _flat_cp(
     ``same_storage`` is
     whether ``dst`` is ``src``, unless given. ``maxdepth`` of 1 copies
     only the keys right in ``path1``. ``ils_kwargs`` go to each of the
-    source's ``ils_recursive``, a pattern's glob's too.
+    source's recursive ``ils``, a pattern's glob's too.
 
     Within one storage, unless ``cp_entry`` is given, the files go to the
     source's ``cp_files`` in batches of its ``cp_batch_size``: by default each

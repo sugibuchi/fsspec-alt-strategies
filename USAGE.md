@@ -150,21 +150,22 @@ class MyHandler(TreeFileOperationHandler):
   adaptive files below.
 - Both take an entry, to read or to write. A file to write may not exist yet: its entry holds its name, its final
   `"size"` where the caller knows it, and its parent's entry as `"parent"` where the caller holds it.
-- A tree handler with a recursive listing of its own implements `ils_recursive`. Its profile's `recursive_order` says
-  the listing's order:
+- A handler's `ils(entry, recursive=False)` lists a directory's items, or with `recursive` all below it.
+- A tree handler with a recursive listing of its own answers `recursive` in its `ils`. Its profile's `recursive_order`
+  says the listing's order:
   - "depth_first" gives a directory's entry, then all below it, before any other entry, and covers name order;
   - "parents_first" only gives a directory's entry before what is below it;
   - unknown is taken as "parents_first", which costs the walk memory and streaming: declare "depth_first" where it
     holds.
-- Without a listing of its own, a tree is listed a directory per request, several at once, by the handler's
-  `ils_by_directory`. That listing is depth first, so it needs no `recursive_order`. A handler whose storage may
-  refuse its own recursive listing falls back on it: `return self.ils_by_directory(entry, **kwargs)`.
+- Without a listing of its own, a tree is listed a directory per request, several at once, by the family's default:
+  `return super().ils(entry, recursive=True, **kwargs)`. That listing is depth first, so it needs no
+  `recursive_order`. A handler whose storage may refuse its own recursive listing falls back on it so.
 - Where an operation needs all below a directory, e.g. a `find` without `maxdepth`, the walk lists it by one
-  `ils_recursive`. A handler overriding `lists_subtree(entry)` to return False lists that directory alone instead,
-  and is asked again of each subdirectory. It may so list a subtree whole only from a depth where it knows subtrees
-  are small, or never, where its storage's recursive listing is slow to start or billed apart.
-- A flat handler implements `ils_recursive(entry, prefix=...)`: every key below a directory starting with the prefix,
-  in name order.
+  recursive `ils`. A handler answering with the family's default lists that directory alone instead, and is asked
+  again of each subdirectory. It may so list a subtree whole only from a depth where it knows subtrees are small, or
+  never, where its storage's recursive listing is slow to start or billed apart.
+- A flat handler answers `ils(entry, recursive=True, prefix=...)`: every key below a directory starting with the
+  prefix, in name order.
 - `rm_tree`, `mv_tree` and `cp_tree`, a storage's own operations on a whole directory, are optional. The profile
   declares them, by `deletes_directories`, `renames_directories` and `copies_directories`.
 - The family's strategies are its methods: `walk`, `find`, `glob`, `du`, `rm`, `rm_files`, `cp`, `cp_files`, `mv`
@@ -361,10 +362,10 @@ None of these is right for every storage, and the library never picks one for yo
 #### Costs to know
 
 - The generic flat handler lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix in
-  pages. That listing is held in memory, and covers the prefix's whole directory. A handler overriding `ils_recursive`
-  with the storage's own listing by prefix streams it instead, as `S3fsHandler` does.
+  pages. That listing is held in memory, and covers the prefix's whole directory. A handler answering `recursive` in its
+  `ils` with the storage's own listing by prefix streams it instead, as `S3fsHandler` does.
 - The generic tree handler scans a tree a directory per request, as fsspec has no recursive listing in pages. A
-  handler implementing `ils_recursive` with the storage's own recursive listing lists it in one, as `AdlfsHandler`
+  handler answering `recursive` in its `ils` with the storage's own recursive listing lists it in one, as `AdlfsHandler`
   does.
 - `known_implementations` is shared by every copy in a project. Change it with care, or pass your own table.
 

@@ -93,16 +93,19 @@ class AdlfsHandler(FsspecTreeHandler):
         else:
             await self.fs._rmdir(container)
 
-    def ils_recursive(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
+    def ils(
+        self, entry: Entry, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[Entry]:
         path = entry["name"]
         container = self.fs.split_path(path)[0] if path.strip("/") else ""
         own = hasattr(self.fs, "service_client") and hasattr(self.fs, "_details")
-        if container and own and not kwargs:
+        if recursive and container and own and not kwargs:
             return self._blobs(path)
         else:
-            # The containers, adlfs without its own, or a caller's options, which
-            # adlfs's ls takes: a directory per request.
-            return self.ils_by_directory(entry, **kwargs)
+            # A directory, the containers, adlfs without its own, or a caller's
+            # options, which adlfs's ls takes: recursively, a directory per
+            # request.
+            return super().ils(entry, recursive, **kwargs)
 
     async def _blobs(self, path: str) -> AsyncIterator[Entry]:
         """All below ``path``, by one ListBlobs without a delimiter, a page at a time.

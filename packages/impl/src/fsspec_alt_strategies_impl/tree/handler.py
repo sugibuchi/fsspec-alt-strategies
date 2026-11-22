@@ -13,6 +13,7 @@ This module depends on `cp`, `du`, `find`, `glob`, `listing`, `mv`, `rm` and
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..common.handler import FileOperationHandler
@@ -50,17 +51,15 @@ class TreeFileOperationHandler(FileOperationHandler):
 
     It suits storages with a hierarchical namespace, such as Azure Data Lake
     Storage Gen2, a local disk or SFTP. Its strategies list a whole tree by
-    one ``ils_recursive``, and a tree they prune a directory per request,
-    several at a time. They act on each part of a listing as it arrives.
+    one ``ils(..., recursive=True)``, and a tree they prune a directory per
+    request, several at a time. They act on each part of a listing as it
+    arrives.
 
-    A subclass implements the storage's primitives, `StorageHandler`'s. It may
+    A subclass implements the storage's primitives, `StorageHandler`'s. Its
+    ``ils`` with ``recursive`` lists all below a directory: by default, a
+    directory per request, which it reaches by ``super().ils``. It may
     implement too:
 
-    - ``ils_recursive``, all below a directory in one listing, depth first or
-      by name, or parents first, as the profile's ``recursive_order`` says. By
-      default, `ils_by_directory`: a directory per request, several at a time;
-    - ``lists_subtree``, whether a subtree an operation needs whole is listed
-      by one ``ils_recursive``: always, by default;
     - ``rm_tree``, a storage's recursive delete, declared by the profile's
       ``deletes_directories=True``;
     - ``mv_tree``, a storage's rename of a directory, declared by
@@ -83,8 +82,14 @@ class TreeFileOperationHandler(FileOperationHandler):
     BaseFileSystem : The filesystem on it.
     """
 
-    def ils_recursive(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
-        """List all below a directory, at any depth, in the order the profile's ``recursive_order`` says.
+    @abstractmethod
+    def ils(
+        self, entry: Entry, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[Entry]:
+        """List a directory, or all below it, at any depth, in the order the profile's ``recursive_order`` says.
+
+        Without ``recursive``, it lists the directory's items, as
+        `StorageHandler.ils` says. With ``recursive``:
 
         - Depth first: a directory's entry, then all below it, before any
           other entry. Its entries among themselves may come in any order.
@@ -98,44 +103,25 @@ class TreeFileOperationHandler(FileOperationHandler):
         strategies tell it from the paths below it. A file lists itself. A
         missing directory raises FileNotFoundError, when the iteration starts.
 
-        Here, it is `ils_by_directory`. A storage listing a tree in one
-        request overrides it. One whose storage may refuse that listing, as
-        only asking tells, e.g. a WebDAV server refusing ``Depth: infinity``,
-        falls back on `ils_by_directory` itself.
+        Here, with ``recursive``, it lists depth first, a directory per request
+        by ``ils``, several at a time: a subclass listing a directory per
+        request reaches it by ``super().ils(entry, recursive=True)``. The walk
+        recognises it, and reads such a subtree a directory at a time itself,
+        so a handler keeping it declares no ``recursive_order``. ``kwargs`` go
+        to each ``ils``.
+
+        A storage listing a tree in one request answers ``recursive`` itself.
+        One whose storage may refuse that listing, as only asking tells, e.g.
+        a WebDAV server refusing ``Depth: infinity``, or one whose recursive
+        listing costs more than a directory per request, e.g. billed apart,
+        falls back on ``super().ils`` itself. The strategies always list a
+        subtree they need whole by it, but a walk top down, which needs each
+        directory before those below it.
         """
-        return self.ils_by_directory(entry, **kwargs)
-
-    def lists_subtree(self, entry: Entry) -> bool:
-        """Whether all below a directory, which an operation needs whole, is listed by one ``ils_recursive``.
-
-        The operation decides which directories it needs: e.g. a ``find``
-        without ``maxdepth`` needs all below its root, and a glob all below a
-        ``**``. The handler decides how they are listed, as that changes only
-        what the listing costs, never what the operation answers. True by
-        default: one recursive listing, which usually beats a directory per
-        request.
-
-        A handler returns False to list the directory alone, as its storage's
-        recursive listing may be slow to start, billed apart, or limited per
-        account. It is then asked again of each subdirectory, so that it may
-        list a subtree whole once it knows it is small, e.g. below a given
-        depth of its storage's paths. A walk top down never lists a subtree
-        whole, as it needs each directory before those below it.
-
-        ``entry`` is the directory's, as a listing gave it, or as the handler's
-        ``entry`` makes it from a path. It sends no request.
-        """
-        return True
-
-    def ils_by_directory(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
-        """List all below a directory depth first, a directory per request by ``ils``, several at a time.
-
-        It is the default ``ils_recursive``, and the fallback of one whose
-        storage refuses its own listing. The walk recognises it, and reads such
-        a subtree a directory at a time itself, so a handler keeping it
-        declares no ``recursive_order``. ``kwargs`` go to each ``ils``.
-        """
-        return _tree_ils(self, entry, **kwargs)
+        if recursive:
+            return _tree_ils(self, entry, **kwargs)
+        else:
+            raise NotImplementedError(f"{type(self).__name__} lists no directory")
 
     async def rm_tree(self, entry: Entry) -> None:
         """Delete a directory with everything in it, in one request."""

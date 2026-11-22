@@ -6,7 +6,7 @@ The generic `FsspecFlatHandler` lists a prefix by s3fs's ``_find`` of its
 directory, and copies by its ``_cp_file``. `S3fsHandler` uses what s3fs has
 beside them:
 
-- its ``ils_recursive`` is s3fs's ``_iterdir`` with no delimiter: a page of
+- its recursive ``ils`` is s3fs's ``_iterdir`` with no delimiter: a page of
   ListObjectsV2 at a time, as it comes, narrowed to the prefix in the request.
   The generic one waits for the whole directory, holds it, then filters.
 - its ``cp_file`` copies by the size its listing found, with s3fs's
@@ -70,16 +70,16 @@ class S3fsHandler(FsspecFlatHandler):
     io_concurrency = 8
     rm_batch_size = 1000
 
-    def ils_recursive(
-        self, entry: Entry, *, prefix: str = "", **kwargs: Any
+    def ils(
+        self, entry: Entry, recursive: bool = False, *, prefix: str = "", **kwargs: Any
     ) -> AsyncIterator[Entry]:
         path = entry["name"]
-        if path and not kwargs and hasattr(self.fs, "_iterdir"):
+        if recursive and path and not kwargs and hasattr(self.fs, "_iterdir"):
             return self._keys(path, prefix)
         else:
-            # The buckets, or a caller's options, which s3fs's find takes: as the
-            # generic handler lists them.
-            return super().ils_recursive(entry, prefix=prefix, **kwargs)
+            # A directory, the buckets, or a caller's options, which s3fs's find
+            # takes: as the generic handler lists them.
+            return super().ils(entry, recursive, prefix=prefix, **kwargs)
 
     async def _keys(self, path: str, prefix: str) -> AsyncIterator[Entry]:
         """Every key starting with ``path/prefix``, in name order, a page at a time."""

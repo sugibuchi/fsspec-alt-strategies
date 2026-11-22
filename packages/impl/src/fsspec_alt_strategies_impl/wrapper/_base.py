@@ -140,7 +140,17 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
 
     # The primitives.
 
-    async def ils(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
+    def ils(
+        self, entry: Entry, recursive: bool = False, **kwargs: Any
+    ) -> AsyncIterator[Entry]:
+        if recursive:
+            # The family's, after this class in a wrapper's MRO, e.g. a tree's by
+            # directory: mypy sees StorageHandler's alone.
+            return super().ils(entry, recursive=True, **kwargs)  # type: ignore[safe-super]
+        else:
+            return self._ls(entry, **kwargs)
+
+    async def _ls(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
         # fsspec has no listing in pages: the wrapped one's ls, all at once.
         for listed in await self.call("ls", entry["name"], detail=True, **kwargs):
             yield listed
