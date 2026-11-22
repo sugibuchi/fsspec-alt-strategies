@@ -40,6 +40,7 @@ class _Handler:
         self.files = files
         self.failing = failing
         self.slashes = slashes
+        self.operation_limit = asyncio.Semaphore(2)
 
     def join(self, directory: str, *names: str) -> str:
         return "/".join([directory, *names])
@@ -93,7 +94,8 @@ class _Count(PathAction):
         self.calls.append(("reduce", entry["name"]))
         if entry["type"] == "file":
             assert values == []
-        else:
+        values = [v for v in values if v is not None]  # A listing failed: None.
+        if entry["type"] != "file":
             await self._emit_event((entry["name"], sum(values)))
         return value + sum(values)
 
@@ -217,7 +219,12 @@ async def test_a_failure_below_skips_the_reduce_above(use_one_listing: bool) -> 
     action = _Count(engine._emit_event)
     handler = _Handler(_FILES, failing="r/a")  # Alone, or whole: it fails either way.
     task = VisitDirectory(
-        engine, _dir("r"), action, handler, use_one_listing=use_one_listing
+        engine,
+        _dir("r"),
+        action,
+        handler,
+        use_one_listing=use_one_listing,
+        on_error="raise",
     )
     with pytest.raises(BaseExceptionGroup) as raised:
         [_ async for _ in engine.events([task])]
@@ -225,6 +232,57 @@ async def test_a_failure_below_skips_the_reduce_above(use_one_listing: bool) -> 
     reduced = {n for c, n in action.calls if c == "reduce"}
     # Its siblings run on: r/a and r are not reduced.
     assert reduced == {"r/1", "r/c", "r/c/5"}
+
+
+@pytest.mark.parametrize("use_one_listing", [False, True])
+async def test_a_listing_error_is_emitted_and_the_others_go_on(
+    use_one_listing: bool,
+) -> None:
+    handler = _Handler(_FILES, failing="r/a")
+    value, action, events = await _run(use_one_listing, handler=handler)
+    errors = [e for e in events if isinstance(e, Exception)]
+    assert [str(e) for e in errors] == ["r/a"]
+    # r/a is left out, and r reduced with the others' values.
+    assert value == 2
+    assert ("reduce", "r/a") not in action.calls
+
+
+async def test_a_listing_error_omitted_or_called_back() -> None:
+    called: list[Exception] = []
+    for on_error in ("omit", called.append):
+        handler = _Handler(_FILES, failing="r/a")
+        _, _, events = await _run(False, handler=handler, on_error=on_error)
+        assert not [e for e in events if isinstance(e, Exception)]
+    assert [str(e) for e in called] == ["r/a"]
+
+
+async def test_the_roots_listing_error_is_raised_whatever_on_error() -> None:
+    with pytest.raises(OSError, match="r"):
+        await _run(False, handler=_Handler(_FILES, failing="r"), on_error="omit")
+
+
+@pytest.mark.parametrize("use_one_listing", [False, True])
+async def test_maxdepth_bounds_the_directories_listed(use_one_listing: bool) -> None:
+    _, action, events = await _run(use_one_listing, maxdepth=2)
+    # r and its subdirectories are listed: r/a/b and r/a/b-x are visited, not listed.
+    assert sorted(n for n, _ in events) == [
+        "r",
+        "r/a",
+        "r/a/b",
+        "r/a/b-x",
+        "r/c",
+    ]
+    mapped = {n for c, n in action.calls if c == "map"}
+    assert "r/a/b/3" not in mapped
+    assert "r/a/2" in mapped
+
+
+async def test_a_listing_holds_a_permit_per_step_only() -> None:
+    # One permit: a listing holding it whole would starve the directories below.
+    handler = _Handler(_FILES)
+    handler.operation_limit = asyncio.Semaphore(1)
+    value, _, _ = await _run(False, handler=handler)
+    assert value == 5
 
 
 async def test_a_directory_listed_with_a_slash_is_traversed_once() -> None:

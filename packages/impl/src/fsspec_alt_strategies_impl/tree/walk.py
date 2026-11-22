@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from fsspec_alt_strategies.states import WalkState
 
-from ..common.glob import PathAction, VisitDirectory
+from ..common.glob import OnError, PathAction, VisitDirectory
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
 from ..common.tree import TreeTraversal
@@ -147,18 +147,14 @@ class _WalkTopDown(VisitDirectory):
     not walked, as with `os.walk` top down. So a directory comes after its
     parent's, which waits: never before it.
 
-    A subdirectory that fails to list emits its error instead, and the walk
-    goes on. The root's raises it, which ends the walk.
+    A directory that fails to list emits nothing: `VisitDirectory` handles
+    its error as ``on_error`` says.
     """
 
     async def prune(self, entries: AsyncIterable[Entry]) -> AsyncIterator[Entry]:
-        try:
-            kept = [e async for e in super().prune(entries)]
-        except Exception as error:
-            if self._group is None:
-                raise  # The root's: ends the walk.
-            await self._emit_event(error)
-            return
+        kept = [e async for e in super().prune(entries)]
+        if self._listing_error is not None:
+            return  # Listed in part: never walked.
         path, dirs, files = _triples(_trim(self.entry["name"]), kept, detail=True)
         walked = asyncio.Event()
         await self._emit_event((walked, path, dirs, files))
@@ -168,12 +164,19 @@ class _WalkTopDown(VisitDirectory):
 
 
 async def _walk_top_down(
-    handler: TreeFileOperationHandler, path: StoragePath, *, max_running: int
+    handler: TreeFileOperationHandler,
+    path: StoragePath,
+    *,
+    max_running: int,
+    maxdepth: int | None = None,
+    on_error: OnError = None,
 ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
     """Walk a tree top down, yielding each directory's ``(path, dirs, files)``, or its error.
 
     The caller may prune by removing names from ``dirs`` before it takes the
-    next item: the directory's task waits until then.
+    next item: the directory's task waits until then. ``maxdepth`` and
+    ``on_error`` are fsspec's walk's: an error is yielded where ``on_error``
+    is None. The root's error is raised.
     """
     engine = TreeTraversal(max_running=max_running, split=handler.segments)
     root = _WalkTopDown(
@@ -181,6 +184,8 @@ async def _walk_top_down(
         {"name": path, "type": "directory"},
         PathAction(engine._emit_event),
         handler,
+        maxdepth=maxdepth,
+        on_error=on_error,
     )
     async with aclosing(engine.events([root])) as events:
         async for event in events:

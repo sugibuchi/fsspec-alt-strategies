@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies_impl.tree.walk import _walk_top_down
@@ -17,12 +18,23 @@ def _tree(fs: SimulatedFileSystem) -> None:
     fs.add_file("data/README.md")
 
 
+@pytest.mark.parametrize("maxdepth", [None, 1, 2])
 async def test_yields_what_fsspecs_walk_yields_top_down(
-    any_fs: SimulatedFileSystem,
+    any_fs: SimulatedFileSystem, maxdepth: int | None
 ) -> None:
     _tree(any_fs)
-    walked = [w async for w in _walk_top_down(TreeView(any_fs), "data", max_running=3)]
-    expected = [w async for w in AsyncFileSystem._walk(any_fs, "data", detail=True)]
+    walked = [
+        w
+        async for w in _walk_top_down(
+            TreeView(any_fs), "data", max_running=3, maxdepth=maxdepth
+        )
+    ]
+    expected = [
+        w
+        async for w in AsyncFileSystem._walk(
+            any_fs, "data", detail=True, maxdepth=maxdepth
+        )
+    ]
     assert sorted(walked, key=lambda w: w[0]) == sorted(expected, key=lambda w: w[0])
     paths = [path for path, _, _ in walked]
     for path in paths[1:]:

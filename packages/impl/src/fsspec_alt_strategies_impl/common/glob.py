@@ -18,25 +18,32 @@ file is visited only if a pattern matches it. Every path visited is acted on,
 and told whether a pattern matches it: a directory may be visited only on the
 way to others.
 
-An error, of ``ils`` or of the action, ends the path's task. Below a
-`VisitDirectory`, the other items run on, then its `reduce` is skipped, and
-the error goes up in an ExceptionGroup, to the strategy running the
-traversal. A `TraverseSubtree` stops at once.
+A listing holds a permit of the handler's ``operation_limit`` around each
+step, never across the whole: see `_TraversalTask._listing`. ``maxdepth``
+bounds the directories listed, as fsspec's walk counts it.
+
+An error of the action ends the path's task. Below a `VisitDirectory`, the
+other items run on, then its `reduce` is skipped, and the error goes up in an
+ExceptionGroup, to the strategy running the traversal. A `TraverseSubtree`
+stops at once. A listing's error ends the path's task alike, its directories
+not reduced, but goes as ``on_error`` says: emitted, called back, left out
+or raised. The root's is always raised.
 
 This module depends on `handler`, `patterns` and `tree`.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Literal
 
 from .tree import PathTask
 
 if TYPE_CHECKING:
     from collections.abc import (
+        AsyncGenerator,
         AsyncIterable,
         AsyncIterator,
-        Callable,
         Coroutine,
         Sequence,
     )
@@ -46,6 +53,9 @@ if TYPE_CHECKING:
     from .tree import TreeTraversal
 
 __all__: list[str] = []
+
+OnError = Literal["omit", "raise"] | Callable[[Exception], object] | None
+"""What becomes of a listing's error, as fsspec's walk takes ``on_error``: see `_TraversalTask._listing_failed`."""
 
 
 class PathAction:
@@ -88,7 +98,8 @@ class PathAction:
 
         ``match`` is as `map` was given it. ``value`` is what `map` returned
         for it, and ``values`` the values of the items in it, in no order:
-        none for a file.
+        none for a file. An item whose listing failed, its error handled as
+        ``on_error`` says, is None among them, never reduced.
         """
         return None
 
@@ -110,16 +121,75 @@ class _TraversalTask(PathTask):
         handler: StorageHandler,
         *,
         patterns: Sequence[_Search] | None = None,
+        maxdepth: int | None = None,
+        on_error: OnError = None,
+        top: int | None = None,
     ) -> None:
         super().__init__(engine, entry["name"])
         self.entry = entry
         self.action = action
         self.handler = handler
         self.patterns = patterns
+        # The depth listed at most below the root, as fsspec's walk counts it:
+        # 1 lists the root alone.
+        self.maxdepth = maxdepth
+        self.on_error = on_error
+        # The root's segments counted: a path's depth is the segments it has more.
+        self.top = len(self._segments(entry["name"])) if top is None else top
+        # The error of the path's own listing, apart from the action's.
+        self._listing_error: Exception | None = None
+
+    def _options(self) -> dict[str, Any]:
+        """What a task below this one is made with, as it was."""
+        return {
+            "patterns": self.patterns,
+            "maxdepth": self.maxdepth,
+            "on_error": self.on_error,
+            "top": self.top,
+        }
 
     def _segments(self, path: str) -> tuple[str, ...]:
         """A path's segments, the handler's: equal for two names `equals` matches."""
         return tuple(self.handler.segments(path))
+
+    async def _listing(self, recursive: bool) -> AsyncGenerator[Entry]:
+        """The path's ``ils``, a permit of the handler's ``operation_limit`` held around each step.
+
+        Never across the whole listing: a listing streaming into tasks waits
+        for room among those pending, while they wait for permits. Its error
+        is kept as ``_listing_error``, then raised.
+        """
+        entries = self.handler.ils(self.entry, recursive=recursive)
+        try:
+            while True:
+                async with self.handler.operation_limit:
+                    try:
+                        entry = await anext(entries)
+                    except StopAsyncIteration:
+                        return
+                    except Exception as error:
+                        self._listing_error = error
+                        raise
+                yield entry
+        finally:
+            if (aclose := getattr(entries, "aclose", None)) is not None:
+                await aclose()
+
+    async def _listing_failed(self) -> None:
+        """Handle the path's listing error as ``on_error`` says.
+
+        The root's is raised whatever it says, as fsspec's walk raises it,
+        and so is any with "raise". None emits it as an event, a callable is
+        called with it, and "omit" leaves it out.
+        """
+        error = self._listing_error
+        assert error is not None
+        if self._group is None or self.on_error == "raise":
+            raise error
+        elif self.on_error is None:
+            await self._emit_event(error)
+        elif callable(self.on_error):
+            self.on_error(error)
 
     async def prune(self, entries: AsyncIterable[Entry]) -> AsyncIterator[Entry]:
         """A directory's listing as traversed: without its own marker, each subdirectory once, only those to descend into or matched, and only the files matched.
@@ -147,6 +217,11 @@ class _TraversalTask(PathTask):
             yield found
 
     def _descend(self, entry: Entry) -> bool:
+        """Whether a directory is listed: within ``maxdepth``, and as a pattern descends."""
+        if self.maxdepth is not None:
+            depth = len(self._segments(entry["name"])) - self.top
+            if depth >= self.maxdepth:
+                return False
         return self.patterns is None or any(p.descend(entry) for p in self.patterns)
 
     def _matched(self, entry: Entry) -> bool:
@@ -154,7 +229,9 @@ class _TraversalTask(PathTask):
         return self.patterns is None or any(p.matched(entry) for p in self.patterns)
 
     def _whole(self, entry: Entry) -> bool:
-        """Whether all below a directory is traversed: no pattern prunes it."""
+        """Whether all below a directory is traversed: no pattern prunes it, nor ``maxdepth``."""
+        if self.maxdepth is not None:
+            return False  # A listing whole would go past it.
         return self.patterns is None or any(p.whole(entry) for p in self.patterns)
 
 
@@ -172,10 +249,10 @@ class VisitDirectory(_TraversalTask):
         action: PathAction,
         handler: StorageHandler,
         *,
-        patterns: Sequence[_Search] | None = None,
         use_one_listing: bool = False,
+        **options: Any,
     ) -> None:
-        super().__init__(engine, entry, action, handler, patterns=patterns)
+        super().__init__(engine, entry, action, handler, **options)
         self.use_one_listing = use_one_listing
 
     async def run(self) -> Any:
@@ -190,19 +267,28 @@ class VisitDirectory(_TraversalTask):
             # there is room among those pending: a wide directory's are never
             # all in memory before they start.
             values = await self._run_tasks(
-                self._subtree(e) async for e in self.prune(self.handler.ils(entry))
+                self._subtree(e) async for e in self.prune(self._items())
             )
+            if self._listing_error is not None:
+                # The items taken ran: the directory, listed in part, is not reduced.
+                await self._listing_failed()
+                return None
         return await self.action.reduce(entry, match, value, values)
+
+    async def _items(self) -> AsyncIterator[Entry]:
+        """The directory's listing, ended by its error, which `run` handles once the items taken ran."""
+        try:
+            async for entry in self._listing(recursive=False):
+                yield entry
+        except Exception as error:
+            if error is not self._listing_error:
+                raise
 
     def _subtree(self, entry: Entry) -> PathTask:
         """All below a subdirectory by one listing, where asked and whole, else listed alone."""
         if self.use_one_listing and entry["type"] == "directory" and self._whole(entry):
             return TraverseSubtree(
-                self._engine,
-                entry,
-                self.action,
-                self.handler,
-                patterns=self.patterns,
+                self._engine, entry, self.action, self.handler, **self._options()
             )
         else:
             # Its own class: a subclass's directories are each one of it.
@@ -211,8 +297,8 @@ class VisitDirectory(_TraversalTask):
                 entry,
                 self.action,
                 self.handler,
-                patterns=self.patterns,
                 use_one_listing=self.use_one_listing,
+                **self._options(),
             )
 
 
@@ -251,27 +337,21 @@ class TraverseSubtree(_TraversalTask):
     error ends the whole subtree's task: no directory open is reduced.
     """
 
-    def __init__(
-        self,
-        engine: TreeTraversal,
-        entry: Entry,
-        action: PathAction,
-        handler: StorageHandler,
-        *,
-        patterns: Sequence[_Search] | None = None,
-    ) -> None:
-        super().__init__(engine, entry, action, handler, patterns=patterns)
-
     async def run(self) -> Any:
         # Listed as the task starts: one pending, or cancelled, holds nothing.
-        entries = self.handler.ils(self.entry, recursive=True)
+        entries = self._listing(recursive=True)
         try:
             first = await anext(entries, None)
             value, _ = await _Span(self, self.entry, first, entries).map_reduce()
             return value
+        except Exception as error:
+            if error is not self._listing_error:
+                raise  # The action's.
+            # No directory open is reduced, the subtree's included.
+            await self._listing_failed()
+            return None
         finally:
-            if (aclose := getattr(entries, "aclose", None)) is not None:
-                await aclose()
+            await entries.aclose()
 
     def subdir_entry(self, root: Entry, entry: Entry) -> Entry:
         """The entry of the directory in ``root`` that ``entry`` is below, made.
