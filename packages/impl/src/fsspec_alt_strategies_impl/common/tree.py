@@ -39,7 +39,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable, Sequence
+    from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable
 
 __all__: list[str] = []
 
@@ -109,12 +109,6 @@ class PathTask(ABC):
     def _set_task(self, task: asyncio.Task[Any]) -> None:
         assert self._task is None and not self._cancelled
         self._task = task
-
-
-async def _wait(tasks: Sequence[asyncio.Task[Any]]) -> None:
-    """Wait for tasks to end, if any: asyncio.wait refuses none."""
-    if tasks:
-        await asyncio.wait(tasks)
 
 
 class _End:
@@ -217,15 +211,8 @@ class TreeTraversal:
         self._closed = True
         self._spawn(self._aclose())
 
-    async def _aclose(self) -> None:
-        """Cancel every task, pending or running, and wait for them to end: a parent waiting for one gets CancelledError.
-
-        No event is emitted after, so `events` yields those emitted before,
-        then ends. The scheduler and the traversal's own tasks are cancelled:
-        none is needed once closed. It raises the errors of the tasks given to
-        `events`, the scheduler and its own tasks, but their cancellation, in
-        an ExceptionGroup: another task's error is its parent's.
-        """
+    async def _cancel_all(self) -> None:
+        """Close: cancel every task, pending or running, and wake every waiter, `events` too."""
         self._closed = True
         async with self._state:
             for task in self._pending_tasks:
@@ -238,10 +225,21 @@ class TreeTraversal:
             # Wakes events, if it waits for an event: none would come.
             self._events.put_nowait(_End())
 
+    async def _aclose(self) -> None:
+        """Cancel every task, pending or running, and wait for them to end: a parent waiting for one gets CancelledError.
+
+        No event is emitted after, so `events` yields those emitted before,
+        then ends. The scheduler and the traversal's own tasks are cancelled:
+        none is needed once closed. It raises the errors of the tasks given to
+        `events`, the scheduler and its own tasks, but their cancellation, in
+        an ExceptionGroup: another task's error is its parent's.
+        """
+        await self._cancel_all()
         # asyncio.wait, never gather: an _aclose cancelled meanwhile cancels
         # none of them, and leaves their errors to the other _aclose.
         running = [t for t in self._running_tasks if t._task is not None]
-        await _wait([t._task for t in running if t._task is not None])
+        if running:  # asyncio.wait refuses none.
+            await asyncio.wait([t._task for t in running if t._task is not None])
         errors: list[BaseException] = []
         for task in running:
             # Read always, so that asyncio never warns of an exception not
@@ -256,13 +254,13 @@ class TreeTraversal:
 
         ends: list[asyncio.Task[Any]] = []
         if self._scheduler is not None:
-            self._scheduler.cancel()
             ends.append(self._scheduler)
         # Those ending above have spawned their _done: none is needed now.
         ends += [t for t in self._own_tasks if t is not asyncio.current_task()]
         for end in ends:
             end.cancel()
-        await _wait(ends)
+        if ends:
+            await asyncio.wait(ends)
         errors += [
             e for t in ends if not t.cancelled() and (e := t.exception()) is not None
         ]
