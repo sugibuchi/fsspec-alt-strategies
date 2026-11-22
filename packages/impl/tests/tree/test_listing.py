@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from fsspec_alt_strategies_impl.tree.listing import _tree_ils
+from fsspec_alt_strategies_impl.tree.handler import _tree_ils
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 

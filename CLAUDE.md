@@ -177,7 +177,7 @@ code: read it before adding a strategy or a handler.
 #### The tree family
 
 - A handler's one listing primitive is `ils(entry, recursive=False)`: a directory's items, or with `recursive` all
-  below it. A tree handler's recursive `ils` defaults to `TreeFileOperationHandler.ils`, `tree.listing._tree_ils`: a
+  below it. A tree handler's recursive `ils` defaults to `TreeFileOperationHandler.ils`, `tree.handler._tree_ils`: a
   directory per request. A handler listing a directory alone reaches it by `super().ils(entry, recursive=True)`.
 - A storage listing a tree in one request answers `recursive` itself. It falls back on `super().ils` where its
   storage refuses, or where its own listing costs more. Outside `tree/`, call the method, never `_tree_ils`.

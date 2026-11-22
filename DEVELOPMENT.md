@@ -450,7 +450,7 @@ The tree strategies list a directory with the handler's `ils`, its entries in an
 `ils(entry, recursive=True)`. A recursive listing may leave a directory out, as object stores list only files: the walk
 tells it from the paths below it.
 
-By default, a tree handler's recursive `ils` runs `tree/listing.py`'s `_tree_ils`: depth first, a directory per
+By default, a tree handler's recursive `ils` runs `tree/handler.py`'s `_tree_ils`: depth first, a directory per
 request, one at a time. The strategies never ask it, as they list a directory per request themselves, many at once:
 it serves other callers, e.g. a filesystem's recursive listing. A handler listing a directory alone reaches it by
 `super().ils(entry, recursive=True)`. The generic tree

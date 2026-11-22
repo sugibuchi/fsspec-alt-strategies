@@ -7,27 +7,28 @@ listing, and the requests on a directory whole, each optional and declared by
 the profile. The tree strategies take it, and it runs them as the methods of
 `Strategy`: what a filesystem takes.
 
-This module depends on `cp`, `du`, `find`, `glob`, `listing`, `mv`, `rm` and
-`walk`, and `cp_files`, `handler` and `rm_files` of `common`.
+This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm` and `walk`, and
+`cp_files`, `handler`, `paths` and `rm_files` of `common`.
 """
 
 from __future__ import annotations
 
 from abc import abstractmethod
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..common.handler import FileOperationHandler
+from ..common.paths import _trim
 from .cp import _tree_cp
 from .du import _tree_du
 from .find import _tree_find
 from .glob import _tree_glob
-from .listing import _tree_ils
 from .mv import _tree_mv
 from .rm import _tree_rm
 from .walk import _tree_walk
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Sequence
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 
     from fsspec_alt_strategies.states import (
         CpState,
@@ -262,3 +263,49 @@ class TreeFileOperationHandler(FileOperationHandler):
             path1_entry=path1_entry,
             ils_kwargs=ils_kwargs,
         )
+
+
+async def _tree_ils(
+    handler: TreeFileOperationHandler, entry: Entry, **ils_kwargs: Any
+) -> AsyncGenerator[dict[str, Any]]:
+    """List all below a directory depth first, by one ``ils`` per directory, in turn: the default recursive ``ils``.
+
+    It yields what a recursive ``ils`` yields: each entry below ``entry``, at
+    any depth, depth first in preorder. A directory's entries come in the
+    order its ``ils`` gives them, each subdirectory's followed by all below
+    it. A file lists itself, as ``ils`` lists it. A directory listed twice,
+    e.g. as a prefix and as its marker object, is yielded twice, but listed
+    once.
+
+    The strategies never ask it of a handler declaring no
+    ``recursive_ls_depth_first_preorder``, as they list a directory per
+    request themselves, many at once: it serves the other callers, e.g. a
+    filesystem's recursive listing.
+
+    A directory below ``entry`` that fails to list raises its error, as the
+    storage raised it, and ends the listing: a recursive listing cannot go on
+    past a failure. A missing ``entry`` raises FileNotFoundError, as its own
+    ``ils`` raises it.
+
+    ``entry`` is the directory's entry, as its parent's listing gave it, or as
+    the handler's ``entry`` makes it from a path: it is listed by it whole, so
+    that a storage addressing items by id asks nothing again. ``ils_kwargs`` go
+    to each ``ils``. The caller holds the permits, as for any ``ils``.
+    """
+    directory = _trim(entry["name"])
+    listed: set[str] = set()
+    async for found in handler.ils(entry, **ils_kwargs):
+        name = found["name"].rstrip("/")
+        if name == directory:
+            # A file lists itself. A directory may list its own marker: it is
+            # no entry below it.
+            if found["type"] != "directory":
+                yield found
+            continue
+        yield found
+        if found["type"] == "directory" and name not in listed:
+            listed.add(name)
+            subtree = _tree_ils(handler, {**found, "name": name}, **ils_kwargs)
+            async with aclosing(subtree):  # Closed with this one.
+                async for below in subtree:
+                    yield below
