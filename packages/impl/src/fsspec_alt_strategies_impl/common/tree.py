@@ -151,7 +151,8 @@ class TreeTraversal:
         self._state = asyncio.Condition()
         # The tasks waiting to start, each with its path's segments, its key.
         self._pending_tasks: dict[PathTask, list[str]] = {}
-        self._running_tasks: set[PathTask] = set()
+        # The tasks running, each with its asyncio task.
+        self._running_tasks: dict[PathTask, asyncio.Task[Any]] = {}
         self._waiting_tasks: set[PathTask] = set()
         self._events: asyncio.Queue[Any] = asyncio.Queue(maxsize=max_events)
         # The tasks given to events whose error is not raised yet: their
@@ -240,9 +241,9 @@ class TreeTraversal:
         await self._cancel_all()
         # asyncio.wait, never gather: an _aclose cancelled meanwhile cancels
         # none of them, and leaves their errors to the other _aclose.
-        running = [t for t in self._running_tasks if t._task is not None]
+        running = dict(self._running_tasks)
         if running:  # asyncio.wait refuses none.
-            await asyncio.wait([t._task for t in running if t._task is not None])
+            await asyncio.wait(running.values())
         errors: list[BaseException] = []
         for task in running:
             # Read always, so that asyncio never warns of an exception not
@@ -287,7 +288,7 @@ class TreeTraversal:
                     running = asyncio.create_task(task.run())
                     running.add_done_callback(partial(self._on_done, task))
                     task._set_task(running)
-                    self._running_tasks.add(task)
+                    self._running_tasks[task] = running
                 self._state.notify_all()  # Room for a task more.
         await self._events.put(_End())
 
@@ -321,7 +322,7 @@ class TreeTraversal:
             await self._events.put(_Failed(error))
             self._initial.discard(task)  # Raised by events: not again.
         async with self._state:
-            self._running_tasks.discard(task)
+            self._running_tasks.pop(task, None)
             self._pending_tasks.pop(task, None)
             self._state.notify_all()
 
