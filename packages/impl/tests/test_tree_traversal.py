@@ -222,6 +222,23 @@ async def test_close_from_elsewhere_wakes_the_reader() -> None:
     assert seen == []
 
 
+async def test_close_runs_once() -> None:
+    async def forever(task: _Call) -> None:
+        await asyncio.Event().wait()
+
+    engine = TreeTraversal(max_running=1)
+    events = engine.events([_Call(engine, "x", forever)])
+    reading = asyncio.ensure_future(anext(events, None))
+    await asyncio.sleep(0)
+    engine.close()
+    spawned = len(engine._own_tasks)
+    engine.close()
+    assert len(engine._own_tasks) == spawned
+    assert await reading is None
+    engine.close()  # Ended: nothing to close.
+    assert not engine._own_tasks
+
+
 async def test_no_event_is_emitted_once_closed() -> None:
     raised = []
 

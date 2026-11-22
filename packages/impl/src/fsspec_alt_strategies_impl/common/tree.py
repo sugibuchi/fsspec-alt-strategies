@@ -206,8 +206,11 @@ class TreeTraversal:
         """Cancel every task, pending or running, and every event emitted after: `_aclose` in a task.
 
         Closed at once, it starts no task and emits no event more, though the
-        tasks are cancelled once `_aclose` runs.
+        tasks are cancelled once `_aclose` runs. Once closed, by it or by
+        `events` ending, it does nothing.
         """
+        if self._closed:
+            return
         self._closed = True
         self._spawn(self._aclose())
 
