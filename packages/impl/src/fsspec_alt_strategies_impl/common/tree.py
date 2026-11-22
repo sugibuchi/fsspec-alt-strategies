@@ -217,8 +217,9 @@ class TreeTraversal:
 
         No event is emitted after, so `events` yields those emitted before,
         then ends. The scheduler and the traversal's own tasks are cancelled:
-        none is needed once closed. It raises the errors of those it waits
-        for, but their cancellation, in an ExceptionGroup.
+        none is needed once closed. It raises the errors of the tasks given to
+        `events`, the scheduler and its own tasks, but their cancellation, in
+        an ExceptionGroup: another task's error is its parent's.
         """
         self._closed = True
         async with self._state:
@@ -248,7 +249,12 @@ class TreeTraversal:
                 and not isinstance(r, asyncio.CancelledError)
             )
 
-        await end([t._task for t in self._running_tasks if t._task is not None])
+        # A task's error is its parent's, raised by its _run_tasks: only those
+        # given to events, which have none, are raised here.
+        running = [t for t in self._running_tasks if t._task is not None]
+        await end([t._task for t in running if t in self._initial and t._task])
+        children = [t._task for t in running if t not in self._initial and t._task]
+        await asyncio.gather(*children, return_exceptions=True)
         if self._scheduler is not None:
             self._scheduler.cancel()
             await end([self._scheduler])

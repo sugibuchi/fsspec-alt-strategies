@@ -306,6 +306,22 @@ async def test_an_error_closing_is_raised_after_the_error_ending() -> None:
     assert (type(ending), str(ending)) == (OSError, "a")
 
 
+async def test_a_child_error_is_raised_by_its_parent_alone() -> None:
+    async def fail(task: _Call) -> None:
+        raise OSError(task.path)
+
+    async def parent(task: _Call) -> None:
+        await task._run_tasks([_Call(engine, "p/c", fail)])
+
+    engine = TreeTraversal(max_running=1)
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await _all(engine, [_Call(engine, "p", parent)])
+    # The parent's group, as the initial task's error: no closing group.
+    [error] = raised.value.exceptions
+    assert (type(error), str(error)) == (OSError, "p/c")
+    assert raised.value.__context__ is None
+
+
 async def test_a_traversal_runs_once() -> None:
     engine = TreeTraversal(max_running=1)
     await _all(engine, [])
