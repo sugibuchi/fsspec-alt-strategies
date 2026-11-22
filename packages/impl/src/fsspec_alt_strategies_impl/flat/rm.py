@@ -17,8 +17,9 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import RmState
 
-from ..common.jobs import _Job, _keys_of, _Roots
+from ..common.jobs import _Job, _keys_of
 from ..common.paths import _check_maxdepth, _trim
+from ..common.placement import _Roots
 from ._jobs import _FlatJobs
 
 if TYPE_CHECKING:

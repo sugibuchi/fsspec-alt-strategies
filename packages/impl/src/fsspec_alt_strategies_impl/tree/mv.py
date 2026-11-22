@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..common.jobs import _moves_of
 from ..common.paths import _check_maxdepth
-from .cp import _Moving, _transfers
+from .cp import _globbing, _Moving, _transfers
 from .walk import _MAX_RUNNING
 
 if TYPE_CHECKING:
@@ -180,8 +180,8 @@ def _tree_mv(
     return _transfers(
         _Moving(
             handler=src,
-            op=None,  # Never run: it only places.
             dst=dst,
+            glob=_globbing(src, maxdepth, ils_kwargs),
             path1=path1,
             path2=path2,
             same_storage=same_storage,

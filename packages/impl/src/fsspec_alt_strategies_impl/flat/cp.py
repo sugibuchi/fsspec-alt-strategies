@@ -168,6 +168,9 @@ class _CopyOrMove(_CopyJobs, _FlatJobs):
     remembered, and each is made once. A subclass says how a key goes, in `transfer_file`.
     """
 
+    handler: FlatFileOperationHandler
+    """The handler listed: a flat one's, which the flat strategies take."""
+
     def fed(self, item: dict[str, Any]) -> list[Any]:
         try:
             return super().fed(item)

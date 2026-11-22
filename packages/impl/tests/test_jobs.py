@@ -16,15 +16,9 @@ import pytest
 
 from fsspec_alt_strategies.monitor import State
 from fsspec_alt_strategies.states import CpState
-from fsspec_alt_strategies_impl.common.jobs import (
-    _CopyJobs,
-    _Job,
-    _Jobs,
-    _Queue,
-    _Roots,
-    _roots_of,
-)
+from fsspec_alt_strategies_impl.common.jobs import _CopyJobs, _Job, _Jobs, _Queue
 from fsspec_alt_strategies_impl.common.operation import Operation, _collect_with_errors
+from fsspec_alt_strategies_impl.common.placement import _Roots, _roots_of
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 if TYPE_CHECKING:

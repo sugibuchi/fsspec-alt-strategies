@@ -28,8 +28,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from ..common.handler import StoragePath
-    from ..common.jobs import _Roots
     from ..common.operation import Operation
+    from ..common.placement import _Roots
     from .handler import FlatFileOperationHandler
 
 

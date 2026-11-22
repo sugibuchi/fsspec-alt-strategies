@@ -12,7 +12,7 @@ Where the handler's ``cp_tree`` copies a directory in one request, the
 profile says so. `_tree_cp` then copies each root whole with it where it can,
 and traverses only what it cannot copy so.
 
-`_transfers` runs both `_tree_cp` and `_tree_mv`: `common.jobs._CopyJobs`
+`_transfers` runs both `_tree_cp` and `_tree_mv`: `common.placement._Placement`
 places each path, as fsspec's ``copy`` does, and `_Sending` copies or moves
 it.
 
@@ -33,9 +33,10 @@ from fsspec_alt_strategies.states import CpState, MvState
 
 from ..common.glob import PathAction
 from ..common.handler import FileTransfer
-from ..common.jobs import _CopyJobs, _Roots, _transfer_of
+from ..common.jobs import _transfer_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
+from ..common.placement import _Placement, _Roots
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
 from .rm import _Call
@@ -51,7 +52,7 @@ if TYPE_CHECKING:
     )
 
     from ..common.handler import Entry, StorageHandler, StoragePath
-    from ..common.jobs import _Job, _Transfer
+    from ..common.jobs import _Transfer
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
@@ -207,10 +208,10 @@ def _tree_cp(
     given = cp_entry
     cp_entry, same_storage = _transfer_of(src, dst, cp_entry, same_storage)
     return _transfers(
-        _Placing(
+        _Placement(
             handler=src,
-            op=None,  # Never run: it only places.
             dst=dst,
+            glob=_globbing(src, maxdepth, ils_kwargs),
             path1=path1,
             path2=path2,
             same_storage=same_storage,
@@ -224,46 +225,20 @@ def _tree_cp(
     )
 
 
-class _Placing(_CopyJobs):
-    """Where a copy's or a move's paths go, as `common.jobs._CopyJobs` places them: never run as jobs.
+def _globbing(
+    src: TreeFileOperationHandler,
+    maxdepth: int | None,
+    ils_kwargs: dict[str, Any] | None,
+) -> Callable[[StoragePath | Sequence[StoragePath]], Operation[Any, Any]]:
+    """The tree's glob of a copy's or a move's patterns, which `_Placement` finds its roots by."""
 
-    `_transfers` calls its ``setup``, ``prepare`` and helpers, e.g. ``target``
-    and ``make_directory``: the traversal does the rest.
-    """
+    def glob(pattern: StoragePath | Sequence[StoragePath]) -> Operation[Any, Any]:
+        return _tree_glob(src, pattern, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
 
-    def glob(self, pattern: StoragePath | Sequence[StoragePath]) -> Operation[Any, Any]:
-        return _tree_glob(
-            cast("TreeFileOperationHandler", self.handler),
-            pattern,
-            maxdepth=self.maxdepth,
-            ils_kwargs=self.ils_kwargs,
-        )
-
-    # Never run as jobs: the traversal does what these would.
-
-    def state(self) -> Any:
-        raise NotImplementedError
-
-    def source(self, roots: _Roots) -> Any:
-        raise NotImplementedError
-
-    def fed(self, item: Any) -> list[Any]:
-        raise NotImplementedError
-
-    def file_root(self, entry: dict[str, Any]) -> None:
-        raise NotImplementedError
-
-    def run(self, job: _Job) -> Awaitable[Any]:
-        raise NotImplementedError
-
-    def done(self, job: _Job) -> list[Any]:
-        raise NotImplementedError
-
-    def failed(self, job: _Job, error: Exception) -> list[Any]:
-        raise NotImplementedError
+    return glob
 
 
-class _Moving(_Placing):
+class _Moving(_Placement):
     """Where a move's paths go: a single path moved onto itself in another case is renamed whole."""
 
     verb = "move"
@@ -290,7 +265,7 @@ class _Moving(_Placing):
 
 
 def _transfers(
-    place: _Placing, transfer: _Transfer, *, max_running: int
+    place: _Placement, transfer: _Transfer, *, max_running: int
 ) -> Operation[tuple[str, str], Any]:
     """The operation of a copy, or of a move if ``place`` is `_Moving`: ``transfer`` sends each file."""
     move = isinstance(place, _Moving)
@@ -333,7 +308,7 @@ def _transfers(
     return Operation(run, state)
 
 
-def _whole(place: _Placing, move: bool) -> bool:
+def _whole(place: _Placement, move: bool) -> bool:
     """Whether the roots go whole, by one ``cp_tree`` or ``mv_tree``, where they can.
 
     Only within one storage does the profile tell how the source copies or
@@ -428,7 +403,7 @@ class _Sending(PathAction):
         self,
         emit_event: Any,
         op: Operation[Any, Any],
-        place: _Placing,
+        place: _Placement,
         transfer: _Transfer,
         *,
         move: bool,

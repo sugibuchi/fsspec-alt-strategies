@@ -22,9 +22,10 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from fsspec_alt_strategies.states import RmState
 
 from ..common.glob import PathAction
-from ..common.jobs import _check_batch_size, _roots_of
+from ..common.jobs import _check_batch_size
 from ..common.operation import Operation, _collect_with_errors
 from ..common.paths import _check_maxdepth, _trim
+from ..common.placement import _roots_of
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
 from .walk import _MAX_RUNNING, _root_task

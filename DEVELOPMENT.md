@@ -381,16 +381,16 @@ A strategy replacing an fsspec method answers as it does. Where it departs on pu
 
 ### Jobs
 
-`common/jobs.py` holds what the strategies changing a storage share:
+Two modules serve the strategies changing a storage:
 
-- `_CopyJobs` places each path of a copy or move, as fsspec's `copy` does, whatever the family. It builds each target
-  by the destination's `join`.
-- `_Jobs` runs the flat strategies changing a storage: it finds what to change and does it at once. Each request
-  holds a permit of the handler's `operation_limit`, through a `_Queue`. `_FlatJobs` says where the items come from.
+- `common/placement.py`'s `_Placement` places each path of a copy or move, as fsspec's `copy` does, whatever the
+  family. It builds each target by the destination's `join`, and keeps the hints it learns on the way.
+- `common/jobs.py`'s `_Jobs` runs the flat strategies changing a storage: it finds what to change and does it at
+  once. Each request holds a permit of the handler's `operation_limit`, through a `_Queue`. `_FlatJobs` says where
+  the items come from.
 
-A flat copy joins the two, `_CopyOrMove(_CopyJobs, _FlatJobs)`. Their constructors take keywords only, and pass on
-what they do not take, so either order works. A tree copy uses `_CopyJobs` only to place its paths: the traversal
-does the rest.
+A tree copy or move uses `_Placement` alone: the traversal does the rest. A flat one joins both, as
+`_CopyOrMove(_CopyJobs, _FlatJobs)`, where `_CopyJobs` is `_Placement` and `_Jobs`.
 
 ### Copies between storages
 

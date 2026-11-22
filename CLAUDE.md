@@ -69,7 +69,7 @@ code: read it before adding a strategy or a handler.
 - `cp_files(transfers)` and `mv_files(transfers)` copy and move `FileTransfer`s within one storage, by default
   `common.cp_files._cp_each_file` and `_mv_each_file`. A storage overrides them with `cp_by_request` or
   `mv_by_request`, and declares `cp_batch_size` or `mv_batch_size`. The recursive copies and moves within one storage
-  send them their files by `_CopyJobs.release`, unless the caller gives its own `cp_entry` or `mv_entry`. Each error
+  send them their files in batches per directory, or by `_CopyJobs.release` in the flat family, unless the caller gives its own `cp_entry` or `mv_entry`. Each error
   they yield has its source's path as its `source`.
 - `BaseFileSystem`, in `common/filesystem.py`, implements fsspec's API on a `FileOperationHandler`, a required
   argument. Nobody overrides its fsspec methods. Its recursive methods, such as `_rm` and `_copy`, run the handler's
@@ -119,9 +119,9 @@ code: read it before adding a strategy or a handler.
   a file. A move's `mv_entry` defaults to `cp_entry`, then the source's `rm_file`. The router passes its routing
   handler's `cp_across` and `mv_across` so.
 - A copy or move tells `makedirs`, `cp_file`, `mv_file` and its `cp_entry` or `mv_entry` two hints:
-  - `missing=True` where `_CopyJobs.known_missing` holds: the destination, or a directory above it, was found missing;
+  - `missing=True` where `_Placement.known_missing` holds: the destination, or a directory above it, was found missing;
   - `parent=`, the destination's parent's entry, as `makedirs` returned it or an `info` found it, kept in
-    `_CopyJobs.directories`. `cp_tree` and `mv_tree` take it too.
+    `_Placement.directories`. `cp_tree` and `mv_tree` take it too.
 
   `makedirs` returns the entry of the directory made, or None. Every override of those primitives takes `missing` and
   `parent`, used or not.
@@ -170,7 +170,7 @@ code: read it before adding a strategy or a handler.
   wrapped filesystem's methods. Write one only where the library saves requests or data beyond fsspec's API.
 - A wrapper of one library declares its profile, limits and batch sizes as class attributes. A `known_implementations`
   entry gives them only to the generic `FsspecTreeHandler` and `FsspecFlatHandler`.
-- A copy or move, in any family, places its paths by `common.jobs._CopyJobs`, by the destination's `join`. The flat
+- A copy or move, in any family, places its paths by `common.placement._Placement`, by the destination's `join`. The flat
   strategies changing a storage run on `common.jobs._Jobs`, e.g. `_CopyOrMove(_CopyJobs, _FlatJobs)`. Their
   constructors take keywords only, and pass the rest on.
 
