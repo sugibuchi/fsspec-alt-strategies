@@ -39,7 +39,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Iterable
+    from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable
 
 __all__: list[str] = []
 
@@ -155,6 +155,9 @@ class TreeTraversal:
         self._events: asyncio.Queue[Any] = asyncio.Queue(maxsize=max_events)
         # The tasks given to events: their failure ends the traversal.
         self._initial: set[PathTask] = set()
+        # The traversal's own tasks, finishing a task or cancelling: closing
+        # cancels those left, e.g. one emitting to a queue no longer read.
+        self._own_tasks: set[asyncio.Task[None]] = set()
         self._started = False
         self._stopping = False
         self._closing = False
@@ -193,7 +196,7 @@ class TreeTraversal:
         """Start nothing more: the tasks running finish, and their events are yielded."""
         if not self._stopping:
             self._stopping = True
-            asyncio.get_running_loop().create_task(self._cancel_pending())
+            self._spawn(self._cancel_pending())
 
     async def _cancel_pending(self) -> None:
         async with self._state:
@@ -242,7 +245,12 @@ class TreeTraversal:
 
     def _on_done(self, task: PathTask, _: object) -> None:
         # A done callback is synchronous: the lock is taken in a task of its own.
-        asyncio.get_running_loop().create_task(self._done(task))
+        self._spawn(self._done(task))
+
+    def _spawn(self, coroutine: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.get_running_loop().create_task(coroutine)
+        self._own_tasks.add(task)
+        task.add_done_callback(self._own_tasks.discard)
 
     def _cancelled_before_start(self, task: PathTask) -> None:
         self._on_done(task, None)
@@ -324,3 +332,8 @@ class TreeTraversal:
         for task in running:
             task.cancel()
         await asyncio.gather(*running, return_exceptions=True)
+        # Those ending above have spawned their _done: none is needed now.
+        own = list(self._own_tasks)
+        for task in own:
+            task.cancel()
+        await asyncio.gather(*own, return_exceptions=True)

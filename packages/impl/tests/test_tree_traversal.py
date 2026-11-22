@@ -215,6 +215,25 @@ async def test_closing_early_cancels_the_tasks_running() -> None:
     assert sorted(cancelled) == ["a", "b"]
 
 
+async def test_closing_leaves_no_task_behind() -> None:
+    async def emit(task: _Call) -> None:
+        for i in range(3):
+            await task._emit_event(i)
+        await asyncio.Event().wait()
+
+    async def fail(task: _Call) -> None:
+        await asyncio.sleep(0.01)  # Once the queue is full: its failure waits.
+        raise OSError(task.path)
+
+    engine = TreeTraversal(max_running=2, max_events=1)
+    events = engine.events([_Call(engine, "a", emit), _Call(engine, "b", fail)])
+    assert await anext(events) == 0
+    await asyncio.sleep(0.02)
+    await events.aclose()
+    await asyncio.sleep(0)
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
 async def test_a_traversal_runs_once() -> None:
     engine = TreeTraversal(max_running=1)
     await _all(engine, [])
