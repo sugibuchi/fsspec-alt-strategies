@@ -70,8 +70,15 @@ class PathTask(ABC):
         self.path = path
         self._task: asyncio.Task[Any] | None = None
         self._cancelled = False
-        # The task running it by _run_tasks: None for one given to events.
-        self._parent: PathTask | None = None
+        # The group _run_tasks runs it in, its caller's: None for one given to
+        # events. Counted done in it once.
+        self._group: PathTaskGroup | None = None
+        self._counted = False
+
+    def _count_done(self) -> None:
+        """Tell its group it is done, ended or cancelled before it started."""
+        if self._group is not None:
+            self._group.task_done(self)
 
     @abstractmethod
     async def run(self) -> Any:
@@ -123,6 +130,35 @@ class PathTask(ABC):
     def _set_task(self, task: asyncio.Task[Any]) -> None:
         assert self._task is None and not self._cancelled
         self._task = task
+
+
+class PathTaskGroup:
+    """The tasks one `_run_tasks` runs for its caller, and how many of them are done.
+
+    Counted as each is done, so that the caller waiting checks `done` in
+    O(1), however many it runs: never by going over them all.
+    """
+
+    def __init__(self, caller: PathTask) -> None:
+        self.caller = caller
+        self.tasks: list[PathTask] = []
+        self.done_tasks = 0
+        # Whether all the tasks are taken: a stream of them may run on.
+        self.complete = False
+
+    def add(self, task: PathTask) -> None:
+        task._group = self
+        self.tasks.append(task)
+
+    def task_done(self, task: PathTask) -> None:
+        """Count a task of the group done: once, however many times it is told."""
+        if not task._counted:
+            task._counted = True
+            self.done_tasks += 1
+
+    def done(self) -> bool:
+        """Whether every task is taken and done."""
+        return self.complete and self.done_tasks == len(self.tasks)
 
 
 async def _aiter(
@@ -270,6 +306,7 @@ class TreeTraversal:
         async with self._state:
             for task in self._pending_tasks:
                 task._cancelled = True  # Never starts: its parent sees it done.
+                task._count_done()
             self._pending_tasks.clear()
             self._heap.clear()
             self._state.notify_all()
@@ -338,7 +375,7 @@ class TreeTraversal:
             # retrieved.
             if task.cancelled() or (error := task.exception()) is None:
                 continue
-            parent = task._parent
+            parent = task._group.caller if task._group is not None else None
             if (
                 parent is not None
                 and parent.done()
@@ -427,20 +464,24 @@ class TreeTraversal:
         async with self._state:
             self._running_tasks.discard(task)
             self._pending_tasks.discard(task)  # Its heap entry is skipped.
+            task._count_done()
             self._state.notify_all()
 
-    async def _add_task(self, task: PathTask) -> None:
-        """Add a task to start, waiting for room: once stopping, cancel it instead."""
+    async def _add_task(self, group: PathTaskGroup, task: PathTask) -> None:
+        """Add a task of a group to start, waiting for room: once stopping, cancel it instead."""
         async with self._state:
             if task._task is not None or task in self._pending_tasks:
                 raise ValueError(f"Task {task.path!r} is added twice.")
+            group.add(task)
             if task.done():
-                return  # Cancelled already: nothing to run.
+                task._count_done()  # Cancelled already: nothing to run.
+                return
             await self._state.wait_for(
                 lambda: self._stopping or len(self._pending_tasks) < self.max_pending
             )
             if self._stopping:
                 task._cancelled = True  # Never runs: its parent sees it done.
+                task._count_done()
             else:
                 self._pend(task)
             self._state.notify_all()
@@ -468,18 +509,18 @@ class TreeTraversal:
                 )
             self._waiting_tasks.add(caller)
             self._state.notify_all()
-        added: list[PathTask] = []
+        group = PathTaskGroup(caller)
+        added = group.tasks
         failed: Exception | None = None
         try:
             try:
                 async for task in _aiter(tasks):
-                    task._parent = caller
-                    added.append(task)
-                    await self._add_task(task)
+                    await self._add_task(group, task)
             except Exception as error:  # Never CancelledError: it propagates.
                 failed = error
             async with self._state:
-                await self._state.wait_for(lambda: all(t.done() for t in added))
+                group.complete = True
+                await self._state.wait_for(group.done)
         finally:
             async with self._state:
                 self._waiting_tasks.discard(caller)
