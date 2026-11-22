@@ -232,32 +232,33 @@ class TreeTraversal:
             # Wakes events, if it waits for an event: none would come.
             self._events.put_nowait(_End())
 
-        errors = await self._wait(
-            [t._task for t in self._running_tasks if t._task is not None]
-        )
+        errors: list[BaseException] = []
+
+        async def end(tasks: Sequence[asyncio.Task[Any]]) -> None:
+            """Wait for tasks to end, keeping their errors, but their cancellation, each task's once."""
+            tasks = [t for t in tasks if t not in self._waited]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Marked once gathered: an _aclose cancelled meanwhile leaves them
+            # to the next.
+            self._waited.update(tasks)
+            errors.extend(
+                r
+                for r in results
+                if isinstance(r, BaseException)
+                and not isinstance(r, asyncio.CancelledError)
+            )
+
+        await end([t._task for t in self._running_tasks if t._task is not None])
         if self._scheduler is not None:
             self._scheduler.cancel()
-            errors += await self._wait([self._scheduler])
+            await end([self._scheduler])
         # Those ending above have spawned their _done: none is needed now.
         own = [t for t in self._own_tasks if t is not asyncio.current_task()]
         for own_task in own:
             own_task.cancel()
-        errors += await self._wait(own)
+        await end(own)
         if errors:
             raise BaseExceptionGroup("The traversal failed to close.", errors)
-
-    async def _wait(self, tasks: Sequence[asyncio.Task[Any]]) -> list[BaseException]:
-        """Wait for tasks to end: their errors, but their cancellation, each task's once."""
-        tasks = [t for t in tasks if t not in self._waited]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        # Marked once gathered: an _aclose cancelled meanwhile leaves them to the next.
-        self._waited.update(tasks)
-        return [
-            r
-            for r in results
-            if isinstance(r, BaseException)
-            and not isinstance(r, asyncio.CancelledError)
-        ]
 
     async def _schedule(self) -> None:
         """Start the leftmost pending task while a slot is free, until nothing is pending or running."""
