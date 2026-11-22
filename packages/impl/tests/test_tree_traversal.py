@@ -212,6 +212,16 @@ async def test_close_cancels_every_task_and_ends_the_events() -> None:
     assert sorted(cancelled) == ["p", "p/a", "p/b"]
 
 
+async def test_close_from_elsewhere_wakes_the_reader() -> None:
+    async def forever(task: _Call) -> None:
+        await asyncio.Event().wait()
+
+    engine = TreeTraversal(max_running=1)
+    asyncio.get_running_loop().call_later(0.01, engine.close)
+    seen = await asyncio.wait_for(_all(engine, [_Call(engine, "x", forever)]), 1)
+    assert seen == []
+
+
 async def test_no_event_is_emitted_once_closed() -> None:
     raised = []
 

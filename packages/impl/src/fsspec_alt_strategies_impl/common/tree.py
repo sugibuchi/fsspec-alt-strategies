@@ -163,8 +163,6 @@ class TreeTraversal:
         self._scheduler: asyncio.Task[None] | None = None
         self._started = False
         self._closed = False
-        # Whether events is read still: once its generator ends, none reads.
-        self._reading = False
 
     async def events(self, tasks: Iterable[PathTask]) -> AsyncGenerator[Any]:
         """Run ``tasks``, and those they run, yielding every event they emit, in order.
@@ -184,9 +182,10 @@ class TreeTraversal:
             self._pending_tasks[task] = self.split(task.path)
 
         self._scheduler = asyncio.create_task(self._schedule())
-        self._reading = True
         try:
             while True:
+                if self._closed and self._events.empty():
+                    return  # No event is emitted once closed: all are read.
                 event = await self._events.get()
                 if isinstance(event, _End):
                     return
@@ -195,7 +194,6 @@ class TreeTraversal:
                 else:
                     yield event
         finally:
-            self._reading = False
             await self._aclose()
 
     def close(self) -> None:
@@ -208,12 +206,11 @@ class TreeTraversal:
         self._spawn(self._aclose())
 
     async def _aclose(self) -> None:
-        """Cancel every task, pending or running: a parent waiting for one gets CancelledError.
+        """Cancel every task, pending or running, and wait for them to end: a parent waiting for one gets CancelledError.
 
-        While `events` is read, the events emitted before are yielded, and it
-        ends once no task runs. Once its generator ends, none reads: so the
-        tasks running, the scheduler and the traversal's own tasks are waited
-        for, or cancelled, here.
+        No event is emitted after, so `events` yields those emitted before,
+        then ends. The scheduler and the traversal's own tasks are cancelled:
+        none is needed once closed.
         """
         self._closed = True
         async with self._state:
@@ -223,8 +220,9 @@ class TreeTraversal:
             for task in self._running_tasks:
                 task.cancel()
             self._state.notify_all()
-        if self._reading:
-            return
+        if self._events.empty():
+            # Wakes events, if it waits for an event: none would come.
+            self._events.put_nowait(_End())
 
         running = [t._task for t in self._running_tasks if t._task is not None]
         await asyncio.gather(*running, return_exceptions=True)
