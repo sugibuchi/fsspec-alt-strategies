@@ -40,13 +40,16 @@ import itertools
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable as AsyncIterableABC
 from functools import partial
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, TypeVar
+
+_T = TypeVar("_T")
 
 if TYPE_CHECKING:
     from collections.abc import (
         AsyncGenerator,
         AsyncIterable,
         AsyncIterator,
+        Awaitable,
         Callable,
         Iterable,
         Sequence,
@@ -208,6 +211,26 @@ class _Failures(BaseExceptionGroup):
 
 class _ExceptionFailures(ExceptionGroup, _Failures):
     """`_Failures` of Exceptions alone: caught as any Exception."""
+
+
+async def _write(request: Awaitable[_T]) -> _T:
+    """Run a request changing the storage, e.g. a deletion, to its end, even when cancelled.
+
+    A task closed cancels its requests, so that it stops at once. A write's
+    outcome would then be unknown: so the request runs as a task of its own,
+    and a caller cancelled waits for it, then raises its CancelledError. Its
+    outcome is lost to the caller, but the storage is left as it says.
+    """
+    task = asyncio.ensure_future(request)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.wait([task])
+            except asyncio.CancelledError:
+                continue  # Cancelled again: the write still runs to its end.
+        raise
 
 
 class _End:
