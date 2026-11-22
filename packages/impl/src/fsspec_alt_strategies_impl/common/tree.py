@@ -163,9 +163,8 @@ class TreeTraversal:
         self._scheduler: asyncio.Task[None] | None = None
         self._started = False
         self._closed = False
-        # The errors of the tasks waited for as the traversal closes, each
-        # task's once, whichever _aclose waited for it.
-        self._closing_errors: list[BaseException] = []
+        # The tasks whose error is raised already, by events or an _aclose:
+        # no other raises it again.
         self._waited: set[asyncio.Task[Any]] = set()
 
     async def events(self, tasks: Iterable[PathTask]) -> AsyncGenerator[Any]:
@@ -175,10 +174,9 @@ class TreeTraversal:
         traversal. An error a task emits is yielded as any event. It raises
         RuntimeError if called twice.
 
-        The errors of the tasks as the traversal closes, other than their
-        cancellation, are raised in an ExceptionGroup, with the error ending
-        it, if any. An error that is no Exception, e.g. a CancelledError or a
-        KeyboardInterrupt, is raised alone.
+        As it ends, it closes the traversal by `_aclose`, which raises the
+        errors of the tasks closing: the error ending it, if any, is then
+        their ExceptionGroup's context.
         """
         if self._started:
             raise RuntimeError("A traversal runs once.")
@@ -191,7 +189,6 @@ class TreeTraversal:
             self._pending_tasks[task] = self.split(task.path)
 
         self._scheduler = asyncio.create_task(self._schedule())
-        ending: BaseException | None = None
         try:
             while True:
                 if self._closed and self._events.empty():
@@ -203,26 +200,8 @@ class TreeTraversal:
                     raise event.error
                 else:
                     yield event
-        except BaseException as error:
-            ending = error
-            raise
         finally:
             await self._aclose()
-            if (group := self._closing_group(ending)) is not None:
-                raise group from None
-
-    def _closing_group(self, ending: BaseException | None) -> BaseExceptionGroup | None:
-        """The errors of closing, with the error ending `events` if it is an Exception: None if none."""
-        # An initial task's error is waited for again: it is raised once.
-        errors = [e for e in self._closing_errors if e is not ending]
-        if not errors:
-            return None
-        elif ending is None or isinstance(ending, GeneratorExit):
-            return BaseExceptionGroup("The traversal failed to close.", errors)
-        elif isinstance(ending, Exception):
-            return BaseExceptionGroup("The traversal failed.", [ending, *errors])
-        else:
-            return None  # A cancellation or an interrupt goes on alone.
 
     def close(self) -> None:
         """Cancel every task, pending or running, and every event emitted after: `_aclose` in a task.
@@ -238,7 +217,8 @@ class TreeTraversal:
 
         No event is emitted after, so `events` yields those emitted before,
         then ends. The scheduler and the traversal's own tasks are cancelled:
-        none is needed once closed.
+        none is needed once closed. It raises the errors of those it waits
+        for, but their cancellation, in an ExceptionGroup.
         """
         self._closed = True
         async with self._state:
@@ -252,23 +232,27 @@ class TreeTraversal:
             # Wakes events, if it waits for an event: none would come.
             self._events.put_nowait(_End())
 
-        await self._wait([t._task for t in self._running_tasks if t._task is not None])
+        errors = await self._wait(
+            [t._task for t in self._running_tasks if t._task is not None]
+        )
         if self._scheduler is not None:
             self._scheduler.cancel()
-            await self._wait([self._scheduler])
+            errors += await self._wait([self._scheduler])
         # Those ending above have spawned their _done: none is needed now.
         own = [t for t in self._own_tasks if t is not asyncio.current_task()]
         for own_task in own:
             own_task.cancel()
-        await self._wait(own)
+        errors += await self._wait(own)
+        if errors:
+            raise BaseExceptionGroup("The traversal failed to close.", errors)
 
-    async def _wait(self, tasks: Sequence[asyncio.Task[Any]]) -> None:
-        """Wait for tasks to end, keeping their errors, but their cancellation, for `events` to raise."""
+    async def _wait(self, tasks: Sequence[asyncio.Task[Any]]) -> list[BaseException]:
+        """Wait for tasks to end: their errors, but their cancellation, each task's once."""
         tasks = [t for t in tasks if t not in self._waited]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        # Kept once gathered: an _aclose cancelled meanwhile leaves them to the next.
+        # Marked once gathered: an _aclose cancelled meanwhile leaves them to the next.
         self._waited.update(tasks)
-        self._closing_errors += [
+        return [
             r
             for r in results
             if isinstance(r, BaseException)
@@ -324,6 +308,8 @@ class TreeTraversal:
         if error is not None and task in self._initial and not self._closed:
             # Emitted while it still runs, so that the end never comes before it.
             await self._events.put(_Failed(error))
+            if task._task is not None:
+                self._waited.add(task._task)  # Raised by events: not again.
         async with self._state:
             self._running_tasks.discard(task)
             self._pending_tasks.pop(task, None)

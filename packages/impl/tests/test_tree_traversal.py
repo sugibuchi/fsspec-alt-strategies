@@ -284,7 +284,7 @@ async def test_closing_leaves_no_task_behind() -> None:
     assert asyncio.all_tasks() == {asyncio.current_task()}
 
 
-async def test_an_error_closing_is_raised_with_the_error_ending() -> None:
+async def test_an_error_closing_is_raised_after_the_error_ending() -> None:
     async def fail(task: _Call) -> None:
         await asyncio.sleep(0.01)
         raise OSError(task.path)
@@ -299,8 +299,11 @@ async def test_an_error_closing_is_raised_with_the_error_ending() -> None:
     tasks = [_Call(engine, "a", fail), _Call(engine, "b", cleanup_fails)]
     with pytest.raises(BaseExceptionGroup) as raised:
         await _all(engine, tasks)
-    errors = raised.value.exceptions
-    assert [(type(e), str(e)) for e in errors] == [(OSError, "a"), (ValueError, "b")]
+    # The closing raises its own group, chained to the error ending events.
+    [error] = raised.value.exceptions
+    assert (type(error), str(error)) == (ValueError, "b")
+    ending = raised.value.__context__
+    assert (type(ending), str(ending)) == (OSError, "a")
 
 
 async def test_a_traversal_runs_once() -> None:
