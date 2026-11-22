@@ -52,6 +52,29 @@ async def test_the_caller_prunes_by_changing_dirs(any_fs: SimulatedFileSystem) -
     assert any_fs.stats.calls == {"list": 3}  # Nothing pruned is listed.
 
 
+async def test_its_state_counts_the_directories_and_items(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    _tree(any_fs)
+    op = _walk_top_down(TreeView(any_fs), "data", max_running=3)
+    walked = [w async for w in op]
+    assert op.state.directories_listed == len(walked) == 7
+    assert op.state.found == sum(len(d) + len(f) for _, d, f in walked)
+    assert op.state.errors == 0
+
+
+async def test_cancelled_it_starts_no_listing(any_fs: SimulatedFileSystem) -> None:
+    _tree(any_fs)
+    op = _walk_top_down(TreeView(any_fs), "data", max_running=3)
+    walked = []
+    async for path, _, _ in op:
+        walked.append(path)
+        op.cancel()  # While the root waits: its subdirectories never start.
+    assert walked == ["data"]
+    assert op.cancelled()
+    assert any_fs.stats.calls == {"list": 1}
+
+
 async def test_a_directory_failing_yields_its_error(
     any_fs: SimulatedFileSystem,
 ) -> None:

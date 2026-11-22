@@ -95,6 +95,9 @@ class Operation(OperationHandler, Generic[T, S]):
         self._steps: AsyncGenerator[T | Exception] | None = None
         self._cancel_requests = 0
         self._done = False
+        # What `cancel` calls, set by a run whose engine stops at once, e.g.
+        # `TreeTraversal.cancel`: else its tasks start until the next step.
+        self._on_cancel: Callable[[], object] | None = None
 
     def __repr__(self) -> str:
         status = (
@@ -144,6 +147,8 @@ class Operation(OperationHandler, Generic[T, S]):
         if self._done:
             return False
         self._cancel_requests += 1
+        if self._on_cancel is not None:
+            self._on_cancel()
         return True
 
     def cancelling(self) -> int:

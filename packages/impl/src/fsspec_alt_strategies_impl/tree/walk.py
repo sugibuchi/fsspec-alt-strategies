@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import aclosing
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from fsspec_alt_strategies.states import WalkState
@@ -163,40 +164,59 @@ class _WalkTopDown(VisitDirectory):
             yield entry
 
 
-async def _walk_top_down(
+def _walk_top_down(
     handler: TreeFileOperationHandler,
     path: StoragePath,
     *,
     max_running: int,
     maxdepth: int | None = None,
     on_error: OnError = None,
-) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
+) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
     """Walk a tree top down, yielding each directory's ``(path, dirs, files)``, or its error.
 
     The caller may prune by removing names from ``dirs`` before it takes the
     next item: the directory's task waits until then. ``maxdepth`` and
     ``on_error`` are fsspec's walk's: an error is yielded where ``on_error``
     is None. The root's error is raised.
+
+    Once cancelled, it starts no new listing, and yields the directories of
+    those in flight. The call raises ValueError if ``maxdepth`` is less than 1.
     """
-    engine = TreeTraversal(max_running=max_running, split=handler.segments)
-    root = _WalkTopDown(
-        engine,
-        {"name": path, "type": "directory"},
-        PathAction(engine._emit_event),
-        handler,
-        maxdepth=maxdepth,
-        on_error=on_error,
-    )
-    async with aclosing(engine.events([root])) as events:
-        async for event in events:
-            if isinstance(event, Exception):
-                yield event
-                continue
-            walked, *triple = event
-            try:
-                yield tuple(triple)
-            finally:
-                walked.set()  # The directory goes on, with the dirs left.
+    _check_maxdepth(maxdepth)
+
+    async def run(
+        op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
+    ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
+        engine = TreeTraversal(max_running=max_running, split=handler.segments)
+        op._on_cancel = engine.cancel
+        root = _WalkTopDown(
+            engine,
+            {"name": path, "type": "directory"},
+            PathAction(engine._emit_event),
+            handler,
+            maxdepth=maxdepth,
+            on_error=on_error,
+        )
+        async with aclosing(engine.events([root])) as events:
+            async for event in events:
+                state = op.state
+                if isinstance(event, Exception):
+                    op.state = replace(state, errors=state.errors + 1)
+                    yield event
+                    continue
+                walked, directory, dirs, files = event
+                op.state = replace(
+                    state,
+                    current=directory,
+                    directories_listed=(state.directories_listed or 0) + 1,
+                    found=state.found + len(dirs) + len(files),
+                )
+                try:
+                    yield directory, dirs, files
+                finally:
+                    walked.set()  # The directory goes on, with the dirs left.
+
+    return Operation(run, WalkState(directories_listed=0))
 
 
 def _walked(
