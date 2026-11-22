@@ -71,14 +71,13 @@ class PathTask(ABC):
         self._task: asyncio.Task[Any] | None = None
         self._cancelled = False
         # The group _run_tasks runs it in, its caller's: None for one given to
-        # events. Counted done in it once.
+        # events.
         self._group: PathTaskGroup | None = None
-        self._counted = False
 
-    def _count_done(self) -> None:
+    def _tell_group(self) -> None:
         """Tell its group it is done, ended or cancelled before it started."""
         if self._group is not None:
-            self._group.task_done(self)
+            self._group.on_task_done()
 
     @abstractmethod
     async def run(self) -> Any:
@@ -135,30 +134,33 @@ class PathTask(ABC):
 class PathTaskGroup:
     """The tasks one `_run_tasks` runs for its caller, and how many of them are done.
 
-    Counted as each is done, so that the caller waiting checks `done` in
-    O(1), however many it runs: never by going over them all.
+    Its status is checked as a task is done, by `on_task_done`, so that the
+    caller waiting reads `done` in O(1) at each wake.
     """
 
     def __init__(self, caller: PathTask) -> None:
         self.caller = caller
         self.tasks: list[PathTask] = []
-        self.done_tasks = 0
         # Whether all the tasks are taken: a stream of them may run on.
         self.complete = False
+        self._done = False
+        # The tasks before it are done: each is checked past once, so the
+        # checks of a group take O(n) in all, as tasks end mostly in order.
+        self._checked = 0
 
     def add(self, task: PathTask) -> None:
         task._group = self
         self.tasks.append(task)
 
-    def task_done(self, task: PathTask) -> None:
-        """Count a task of the group done: once, however many times it is told."""
-        if not task._counted:
-            task._counted = True
-            self.done_tasks += 1
+    def on_task_done(self) -> None:
+        """Check the status of the tasks, once one is done or all are taken."""
+        while self._checked < len(self.tasks) and self.tasks[self._checked].done():
+            self._checked += 1
+        self._done = self.complete and self._checked == len(self.tasks)
 
     def done(self) -> bool:
         """Whether every task is taken and done."""
-        return self.complete and self.done_tasks == len(self.tasks)
+        return self._done
 
 
 async def _aiter(
@@ -306,7 +308,7 @@ class TreeTraversal:
         async with self._state:
             for task in self._pending_tasks:
                 task._cancelled = True  # Never starts: its parent sees it done.
-                task._count_done()
+                task._tell_group()
             self._pending_tasks.clear()
             self._heap.clear()
             self._state.notify_all()
@@ -464,7 +466,7 @@ class TreeTraversal:
         async with self._state:
             self._running_tasks.discard(task)
             self._pending_tasks.discard(task)  # Its heap entry is skipped.
-            task._count_done()
+            task._tell_group()
             self._state.notify_all()
 
     async def _add_task(self, group: PathTaskGroup, task: PathTask) -> None:
@@ -474,14 +476,14 @@ class TreeTraversal:
                 raise ValueError(f"Task {task.path!r} is added twice.")
             group.add(task)
             if task.done():
-                task._count_done()  # Cancelled already: nothing to run.
+                task._tell_group()  # Cancelled already: nothing to run.
                 return
             await self._state.wait_for(
                 lambda: self._stopping or len(self._pending_tasks) < self.max_pending
             )
             if self._stopping:
                 task._cancelled = True  # Never runs: its parent sees it done.
-                task._count_done()
+                task._tell_group()
             else:
                 self._pend(task)
             self._state.notify_all()
@@ -520,6 +522,7 @@ class TreeTraversal:
                 failed = error
             async with self._state:
                 group.complete = True
+                group.on_task_done()  # All may be done already.
                 await self._state.wait_for(group.done)
         finally:
             async with self._state:
