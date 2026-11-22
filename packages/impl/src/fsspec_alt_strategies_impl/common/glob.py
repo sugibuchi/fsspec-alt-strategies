@@ -96,7 +96,7 @@ class PathAction:
 class _TraversalTask(PathTask):
     """What both tasks share: the handler, the action, and the patterns pruning.
 
-    Paths are compared by their keys, the handler's segments, never as strings: a listing may name a
+    Paths are compared by their segments, the handler's, never as strings: a listing may name a
     directory with a trailing delimiter, as an object store does, or escape
     its names. A listing's entries are passed on whole, as the storage gave
     them.
@@ -117,7 +117,7 @@ class _TraversalTask(PathTask):
         self.handler = handler
         self.patterns = patterns
 
-    def _key(self, path: str) -> tuple[str, ...]:
+    def segments(self, path: str) -> tuple[str, ...]:
         """A path's segments, the handler's: equal for two names `equals` matches."""
         return tuple(self.handler.segments(path))
 
@@ -130,12 +130,12 @@ class _TraversalTask(PathTask):
         with all below it: one matched alone is kept, as a glob reports it,
         but not listed. A file is kept only where a pattern matches it. The
         entries kept are as the listing gave them, as it streams: only the
-        subdirectories' keys are held.
+        subdirectories' segments are held.
         """
-        own = self._key(self.entry["name"])
+        own = self.segments(self.entry["name"])
         subdirs: set[tuple[str, ...]] = set()
         async for found in entries:
-            key = self._key(found["name"])
+            key = self.segments(found["name"])
             if key == own:
                 continue
             if found["type"] == "directory":
@@ -216,7 +216,7 @@ class VisitDirectory(_TraversalTask):
 
 
 def _below(directory: tuple[str, ...], key: tuple[str, ...]) -> bool:
-    """Whether a path's key is below a directory's."""
+    """Whether a path's segments are below a directory's."""
     return len(directory) < len(key) and key[: len(directory)] == directory
 
 
@@ -229,7 +229,7 @@ class TraverseSubtree(_TraversalTask):
 
     - the byte order of names, a directory either not listed or named with
       the trailing delimiter, as S3, GCS and Azure Blob list objects;
-    - the order of segments, as ``sorted(..., key=handler._split)`` gives it;
+    - the order of segments, as ``sorted(..., key=handler.segments)`` gives it;
     - depth first, a directory at a time.
 
     Names in byte order with a directory named without the delimiter, as
@@ -277,8 +277,8 @@ class TraverseSubtree(_TraversalTask):
 
         E.g. ``{"name": "a/b/c"}`` for ``a/b`` and ``a/b/c/d``.
         """
-        depth = len(self._key(root["name"]))
-        name = self.handler.join(root["name"], self._key(entry["name"])[depth])
+        depth = len(self.segments(root["name"]))
+        name = self.handler.join(root["name"], self.segments(entry["name"])[depth])
         return {"name": name, "size": 0, "type": "directory"}
 
 
@@ -312,11 +312,11 @@ class _Span:
             # A directory matched alone: reduced with no values, nothing below.
             return await task.action.reduce(root, match, value, []), await self._skip()
 
-        key = task._key(root["name"])
+        key = task.segments(root["name"])
         values: list[Any] = []
         next = self.next
         while next is not None:
-            found = task._key(next["name"])
+            found = task.segments(next["name"])
             in_root = len(found) == len(key) + 1
             if found == key:
                 next = await anext(self.entries, None)  # Its own marker.
@@ -342,10 +342,10 @@ class _Span:
 
     async def _skip(self) -> Entry | None:
         """Read past the span unread: the first entry not below the directory."""
-        key = self.task._key(self.root["name"])
+        key = self.task.segments(self.root["name"])
         next = self.next
         while next is not None:
-            found = self.task._key(next["name"])
+            found = self.task.segments(next["name"])
             if found != key and not _below(key, found):
                 break
             next = await anext(self.entries, None)
