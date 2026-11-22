@@ -144,8 +144,9 @@ class PathTaskGroup:
         # Read only once all are taken, and checked again then: while a
         # stream of them runs on, it may be true for those taken so far.
         self._done = False
-        # The tasks before it are done: each is checked past once, so the
-        # checks of a group take O(n) in all, as tasks end mostly in order.
+        # The tasks before it are done. It only moves on, each task passed
+        # once, and each check stops at the first not done: O(n) in all, in
+        # whatever order the tasks end.
         self._checked = 0
 
     def add(self, task: PathTask) -> None:
