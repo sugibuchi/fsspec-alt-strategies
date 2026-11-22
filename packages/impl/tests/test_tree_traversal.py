@@ -276,9 +276,31 @@ async def test_closing_leaves_no_task_behind() -> None:
     events = engine.events([_Call(engine, "a", emit), _Call(engine, "b", fail)])
     assert await anext(events) == 0
     await asyncio.sleep(0.02)
-    await events.aclose()
+    # b's failure never reached the queue: closing raises it.
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await events.aclose()
+    assert [str(e) for e in raised.value.exceptions] == ["b"]
     await asyncio.sleep(0)
     assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+async def test_an_error_closing_is_raised_with_the_error_ending() -> None:
+    async def fail(task: _Call) -> None:
+        await asyncio.sleep(0.01)
+        raise OSError(task.path)
+
+    async def cleanup_fails(task: _Call) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            raise ValueError(task.path)  # As a failing cleanup.
+
+    engine = TreeTraversal(max_running=2)
+    tasks = [_Call(engine, "a", fail), _Call(engine, "b", cleanup_fails)]
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await _all(engine, tasks)
+    errors = raised.value.exceptions
+    assert [(type(e), str(e)) for e in errors] == [(OSError, "a"), (ValueError, "b")]
 
 
 async def test_a_traversal_runs_once() -> None:
