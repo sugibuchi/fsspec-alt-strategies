@@ -148,7 +148,7 @@ class PathTaskGroup:
         # The tasks before it are done. It only moves on, each task passed
         # once, and each check stops at the first not done: O(n) in all, in
         # whatever order the tasks end.
-        self._checked = 0
+        self._first_not_done = 0
 
     def add(self, task: PathTask) -> None:
         task._group = self
@@ -156,9 +156,12 @@ class PathTaskGroup:
 
     def on_task_done(self) -> None:
         """Check the status of the tasks, once one is done or all are taken."""
-        while self._checked < len(self.tasks) and self.tasks[self._checked].done():
-            self._checked += 1
-        self._done = self._checked == len(self.tasks)
+        while (
+            self._first_not_done < len(self.tasks)
+            and self.tasks[self._first_not_done].done()
+        ):
+            self._first_not_done += 1
+        self._done = self._first_not_done == len(self.tasks)
 
     def done(self) -> bool:
         """Whether every task is taken and done."""
