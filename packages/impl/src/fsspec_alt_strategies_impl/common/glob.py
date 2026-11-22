@@ -209,8 +209,21 @@ def _below(directory: tuple[str, ...], key: tuple[str, ...]) -> bool:
 class TraverseSubtree(_TraversalTask):
     """A subtree traversed from one listing of all below it, its handler's ``ils(..., recursive=True)``, as it streams: no task per item.
 
-    The listing must give each directory's descendants together, as a
-    listing in name order does: all below ``a/b/`` lie between two names.
+    The listing must give each directory's descendants together, with nothing
+    else between them. The handler's listing answers for it, as any of these
+    orders does:
+
+    - the byte order of names, a directory either not listed or named with
+      the trailing delimiter, as S3, GCS and Azure Blob list objects;
+    - the order of segments, as ``sorted(..., key=handler._split)`` gives it;
+    - depth first, a directory at a time.
+
+    Names in byte order with a directory named without the delimiter, as
+    fsspec's ``find(withdirs=True)`` gives them, do not: ``a/b``, ``a/b.txt``,
+    ``a/b/c`` puts a file between ``a/b`` and what is below it. A directory
+    so listed apart is acted on twice. A handler whose listing is so sorts
+    it by segments, appends the delimiter, or leaves the directories out.
+
     Each directory is a `_Span` of the listing, which maps it, acts on what
     is below it, and reduces it as the first path not below it comes. Only
     the directories above the path read are held.
