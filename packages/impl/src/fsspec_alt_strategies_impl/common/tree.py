@@ -35,6 +35,8 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 import asyncio
+import heapq
+import itertools
 from abc import ABC, abstractmethod
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -160,8 +162,13 @@ class TreeTraversal:
         # One condition over all the state: every change notifies, and each
         # waiter checks its own predicate.
         self._state = asyncio.Condition()
-        # The tasks waiting to start, each with its path's segments, its key.
-        self._pending_tasks: dict[PathTask, list[str]] = {}
+        # The tasks waiting to start.
+        self._pending_tasks: set[PathTask] = set()
+        # The same, in a heap by their path's segments, the leftmost first: the
+        # order added breaks ties. One dropped from _pending_tasks, cancelled
+        # before it starts, stays until popped, then is skipped.
+        self._heap: list[tuple[list[str], int, PathTask]] = []
+        self._added = itertools.count()
         self._running_tasks: set[PathTask] = set()
         self._waiting_tasks: set[PathTask] = set()
         # Unbounded: _emit_event waits for room itself, the traversal's own
@@ -206,7 +213,7 @@ class TreeTraversal:
                 raise ValueError(f"Task {task.path!r} is added twice.")
             # Given up front, they are in memory already: no room is waited for.
             self._initial.add(task)
-            self._pending_tasks[task] = self.split(task.path)
+            self._pend(task)
 
         self._scheduler = asyncio.create_task(self._schedule())
         try:
@@ -243,6 +250,7 @@ class TreeTraversal:
             for task in self._pending_tasks:
                 task._cancelled = True  # Never starts: its parent sees it done.
             self._pending_tasks.clear()
+            self._heap.clear()
             self._state.notify_all()
 
     def close(self) -> None:
@@ -348,8 +356,7 @@ class TreeTraversal:
                     break
                 # Depth first among those pending: segments compare as a walk
                 # visits them, "a/b/c" between "a/b" and "a/b-x".
-                task = min(self._pending_tasks, key=self._pending_tasks.__getitem__)
-                del self._pending_tasks[task]
+                task = self._pop_leftmost()
                 if not task.cancelled():
                     running = asyncio.create_task(task.run())
                     running.add_done_callback(partial(self._on_done, task))
@@ -357,6 +364,18 @@ class TreeTraversal:
                     self._running_tasks.add(task)
                 self._state.notify_all()  # Room for a task more.
         self._events.put_nowait(_End())
+
+    def _pend(self, task: PathTask) -> None:
+        self._pending_tasks.add(task)
+        heapq.heappush(self._heap, (self.split(task.path), next(self._added), task))
+
+    def _pop_leftmost(self) -> PathTask:
+        """The pending task with the first path, dropped: in O(log n), skipping those no more pending."""
+        while True:
+            _, _, task = heapq.heappop(self._heap)
+            if task in self._pending_tasks:
+                self._pending_tasks.discard(task)
+                return task
 
     def _can_go_on(self) -> bool:
         """Whether the scheduler can start a task, or end."""
@@ -386,7 +405,7 @@ class TreeTraversal:
             self._events.put_nowait(_Failed(task, error))
         async with self._state:
             self._running_tasks.discard(task)
-            self._pending_tasks.pop(task, None)
+            self._pending_tasks.discard(task)  # Its heap entry is skipped.
             self._state.notify_all()
 
     async def _add_tasks(self, tasks: list[PathTask]) -> None:
@@ -405,7 +424,7 @@ class TreeTraversal:
                 if self._stopping:
                     task._cancelled = True  # Never runs: its parent sees it done.
                 else:
-                    self._pending_tasks[task] = self.split(task.path)
+                    self._pend(task)
                 self._state.notify_all()
 
     async def _run_tasks(self, caller: PathTask, tasks: list[PathTask]) -> list[Any]:
