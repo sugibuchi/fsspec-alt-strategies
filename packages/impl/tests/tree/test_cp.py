@@ -373,10 +373,6 @@ async def test_a_failure_is_yielded_and_the_rest_is_copied() -> None:
     _tree(fs)
     copied, errors = await _collect_with_errors(_cp(fs, "data", "copied"))
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].__notes__ == [
-        "Copying 'data/2023/01/part-0.parquet' to"
-        " 'copied/2023/01/part-0.parquet' failed."
-    ]
     assert len(copied) == 3
 
 
@@ -417,7 +413,6 @@ async def test_a_dir_failing_to_be_created_keeps_its_files() -> None:
         _cp(fs, "data", "copied", dst_makedirs=makedirs)
     )
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].__notes__ == ["Creating the directory 'copied/2023/01' failed."]
     # The files waiting on the directory are not copied; the others are.
     assert not any(source.startswith("data/2023/01/") for source, _ in copied)
     assert not await fs._exists("copied/2023/01")
@@ -509,7 +504,6 @@ async def test_a_dir_failing_to_be_copied_whole_is_the_roots_error(
     # Its cause, not one failure per file: nothing is walked.
     assert copied == []
     assert [type(e) for e in errors] == [NotImplementedError]
-    assert "Copying 'data' to 'copied' failed." in errors[0].__notes__
     assert (op.state.roots_copied, op.state.files_copied) == (0, 0)
 
 

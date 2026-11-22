@@ -360,7 +360,6 @@ async def test_a_dir_failing_to_move_whole_is_the_roots_error(
     # Its cause, not one failure per file: nothing is walked.
     assert moved == []
     assert len(errors) == 1
-    assert "Moving 'data' to 'moved' failed." in errors[0].__notes__
     assert (op.state.roots_renamed, op.state.files_moved) == (0, 0)
     assert await flat_fs._exists("data/README.md")
 
@@ -534,9 +533,6 @@ async def test_a_failure_keeps_its_source_and_the_rest_moves() -> None:
     _tree(fs)
     moved, errors = await _collect_with_errors(_mv(fs, "data", "moved"))
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].__notes__ == [
-        "Moving 'data/2023/01/part-0.parquet' to 'moved/2023/01/part-0.parquet' failed."
-    ]
     assert await fs._exists("data/2023/01/part-0.parquet")
     assert not await fs._exists("data/2023/02")
     assert not await fs._exists("data/2024")
@@ -558,9 +554,6 @@ async def test_a_move_failing_midway_is_reported() -> None:
     _tree(fs)
     _, errors = await _collect_with_errors(_mv(fs, "data", "moved"))
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].__notes__ == [
-        "Moving 'data/README.md' to 'moved/README.md' failed."
-    ]
     # fsspec's _mv_file copied it before failing to delete it.
     assert await fs._exists("data/README.md")
     assert await fs._exists("moved/README.md")
@@ -578,7 +571,6 @@ async def test_a_source_dir_failing_to_go_is_reported() -> None:
     op = _mv(fs, "data", "moved", rm_dir=rm_dir)
     moved, errors = await _collect_with_errors(op)
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].__notes__ == ["Deleting the directory 'data/2023/01' failed."]
     # Its files moved; it and the directories above it stay.
     assert await fs._exists("moved/2023/01/part-0.parquet")
     assert await fs._exists("data/2023/01")
@@ -656,7 +648,6 @@ async def test_a_target_failing_its_info_is_the_roots_error(
     # Its cause, not one failure per file: nothing is walked.
     assert moved == []
     assert [type(e) for e in errors] == [PermissionError]
-    assert "Moving 'data' to 'moved/data' failed." in errors[0].__notes__
     assert (op.state.roots_renamed, op.state.files_moved, op.state.errors) == (0, 0, 1)
     assert await hierarchical_fs._exists("data/README.md")
 

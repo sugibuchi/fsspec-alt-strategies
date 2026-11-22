@@ -11,26 +11,26 @@ Where the handler's ``mv_tree`` moves a directory in one request, as a
 storage's rename does, the profile says so. `_tree_mv` then moves each root
 whole with it where it can, and walks only what it cannot move so.
 
-This module depends on `cp`, and `jobs` and `paths` of `common`.
+This module depends on `cp` and `walk`, and `jobs` and `paths` of `common`.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fsspec_alt_strategies.states import MvState
-
-from ..common.jobs import _Job, _moves_of, _Roots
+from ..common.jobs import _moves_of
 from ..common.paths import _check_maxdepth
-from .cp import _CopyOrMove
+from .cp import _Moving, _transfers
+from .walk import _MAX_RUNNING
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Sequence
+    from collections.abc import Sequence
 
-    from ..common.handler import Entry, StorageHandler, StoragePath
+    from fsspec_alt_strategies.states import MvState
+
+    from ..common.handler import StorageHandler, StoragePath
     from ..common.jobs import _Transfer
     from ..common.operation import Operation
-    from ._walker import _Listing
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
@@ -48,6 +48,7 @@ def _tree_mv(
     maxdepth: int | None = None,
     path1_entry: dict[str, Any] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
+    max_running: int = _MAX_RUNNING,
 ) -> Operation[tuple[str, str], MvState]:
     """Move a directory and everything in it, moving while the tree is walked.
 
@@ -176,147 +177,19 @@ def _tree_mv(
     _check_maxdepth(maxdepth)
     given = mv_entry
     _, mv_entry, same_storage = _moves_of(src, dst, cp_entry, mv_entry, same_storage)
-    return _Move.operation(
-        batching=same_storage and given is None,
-        handler=src,
-        dst=dst,
-        path1=path1,
-        path2=path2,
-        same_storage=same_storage,
-        maxdepth=maxdepth,
-        mv_entry=mv_entry,
-        path1_entry=path1_entry,
-        ils_kwargs=ils_kwargs,
+    return _transfers(
+        _Moving(
+            handler=src,
+            op=None,  # Never run: it only places.
+            dst=dst,
+            path1=path1,
+            path2=path2,
+            same_storage=same_storage,
+            maxdepth=maxdepth,
+            path1_entry=path1_entry,
+            batching=same_storage and given is None,
+            ils_kwargs=ils_kwargs,
+        ),
+        mv_entry,
+        max_running=max_running,
     )
-
-
-class _Move(_CopyOrMove):
-    """The jobs of one `_tree_mv`: a ``mv_entry`` per file, deleting each directory emptied."""
-
-    verb = "move"
-    doing = "Moving"
-    transfers = "move"
-
-    def __init__(self, *, mv_entry: _Transfer, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-
-        self.mv_entry = mv_entry
-        self.directories_moved = 0
-
-    async def setup(self) -> None:
-        await super().setup()
-
-        # The profile is the destination's: only within one storage does it
-        # tell how the source renames, or deletes its directories. A
-        # directory moved whole would take what is deeper than maxdepth along.
-        self.goes_whole = (
-            self.same_storage
-            and bool(self.profile.renames_directories)
-            and self.maxdepth is None
-        )
-        self.implicit_directories = self.same_storage and self.implicit_directories
-        # A rename makes no parent, as a write may: parents_required tells of
-        # writes only. Within one storage, mv_entry may rename unless the
-        # profile says it does not, so its directory is made first.
-        self.parents_required = self.parents_required or (
-            self.same_storage
-            and not self.implicit_directories
-            and self.profile.renames_files is not False
-        )
-        self.roots_whole = 0 if self.goes_whole else None
-
-    def state(self) -> MvState:
-        return MvState(
-            errors=self.errors,
-            current=self.current,
-            files_found=self.files_found,
-            files_moved=self.files_done,
-            directories_moved=self.directories_moved,
-            roots_renamed=self.roots_whole,
-        )
-
-    def recased(self, root: str, destination: StoragePath) -> _Roots:
-        """A single path moved onto itself in another case: renamed by one ``mv_tree``.
-
-        The destination is the root itself. Found existing, it would take the
-        root into itself: it is taken as missing instead.
-        """
-        if not self.goes_whole:
-            return super().recased(root, destination)
-
-        self.prefix, self.base = root, destination
-        self.missing.add(destination)
-        self.made.add(self.handler.parent(root))
-        # A directory root, as mv_tree takes a file too.
-        return _Roots([self.path1_entry or {"name": root}])
-
-    def add(self, listing: _Listing) -> list[Any] | None:
-        self.track(listing)
-        # The files refused, e.g. a name the destination takes not: yielded.
-        refused = super().add(listing) or []
-
-        # All in it moved before its listing came. An empty directory goes once
-        # made at the destination, in done.
-        if listing.entries and self.finished(listing.directory):
-            return refused + self.remove(listing.directory)
-        else:
-            return refused or None
-
-    def run(self, job: _Job) -> Awaitable[Any]:
-        if job.kind == "rmdir":
-            return self.handler.rmdir(job.source)
-        else:
-            return super().run(job)
-
-    def transfer_whole(self, entry: Entry, destination: StoragePath) -> Awaitable[None]:
-        return self.handler.mv_tree(
-            entry, destination, parent=self.parent_of(destination)
-        )
-
-    async def transfer_file(
-        self, entry: dict[str, Any], destination: StoragePath
-    ) -> None:
-        await self.move_file(self.mv_entry, entry, destination)
-
-    def done(self, job: _Job) -> list[Any]:
-        if job.kind == "mkdir":
-            outcome = super().done(job)
-            # An empty directory: made at the destination, it can go.
-            if job.path and self.finished(job.path):
-                outcome += self.remove(job.path)
-            return outcome
-
-        if job.kind == "whole":
-            return super().done(job)
-
-        if job.kind == "rmdir":
-            self.directories_moved += 1
-        else:
-            self.files_done += 1
-
-        moved: list[Any] = [(job.path, job.destination)]
-        if (directory := self.child_done(job.path)) is not None:
-            moved += self.remove(directory)
-
-        return moved
-
-    def remove(self, directory: str) -> list[Any]:
-        """Delete a source directory now empty, and return what that moved at once.
-
-        An implicit directory went with its last file: it is moved, with no
-        request, as one found already gone is.
-        """
-        job = _Job("rmdir", {"name": directory}, self.target(directory))
-        if self.implicit_directories:
-            return self.done(job)
-        self.waiting.append(job)
-        return []
-
-    def failed(self, job: _Job, error: Exception) -> list[Any]:
-        if job.kind != "rmdir":
-            return super().failed(job, error)
-
-        if isinstance(error, FileNotFoundError):
-            return self.done(job)  # Already gone, as _tree_rm counts it.
-        error.add_note(f"Deleting the directory {job.path!r} failed.")
-        return [error]

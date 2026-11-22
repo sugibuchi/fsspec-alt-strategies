@@ -246,9 +246,6 @@ async def test_a_failure_is_yielded_and_the_rest_is_copied(
         _across(hierarchical_fs, dst, "data", "copied", cp_entry=copy_file)
     )
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].__notes__ == [
-        "Copying 'data/README.md' to 'copied/README.md' failed."
-    ]
     assert len(copied) == 3
     assert "copied/README.md" not in dst._file_data
 

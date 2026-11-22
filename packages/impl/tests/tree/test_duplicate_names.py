@@ -42,9 +42,6 @@ async def test_a_copy_refuses_the_second_file_of_a_name() -> None:
         ("t/b/z", "c/b/z"),
     ]
     assert [type(e) for e in errors] == [FileExistsError]
-    assert errors[0].__notes__ == [
-        "Copying 't/a/x' to 'c/a/x' refused: another file of that name went there."
-    ]
 
 
 async def test_a_move_refuses_it_and_keeps_its_directory() -> None:

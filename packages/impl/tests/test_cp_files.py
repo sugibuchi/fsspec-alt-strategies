@@ -95,7 +95,7 @@ async def _found(fs: SimulatedFileSystem, path: str) -> list[str]:
 
 
 @pytest.mark.parametrize("size", [1, 3, 100])
-async def test_tree_copy_in_batches_spanning_directories(
+async def test_tree_copy_in_batches_of_one_directory_each(
     any_fs: SimulatedFileSystem, size: int
 ) -> None:
     _tree(any_fs)
@@ -106,11 +106,11 @@ async def test_tree_copy_in_batches_spanning_directories(
     assert await _found(any_fs, "out") == sorted(
         f.replace("data", "out", 1) for f in _FILES
     )
-    # Each batch full but the last, whatever its files' directories.
-    sizes = [len(paths) for _, paths in view.batches]
-    assert sizes == [size] * (len(_FILES) // size) + (
-        [len(_FILES) % size] if len(_FILES) % size else []
-    )
+    # Each file once, each batch of one directory's files, at most size.
+    assert sorted(p for _, paths in view.batches for p in paths) == sorted(_FILES)
+    for _, paths in view.batches:
+        assert len(paths) <= size
+        assert len({p.rpartition("/")[0] for p in paths}) == 1
     assert {kind for kind, _ in view.batches} == {"copy"}
 
 
@@ -125,7 +125,9 @@ async def test_tree_move_in_batches_deletes_each_directory_emptied(
         f.replace("data", "out", 1) for f in _FILES
     )
     assert not await any_fs._exists("data")
-    assert [len(p) for k, p in view.batches if k == "move"] == [3, 3, 1]
+    moves = [p for k, p in view.batches if k == "move"]
+    assert sorted(p for paths in moves for p in paths) == sorted(_FILES)
+    assert all(len({p.rpartition("/")[0] for p in paths}) == 1 for paths in moves)
     assert ("data", "out") in moved
 
 
@@ -167,10 +169,9 @@ async def test_a_batch_failing_whole_is_one_error() -> None:
     view.fail = ConnectionResetError("commit")
     copied, errors = await _collect_with_errors(_tree_cp(view, view, "data", "out"))
     assert copied == []
-    assert [type(e) for e in errors] == [ConnectionResetError]
-    # One note naming the batch: its files' order is the order they were ready.
-    [note] = errors[0].__notes__
-    assert note.startswith("Copying 7 keys, from ") and note.endswith(" failed.")
+    # One error per batch, a batch per directory holding files.
+    directories = {f.rpartition("/")[0] for f in _FILES}
+    assert [type(e) for e in errors] == [ConnectionResetError] * len(directories)
 
 
 async def test_no_batch_between_two_storages_or_with_the_callers_copy() -> None:
@@ -256,7 +257,8 @@ async def test_cancel_drops_the_batches_not_sent() -> None:
     for i in range(20):
         fs.add_file(f"data/{i:02}/f")
     view = _TreeBatching(fs, 2)
-    op = _tree_cp(view, view, "data", "out")
+    # Two directories at a time: those not started send nothing once cancelled.
+    op = _tree_cp(view, view, "data", "out", max_running=2)
     copied = []
     async for outcome in op:
         copied.append(outcome)
