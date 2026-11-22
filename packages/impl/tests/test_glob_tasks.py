@@ -32,6 +32,7 @@ class _Handler:
     delimiter = "/"
     equals = _PathHandler.equals
     _split = _PathHandler._split
+    segments = _PathHandler.segments
 
     def __init__(
         self, files: list[str], *, failing: str | None = None, slashes: bool = False

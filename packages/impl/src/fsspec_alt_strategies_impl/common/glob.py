@@ -112,8 +112,8 @@ class _TraversalTask(PathTask):
         self.patterns = patterns
 
     def _key(self, path: str) -> tuple[str, ...]:
-        """A path's segments, as the handler splits them: equal for two names `equals` matches."""
-        return tuple(self.handler._split(path))
+        """A path's segments, the handler's: equal for two names `equals` matches."""
+        return tuple(self.handler.segments(path))
 
     def prune(self, entries: list[Entry]) -> list[Entry]:
         """A directory's listing as traversed: without its own marker, each subdirectory once, only those to descend into or matched, and only the files matched.

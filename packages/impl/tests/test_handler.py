@@ -345,3 +345,14 @@ def test_paths_of_a_storage_rooted_at_slash_are_absolute() -> None:
     assert Drive.strip_protocol("a") == "/a"
     assert Drive.strip_protocol("drive://") == "/"
     assert Drive.strip_protocol("/") == "/"
+
+
+@pytest.mark.parametrize(
+    ("path", "segments"),
+    [("a/b", ["a", "b"]), ("a/b/", ["a", "b"]), ("/a/b", ["a", "b"]), ("", [])],
+)
+def test_segments_of_a_whole_path(path: str, segments: list[str]) -> None:
+    handler = TreeView(SimulatedFileSystem())
+    assert handler.segments(path) == segments
+    # Two paths equals matches have the same segments.
+    assert handler.segments(path.rstrip("/") + "/") == segments

@@ -301,6 +301,18 @@ class _PathHandler(ABC):
         """
         return path1.rstrip(self.delimiter) == path2.rstrip(self.delimiter)
 
+    def segments(self, path: str) -> list[str]:
+        """The names a whole path is made of, from the root down, e.g. ``["a", "b"]`` for ``"a/b/"``.
+
+        Two paths `equals` matches have the same segments, and a path below a
+        directory starts with the directory's. A traversal compares and
+        orders paths by them. Here, they are `_split`'s: the path split by
+        ``delimiter``, leading and trailing ones ignored. A storage whose
+        names may hold the delimiter, escaped, overrides it, as it does
+        `_split` and `equals`.
+        """
+        return self._split(path)
+
 
 class StorageHandler(_PathHandler):
     """A storage's primitives, profile, limits and clients, for the strategies.

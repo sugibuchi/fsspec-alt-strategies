@@ -147,7 +147,8 @@ class TreeTraversal:
         self.max_running = max_running
         self.max_pending = max_pending
         self.max_events = max_events
-        # A path's segments, e.g. a handler's _split: by "/" by default.
+        # A path's segments: a strategy passes its handler's segments. By "/"
+        # by default.
         self.split = split or (lambda path: path.split("/"))
         # One condition over all the state: every change notifies, and each
         # waiter checks its own predicate.
