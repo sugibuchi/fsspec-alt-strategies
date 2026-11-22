@@ -38,11 +38,18 @@ import asyncio
 import heapq
 import itertools
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable as AsyncIterableABC
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Iterable
+    from collections.abc import (
+        AsyncGenerator,
+        AsyncIterable,
+        AsyncIterator,
+        Callable,
+        Iterable,
+    )
 
 __all__: list[str] = []
 
@@ -103,7 +110,9 @@ class PathTask(ABC):
             self._engine._cancelled_before_start(self)
             return True
 
-    async def _run_tasks(self, tasks: list[PathTask]) -> list[Any]:
+    async def _run_tasks(
+        self, tasks: Iterable[PathTask] | AsyncIterable[PathTask]
+    ) -> list[Any]:
         """Run ``tasks`` and wait for all of them: see `TreeTraversal._run_tasks`."""
         return await self._engine._run_tasks(self, tasks)
 
@@ -114,6 +123,18 @@ class PathTask(ABC):
     def _set_task(self, task: asyncio.Task[Any]) -> None:
         assert self._task is None and not self._cancelled
         self._task = task
+
+
+async def _aiter(
+    tasks: Iterable[PathTask] | AsyncIterable[PathTask],
+) -> AsyncIterator[PathTask]:
+    """Tasks given either way, taken one at a time."""
+    if isinstance(tasks, AsyncIterableABC):
+        async for task in tasks:
+            yield task
+    else:
+        for task in tasks:
+            yield task
 
 
 class _End:
@@ -408,32 +429,37 @@ class TreeTraversal:
             self._pending_tasks.discard(task)  # Its heap entry is skipped.
             self._state.notify_all()
 
-    async def _add_tasks(self, tasks: list[PathTask]) -> None:
-        """Add tasks to start, each waiting for room: once stopping, cancel them instead."""
+    async def _add_task(self, task: PathTask) -> None:
+        """Add a task to start, waiting for room: once stopping, cancel it instead."""
         async with self._state:
-            for task in tasks:
-                if task._task is not None or task in self._pending_tasks:
-                    raise ValueError(f"Task {task.path!r} is added twice.")
-                if task.done():
-                    continue  # Cancelled already: nothing to run.
-                await self._state.wait_for(
-                    lambda: (
-                        self._stopping or len(self._pending_tasks) < self.max_pending
-                    )
-                )
-                if self._stopping:
-                    task._cancelled = True  # Never runs: its parent sees it done.
-                else:
-                    self._pend(task)
-                self._state.notify_all()
+            if task._task is not None or task in self._pending_tasks:
+                raise ValueError(f"Task {task.path!r} is added twice.")
+            if task.done():
+                return  # Cancelled already: nothing to run.
+            await self._state.wait_for(
+                lambda: self._stopping or len(self._pending_tasks) < self.max_pending
+            )
+            if self._stopping:
+                task._cancelled = True  # Never runs: its parent sees it done.
+            else:
+                self._pend(task)
+            self._state.notify_all()
 
-    async def _run_tasks(self, caller: PathTask, tasks: list[PathTask]) -> list[Any]:
+    async def _run_tasks(
+        self, caller: PathTask, tasks: Iterable[PathTask] | AsyncIterable[PathTask]
+    ) -> list[Any]:
         """Run ``tasks`` for ``caller``, which waits: their results, in the order given.
+
+        ``tasks`` may be an async iterator, e.g. made from a listing as it
+        streams: each is taken once there is room for it among those pending,
+        so that a wide directory's are never all in memory before they start.
 
         ``caller`` counts no more against ``max_running`` while it waits. Once
         all are done, it raises CancelledError if any was cancelled, else an
         ExceptionGroup of those that failed, in the order given. None is
-        cancelled for another's failure.
+        cancelled for another's failure. An error of ``tasks`` itself, e.g. of
+        the listing, lets those taken end: it is raised alone where none
+        failed, else first in their group.
         """
         async with self._state:
             if caller not in self._running_tasks or caller in self._waiting_tasks:
@@ -442,26 +468,38 @@ class TreeTraversal:
                 )
             self._waiting_tasks.add(caller)
             self._state.notify_all()
-        for task in tasks:
-            task._parent = caller
+        added: list[PathTask] = []
+        failed: Exception | None = None
         try:
-            await self._add_tasks(tasks)
+            try:
+                async for task in _aiter(tasks):
+                    task._parent = caller
+                    added.append(task)
+                    await self._add_task(task)
+            except Exception as error:  # Never CancelledError: it propagates.
+                failed = error
             async with self._state:
-                await self._state.wait_for(lambda: all(t.done() for t in tasks))
+                await self._state.wait_for(lambda: all(t.done() for t in added))
         finally:
             async with self._state:
                 self._waiting_tasks.discard(caller)
                 self._state.notify_all()
 
-        if any(t.cancelled() for t in tasks):
+        if any(t.cancelled() for t in added):
             raise asyncio.CancelledError()
-        errors = [e for t in tasks if (e := t.exception()) is not None]
+        errors: list[BaseException] = [
+            e for t in added if (e := t.exception()) is not None
+        ]
+        if failed is not None:
+            if not errors:
+                raise failed
+            errors.insert(0, failed)
         if errors:
             # An ExceptionGroup, unless an error is no Exception, e.g. a KeyboardInterrupt.
             raise BaseExceptionGroup(
-                f"{len(errors)} of {len(tasks)} tasks failed", errors
+                f"{len(errors)} of {len(added)} tasks failed", errors
             )
-        return [t.result() for t in tasks]
+        return [t.result() for t in added]
 
     async def _emit_event(self, event: Any) -> None:
         if self._closed:

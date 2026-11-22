@@ -10,7 +10,7 @@ import pytest
 from fsspec_alt_strategies_impl.common.tree import PathTask, TreeTraversal
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncIterator, Callable
 
 
 class _Node(PathTask):
@@ -127,6 +127,53 @@ async def test_the_limits_hold() -> None:
     await _all(engine, [_Call(engine, "p", parent)])
     assert peak == 3
     assert pending <= 2
+
+
+async def test_tasks_streamed_are_taken_as_room_frees() -> None:
+    made = started = 0
+    ahead = 0  # The most made before they start.
+
+    async def leaf(task: _Call) -> None:
+        nonlocal started
+        started += 1
+        await asyncio.sleep(0.001)
+
+    async def children() -> AsyncIterator[PathTask]:
+        nonlocal made, ahead
+        for i in range(20):
+            made += 1
+            ahead = max(ahead, made - started)
+            yield _Call(engine, f"p/{i:02}", leaf)
+
+    async def parent(task: _Call) -> None:
+        await task._emit_event(len(await task._run_tasks(children())))
+
+    engine = TreeTraversal(max_running=2, max_pending=3)
+    assert await _all(engine, [_Call(engine, "p", parent)]) == [20]
+    # Those pending, those starting and the one made waiting for room.
+    assert ahead <= 3 + 2 + 1
+
+
+async def test_a_stream_breaking_off_lets_the_tasks_taken_end() -> None:
+    ended = []
+
+    async def leaf(task: _Call) -> None:
+        await asyncio.sleep(0.01)
+        ended.append(task.path)
+
+    async def children() -> AsyncIterator[PathTask]:
+        for c in "ab":
+            yield _Call(engine, f"p/{c}", leaf)
+        raise OSError("listing")
+
+    async def parent(task: _Call) -> None:
+        await task._run_tasks(children())
+
+    engine = TreeTraversal(max_running=2)
+    # The stream's error alone, none of the tasks failing: raised as it is.
+    with pytest.raises(OSError, match="listing"):
+        await _all(engine, [_Call(engine, "p", parent)])
+    assert sorted(ended) == ["p/a", "p/b"]
 
 
 async def test_failed_children_raise_an_exception_group_after_all_ran() -> None:

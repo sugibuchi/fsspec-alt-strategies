@@ -33,7 +33,13 @@ from typing import TYPE_CHECKING, Any
 from .tree import PathTask
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
+    from collections.abc import (
+        AsyncIterable,
+        AsyncIterator,
+        Callable,
+        Coroutine,
+        Sequence,
+    )
 
     from .handler import Entry, StorageHandler
     from .patterns import _Search
@@ -115,7 +121,7 @@ class _TraversalTask(PathTask):
         """A path's segments, the handler's: equal for two names `equals` matches."""
         return tuple(self.handler.segments(path))
 
-    def prune(self, entries: list[Entry]) -> list[Entry]:
+    async def prune(self, entries: AsyncIterable[Entry]) -> AsyncIterator[Entry]:
         """A directory's listing as traversed: without its own marker, each subdirectory once, only those to descend into or matched, and only the files matched.
 
         A storage may list a directory's marker object in it, and a
@@ -123,12 +129,12 @@ class _TraversalTask(PathTask):
         subdirectory the patterns neither descend into nor match is dropped,
         with all below it: one matched alone is kept, as a glob reports it,
         but not listed. A file is kept only where a pattern matches it. The
-        entries kept are as the listing gave them.
+        entries kept are as the listing gave them, as it streams: only the
+        subdirectories' keys are held.
         """
-        kept: list[Entry] = []
         own = self._key(self.entry["name"])
         subdirs: set[tuple[str, ...]] = set()
-        for found in entries:
+        async for found in entries:
             key = self._key(found["name"])
             if key == own:
                 continue
@@ -138,8 +144,7 @@ class _TraversalTask(PathTask):
                 subdirs.add(key)
             elif not self._matched(found):
                 continue
-            kept.append(found)
-        return kept
+            yield found
 
     def _descend(self, entry: Entry) -> bool:
         return self.patterns is None or any(p.descend(entry) for p in self.patterns)
@@ -179,11 +184,14 @@ class VisitDirectory(_TraversalTask):
         value = await self.action.map(entry, match)
         if entry.get("type") != "directory" or not self._descend(entry):
             # A file, or a directory kept as matched: reduced with no values.
-            entries = []
+            values = []
         else:
-            entries = [e async for e in self.handler.ils(entry)]
-            entries = self.prune(entries)
-        values = await self._run_tasks([self._subtree(e) for e in entries])
+            # Each item's task is made as the listing streams, and taken once
+            # there is room among those pending: a wide directory's are never
+            # all in memory before they start.
+            values = await self._run_tasks(
+                self._subtree(e) async for e in self.prune(self.handler.ils(entry))
+            )
         return await self.action.reduce(entry, match, value, values)
 
     def _subtree(self, entry: Entry) -> PathTask:
