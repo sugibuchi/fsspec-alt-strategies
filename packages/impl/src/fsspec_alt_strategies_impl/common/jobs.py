@@ -11,7 +11,7 @@ outcome is.
 
 `_CopyJobs` is the base of every copy's and move's jobs, whatever the
 family: it places each path as fsspec's ``copy`` does. A family's copy joins
-it with the family's jobs, e.g. ``_CopyOrMove(_CopyJobs, _TreeJobs)``: the
+it with the family's jobs, e.g. ``_CopyOrMove(_CopyJobs, _FlatJobs)``: the
 family finds what to copy, `_CopyJobs` where it goes. The two define no
 method in common, and their constructors take keywords and pass the rest on,
 so either order works.

@@ -80,7 +80,7 @@ async def test_a_failed_directory_ends_the_listing() -> None:
         # A loop, not a comprehension: what came before the error is kept.
         async for entry in _tree_ils(view, view.entry("data")):
             listed.append(entry["name"])  # noqa: PERF401
-    assert raised.value.__notes__ == ["Listing 'data/a-x' failed."]
+    assert not getattr(raised.value, "__notes__", [])  # As the storage raised it.
     assert listed == ["data/a", "data/a/f", "data/a-x"]
     assert fs._in_flight == 0
 

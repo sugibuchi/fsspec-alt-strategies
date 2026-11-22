@@ -7,9 +7,7 @@ depth first in preorder, which covers name order, where the profile's
 ``recursive_ls_depth_first_preorder`` declares it, else parents first. A storage with a recursive listing of its
 own implements it so. One without has `_tree_ils`, its default, which lists a
 directory per request by ``ils``. One whose own may be refused, as only
-asking tells, falls back on it. Its listing is a `_DepthFirst`, which the walk
-recognises: it then reads the subtree a directory at a time itself, under its
-own control, and `_tree_ils` serves the callers that list otherwise.
+asking tells, falls back on it.
 
 It yields the entries depth first, as a walk visits them: each directory's
 entries in the order its listing gives them, and all below a subdirectory right
@@ -31,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 from ..common.paths import _trim
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
+    from collections.abc import AsyncGenerator, AsyncIterator
 
     from ..common.handler import Entry, StorageHandler
     from .handler import TreeFileOperationHandler
@@ -48,7 +46,7 @@ _HELD = 32 * _BATCH
 
 def _tree_ils(
     handler: TreeFileOperationHandler, entry: Entry, **ils_kwargs: Any
-) -> _DepthFirst:
+) -> AsyncGenerator[dict[str, Any]]:
     """List all below a directory depth first, by one ``ils`` per directory.
 
     It yields what a recursive ``ils`` yields: each entry below ``entry``, at
@@ -68,9 +66,9 @@ def _tree_ils(
     is listed under the permit its caller holds, as for any ``ils``. So it
     needs no permit more to go on.
 
-    A directory below ``entry`` that fails to list raises its error, noted with
-    its path, and ends the listing: a recursive listing cannot go on past a
-    failure.
+    A directory below ``entry`` that fails to list raises its error, as the
+    storage raised it, and ends the listing: a recursive listing cannot go on
+    past a failure.
     A missing ``entry`` raises FileNotFoundError, when the iteration starts, as
     its own ``ils`` raises it.
 
@@ -78,33 +76,8 @@ def _tree_ils(
     the handler's ``entry`` makes it from a path: it is listed by it whole, so
     that a storage addressing items by id asks nothing again. ``ils_kwargs`` go
     to each ``ils``.
-
-    The listing is a `_DepthFirst`, so that the walk recognises it: it reads
-    such a subtree a directory at a time itself, as this would, but without a
-    look-ahead of its own beyond the walk's control.
     """
-    return _DepthFirst(_entries(handler, entry, ils_kwargs))
-
-
-class _DepthFirst:
-    """A listing depth first by construction, `_tree_ils`'s: the walk reads such a subtree a directory at a time itself.
-
-    It is the listing's own type that tells the walk, not the handler's class:
-    a handler overriding recursive ``ils`` may still answer with `_tree_ils`,
-    e.g. where its storage refuses its own listing.
-    """
-
-    def __init__(self, entries: AsyncGenerator[dict[str, Any]]) -> None:
-        self._entries = entries
-
-    def __aiter__(self) -> _DepthFirst:
-        return self
-
-    def __anext__(self) -> Awaitable[dict[str, Any]]:
-        return self._entries.__anext__()
-
-    async def aclose(self) -> None:
-        await self._entries.aclose()
+    return _entries(handler, entry, ils_kwargs)
 
 
 async def _entries(
@@ -121,12 +94,7 @@ async def _entries(
     try:
         while stack:
             listing = stack[-1]
-            try:
-                item = await listing.next()
-            except Exception as e:
-                if len(stack) > 1:  # The root's error is the listing's own.
-                    e.add_note(f"Listing {listing.directory!r} failed.")
-                raise
+            item = await listing.next()
             if item is None:
                 stack.pop()
                 continue

@@ -20,7 +20,7 @@ nothing, e.g. ``data`` for ``data/**/*.csv``, is listed by one recursive
 Several patterns are matched in one walk per tree: a directory is listed once if
 any of them can match in it, and each path is matched with all of them.
 
-This module depends on `_visit` and `find`, and `operation`, `paths` and `patterns` of
+This module depends on `find` and `walk`, and `operation`, `paths` and `patterns` of
 `common`.
 """
 

@@ -347,20 +347,20 @@ class TraverseSubtree(_TraversalTask):
     else between them. The handler's listing answers for it, as any of these
     orders does:
 
-    - the byte order of names, a directory either not listed or named with
-      the trailing delimiter, as S3, GCS and Azure Blob list objects;
+    - the byte order of names, as S3, GCS and Azure Blob list objects, or as
+      fsspec's ``find(withdirs=True)`` gives them;
     - the order of segments, as ``sorted(..., key=handler.segments)`` gives it;
     - depth first, a directory at a time.
 
-    Names in byte order with a directory named without the delimiter, as
-    fsspec's ``find(withdirs=True)`` gives them, do not: ``a/b``, ``a/b.txt``,
-    ``a/b/c`` puts a file between ``a/b`` and what is below it. A directory
-    so listed apart is acted on twice. A handler whose listing is so sorts
-    it by segments, appends the delimiter, or leaves the directories out.
+    In byte order, a directory named without the delimiter comes apart from
+    what is below it: ``a/b``, ``a/b.txt``, ``a/b/c``. A subdirectory listed
+    is so held until the first path below it comes, or its parent's span
+    ends, with nothing below it.
 
     Each directory is a `_Span` of the listing, which maps it, acts on what
     is below it, and reduces it as the first path not below it comes. Only
-    the directories above the path read are held.
+    the directories above the path read are held, and their subdirectories
+    listed but not reached yet.
 
     A directory not listed, as an object store lists only files, is made from
     the path below it, by `subdir_entry`. A directory's marker listed inside
@@ -428,6 +428,9 @@ class _Span:
 
         key = task._segments(root["name"])
         values: list[Any] = []
+        # The subdirectories listed, held until the first path below each
+        # comes: in byte order, "a/b.txt" comes between "a/b" and "a/b/c".
+        held: dict[tuple[str, ...], Entry] = {}
         next = self.next
         while next is not None:
             found = task._segments(next["name"])
@@ -441,19 +444,32 @@ class _Span:
                     item = await task.action.map(next, True)
                     values.append(await task.action.reduce(next, True, item, []))
                 next = await anext(self.entries, None)
+            elif in_root:
+                # A subdirectory listed, or listed again, e.g. as its marker.
+                held.setdefault(found, next)
+                next = await anext(self.entries, None)
             else:
-                # A subdirectory listed, or made from a path below it. Its span
-                # starts at next either way: a subdirectory listed is its marker.
-                subdir = next if in_root else task.subdir_entry(root, next)
-                if task._descend(subdir) or task._matched(subdir):
-                    span = _Span(task, subdir, next, self.entries)
-                    item, next = await span.map_reduce()
-                    values.append(item)
-                else:
-                    # Pruned, with all below it.
-                    next = await _Span(task, subdir, next, self.entries)._skip()
+                # A path below a subdirectory, listed or made from it.
+                sub = found[: len(key) + 1]
+                subdir = held.pop(sub, None) or task.subdir_entry(root, next)
+                item, next = await self._below(subdir, next)
+                values.extend(item)
+        for subdir in held.values():  # Listed, with nothing below.
+            item, _ = await self._below(subdir, None)
+            values.extend(item)
         await task.action.listed(root)
         return await task.action.reduce(root, match, value, values), next
+
+    async def _below(
+        self, subdir: Entry, next: Entry | None
+    ) -> tuple[list[Any], Entry | None]:
+        """A subdirectory's span, from ``next``: its value, if not pruned, and the first entry not below it."""
+        task = self.task
+        span = _Span(task, subdir, next, self.entries)
+        if task._descend(subdir) or task._matched(subdir):
+            item, next = await span.map_reduce()
+            return [item], next
+        return [], await span._skip()  # Pruned, with all below it.
 
     async def _skip(self) -> Entry | None:
         """Read past the span unread: the first entry not below the directory."""

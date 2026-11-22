@@ -9,7 +9,6 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree._walker import _depth_first
 from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.mv import _tree_mv
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
@@ -118,23 +117,3 @@ async def test_mv_moves_the_whole_tree() -> None:
         ["out/kept", *(p.replace("data", "out", 1) for p in _FILES)]
     )
     assert not await fs._exists("data/a")
-
-
-async def test_the_default_listing_is_depth_first() -> None:
-    # The library's own listing is depth first, whatever the profile says of the
-    # storage's: a handler keeping it declares nothing, and pays no more.
-    fs = _fs()
-    view = TreeView(fs, storage_profile=StorageProfile())
-    entries = view.ils(view.entry("data"), recursive=True)
-    await view.open()
-    assert _depth_first(entries, view.profile)
-    await entries.aclose()  # type: ignore[attr-defined]  # A _DepthFirst.
-
-    own = TreeView(
-        fs,
-        recursive_listing=True,
-        storage_profile=StorageProfile(),
-    )
-    entries = own.ils(own.entry("data"), recursive=True)
-    await own.open()
-    assert not _depth_first(entries, own.profile)

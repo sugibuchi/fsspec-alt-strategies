@@ -1,4 +1,4 @@
-"""Tests of `_tree_walk`, and of ``_chunks``, the engine under the tree strategies."""
+"""Tests of `_tree_walk`, top down and bottom up."""
 
 from __future__ import annotations
 
@@ -10,8 +10,6 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree._visit import _Pruned
-from fsspec_alt_strategies_impl.tree._walker import _TreeWalk
 from fsspec_alt_strategies_impl.tree.walk import WalkState, _tree_walk
 from fsspec_alt_strategies_impl_testing import (
     SimulatedFileSystem,
@@ -20,11 +18,6 @@ from fsspec_alt_strategies_impl_testing import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-
-
-def _listings(handler: Any, path: Any, visit: Any = None, **kwargs: Any) -> Any:
-    """The listings of a walk of ``path`` on ``handler``."""
-    return _TreeWalk(handler, path, visit, **kwargs).listings()
 
 
 _PRIMITIVES = {"ils", "info", "rm_file", "rm_dir", "rm_tree", "cp_file", "mv_file"}
@@ -313,17 +306,6 @@ def test_on_error_is_checked_at_once(any_fs: SimulatedFileSystem) -> None:
         _walk(any_fs, "data", on_error="ignore")
 
 
-async def test_listings_carry_dir_and_depth(any_fs: SimulatedFileSystem) -> None:
-    _tree(any_fs)
-    # A trailing "/" is trimmed, as fsspec's _strip_protocol does.
-    depths = {
-        listing.directory: listing.depth
-        async for listing in _listings(TreeView(any_fs), "data/")
-    }
-    assert depths["data"] == 1
-    assert list(depths.values()).count(3) == 4
-
-
 async def test_bottom_up_directories_come_after_their_subdirs() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.002, asynchronous=True)
     _tree(fs)
@@ -334,26 +316,23 @@ async def test_bottom_up_directories_come_after_their_subdirs() -> None:
         assert all(not f.startswith(directory + "/") for f in directories[i + 1 :])
 
 
-async def test_an_empty_dir_is_one_listing_with_no_entries() -> None:
+async def test_an_empty_dir_is_yielded_empty() -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     fs.add_dir("data")
-    listings = [x async for x in _listings(TreeView(fs), "data")]
-    assert [(x.directory, x.entries, x.error) for x in listings] == [("data", [], None)]
+    for topdown in (True, False):
+        assert await _all(_walk(fs, "data", topdown=topdown)) == [("data", {}, {})]
 
 
 @pytest.mark.parametrize("maxdepth", [None, 3])
 async def test_bottom_up_each_directory_comes_once_after_all_below_it(
     any_fs: SimulatedFileSystem, maxdepth: int | None
 ) -> None:
-    # Recursively listed without maxdepth, a directory per request with it.
+    # Recursively listed without maxdepth, as declared, a directory per request with it.
     _tree(any_fs)
-    view = TreeView(any_fs, recursive_listing=maxdepth is None)
-    order = [
-        x.directory
-        async for x in _listings(
-            view, "data", _Pruned(maxdepth=maxdepth), order="bottomup"
-        )
-    ]
+    profile = StorageProfile(recursive_ls_depth_first_preorder=True)
+    view = TreeView(any_fs, recursive_listing=maxdepth is None, storage_profile=profile)
+    walk = _tree_walk(view, "data", topdown=False, maxdepth=maxdepth)
+    order = [directory async for directory, _, _ in walk]
     assert len(order) == len(set(order))
     assert order[-1] == "data"
     for i, directory in enumerate(order):
@@ -394,18 +373,11 @@ async def test_every_permit_is_given_back(how: str) -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True, latency=0.002)
     _tree(fs)
     limit = asyncio.Semaphore(3)
-    stopped = False
-    walk = _TreeWalk(
-        TreeView(fs, operation_limit=limit),
-        "data",
-        _Pruned(maxdepth=4),
-        stopping=lambda: stopped,
-    )
-    events = walk.listings()
-    async for _ in events:
+    op = _walk(fs, "data", maxdepth=4, concurrency_limit=limit)
+    async for _ in op:
         if how == "stop":
-            stopped = True
+            op.cancel()
         elif how == "close":
             break
-    await events.aclose()
+    await op.aclose()
     assert limit._value == 3

@@ -170,9 +170,9 @@ code: read it before adding a strategy or a handler.
   wrapped filesystem's methods. Write one only where the library saves requests or data beyond fsspec's API.
 - A wrapper of one library declares its profile, limits and batch sizes as class attributes. A `known_implementations`
   entry gives them only to the generic `FsspecTreeHandler` and `FsspecFlatHandler`.
-- The strategies changing a storage, in any family, run on `common.jobs._Jobs`, and start with `_Jobs.operation`. A
-  copy or move also builds on `common.jobs._CopyJobs`, which places its paths by the destination's `join`, e.g.
-  `_CopyOrMove(_CopyJobs, _TreeJobs)`. Their constructors take keywords only, and pass the rest on.
+- A copy or move, in any family, places its paths by `common.jobs._CopyJobs`, by the destination's `join`. The flat
+  strategies changing a storage run on `common.jobs._Jobs`, e.g. `_CopyOrMove(_CopyJobs, _FlatJobs)`. Their
+  constructors take keywords only, and pass the rest on.
 
 #### The tree family
 
@@ -181,25 +181,22 @@ code: read it before adding a strategy or a handler.
   directory per request. A handler listing a directory alone reaches it by `super().ils(entry, recursive=True)`.
 - A storage listing a tree in one request answers `recursive` itself. It falls back on `super().ils` where its
   storage refuses, or where its own listing costs more. Outside `tree/`, call the method, never `_tree_ils`.
-- The profile's `recursive_ls_depth_first_preorder` says the order of a storage's own listing: the walk can never
-  tell it.
-  - False, the default, takes it as parents first, right on any storage.
-  - True, declared, covers name order too. It lets the walk close each directory as the listing passes it.
-  - `_tree_ils`'s listing is a `_DepthFirst`, which the walk reads a directory at a time itself, whatever the profile
-    says.
-- The tree strategies walk with `tree._walker._TreeWalk`, which is private. It gives one `_Listing` per directory, its
-  entries or its error, as a standard walk does, in the order the caller asks: "topdown", "bottomup" or "any".
-- Its directories to list wait on a stack, depth first. A listing holds one permit until it ends, taken by the walk
-  before it starts. Keep it so: a queue or a task per directory would list beyond the walk's control, and past a
-  cancel.
-- The walk takes a `tree._visit._Visit`: which directories the operation needs, e.g. within `maxdepth`. A subtree
-  needed whole is listed by one recursive `ils`, unless the order is "topdown". How it is listed is the handler's, in
-  its `ils`: never decide it in a visit, nor by the storage in a strategy.
-- A root's failure is a failed listing like any other. Each strategy decides what it means, as its fsspec method does.
-- A recursive listing that breaks off is a failed listing: its root's. Nothing is listed again: a storage resumes its
-  own listing, e.g. a page by its continuation token.
-- Those that only read build on `tree.find._read`, a `common.tree` traversal handling the root as `_find` does: each is a `PathAction`. Those changing
-  the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
+- The profile's `recursive_ls_depth_first_preorder` says the order of a storage's own listing: the strategies can
+  never tell it.
+  - False, the default, streams no recursive listing: each directory is listed on its own.
+  - True, declared, covers name order too. A subtree nothing prunes is then streamed by one recursive `ils`.
+- The tree strategies run on `common.tree.TreeTraversal`, with `common.glob`'s tasks: `VisitDirectory`, a directory
+  per listing, and `TraverseSubtree`, a subtree by one recursive listing. `tree.walk._root_task` chooses between them
+  by the profile. Never write another walk.
+- What a strategy does on each path is a `common.glob.PathAction`: `map` before what is below a path, `reduce` after.
+  A task holds a permit of `operation_limit` around each page of a listing, never across it.
+- A write goes through `common.tree._write`, under a permit checked against the operation's `cancelling()`. So none
+  starts once cancelled, and a close waits for those in flight.
+- A root's failure to list is raised by the traversal. Each strategy decides what it means, as its fsspec method does.
+- A recursive listing that breaks off fails its whole subtree. Nothing is listed again: a storage resumes its own
+  listing, e.g. a page by its continuation token.
+- Those that only read build on `tree.find._read`, which handles the root as `_find` does. `rm`, `cp` and `mv` are
+  each a `PathAction` of their own, batching their files per directory.
 
 #### The flat family
 

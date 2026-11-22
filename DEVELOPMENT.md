@@ -381,19 +381,16 @@ A strategy replacing an fsspec method answers as it does. Where it departs on pu
 
 ### Jobs
 
-The strategies changing a storage run on `common/jobs.py`:
+`common/jobs.py` holds what the strategies changing a storage share:
 
-- `_Jobs` finds what to change and does it at once, e.g. deleting each file as its directory is listed. Each request
-  holds a permit of the handler's `operation_limit`, through a `_Queue`.
-- `_TreeJobs` and `_FlatJobs` say where the items come from, in each family's `_jobs.py`.
 - `_CopyJobs` places each path of a copy or move, as fsspec's `copy` does, whatever the family. It builds each target
   by the destination's `join`.
+- `_Jobs` runs the flat strategies changing a storage: it finds what to change and does it at once. Each request
+  holds a permit of the handler's `operation_limit`, through a `_Queue`. `_FlatJobs` says where the items come from.
 
-A family's copy joins the two, e.g. `_CopyOrMove(_CopyJobs, _TreeJobs)`. Their constructors take keywords only, and
-pass on what they do not take, so either order works.
-
-A strategy's jobs say what an item queues, how a job runs, and what its outcome is. `_Jobs.operation(...)` makes the
-jobs and their `Operation` at once.
+A flat copy joins the two, `_CopyOrMove(_CopyJobs, _FlatJobs)`. Their constructors take keywords only, and pass on
+what they do not take, so either order works. A tree copy uses `_CopyJobs` only to place its paths: the traversal
+does the rest.
 
 ### Copies between storages
 
@@ -454,97 +451,56 @@ The tree strategies list a directory with the handler's `ils`, its entries in an
 tells it from the paths below it.
 
 By default, a tree handler's recursive `ils` runs `tree/listing.py`'s `_tree_ils`: depth first, a directory per
-request. A handler listing a directory alone reaches it by `super().ils(entry, recursive=True)`. The walk recognises
-that listing, a `_DepthFirst`, and reads such a subtree a directory at a time itself, under its own control. The
-generic tree handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing. A storage may refuse a
-recursive listing in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`. Its handler's `ils`
-then falls back on `super().ils` itself.
+request. A handler listing a directory alone reaches it by `super().ils(entry, recursive=True)`. The generic tree
+handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing. A storage may refuse a recursive listing
+in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`. Its handler's `ils` then falls back on
+`super().ils` itself.
 
-A storage's own recursive listing keeps one of two orders, which tell the walk when a directory is done:
+The profile's `recursive_ls_depth_first_preorder` declares the order of a storage's own recursive listing:
 
-- depth first: a directory's entry, then all below it, before any other entry. Siblings may come in any order.
-- by name: sorted by the whole name, as object stores list keys. A directory's entry may come apart from what is below
-  it, as "a/b-x" comes between "a/b" and "a/b/c".
+- True: each directory's descendants come together. That covers depth first, siblings in any order, and the byte
+  order of names, as object stores list keys. A subtree nothing prunes is then streamed by one recursive listing.
+- False, the default: nothing is promised, e.g. breadth first, as Dropbox's recursive listing documents no more. Each
+  directory is then listed on its own, a failure failing only itself.
 
-The profile's `recursive_ls_depth_first_preorder` declares which order a storage's own listing keeps:
+The strategies cannot tell one order from another. By the time an entry comes under a directory taken as done, that
+directory may have been reduced, and a move may have deleted it. So the order is declared, never detected.
 
-- True covers both of the above. `_Split` then completes each directory's listing as the listing passes it.
-- False, the default, takes the listing as parents first: a directory's entry before what is below it, and nothing
-  more, e.g. breadth first, as Dropbox's recursive listing documents no more. No directory is known done before the
-  listing ends, so the walk holds it whole, then takes it in name order, which is depth first.
+#### The traversal
 
-The walk cannot tell a parents-first order from a depth-first one. By the time an entry comes under a directory taken
-as done, that directory's listing has gone, and a move may have deleted it. So the order is declared, never detected.
+The tree strategies run on `common/tree.py`'s `TreeTraversal`, with `common/glob.py`'s tasks:
 
-Parents first is always right, as a depth-first listing is parents first too. It costs the streaming of each
-directory done, and the memory of the tree's names. So a storage whose own listing is depth first declares it, as
-`AdlfsHandler` does. A handler keeping the default listing declares nothing: the walk reads it by directory.
+- `VisitDirectory` lists a directory by one `ils`, and runs a task per item as the listing streams.
+- `TraverseSubtree` reads a subtree from one recursive `ils`, as it streams, with no task per item. In byte order, a
+  subdirectory listed apart from what is below it is held until its first path comes.
+- `tree/walk.py`'s `_root_task` takes `TraverseSubtree` where the profile declares the order and nothing prunes the
+  root, else `VisitDirectory`, which streams each subtree it can.
 
-#### The walk
+What a strategy does on each path is a `PathAction`: `map` before what is below the path, `reduce` after, with the
+values of the items in it. So a strategy is a map-reduce:
 
-The strategies walk with a private engine, `tree._walker._TreeWalk`. It gives one listing per directory, as a
-standard walk does: its entries, or its error. The caller chooses the order:
+| Strategies                             | Their action                                             |
+|----------------------------------------|----------------------------------------------------------|
+| `_tree_walk` top down                  | `_WalkTopDown`: each directory, which the caller prunes  |
+| `_tree_walk` bottom up                 | `_WalkBottomUp`: each directory once all below it is     |
+| `_tree_find`, `_tree_glob`, `_tree_du` | `_Found` and `_Du`, by `tree/find.py`'s `_read`          |
+| `_tree_rm`                             | `_Deletion`: a directory deleted once all in it is       |
+| `_tree_cp`, `_tree_mv`                 | `_Sending`: directories made first, each file as found   |
 
-- "topdown", a directory before those below it. Each is listed alone: a subdirectory is found only in its parent's
-  whole listing.
-- "bottomup", a directory after those below it. A recursive listing gives that order. A directory listed alone waits
-  for those below it.
-- "any", each as it completes: what `find`, `du`, `glob` and `rm` take.
+How the traversal goes:
 
-A copy or move whose destination makes each directory after its parent takes "topdown", and any other "any".
-
-A walk's plan has two sides:
-
-- Which directories to visit is the operation's, as its arguments say: a `maxdepth`, a glob's pattern, a
-  `descend`. A `_Visit`, in `tree/_visit.py`, tells the walk of each directory it finds whether to leave it, list it
-  alone, or take all below it.
-- How each is listed is the storage's, in its handler's `ils`. All below a directory the visit takes whole is asked of
-  one recursive `ils`. A handler answering with the default, a directory per request, is asked again of each
-  subdirectory, so it may list a subtree whole once it knows it is small.
-- A recursive listing serves only an order it gives: "any" or "bottomup". A walk top down lists each directory alone.
-
-How the walk reads:
-
-- **Listings.** A directory listed alone is one request's task. A subtree listed whole is read by a `_SubtreeReader`,
-  which gives the directories its listing completed, a read at a time. The walk awaits a few at once, and takes each
-  as it comes. Nothing is listed ahead of what the walk asks, and nothing is buffered between the listings and it.
-- **Order.** The directories to read wait on a stack, so the walk goes depth first, as fsspec's `walk` does. What waits
-  is the subdirectories along the paths the walk is in, not a whole level of the tree.
-- **Permits.** A listing holds a permit of `operation_limit` until it ends, as a listing is one request to the
-  strategies. The walk takes one before it starts a listing: while one is free, or, when none of its own runs, by
-  waiting for one.
-- **Stopping.** Once cancelled, no listing starts. The listings in flight are yielded.
-- **Failures.** A root's failure is a failed listing like any other: a missing root fails with FileNotFoundError, and a
-  file with NotADirectoryError carrying its entry. Each strategy answers as its fsspec method does: `find` finds
-  nothing for a missing root, `walk` raises, and the jobs treat a file root as a file.
-
-What it lists, and when:
-
-- A tree that nothing prunes is listed by one recursive listing per root. Its order tells when each directory is
-  done. Where the storage has a recursive listing, that is one paginated request, which usually beats a directory per
-  request.
-- A tree pruned, by `maxdepth` or a glob's pattern, is listed a directory per request, many at once. Below a glob's
-  `**`, nothing is pruned, so it is listed recursively again. Pruning wins on a large tree, and loses on a small
-  subtree that one recursive listing would cover. The library cannot tell which without guessing the tree's size, so
-  it prunes.
-- A recursive listing broken off is a failed listing: its root's, noted with the root, after the directories it
-  completed. The walk goes on with its other directories. Nothing is listed again: a storage resumes its own listing
-  where it can, e.g. a page by its continuation token, as s3fs, gcsfs and adlfs do through their SDKs.
-- A listing drops a subdirectory its directory listed before, as a storage may list one twice, e.g. as a prefix and as
-  its marker object.
-
-The jobs of `rm`, `cp` and `mv` count what is done in each directory by its parent's listing. In the order "any", a
-subdirectory listed whole may be done before its parent's listing comes: they remember it until then.
-
-The tree strategies come in two layers:
-
-| Strategies                             | They send                         | They build on    |
-|----------------------------------------|-----------------------------------|------------------|
-| `_tree_find`, `_tree_du`, `_tree_glob` | Listings, and one `info` at most  | `_read`          |
-| `_tree_rm`, `_tree_cp`, `_tree_mv`     | Changes, as the listings come     | `_TreeJobs`      |
-
-- The changes run along with the walk still in flight.
-- Patterns are expanded by the family's glob first, as copies place paths from the common prefix of all matches.
+- **Permits.** A task holds a permit of `operation_limit` around each page of its listing, never across it. A listing
+  streaming into tasks would otherwise wait for room among them while they wait for permits.
+- **Order.** The task taken next is the pending one with the first path, so the traversal goes quasi depth first.
+- **Writes.** Each goes through `common/tree.py`'s `_write`. A close waits for those in flight, and none starts once
+  the operation is cancelled.
+- **Batches.** A file joins its directory's batch, sent once full: a batch never spans two directories.
+- **Stopping.** Once cancelled, no task starts. Those running finish, their pages bound by the permits.
+- **Failures.** A root's failure to list is raised, and each strategy answers as its fsspec method does. A directory's
+  failure is emitted with its entry, as the storage raised it. A recursive listing broken off fails its whole subtree:
+  nothing is listed again, as a storage resumes its own listing where it can.
+- **Patterns.** They are expanded by the family's glob first, as copies place paths from the common prefix of all
+  matches.
 
 ### The flat strategies
 
