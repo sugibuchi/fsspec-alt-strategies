@@ -141,8 +141,8 @@ class PathTaskGroup:
     def __init__(self, caller: PathTask) -> None:
         self.caller = caller
         self.tasks: list[PathTask] = []
-        # Whether all the tasks are taken: a stream of them may run on.
-        self.complete = False
+        # Read only once all are taken, and checked again then: while a
+        # stream of them runs on, it may be true for those taken so far.
         self._done = False
         # The tasks before it are done: each is checked past once, so the
         # checks of a group take O(n) in all, as tasks end mostly in order.
@@ -156,7 +156,7 @@ class PathTaskGroup:
         """Check the status of the tasks, once one is done or all are taken."""
         while self._checked < len(self.tasks) and self.tasks[self._checked].done():
             self._checked += 1
-        self._done = self.complete and self._checked == len(self.tasks)
+        self._done = self._checked == len(self.tasks)
 
     def done(self) -> bool:
         """Whether every task is taken and done."""
@@ -521,8 +521,9 @@ class TreeTraversal:
             except Exception as error:  # Never CancelledError: it propagates.
                 failed = error
             async with self._state:
-                group.complete = True
-                group.on_task_done()  # All may be done already.
+                # All taken: checked again, as done may hold for those
+                # taken so far only, and all may be done already.
+                group.on_task_done()
                 await self._state.wait_for(group.done)
         finally:
             async with self._state:
