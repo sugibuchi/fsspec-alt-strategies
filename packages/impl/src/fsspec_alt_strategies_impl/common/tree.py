@@ -240,7 +240,7 @@ class TreeTraversal:
         await self._cancel_all()
         # asyncio.wait, never gather: an _aclose cancelled meanwhile cancels
         # none of them, and leaves their errors to the other _aclose.
-        running = [t for t in self._running_tasks if t._task is not None]
+        running = list(self._running_tasks)
         if running:  # asyncio.wait refuses none.
             await asyncio.wait([t._task for t in running if t._task is not None])
         errors: list[BaseException] = []
