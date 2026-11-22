@@ -231,12 +231,12 @@ async def test_close_runs_once() -> None:
     reading = asyncio.ensure_future(anext(events, None))
     await asyncio.sleep(0)
     engine.close()
-    spawned = len(engine._own_tasks)
+    closer = engine._closer
     engine.close()
-    assert len(engine._own_tasks) == spawned
+    assert engine._closer is closer
     assert await reading is None
     engine.close()  # Ended: nothing to close.
-    assert not engine._own_tasks
+    assert engine._closer is closer
 
 
 async def test_an_event_emitted_waits_for_room() -> None:
