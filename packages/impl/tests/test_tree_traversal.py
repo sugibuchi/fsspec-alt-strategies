@@ -239,6 +239,23 @@ async def test_close_runs_once() -> None:
     assert not engine._own_tasks
 
 
+async def test_an_event_emitted_waits_for_room() -> None:
+    sizes = []
+
+    async def emit(task: _Call) -> None:
+        for i in range(6):
+            await task._emit_event(i)
+            sizes.append(engine._events.qsize())
+
+    engine = TreeTraversal(max_running=1, max_events=2)
+    seen = []
+    async for event in engine.events([_Call(engine, "x", emit)]):
+        seen.append(event)
+        await asyncio.sleep(0.001)  # A slow caller.
+    assert seen == list(range(6))
+    assert max(sizes) <= 2
+
+
 async def test_no_event_is_emitted_once_closed() -> None:
     raised = []
 
@@ -279,21 +296,26 @@ async def test_closing_early_cancels_the_tasks_running() -> None:
     assert sorted(cancelled) == ["a", "b"]
 
 
-async def test_closing_leaves_no_task_behind() -> None:
+async def test_a_failure_unread_is_raised_closing() -> None:
+    failed = asyncio.Event()
+
     async def emit(task: _Call) -> None:
         for i in range(3):
             await task._emit_event(i)
         await asyncio.Event().wait()
 
     async def fail(task: _Call) -> None:
-        await asyncio.sleep(0.01)  # Once the queue is full: its failure waits.
+        failed.set()
         raise OSError(task.path)
 
     engine = TreeTraversal(max_running=2, max_events=1)
     events = engine.events([_Call(engine, "a", emit), _Call(engine, "b", fail)])
     assert await anext(events) == 0
-    await asyncio.sleep(0.02)
-    # b's failure never reached the queue: closing raises it.
+    await failed.wait()
+    for _ in range(3):
+        await asyncio.sleep(0)  # Until b's failure is queued, past the limit.
+    assert engine._events.qsize() > engine.max_events
+    # The caller closes before reading it: closing raises it.
     with pytest.raises(BaseExceptionGroup) as raised:
         await events.aclose()
     assert [str(e) for e in raised.value.exceptions] == ["b"]

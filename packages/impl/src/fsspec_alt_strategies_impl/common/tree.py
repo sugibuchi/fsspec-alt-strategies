@@ -20,7 +20,8 @@ Three limits bound it:
 - ``max_pending``: the tasks waiting to start. A task adding more waits for
   room, which bounds the memory of a wide directory.
 - ``max_events``: the events not yet read. A task emitting more waits, so a
-  slow caller slows the traversal.
+  slow caller slows the traversal. The traversal's own, its end and a
+  failure, never wait: so finishing a task never blocks.
 
 The task taken next is the pending one with the first path, compared by its
 segments as ``split`` gives them. So the tasks under the leftmost subtree go
@@ -118,7 +119,8 @@ class _End:
 class _Failed:
     """The event of a task given to `events` that failed: the traversal raises its error."""
 
-    def __init__(self, error: BaseException) -> None:
+    def __init__(self, task: PathTask, error: BaseException) -> None:
+        self.task = task
         self.error = error
 
 
@@ -144,6 +146,7 @@ class TreeTraversal:
         assert max_events >= 1
         self.max_running = max_running
         self.max_pending = max_pending
+        self.max_events = max_events
         # A path's segments, e.g. a handler's _split: by "/" by default.
         self.split = split or (lambda path: path.split("/"))
         # One condition over all the state: every change notifies, and each
@@ -153,7 +156,9 @@ class TreeTraversal:
         self._pending_tasks: dict[PathTask, list[str]] = {}
         self._running_tasks: set[PathTask] = set()
         self._waiting_tasks: set[PathTask] = set()
-        self._events: asyncio.Queue[Any] = asyncio.Queue(maxsize=max_events)
+        # Unbounded: _emit_event waits for room itself, the traversal's own
+        # events never.
+        self._events: asyncio.Queue[Any] = asyncio.Queue()
         # The tasks given to events whose error is not raised yet: their
         # failure ends the traversal. One is dropped once its error is raised,
         # by events or by an _aclose, so that none raises it again.
@@ -193,9 +198,12 @@ class TreeTraversal:
                 if self._closed and self._events.empty():
                     return  # No event is emitted once closed: all are read.
                 event = await self._events.get()
+                async with self._state:
+                    self._state.notify_all()  # Room for an event more.
                 if isinstance(event, _End):
                     return
                 elif isinstance(event, _Failed):
+                    self._initial.discard(event.task)  # Raised: not again.
                     raise event.error
                 else:
                     yield event
@@ -228,6 +236,20 @@ class TreeTraversal:
             # Wakes events, if it waits for an event: none would come.
             self._events.put_nowait(_End())
 
+    def _unread_failures(self) -> list[BaseException]:
+        """The errors of the tasks given to events that `events` did not raise: each once.
+
+        Those have no parent. Each failed, now or before with its failure
+        unread, and is dropped from _initial as its error is taken.
+        """
+        errors: list[BaseException] = []
+        for task in list(self._initial):
+            if task.done():
+                self._initial.discard(task)
+                if not task.cancelled() and (error := task.exception()) is not None:
+                    errors.append(error)
+        return errors
+
     async def _aclose(self) -> None:
         """Cancel every task, pending or running, and wait for them to end: a parent waiting for one gets CancelledError.
 
@@ -243,17 +265,13 @@ class TreeTraversal:
         running = list(self._running_tasks)
         if running:  # asyncio.wait refuses none.
             await asyncio.wait([t._task for t in running if t._task is not None])
-        errors: list[BaseException] = []
         for task in running:
             # Read always, so that asyncio never warns of an exception not
-            # retrieved. A task's error is its parent's, raised by its
-            # _run_tasks: only those given to events, which have none, are
-            # raised here, once, as they are dropped from _initial.
-            error = None if task.cancelled() else task.exception()
-            if task in self._initial:
-                self._initial.discard(task)
-                if error is not None:
-                    errors.append(error)
+            # retrieved: a task's error is its parent's, raised by its
+            # _run_tasks.
+            if not task.cancelled():
+                task.exception()
+        errors = self._unread_failures()
 
         ends: list[asyncio.Task[Any]] = []
         if self._scheduler is not None:
@@ -289,7 +307,7 @@ class TreeTraversal:
                     task._set_task(running)
                     self._running_tasks.add(task)
                 self._state.notify_all()  # Room for a task more.
-        await self._events.put(_End())
+        self._events.put_nowait(_End())
 
     def _can_go_on(self) -> bool:
         """Whether the scheduler can start a task, or end."""
@@ -318,8 +336,7 @@ class TreeTraversal:
         error = None if task.cancelled() else task.exception()
         if error is not None and task in self._initial and not self._closed:
             # Emitted while it still runs, so that the end never comes before it.
-            await self._events.put(_Failed(error))
-            self._initial.discard(task)  # Raised by events: not again.
+            self._events.put_nowait(_Failed(task, error))
         async with self._state:
             self._running_tasks.discard(task)
             self._pending_tasks.pop(task, None)
@@ -379,4 +396,10 @@ class TreeTraversal:
     async def _emit_event(self, event: Any) -> None:
         if self._closed:
             raise RuntimeError("The traversal is closed: no event is emitted.")
-        await self._events.put(event)
+        async with self._state:
+            await self._state.wait_for(
+                lambda: self._closed or self._events.qsize() < self.max_events
+            )
+            if self._closed:
+                raise RuntimeError("The traversal is closed: no event is emitted.")
+            self._events.put_nowait(event)
