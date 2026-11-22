@@ -451,7 +451,9 @@ The tree strategies list a directory with the handler's `ils`, its entries in an
 tells it from the paths below it.
 
 By default, a tree handler's recursive `ils` runs `tree/listing.py`'s `_tree_ils`: depth first, a directory per
-request. A handler listing a directory alone reaches it by `super().ils(entry, recursive=True)`. The generic tree
+request, one at a time. The strategies never ask it, as they list a directory per request themselves, many at once:
+it serves other callers, e.g. a filesystem's recursive listing. A handler listing a directory alone reaches it by
+`super().ils(entry, recursive=True)`. The generic tree
 handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing. A storage may refuse a recursive listing
 in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`. Its handler's `ils` then falls back on
 `super().ils` itself.

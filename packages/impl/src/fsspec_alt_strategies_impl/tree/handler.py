@@ -50,10 +50,10 @@ class TreeFileOperationHandler(FileOperationHandler):
     """A storage's primitives, as the tree strategies call them, and the tree strategies on them.
 
     It suits storages with a hierarchical namespace, such as Azure Data Lake
-    Storage Gen2, a local disk or SFTP. Its strategies list a whole tree by
-    one ``ils(..., recursive=True)``, and a tree they prune a directory per
-    request, several at a time. They act on each part of a listing as it
-    arrives.
+    Storage Gen2, a local disk or SFTP. Its strategies list a directory per
+    request, several at a time, or a whole tree by one ``ils(...,
+    recursive=True)`` where the profile declares its order. They act on each
+    part of a listing as it arrives.
 
     A subclass implements the storage's primitives, `StorageHandler`'s. Its
     ``ils`` with ``recursive`` lists all below a directory: by default, a
@@ -96,27 +96,25 @@ class TreeFileOperationHandler(FileOperationHandler):
         - By name: sorted by the whole name, as object stores list keys. A
           directory's entry may then come apart from what is below it, as
           "a/b-x" comes between "a/b" and "a/b/c". It counts as depth first.
-        - Parents first, unless the profile declares one of the above: a
-          directory's entry before what is below it, in any order otherwise.
+        - Any order, unless the profile declares one of the above.
 
         A directory may be left out, as object stores list only files: the
         strategies tell it from the paths below it. A file lists itself. A
         missing directory raises FileNotFoundError, when the iteration starts.
 
         Here, with ``recursive``, it lists depth first, a directory per request
-        by ``ils``, several at a time: a subclass listing a directory per
-        request reaches it by ``super().ils(entry, recursive=True)``. The walk
-        recognises it, and reads such a subtree a directory at a time itself,
-        so a handler keeping it declares no
-        ``recursive_ls_depth_first_preorder``. ``kwargs`` go to each ``ils``.
+        by ``ils``, one at a time: a subclass listing a directory per request
+        reaches it by ``super().ils(entry, recursive=True)``. The strategies
+        never ask it of a handler declaring no
+        ``recursive_ls_depth_first_preorder``: they list a directory per
+        request themselves, many at once. ``kwargs`` go to each ``ils``.
 
-        A storage listing a tree in one request answers ``recursive`` itself.
-        One whose storage may refuse that listing, as only asking tells, e.g.
-        a WebDAV server refusing ``Depth: infinity``, or one whose recursive
-        listing costs more than a directory per request, e.g. billed apart,
-        falls back on ``super().ils`` itself. The strategies always list a
-        subtree they need whole by it, but a walk top down, which needs each
-        directory before those below it.
+        A storage listing a tree in one request answers ``recursive`` itself,
+        and declares its order: the strategies then stream a subtree they need
+        whole by it, but a walk top down. One whose storage may refuse that
+        listing, as only asking tells, e.g. a WebDAV server refusing ``Depth:
+        infinity``, or one whose recursive listing costs more than a directory
+        per request, e.g. billed apart, falls back on ``super().ils`` itself.
         """
         if recursive:
             return _tree_ils(self, entry, **kwargs)

@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 
-from fsspec_alt_strategies_impl.tree import listing
 from fsspec_alt_strategies_impl.tree.listing import _tree_ils
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
@@ -110,62 +109,12 @@ async def test_a_directory_listed_twice_is_listed_once() -> None:
     assert fs.stats.calls == {"list": 5}
 
 
-async def test_lists_ahead_within_the_limit() -> None:
-    fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
-    for i in range(20):
-        fs.add_file(f"root/{i:02}/file")
-    limit = asyncio.Semaphore(4)
-
-    # The caller holds a permit, as the strategies hold one for each _ils.
-    async with limit:
-        names = await _names(TreeView(fs, operation_limit=limit), "root")
-
-    assert len(names) == 40
-    assert fs.stats.calls == {"list": 21}
-    # Its 3 permits ahead, and the caller's.
-    assert fs.stats.max_concurrency == 4
-
-
-async def test_lists_ahead_as_many_as_the_limit_lets() -> None:
-    fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
-    for i in range(80):
-        fs.add_file(f"root/{i:02}/file")
-    limit = asyncio.Semaphore(65)
-
-    async with limit:
-        names = await _names(TreeView(fs, operation_limit=limit), "root")
-
-    assert len(names) == 160
-    # 64 permits ahead, and the caller's: no bound of its own on top.
-    assert fs.stats.max_concurrency == 65
-
-
-async def test_lists_nothing_ahead_while_many_entries_wait(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(listing, "_HELD", 10)
-    fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
-    for i in range(20):
-        fs.add_file(f"root/{i:02}/file")
-
-    async with aclosing(_tree_ils(TreeView(fs), {"name": "root"})) as it:
-        await anext(it)  # The root's 20 entries are read: 19 wait.
-        await asyncio.sleep(0.05)
-        # The root, and the 9 directories found before 10 entries waited.
-        assert fs.stats.calls == {"list": 10}
-        names = [e["name"] async for e in it]
-
-    # Once fewer wait, the listings ahead start again, and miss nothing.
-    assert len(names) == 39
-    assert fs.stats.calls == {"list": 21}
-
-
 async def test_goes_on_under_the_callers_permit_alone() -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     _tree(fs)
     limit = asyncio.Semaphore(1)
 
-    async with limit:  # The only permit: none is left to list ahead.
+    async with limit:  # The only permit: it lists one directory at a time.
         names = await asyncio.wait_for(
             _names(TreeView(fs, operation_limit=limit), "data"), timeout=5
         )
@@ -174,18 +123,10 @@ async def test_goes_on_under_the_callers_permit_alone() -> None:
     assert fs.stats.max_concurrency == 1
 
 
-async def test_closing_stops_the_listings_ahead() -> None:
-    fs = SimulatedFileSystem(hierarchical=True, latency=0.05, asynchronous=True)
-    for i in range(10):
-        fs.add_file(f"root/{i}/file")
-    limit = asyncio.Semaphore(4)
-
-    async with aclosing(
-        _tree_ils(TreeView(fs, operation_limit=limit), {"name": "root"})
-    ) as it:
-        await anext(it)  # The root's first entry: listings ahead are in flight.
-
+async def test_closing_closes_each_listing_open() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    _tree(fs)
+    async with aclosing(_tree_ils(TreeView(fs), {"name": "data"})) as it:
+        await anext(it)
+        await anext(it)  # Inside data/a: two listings open.
     assert fs._in_flight == 0
-    assert fs.stats.calls["list"] < 11
-    for _ in range(4):  # Every permit is back.
-        await asyncio.wait_for(limit.acquire(), 0.1)
