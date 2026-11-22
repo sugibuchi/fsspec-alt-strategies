@@ -91,7 +91,6 @@ class FlatFileOperationHandler(FileOperationHandler):
         *,
         maxdepth: int | None = None,
         topdown: bool = True,
-        descend: Callable[[dict[str, Any]], bool] | None = None,
         on_error: Literal["omit", "raise"]
         | Callable[[Exception], object]
         | None = None,
@@ -103,7 +102,6 @@ class FlatFileOperationHandler(FileOperationHandler):
             path,
             maxdepth=maxdepth,
             topdown=topdown,
-            descend=descend,
             on_error=on_error,
             ils_kwargs=ils_kwargs,
         )

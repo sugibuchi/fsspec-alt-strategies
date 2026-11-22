@@ -37,7 +37,6 @@ def _flat_walk(
     *,
     maxdepth: int | None = None,
     topdown: bool = True,
-    descend: Callable[[dict[str, Any]], bool] | None = None,
     on_error: Literal["omit", "raise"] | Callable[[Exception], object] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
 ) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
@@ -58,7 +57,7 @@ def _flat_walk(
     ends: so all of them come then. A walk that is cancelled leaves out the
     directories not done.
 
-    ``maxdepth`` and ``descend`` leave directories out, but save no request: the
+    ``maxdepth`` leaves directories out, but saves no request: the
     listing gives all the keys under ``path`` anyway.
 
     It wins over fsspec's ``walk`` on flat storages, with many directories: one
@@ -68,9 +67,9 @@ def _flat_walk(
 
     A failure of the listing ends the walk, as there is no other listing to go
     on with. It yields its error as ``path``'s, after the directories done,
-    and leaves out those not done. The error names ``path`` in its note, and
-    as its ``directory`` attribute. ``on_error``, below, may handle it
-    instead, as with fsspec's ``walk``.
+    and leaves out those not done, as the storage raised it: the state's
+    ``current`` is then ``path``. ``on_error``, below, may handle it instead,
+    as with fsspec's ``walk``.
 
     Once cancelled, it takes nothing more from the listing. Iterating it raises
     these errors, which end it:
@@ -86,9 +85,7 @@ def _flat_walk(
     ``path`` is the directory the walk starts from on ``handler``. Its recursive ``ils``
      lists every key below a directory, in name order, each key once,
     as an object store lists them. ``maxdepth`` of 1 yields only ``path``.
-    ``topdown`` puts a directory before those below it. ``descend``, called with
-    the entry of each subdirectory found, lets the walk enter it only if it
-    returns True. ``ils_kwargs`` go to the recursive ``ils``, as fsspec's
+    ``topdown`` puts a directory before those below it. ``ils_kwargs`` go to the recursive ``ils``, as fsspec's
     ``walk`` passes its own on.
 
     ``on_error`` says what becomes of the error of the listing:
@@ -114,7 +111,6 @@ def _flat_walk(
             handler,
             path,
             maxdepth=maxdepth,
-            descend=descend,
             ils_kwargs=ils_kwargs,
             stopping=op.cancelling,
         )
@@ -154,6 +150,8 @@ def _flat_walk(
         elif callable(on_error):
             on_error(failed)
         else:
+            # Its path is the state's current, for a caller yielding it.
+            op.state = WalkState(current=_trim(path), found=op.state.found)
             yield failed
 
     return Operation(run, WalkState())
@@ -164,7 +162,6 @@ async def _dirs_done(
     path: str,
     *,
     maxdepth: int | None,
-    descend: Callable[[dict[str, Any]], bool] | None,
     ils_kwargs: dict[str, Any] | None,
     stopping: Callable[[], object],
 ) -> AsyncGenerator[tuple[str, list[dict[str, Any]]] | Exception]:
@@ -175,8 +172,7 @@ async def _dirs_done(
     keys come in order, so none under it comes later. A walk stopped leaves
     out the directories still open.
 
-    A failure of the listing comes last, its error noted with ``path``, the
-    directories still open left out.
+    A failure of the listing comes last, the directories still open left out.
     """
     root = _trim(path)
     prefix = f"{root}/" if root else ""
@@ -188,15 +184,12 @@ async def _dirs_done(
     keys = _listing(handler, prefix, ils_kwargs=ils_kwargs)
     try:
         while True:
-            # Only the listing's own error is the walk's to handle: the
-            # others, e.g. of a descend, end it.
+            # Only the listing's own error is the walk's to handle.
             try:
                 key = await anext(keys)
             except StopAsyncIteration:
                 break
             except Exception as e:
-                e.add_note(f"Listing {root!r} failed.")
-                e.directory = root  # type: ignore[attr-defined]
                 yield e
                 return
 
@@ -205,7 +198,7 @@ async def _dirs_done(
             while len(open_) > 1 and not name.startswith(open_[-1][0] + "/"):
                 yield open_.pop()
 
-            _add(key, name[len(prefix) :], prefix, open_, maxdepth, descend)
+            _add(key, name[len(prefix) :], prefix, open_, maxdepth)
             if stopping():
                 return
     finally:
@@ -228,13 +221,12 @@ def _add(
     prefix: str,
     open_: list[tuple[str, list[dict[str, Any]]]],
     maxdepth: int | None,
-    descend: Callable[[dict[str, Any]], bool] | None,
 ) -> None:
     """Add a key to the walk: the directories it implies first seen, then itself.
 
     The directories already open are the key's parents. Each new one goes into
-    its parent's entries, and is opened unless ``maxdepth`` or ``descend``
-    leaves out what is in it. A key in a directory left out adds nothing more.
+    its parent's entries, and is opened unless ``maxdepth`` leaves out what is
+    in it. A key in a directory left out adds nothing more.
     """
     if not relative:
         return  # The root's own marker.
@@ -250,9 +242,7 @@ def _add(
         entries.append(entry)
 
         depth = directory.count("/") + 1
-        if (maxdepth is not None and depth >= maxdepth) or (
-            descend is not None and not descend(entry)
-        ):
+        if maxdepth is not None and depth >= maxdepth:
             return
 
         open_.append((full, []))

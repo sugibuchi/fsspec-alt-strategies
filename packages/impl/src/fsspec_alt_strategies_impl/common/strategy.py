@@ -108,7 +108,6 @@ class Strategy(ABC):
         *,
         maxdepth: int | None = None,
         topdown: bool = True,
-        descend: Callable[[dict[str, Any]], bool] | None = None,
         on_error: Literal["omit", "raise"]
         | Callable[[Exception], object]
         | None = None,
@@ -124,9 +123,6 @@ class Strategy(ABC):
             The levels walked: 1 yields only ``path``.
         topdown : bool, default True
             Whether a directory comes before those below it.
-        descend : callable, optional
-            Called with each subdirectory's entry: the walk enters it only if
-            it returns True.
         on_error : {"omit", "raise"} or callable, optional
             What becomes of the error of a directory that fails to list: None
             yields it.

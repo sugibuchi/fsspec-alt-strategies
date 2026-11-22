@@ -393,7 +393,8 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
             try:
                 async for item in items:
                     if isinstance(item, Exception):
-                        directory = getattr(item, "directory", root)
+                        # The walk's state names the directory that failed.
+                        directory = walk.state.current or root
                         yield _failed_dir(directory, item, on_error, detail)
                         continue
 

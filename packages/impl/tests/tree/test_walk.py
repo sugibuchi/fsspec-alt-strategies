@@ -113,16 +113,6 @@ async def test_maxdepth(any_fs: SimulatedFileSystem) -> None:
         await _all(_walk(any_fs, "data", maxdepth=0))
 
 
-async def test_descend_prunes(any_fs: SimulatedFileSystem) -> None:
-    _tree(any_fs)
-
-    def only_2024(entry: dict[str, Any]) -> bool:
-        return entry["name"].startswith("data/2024")
-
-    await _all(_walk(any_fs, "data", descend=only_2024))
-    assert any_fs.stats.calls == {"list": 4}
-
-
 async def test_root_errors_are_raised(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     with pytest.raises(FileNotFoundError):
@@ -192,9 +182,15 @@ async def test_on_error_raise_stops_at_once(topdown: bool) -> None:
                 profile=StorageProfile(recursive_ls_depth_first_preorder=True),
             )
         )
-    # The default listing is read a directory at a time, depth first, either
-    # way: data/2023 fails, and data/2024, waiting behind it, is never listed.
-    assert fs.requested == ["data", "data/2023"]
+    if topdown:
+        # Its siblings started with it, their pages bound by the permit: none
+        # below them is listed.
+        assert "data/2023" in fs.requested
+        assert set(fs.requested) <= {"data", "data/2023", "data/2024"}
+    else:
+        # The default listing is read a directory at a time, depth first:
+        # data/2023 fails, and data/2024, waiting behind it, is never listed.
+        assert fs.requested == ["data", "data/2023"]
     assert fs._in_flight == 0
 
 
@@ -265,31 +261,37 @@ async def test_closing_cancels_listings_in_flight() -> None:
     assert fs.stats.calls["list"] < 11
 
 
-async def test_cancel_yields_the_listings_in_flight() -> None:
+async def test_cancel_yields_the_directories_started() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.01, asynchronous=True)
     for i in range(10):
-        fs.add_file(f"root/{i}/a")
-        fs.add_file(f"root/{i}/b")
+        fs.add_file(f"root/{i}/a/f")
     op = _walk(fs, "root", concurrency_limit=asyncio.Semaphore(4))
     paths = []
     async for path, _, _ in op:
         paths.append(path)
-        if path == "root":
-            op.cancel()  # Four subdirectories are in flight.
-    assert len(paths) == 1 + 4
-    assert fs.stats.calls["list"] == 1 + 4
+        if path != "root":
+            # The root's ten subdirectories have started, their pages bound by
+            # the permits: they are walked, but none below them starts.
+            op.cancel()
+    assert len(paths) == 1 + 10
+    assert fs.stats.calls["list"] == 1 + 10
     assert op.cancelled()
     assert op.state == WalkState(
-        current=op.state.current, directories_listed=5, found=10 + 4 * 2
+        current=op.state.current, directories_listed=11, found=10 + 10
     )
 
 
-async def test_failed_listing_names_its_dir() -> None:
+@pytest.mark.parametrize("topdown", [True, False])
+async def test_the_state_names_a_failed_dir(topdown: bool) -> None:
     fs = _Forbidding(hierarchical=True, asynchronous=True)
     _tree(fs)
-    errors = [i for i in await _all(_walk(fs, "data")) if isinstance(i, Exception)]
-    assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
-    assert errors[0].directory == "data/2023"
+    op = _walk(fs, "data", topdown=topdown)
+    async for item in op:
+        if isinstance(item, Exception):
+            assert op.state.current == "data/2023"
+            break
+    else:
+        pytest.fail("no error")
 
 
 async def test_on_error_omits_or_calls() -> None:
@@ -384,25 +386,6 @@ async def test_top_down_a_directory_comes_before_those_below_it_while_it_streams
     walked, errors = await _collect_with_errors(_tree_walk(view, "big", topdown=True))
     assert errors == []
     assert [d for d, _, _ in walked] == ["big", "big/a", "big/a/b"]
-
-
-async def test_the_walk_goes_depth_first() -> None:
-    # One listing at a time: each subtree is done before its next sibling starts.
-    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
-    for top in ("a", "b"):
-        for sub in ("x", "y"):
-            fs.add_file(f"t/{top}/{sub}/f")
-    view = TreeView(fs, operation_limit=asyncio.Semaphore(1))
-    walked, _ = await _collect_with_errors(_tree_walk(view, "t", topdown=True))
-    assert [d for d, _, _ in walked] == [
-        "t",
-        "t/a",
-        "t/a/x",
-        "t/a/y",
-        "t/b",
-        "t/b/x",
-        "t/b/y",
-    ]
 
 
 @pytest.mark.parametrize("how", ["end", "stop", "close"])

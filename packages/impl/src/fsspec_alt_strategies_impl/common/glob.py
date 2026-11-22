@@ -124,6 +124,7 @@ class _TraversalTask(PathTask):
         maxdepth: int | None = None,
         on_error: OnError = None,
         top: int | None = None,
+        ils_kwargs: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(engine, entry["name"])
         self.entry = entry
@@ -136,6 +137,8 @@ class _TraversalTask(PathTask):
         self.on_error = on_error
         # The root's segments counted: a path's depth is the segments it has more.
         self.top = len(self._segments(entry["name"])) if top is None else top
+        # The options of each listing, as fsspec's walk passes its own on.
+        self.ils_kwargs = ils_kwargs or {}
         # The error of the path's own listing, apart from the action's.
         self._listing_error: Exception | None = None
 
@@ -146,6 +149,7 @@ class _TraversalTask(PathTask):
             "maxdepth": self.maxdepth,
             "on_error": self.on_error,
             "top": self.top,
+            "ils_kwargs": self.ils_kwargs,
         }
 
     def _segments(self, path: str) -> tuple[str, ...]:
@@ -159,7 +163,7 @@ class _TraversalTask(PathTask):
         for room among those pending, while they wait for permits. Its error
         is kept as ``_listing_error``, then raised.
         """
-        entries = self.handler.ils(self.entry, recursive=recursive)
+        entries = self.handler.ils(self.entry, recursive=recursive, **self.ils_kwargs)
         try:
             while True:
                 async with self.handler.operation_limit:

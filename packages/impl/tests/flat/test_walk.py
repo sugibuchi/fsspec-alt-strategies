@@ -27,14 +27,8 @@ def _tree(fs: SimulatedFileSystem) -> None:
     fs.add_file("database.csv")  # Shares the text "data", not the directory.
 
 
-def _not_2023(entry: dict[str, Any]) -> bool:
-    return not entry["name"].endswith("2023")
-
-
 @pytest.mark.parametrize("topdown", [True, False])
-@pytest.mark.parametrize(
-    "kwargs", [{}, {"maxdepth": 1}, {"maxdepth": 2}, {"descend": _not_2023}]
-)
+@pytest.mark.parametrize("kwargs", [{}, {"maxdepth": 1}, {"maxdepth": 2}])
 @pytest.mark.parametrize("path", ["data", "data/2024", ""])
 async def test_finds_what_tree_walk_finds(
     flat_fs: SimulatedFileSystem, path: str, kwargs: dict[str, Any], topdown: bool
@@ -136,21 +130,18 @@ async def test_a_failed_listing_yields_its_error_last(
 ) -> None:
     _tree(flat_fs)
     # data/2023/01 and data/2023/02 are listed, then the listing fails.
-    items: list[Any] = [
-        item
-        async for item in _walk(
-            flat_fs,
-            "data",
-            topdown=topdown,
-            list_prefix=_failing_after(flat_fs, 2),
-            on_error=None,
-        )
-    ]
+    op = _walk(
+        flat_fs,
+        "data",
+        topdown=topdown,
+        list_prefix=_failing_after(flat_fs, 2),
+        on_error=None,
+    )
+    items: list[Any] = [item async for item in op]
 
     error = items[-1]
     assert isinstance(error, OSError)
-    assert error.directory == "data"  # type: ignore[attr-defined]
-    assert "Listing 'data' failed." in error.__notes__
+    assert op.state.current == "data"  # The failed directory's path.
     # The directories done come first: data/2023/01, which the second key closed.
     assert [d for d, _, _ in items[:-1]] == ["data/2023/01"]
 

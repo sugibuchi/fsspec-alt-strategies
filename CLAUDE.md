@@ -111,7 +111,7 @@ code: read it before adding a strategy or a handler.
 - A strategy calls only a handler's primitives, such as `ils`, `info` and `rm_file`, never a filesystem's method: the
   filesystem is the caller's.
 - The only functions a strategy takes are:
-  - the options fsspec's method takes, such as `walk`'s `on_error`, and the walk's `descend`, which prunes it;
+  - the options fsspec's method takes, such as `walk`'s `on_error`;
   - a copy's `cp_entry`, and a move's `cp_entry` and `mv_entry`, each a `common.jobs._Transfer` taking the source's
     entry;
   - the `request` of `rm_by_request`, `cp_by_request` and `mv_by_request`, the storage's request on a batch.
@@ -131,7 +131,8 @@ code: read it before adding a strategy or a handler.
     gives them;
   - it returns a private `Operation`, an `OperationHandler` working as it is iterated. Callers never get one: they
     watch operations with a `Monitor`, which stops one through its `OperationHandler`;
-  - the operation yields what it did, mixed with an exception per failed path, each noting its path;
+  - the operation yields what it did, mixed with an exception per failed path, as the storage raised it, with no
+    note: a walk's state names the directory whose error it yields, as its `current`;
   - the call raises argument errors, and the iteration only errors ending the whole operation, such as a missing root;
   - its stopping mirrors `asyncio.Task`: `cancel()` starts nothing new but yields what is in flight, and `aclose()`
     stops at once, waiting for writes in flight. There are no callbacks and no result classes.
