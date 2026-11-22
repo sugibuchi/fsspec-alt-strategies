@@ -205,7 +205,8 @@ class VisitDirectory(_TraversalTask):
                 patterns=self.patterns,
             )
         else:
-            return VisitDirectory(
+            # Its own class: a subclass's directories are each one of it.
+            return type(self)(
                 self._engine,
                 entry,
                 self.action,

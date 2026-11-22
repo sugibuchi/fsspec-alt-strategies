@@ -7,26 +7,32 @@
 strategy, in the order fsspec's ``walk`` promises: top down, a directory
 before those below it; bottom up, after all of them.
 
-This module depends on `_visit` and `_walker`, and `handler`, `operation` and
-`paths` of `common`.
+`_walk_top_down` walks top down on `common.tree`'s traversal instead, by a
+`_WalkTopDown` per directory: its caller may prune by changing ``dirs``.
+
+This module depends on `_visit` and `_walker`, and `glob`, `handler`,
+`operation`, `paths` and `tree` of `common`.
 """
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, Literal
 
 from fsspec_alt_strategies.states import WalkState
 
+from ..common.glob import PathAction, VisitDirectory
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
+from ..common.tree import TreeTraversal
 from ._visit import _Pruned
 from ._walker import _TreeWalk
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
 
-    from ..common.handler import StoragePath
+    from ..common.handler import Entry, StoragePath
     from ._walker import _Listing
     from .handler import TreeFileOperationHandler
 
@@ -130,6 +136,62 @@ def _tree_walk(
                     yield item
 
     return Operation(run, WalkState(directories_listed=0))
+
+
+class _WalkTopDown(VisitDirectory):
+    """A directory of a walk top down: its ``(path, dirs, files)`` out before any below it, pruned by the caller.
+
+    Its listing pruned, it emits ``(walked, path, dirs, files)``, and waits
+    for ``walked``, an `asyncio.Event`, which the caller sets once it has
+    taken them. A subdirectory the caller removed from ``dirs`` meanwhile is
+    not walked, as with `os.walk` top down. So a directory comes after its
+    parent's, which waits: never before it.
+
+    A subdirectory that fails to list emits its error instead, and the walk
+    goes on. The root's raises it, which ends the walk.
+    """
+
+    async def prune(self, entries: AsyncIterable[Entry]) -> AsyncIterator[Entry]:
+        try:
+            kept = [e async for e in super().prune(entries)]
+        except Exception as error:
+            if self._group is None:
+                raise  # The root's: ends the walk.
+            await self._emit_event(error)
+            return
+        path, dirs, files = _triples(_trim(self.entry["name"]), kept, detail=True)
+        walked = asyncio.Event()
+        await self._emit_event((walked, path, dirs, files))
+        await walked.wait()
+        for entry in dirs.values():  # Those the caller left.
+            yield entry
+
+
+async def _walk_top_down(
+    handler: TreeFileOperationHandler, path: StoragePath, *, max_running: int
+) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
+    """Walk a tree top down, yielding each directory's ``(path, dirs, files)``, or its error.
+
+    The caller may prune by removing names from ``dirs`` before it takes the
+    next item: the directory's task waits until then.
+    """
+    engine = TreeTraversal(max_running=max_running, split=handler.segments)
+    root = _WalkTopDown(
+        engine,
+        {"name": path, "type": "directory"},
+        PathAction(engine._emit_event),
+        handler,
+    )
+    async with aclosing(engine.events([root])) as events:
+        async for event in events:
+            if isinstance(event, Exception):
+                yield event
+                continue
+            walked, *triple = event
+            try:
+                yield tuple(triple)
+            finally:
+                walked.set()  # The directory goes on, with the dirs left.
 
 
 def _walked(
