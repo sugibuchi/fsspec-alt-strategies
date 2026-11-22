@@ -173,17 +173,19 @@ def _root_task(
 ) -> _TraversalTask:
     """The root task of a traversal whose action needs no order but its own: one listing where it streams right.
 
-    Where the handler's profile declares ``recursive_ls_depth_first_preorder``
-    and no ``maxdepth`` prunes it, each directory's descendants come together,
-    so one recursive listing is streamed. Else a directory per listing: one
-    failing fails only itself. The handler is open, its profile read.
+    Where the handler's profile declares ``recursive_ls_depth_first_preorder``,
+    each directory's descendants come together, so a subtree that neither
+    ``maxdepth`` nor a pattern prunes is streamed by one recursive listing:
+    the root's, if it is one. Else a directory per listing: one failing fails
+    only itself. The handler is open, its profile read.
     """
-    if (
-        options.get("maxdepth") is None
-        and handler.profile.recursive_ls_depth_first_preorder
-    ):
+    declared = handler.profile.recursive_ls_depth_first_preorder
+    root = VisitDirectory(
+        engine, entry, action, handler, use_one_listing=declared, **options
+    )
+    if declared and root._whole(entry):
         return TraverseSubtree(engine, entry, action, handler, **options)
-    return VisitDirectory(engine, entry, action, handler, **options)
+    return root
 
 
 def _unlisted(

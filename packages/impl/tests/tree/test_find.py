@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.states import FindState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.find import _tree_find
@@ -141,10 +142,9 @@ async def test_a_failed_dir_in_the_recursive_listing_is_resumed_past() -> None:
     _tree(fs)
     async with _find(fs, "data") as op:
         entries, errors = await _collect_with_errors(op)
-    # The listing breaks at data/2023, and is resumed a directory per request:
-    # data/2023 fails again, its error noted with it, and the rest is found.
+    # The default profile streams no recursive listing: each directory is
+    # listed alone, data/2023 fails alone, and the rest is found.
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
     assert _names(entries) == [
         "data/2024/01/part-0.parquet",
         "data/2024/02/part-0.parquet",
@@ -175,13 +175,11 @@ async def test_a_recursive_listing_broken_off_yields_its_error(
     fs = _BreakingOff(hierarchical=any_fs.hierarchical, asynchronous=True)
     fs.cut_after = cut_after
     _tree(fs)
-    view = TreeView(fs, recursive_listing=True)
-    try:
-        entries, errors = await _collect_with_errors(
-            _tree_find(view, "data", withdirs=withdirs)
-        )
-    except ConnectionResetError:
-        return  # Broken before its first part: the root's failure, raised.
+    # Declared, so that the tree is streamed by its one listing.
+    profile = StorageProfile(recursive_ls_depth_first_preorder=True)
+    view = TreeView(fs, recursive_listing=True, storage_profile=profile)
+    op = _tree_find(view, "data", withdirs=withdirs)
+    entries, errors = await _collect_with_errors(op)
     # Nothing is listed again.
     assert fs.stats.calls["list"] == 1
     names = [e["name"] for e in entries]
@@ -190,9 +188,9 @@ async def test_a_recursive_listing_broken_off_yields_its_error(
     if not errors:
         assert sorted(names) == expected  # A listing shorter than the cut ends whole.
     else:
-        # A failed listing: its error, noted with the root it lists, and what it passed.
+        # A failed listing: the root's error, the state naming it, and what it passed.
         assert [type(e) for e in errors] == [ConnectionResetError]
-        assert errors[0].__notes__ == ["Listing 'data' failed."]
+        assert op.state.current == "data"
         assert set(names) <= set(expected)
 
 
@@ -203,9 +201,10 @@ async def test_cancel_after_the_first_listing(any_fs: SimulatedFileSystem) -> No
     async for entry in op:
         found.append(entry["name"])
         op.cancel()
-    # data's listing, then the one in flight with it, data/2023, which has no file.
+    # data's listing, then those started with it, data/2023 and data/2024,
+    # whose subdirectories, at maxdepth, hold the files: none is listed.
     assert found == ["data/README.md"]
-    assert any_fs.stats.calls["list"] <= 2
+    assert any_fs.stats.calls["list"] <= 3
     assert op.cancelled()
 
 
@@ -213,9 +212,9 @@ async def test_cancel_stops_the_recursive_listing() -> None:
     fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
     for i in range(100):
         fs.add_file(f"data/{i:03}/file")
-    op = _find(fs, "data", concurrency_limit=asyncio.Semaphore(1))
+    op = _find(fs, "data", concurrency_limit=asyncio.Semaphore(1), max_running=4)
     found = [entry async for entry in op if op.cancel() or True]
-    # Its listings ahead stop too: far from all 101 directories are listed.
+    # The directories not started stop: far from all 101 are listed.
     assert len(found) < 100
     assert fs.stats.calls["list"] < 101
     assert fs._in_flight == 0

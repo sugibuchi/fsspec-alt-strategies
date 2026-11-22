@@ -7,8 +7,8 @@ each file's size with a request of its own. `_tree_du` adds up the sizes the
 listings already give, as a map-reduce on `common.tree`'s traversal, by
 `_Du`: a file's value is its size, a directory's the sum of its items'.
 
-This module depends on `walk`, and `glob`, `operation`, `paths` and `tree` of
-`common`.
+This module depends on `find` and `walk`, and `glob`, `operation` and `paths`
+of `common`.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from fsspec_alt_strategies.states import DuState
 from ..common.glob import PathAction
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
-from ..common.tree import TreeTraversal
-from .walk import _MAX_RUNNING, _root_task, _unlisted
+from .find import _listed, _read
+from .walk import _MAX_RUNNING
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -77,57 +77,26 @@ def _tree_du(
     """
     _check_maxdepth(maxdepth)
 
+    def counted(state: DuState, entry: Entry) -> DuState:
+        size = entry.get("size") or 0
+        return replace(state, files=state.files + 1, size=state.size + size)
+
     async def run(
         op: Operation[dict[str, Any], DuState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
-        engine = TreeTraversal(max_running=max_running, split=handler.segments)
-        op._on_cancel = engine.cancel
-        await handler.open()  # Its profile, read by _root_task.
-        top = len(tuple(handler.segments(path)))
-        root = _root_task(
-            engine,
-            {"name": path, "type": "directory"},
-            _Du(engine._emit_event, handler, top, maxdepth),
+        steps = _read(
             handler,
+            _trim(path),
+            op,
+            lambda emit, _: _Du(emit, op),
+            count=counted,
+            max_running=max_running,
             maxdepth=maxdepth,
             ils_kwargs=ils_kwargs,
         )
-        try:
-            async with aclosing(engine.events([root])) as events:
-                async for event in events:
-                    state = op.state
-                    if isinstance(event, tuple):  # A directory failed: (entry, error).
-                        entry, error = event
-                        op.state = replace(
-                            state,
-                            current=_trim(entry["name"]),
-                            errors=state.errors + 1,
-                            directories_listed=(state.directories_listed or 0) + 1,
-                        )
-                        yield error
-                    elif event["type"] == "directory":  # Listed, and counted.
-                        op.state = replace(
-                            state,
-                            current=_trim(event["name"]),
-                            directories_listed=(state.directories_listed or 0) + 1,
-                        )
-                    else:
-                        op.state = _counted(state, event)
-                        yield event
-        except FileNotFoundError:
-            return  # A missing root measures nothing, as fsspec's _du.
-        except NotADirectoryError:
-            # A file measures itself.
-            async with handler.operation_limit:
-                entry = await handler.info(handler.entry(_trim(path)))
-            op.state = _counted(op.state, entry)
-            yield entry
-        except Exception as error:
-            # The root's other failures are a failed listing, as any is.
-            op.state = replace(
-                op.state, current=_trim(path), errors=op.state.errors + 1
-            )
-            yield error
+        async with aclosing(steps):
+            async for item in steps:
+                yield item
 
     return Operation(run, DuState(directories_listed=0))
 
@@ -135,22 +104,13 @@ def _tree_du(
 class _Du(PathAction):
     """du as a map-reduce: a file's value is its size, a directory's the sum of its items'.
 
-    Each file's entry is emitted as it is counted, and each directory's as it
-    is reduced, once listed: one at ``maxdepth`` is reduced unlisted, and
-    emits nothing. A directory that failed adds nothing.
+    Each file's entry is emitted as it is counted. A directory that failed
+    adds nothing.
     """
 
-    def __init__(
-        self,
-        emit_event: Any,
-        handler: TreeFileOperationHandler,
-        top: int,
-        maxdepth: int | None,
-    ) -> None:
+    def __init__(self, emit_event: Any, op: Operation[Any, DuState]) -> None:
         super().__init__(emit_event)
-        self.handler = handler
-        self.top = top
-        self.maxdepth = maxdepth
+        self.op = op
 
     async def reduce(
         self, entry: Entry, match: bool, value: Any, values: list[Any]
@@ -158,13 +118,7 @@ class _Du(PathAction):
         if entry["type"] != "directory":
             await self._emit_event(entry)
             return entry.get("size") or 0
-        if not _unlisted(self.handler, self.top, self.maxdepth, entry):
-            await self._emit_event(entry)
         return sum(v for v in values if v is not None)
 
-
-def _counted(state: DuState, entry: Entry) -> DuState:
-    """The state once a file is counted."""
-    return replace(
-        state, files=state.files + 1, size=state.size + (entry.get("size") or 0)
-    )
+    async def listed(self, entry: Entry) -> None:
+        self.op.state = _listed(self.op.state, entry)

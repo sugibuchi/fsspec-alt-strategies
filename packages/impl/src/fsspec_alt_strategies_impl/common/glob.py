@@ -104,6 +104,13 @@ class PathAction:
         """
         return None
 
+    async def listed(self, entry: Entry) -> None:
+        """A directory's listing is whole, its items acted on: called before its `reduce`.
+
+        Never for a directory reduced unlisted, e.g. at ``maxdepth``, nor one
+        that failed: e.g. a strategy counts the directories listed by it.
+        """
+
     async def failed(self, entry: Entry) -> Any:
         """The value of a directory whose listing failed, for its parent's `reduce`: None by default.
 
@@ -298,6 +305,7 @@ class VisitDirectory(_TraversalTask):
                 # The items taken ran: the directory, listed in part, is not reduced.
                 await self._listing_failed()
                 return await self.action.failed(entry)
+            await self.action.listed(entry)
         return await self.action.reduce(entry, match, value, values)
 
     async def _items(self) -> AsyncIterator[Entry]:
@@ -444,6 +452,7 @@ class _Span:
                 else:
                     # Pruned, with all below it.
                     next = await _Span(task, subdir, next, self.entries)._skip()
+        await task.action.listed(root)
         return await task.action.reduce(root, match, value, values), next
 
     async def _skip(self) -> Entry | None:

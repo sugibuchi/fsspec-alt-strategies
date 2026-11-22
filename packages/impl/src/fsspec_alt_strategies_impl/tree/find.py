@@ -4,10 +4,14 @@
 
 `_tree_find` is an alternative to fsspec's ``_find``, with the same paths.
 fsspec's walks a tree one directory at a time, unless the filesystem lists
-whole trees. `_tree_find` lists the tree as `_tree_walk` does: by one recursive
-``ils``, or a directory per request, several at a time.
+whole trees. `_tree_find` lists the tree on `common.tree`'s traversal: by one
+recursive ``ils``, or a directory per request, several at a time.
 
-This module depends on `_visit` and `_walker`, and `handler`, `operation` and `paths` of `common`.
+`_read` runs the strategies that only read, find, glob and du, on the
+traversal, and handles a tree's root as fsspec's ``_find`` does.
+
+This module depends on `walk`, and `glob`, `handler`, `operation`, `paths`
+and `tree` of `common`.
 """
 
 from __future__ import annotations
@@ -18,19 +22,22 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from fsspec_alt_strategies.states import DuState, FindState, GlobState
 
+from ..common.glob import PathAction
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
-from ._visit import _Pruned
-from ._walker import _Listing, _TreeWalk
+from ..common.tree import TreeTraversal
+from .walk import _MAX_RUNNING, _root_task
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator, Callable, Sequence
 
-    from ..common.handler import StorageHandler, StoragePath
-    from ._visit import _Visit
+    from ..common.handler import Entry, StoragePath
+    from ..common.patterns import _Search
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
+
+_S = TypeVar("_S", FindState, DuState, GlobState)
 
 
 def _tree_find(
@@ -40,37 +47,39 @@ def _tree_find(
     maxdepth: int | None = None,
     withdirs: bool = False,
     ils_kwargs: dict[str, Any] | None = None,
+    max_running: int = _MAX_RUNNING,
 ) -> Operation[dict[str, Any], FindState]:
     """Find the files in a tree, listing several directories at a time.
 
     It finds the paths fsspec's ``_find`` finds. A missing ``path`` finds
     nothing, and a file finds itself. A directory that fails to list yields its
-    error, and the rest of the tree is still searched. Without ``maxdepth``, the
-    tree's one recursive listing broken off is its root's failure: what it
-    passed is found, and its error yielded.
+    error, and the rest of the tree is still searched. A tree listed by one
+    recursive ``ils``, broken off, is its root's failure: what it passed is
+    found, and its error yielded.
 
-    It yields each path as its directory's listing arrives, so the paths are not
-    in order. fsspec's ``_find`` sorts them, by name. A storage listing a
-    directory twice, e.g. as a prefix and as its marker object, yields it once.
+    It yields each path as it is listed, so the paths are not in order.
+    fsspec's ``_find`` sorts them, by name. A storage listing a directory
+    twice, e.g. as a prefix and as its marker object, yields it once.
 
     It wins over fsspec's ``_find`` on storages that list one directory per
     request, with many directories: their listings overlap. It gains nothing on
     object stores, which list a whole tree in one paginated request: it sends
-    that same listing.
+    that same listing, where the profile declares
+    ``recursive_ls_depth_first_preorder``.
 
-    Once cancelled, it lists no new directory, and yields the paths of the
-    listings in flight.
+    Once cancelled, it starts no new directory, and yields the paths of those
+    started.
 
-    Requests: one recursive ``ils`` of ``path``, which a storage without a
-    recursive listing answers with one per directory. With ``maxdepth``, one
-    ``ils`` per directory instead, as the handler's ``operation_limit``
-    allows. One ``info`` more for ``path`` itself, if a file, or a directory
-    with ``withdirs``.
+    Requests: one recursive ``ils`` of ``path``, as above, else one ``ils``
+    per directory, each page holding a permit of the handler's
+    ``operation_limit``. One ``info`` more for ``path`` itself, if a file, or
+    a directory with ``withdirs``.
 
     ``path`` is the directory searched on ``handler``, by its ``ils`` and ``info``.
     ``maxdepth`` of 1 finds only the files in ``path``. ``withdirs`` finds
     directories too, ``path`` included. ``ils_kwargs`` go to each ``ils``, as
-    fsspec's ``find`` passes its own on.
+    fsspec's ``find`` passes its own on. ``max_running`` bounds the
+    directories in flight.
 
     The operation yields the ``ils`` entry of each path found, or the error
     of a directory that failed to list, and its state is a `FindState`. The call
@@ -78,67 +87,95 @@ def _tree_find(
     """
     _check_maxdepth(maxdepth)
 
+    def found(state: FindState, entry: Entry) -> FindState:
+        return replace(state, found=state.found + 1)
+
     async def run(
         op: Operation[dict[str, Any], FindState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         root = _trim(path)
-        steps = _find_listings(
+        steps = _read(
             handler,
             root,
-            _Pruned(maxdepth=maxdepth),
+            op,
+            lambda emit, root_entry: _Found(emit, op, root_entry, withdirs=withdirs),
+            count=found,
+            max_running=max_running,
+            maxdepth=maxdepth,
             ils_kwargs=ils_kwargs,
-            stopping=op.cancelling,
-            file_root=True,
             dir_root=withdirs and bool(root),
         )
-        state = op.state
-
         async with aclosing(steps):
-            async for listing in steps:
-                found = [
-                    e for e in listing.entries if withdirs or e["type"] != "directory"
-                ]
-                op.state = state = _listed(
-                    state, listing, found=state.found + len(found)
-                )
-
-                if listing.error is not None:
-                    yield listing.error
-
-                for entry in found:
-                    yield entry
+            async for item in steps:
+                yield item
 
     return Operation(run, FindState(directories_listed=0))
 
 
-_S = TypeVar("_S", FindState, DuState, GlobState)
+class _Found(PathAction):
+    """find's and glob's action: each path matched emitted as it is listed, each directory listed counted.
 
-
-def _listed(state: _S, listing: _Listing, **counts: int) -> _S:
-    """A state once a directory's listing is out, with ``counts`` its own: its error, and the directory listed.
-
-    Depth 0 is the root's own entry, which is no directory listed.
+    ``root``, the root task's own entry, made, is never emitted: `_read`
+    asks its ``info`` instead. Without ``withdirs``, only files are. A path in
+    ``found`` already, e.g. a glob's literal, is not emitted again.
     """
+
+    def __init__(
+        self,
+        emit_event: Any,
+        op: Operation[Any, Any],
+        root: Entry,
+        *,
+        withdirs: bool,
+        found: set[str] | None = None,
+    ) -> None:
+        super().__init__(emit_event)
+        self.op = op
+        self.root = root
+        self.withdirs = withdirs
+        self.found = found if found is not None else set()
+
+    async def map(self, entry: Entry, match: bool) -> Any:
+        if (
+            match
+            and entry is not self.root
+            and (self.withdirs or entry["type"] != "directory")
+            and entry["name"].rstrip("/") not in self.found
+        ):
+            await self._emit_event(entry)
+
+    async def listed(self, entry: Entry) -> None:
+        self.op.state = _listed(self.op.state, entry)
+
+
+def _listed(state: _S, entry: Entry) -> _S:
+    """A state once a directory's listing is whole."""
     return replace(
         state,
-        errors=state.errors + (listing.error is not None),
-        current=listing.directory,
-        directories_listed=(state.directories_listed or 0) + (listing.depth > 0),
-        **counts,
+        current=_trim(entry["name"]),
+        directories_listed=(state.directories_listed or 0) + 1,
     )
 
 
-async def _find_listings(
+async def _read(
     handler: TreeFileOperationHandler,
     path: str,
-    visit: _Visit,
+    op: Operation[Any, _S],
+    action: Callable[[Any, Entry], PathAction],
     *,
+    count: Callable[[_S, Entry], _S],
+    max_running: int,
+    maxdepth: int | None = None,
+    patterns: Sequence[_Search] | None = None,
     ils_kwargs: dict[str, Any] | None = None,
-    stopping: Callable[[], object] | None = None,
-    file_root: bool = False,
+    file_root: bool = True,
     dir_root: bool = False,
-) -> AsyncGenerator[_Listing]:
-    """Walk as the strategies that only read do, such as find, du and glob: each directory's listing as it comes.
+) -> AsyncGenerator[dict[str, Any] | Exception]:
+    """Traverse a tree as the strategies that only read do, such as find, du and glob: each entry the action emits, or an error.
+
+    ``action`` makes the traversal's action from its ``emit_event`` and the
+    root's own entry. Each entry it emits is yielded, counted in the state by
+    ``count``.
 
     It treats ``path`` itself as fsspec's ``_find`` and ``_glob`` do:
 
@@ -146,48 +183,65 @@ async def _find_listings(
     - a file, it yields the file's ``info`` entry if ``file_root``, else
       nothing;
     - a directory, it yields the directory's own ``info`` entry after its
-      listing, if ``dir_root`` and the walk is not stopping.
+      traversal, if ``dir_root`` and the operation is not cancelled.
 
-    Any other failure of the root is a failed listing, yielded as any is. The
-    root's own entry comes as a `_Listing` of depth 0, which is no listing. So
-    the strategies filter and count it as any entry, but count no directory
-    listed for it.
+    Any other failure of the root is a failed directory, yielded as any is,
+    the state's ``current`` naming it.
     """
-    root = _trim(path)
-    walk = _TreeWalk(handler, root, visit, ils_kwargs=ils_kwargs, stopping=stopping)
-    listings = walk.listings()
+    engine = TreeTraversal(max_running=max_running, split=handler.segments)
+    op._on_cancel = engine.cancel
+    await handler.open()  # Its profile, read by _root_task.
+    root_entry: Entry = {"name": path, "type": "directory"}
+    root = _root_task(
+        engine,
+        root_entry,
+        action(engine._emit_event, root_entry),
+        handler,
+        maxdepth=maxdepth,
+        patterns=patterns,
+        ils_kwargs=ils_kwargs,
+    )
+    try:
+        async with aclosing(engine.events([root])) as events:
+            async for event in events:
+                if isinstance(event, tuple):  # A directory failed: (entry, error).
+                    entry, error = event
+                    op.state = _failed(op.state, _trim(entry["name"]))
+                    yield error
+                else:
+                    op.state = count(op.state, event)
+                    yield event
+    except FileNotFoundError:
+        return  # A missing root has nothing, as with fsspec's _find.
+    except NotADirectoryError:
+        if file_root:  # A file finds itself.
+            entry = await _info(handler, path)
+            op.state = count(op.state, entry)
+            yield entry
+        return
+    except Exception as error:
+        # The root's other failures are a failed directory, as any is.
+        op.state = _failed(op.state, _trim(path))
+        yield error
+        return
 
-    async with aclosing(listings):
-        async for listing in listings:
-            if listing.directory == root and isinstance(
-                listing.error, FileNotFoundError
-            ):
-                return
-            if listing.directory == root and isinstance(
-                listing.error, NotADirectoryError
-            ):
-                if file_root:
-                    yield await _file_entry(handler, root, listing.error)
-                return
-            yield listing
-            stopped = stopping is not None and bool(stopping())
-            if (
-                listing.directory == root
-                and dir_root
-                and not stopped
-                and not listing.error
-            ):
-                async with handler.operation_limit:
-                    entry = await handler.info(handler.entry(root))
-                yield _Listing(root, 0, [entry])
+    if dir_root and not op.cancelling():
+        entry = await _info(handler, path)
+        op.state = count(op.state, entry)
+        yield entry
 
 
-async def _file_entry(
-    handler: StorageHandler, root: str, error: NotADirectoryError
-) -> _Listing:
-    """A root that is a file, as a listing of depth 0: its entry as its listing gave it, else asked."""
-    entry = getattr(error, "entry", None)
-    if entry is None:
-        async with handler.operation_limit:
-            entry = await handler.info(handler.entry(root))
-    return _Listing(root, 0, [entry])
+def _failed(state: _S, directory: str) -> _S:
+    """A state once a directory failed to list: listed, though failed, and its error."""
+    return replace(
+        state,
+        current=directory,
+        errors=state.errors + 1,
+        directories_listed=(state.directories_listed or 0) + 1,
+    )
+
+
+async def _info(handler: TreeFileOperationHandler, path: str) -> Entry:
+    """A path's ``info``, holding a permit."""
+    async with handler.operation_limit:
+        return await handler.info(handler.entry(_trim(path)))

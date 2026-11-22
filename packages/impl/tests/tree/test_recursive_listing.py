@@ -97,7 +97,11 @@ async def test_a_refused_recursive_listing_lists_each_directory(
 ) -> None:
     _tree(any_fs)
     expected = await AsyncFileSystem._find(any_fs, "data", withdirs=True)
-    handler = _Refusing(any_fs, recursive_listing=True)
+    handler = _Refusing(
+        any_fs,
+        recursive_listing=True,
+        storage_profile=StorageProfile(recursive_ls_depth_first_preorder=True),
+    )
 
     for _ in range(2):
         found, errors = await _collect_with_errors(
@@ -418,7 +422,9 @@ class _Choosing(TreeView):
     ("below", "listings"),
     [
         (0, 1),  # Every subtree whole: data's one recursive listing.
-        (1, 3),  # data alone, then 2023 and 2024 whole.
+        # The default, asked of data, lists each directory alone: the
+        # traversal streams it, and asks no subdirectory again.
+        (1, 7),
         (None, 7),  # Never: each of data's 7 directories alone.
     ],
 )

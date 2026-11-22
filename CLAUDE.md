@@ -198,7 +198,7 @@ code: read it before adding a strategy or a handler.
 - A root's failure is a failed listing like any other. Each strategy decides what it means, as its fsspec method does.
 - A recursive listing that breaks off is a failed listing: its root's. Nothing is listed again: a storage resumes its
   own listing, e.g. a page by its continuation token.
-- Those that only read build on `tree.find._find_listings`, which handles the root as `_find` does. Those changing
+- Those that only read build on `tree.find._read`, a `common.tree` traversal handling the root as `_find` does: each is a `PathAction`. Those changing
   the storage build on `tree._jobs._TreeJobs`. Never write another loop or root handling.
 
 #### The flat family

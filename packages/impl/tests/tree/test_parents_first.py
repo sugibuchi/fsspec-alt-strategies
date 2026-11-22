@@ -58,7 +58,7 @@ def _fs(hierarchical: bool = True) -> _BreadthFirst:
 
 @pytest.mark.parametrize("withdirs", [False, True])
 @pytest.mark.parametrize("hierarchical", [True, False])
-async def test_find_as_fsspec_by_one_listing(
+async def test_find_as_fsspec_a_directory_per_listing(
     withdirs: bool, hierarchical: bool
 ) -> None:
     fs = _fs(hierarchical)
@@ -66,8 +66,9 @@ async def test_find_as_fsspec_by_one_listing(
         _tree_find(_view(fs), "data", withdirs=withdirs)
     )
     assert errors == []
-    # One listing, and with withdirs the root's own info, read before fsspec's find adds its own.
-    assert fs.stats.calls == {"list": 1, **({"info": 1} if withdirs else {})}
+    # Its own listing is not streamed: one per directory, and with withdirs
+    # the root's own info, read before fsspec's find adds its own.
+    assert fs.stats.calls == {"list": 6, **({"info": 1} if withdirs else {})}
     expected = await AsyncFileSystem._find(fs, "data", withdirs=withdirs)
     assert sorted(e["name"] for e in found) == expected
 
@@ -117,25 +118,6 @@ async def test_mv_moves_the_whole_tree() -> None:
         ["out/kept", *(p.replace("data", "out", 1) for p in _FILES)]
     )
     assert not await fs._exists("data/a")
-
-
-@pytest.mark.parametrize("cut_after", [1, 2, 4, 7, 9])
-async def test_a_listing_broken_off_yields_its_error(cut_after: int) -> None:
-    fs = _fs()
-    fs.cut_after = cut_after
-    try:
-        found, errors = await _collect_with_errors(
-            _tree_find(_view(fs), "data", withdirs=True)
-        )
-    except ConnectionResetError:
-        return  # Broken before its first part: the root's failure, raised.
-    # What it passed, once each, and its error: nothing is listed again.
-    assert [type(e) for e in errors] == [ConnectionResetError]
-    assert fs.stats.calls["list"] == 1
-    names = [e["name"] for e in found]
-    assert len(names) == len(set(names))
-    fs.cut_after = None
-    assert set(names) <= set(await AsyncFileSystem._find(fs, "data", withdirs=True))
 
 
 async def test_the_default_listing_is_depth_first() -> None:

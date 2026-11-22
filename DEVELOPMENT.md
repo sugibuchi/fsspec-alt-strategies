@@ -540,7 +540,7 @@ The tree strategies come in two layers:
 
 | Strategies                             | They send                         | They build on    |
 |----------------------------------------|-----------------------------------|------------------|
-| `_tree_find`, `_tree_du`, `_tree_glob` | Listings, and one `info` at most  | `_find_listings` |
+| `_tree_find`, `_tree_du`, `_tree_glob` | Listings, and one `info` at most  | `_read`          |
 | `_tree_rm`, `_tree_cp`, `_tree_mv`     | Changes, as the listings come     | `_TreeJobs`      |
 
 - The changes run along with the walk still in flight.

@@ -13,7 +13,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.wrapper.adlfs import AdlfsHandler
+from fsspec_alt_strategies_impl.wrapper.adlfs import ADLFS_PROFILE, AdlfsHandler
 from fsspec_alt_strategies_impl.wrapper.filesystem import FileSystemWrapper
 from fsspec_alt_strategies_impl.wrapper.gcsfs import GcsfsHandler
 from fsspec_alt_strategies_impl.wrapper.s3fs import S3fsHandler
@@ -312,7 +312,8 @@ _TREE: dict[str, int | None] = {
 
 def _adl(keys: dict[str, int | None]) -> tuple[_Adl, Any]:
     fs = _Adl(keys)
-    return fs, _adlfs(fs, **_LIMITS)
+    # Its own profile: its listing, depth first, is streamed whole.
+    return fs, _adlfs(fs, **{**_LIMITS, "storage_profile": ADLFS_PROFILE})
 
 
 async def test_adlfs_lists_a_tree_in_one_listing_of_pages() -> None:

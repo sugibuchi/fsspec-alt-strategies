@@ -27,6 +27,7 @@ This module depends on `_visit` and `find`, and `operation`, `paths` and `patter
 from __future__ import annotations
 
 from contextlib import aclosing
+from dataclasses import replace
 from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
@@ -35,14 +36,13 @@ from fsspec_alt_strategies.states import GlobState
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.patterns import _infos, _inside, _Search
-from ._visit import _Pruned
-from .find import _find_listings, _listed
+from .find import _Found, _read
+from .walk import _MAX_RUNNING
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
-    from ..common.handler import StoragePath
-    from ._walker import _Listing
+    from ..common.handler import Entry, StoragePath
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
@@ -55,6 +55,7 @@ def _tree_glob(
     maxdepth: int | None = None,
     withdirs: bool = True,
     ils_kwargs: dict[str, Any] | None = None,
+    max_running: int = _MAX_RUNNING,
 ) -> Operation[dict[str, Any], GlobState]:
     """Find the paths matching glob patterns, listing only directories they can match in.
 
@@ -137,9 +138,10 @@ def _tree_glob(
         for root, group in _walks(searches):
             if op.cancelling():
                 return
-            walk = _walk(handler, root, group, op, found, ils_kwargs)
-            async for match in walk:
-                yield match
+            walk = _walk(handler, root, group, op, found, ils_kwargs, max_running)
+            async with aclosing(walk):
+                async for match in walk:
+                    yield match
 
     return Operation(run, GlobState(directories_listed=0))
 
@@ -158,65 +160,39 @@ def _walks(searches: list[_Search]) -> list[tuple[str, list[_Search]]]:
     ]
 
 
-async def _walk(
+def _walk(
     handler: TreeFileOperationHandler,
     root: str,
     searches: list[_Search],
     op: Operation[dict[str, Any], GlobState],
     found: set[str],
     ils_kwargs: dict[str, Any] | None,
+    max_running: int,
 ) -> AsyncGenerator[dict[str, Any] | Exception]:
-    """The matches of patterns in one tree, walked from ``root``."""
-    depths = [s.depth_from(root) for s in searches]
+    """The matches of patterns in one tree, traversed from ``root``, the patterns pruning it.
 
-    # As fsspec's _glob: a pattern under a missing directory, or a file, matches
-    # nothing. Its find includes the root directory itself, which few patterns
-    # match.
-    steps = _find_listings(
+    As fsspec's ``_glob``: a pattern under a missing directory, or a file,
+    matches nothing. Its find includes the root directory itself, which few
+    patterns match. A match of a pattern without wildcards, in ``found``
+    already, is not yielded again.
+    """
+
+    def matched(state: GlobState, entry: Entry) -> GlobState:
+        return replace(state, matched=state.matched + 1)
+
+    return _read(
         handler,
         root,
-        _Pruned(
-            maxdepth=None
-            if None in depths
-            else max(d for d in depths if d is not None),
-            descend=lambda e: any(s.descend(e) for s in searches),
-            whole=lambda e: any(s.whole(e) for s in searches),
+        op,
+        lambda emit, root_entry: _Found(
+            emit, op, root_entry, withdirs=True, found=found
         ),
+        count=matched,
+        max_running=max_running,
+        patterns=searches,
         ils_kwargs=ils_kwargs,
-        stopping=op.cancelling,
+        file_root=False,
         dir_root=bool(root)
+        and root not in found  # A literal's match, found already.
         and any(s.matched({"name": root, "type": "directory"}) for s in searches),
     )
-
-    async with aclosing(steps):
-        async for listing in steps:
-            for match in _matches_in(listing, searches, op, found):
-                yield match
-
-
-def _matches_in(
-    listing: _Listing,
-    searches: list[_Search],
-    op: Operation[dict[str, Any], GlobState],
-    found: set[str],
-) -> list[dict[str, Any] | Exception]:
-    """A listing's matches, or its error, counted in the operation's state."""
-    state = op.state
-    if listing.error is not None:
-        matches: list[dict[str, Any] | Exception] = [listing.error]
-    else:
-        matches = [
-            e
-            for e in listing.entries
-            if any(s.matched(e) for s in searches)
-            # A match of a pattern without wildcards, found already.
-            and e["name"].rstrip("/") not in found
-        ]
-
-    op.state = _listed(
-        state,
-        listing,
-        matched=state.matched + len(matches) - (listing.error is not None),
-    )
-
-    return matches
