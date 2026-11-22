@@ -125,9 +125,10 @@ class _Failed:
 class TreeTraversal:
     """One traversal: the tasks pending, running and waiting, and the events not yet read.
 
-    `events` runs it, once. `cancel` starts nothing more: the tasks running
-    finish, and their events are read. Closing `events` early cancels the tasks
-    running at once, and waits for them to end.
+    `events` runs it, once. `close` cancels every task, pending or running: a
+    parent waiting for one gets CancelledError. No task emits any more event,
+    and `events` ends once none runs. Closing `events` early closes it, and
+    waits for the tasks to end.
     """
 
     def __init__(
@@ -159,8 +160,7 @@ class TreeTraversal:
         # cancels those left, e.g. one emitting to a queue no longer read.
         self._own_tasks: set[asyncio.Task[None]] = set()
         self._started = False
-        self._stopping = False
-        self._closing = False
+        self._closed = False
 
     async def events(self, tasks: Iterable[PathTask]) -> AsyncGenerator[Any]:
         """Run ``tasks``, and those they run, yielding every event they emit, in order.
@@ -190,26 +190,42 @@ class TreeTraversal:
                 else:
                     yield event
         finally:
-            await self._close(scheduler)
+            await self._aclose(scheduler)
 
-    def cancel(self) -> None:
-        """Start nothing more: the tasks running finish, and their events are yielded."""
-        if not self._stopping:
-            self._stopping = True
-            self._spawn(self._cancel_pending())
+    def close(self) -> None:
+        """Cancel every task, pending or running, and every event emitted after.
 
-    async def _cancel_pending(self) -> None:
+        A parent waiting for a task cancelled gets CancelledError, and is
+        cancelled too. The events emitted before are still yielded, and
+        `events` ends once no task runs.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        for task in self._pending_tasks:
+            task._cancelled = True  # Never starts: its parent sees it done.
+        self._pending_tasks.clear()
+        for task in self._running_tasks:
+            if task._task is not None:
+                task._task.cancel()
+        self._spawn(self._notify())
+
+    async def _notify(self) -> None:
         async with self._state:
-            self._drop_pending()
             self._state.notify_all()
 
-    def _drop_pending(self) -> None:
-        """Cancel every task not started: their parents see them done."""
-        for task in self._pending_tasks:
-            task._cancelled = (
-                True  # Each would notify on its own: the caller does once.
-            )
-        self._pending_tasks.clear()
+    async def _aclose(self, scheduler: asyncio.Task[None]) -> None:
+        """Close the traversal, and wait for every task, the scheduler and its own, to end."""
+        self.close()
+        running = [t._task for t in self._running_tasks if t._task is not None]
+        await asyncio.gather(*running, return_exceptions=True)
+        scheduler.cancel()
+        await asyncio.gather(scheduler, return_exceptions=True)
+        # Those ending above have spawned their _done: none is needed now.
+        own = list(self._own_tasks)
+        for task in own:
+            task.cancel()
+        await asyncio.gather(*own, return_exceptions=True)
 
     async def _schedule(self) -> None:
         """Start the leftmost pending task while a slot is free, until nothing is pending or running."""
@@ -217,7 +233,7 @@ class TreeTraversal:
             async with self._state:
                 await self._state.wait_for(self._can_go_on)
                 if not self._running_tasks and (
-                    self._stopping or not self._pending_tasks
+                    self._closed or not self._pending_tasks
                 ):
                     break
                 # Depth first among those pending: segments compare as a walk
@@ -230,17 +246,15 @@ class TreeTraversal:
                     task._set_task(running)
                     self._running_tasks.add(task)
                 self._state.notify_all()  # Room for a task more.
-        await self._emit_event(_End())
+        await self._events.put(_End())
 
     def _can_go_on(self) -> bool:
         """Whether the scheduler can start a task, or end."""
         active = len(self._running_tasks) - len(self._waiting_tasks)
         can_start = (
-            not self._stopping and self._pending_tasks and active < self.max_running
+            not self._closed and self._pending_tasks and active < self.max_running
         )
-        can_end = not self._running_tasks and (
-            self._stopping or not self._pending_tasks
-        )
+        can_end = not self._running_tasks and (self._closed or not self._pending_tasks)
         return bool(can_start or can_end)
 
     def _on_done(self, task: PathTask, _: object) -> None:
@@ -259,16 +273,16 @@ class TreeTraversal:
         """A task is done, ended or cancelled before it started: forget it, and wake every waiter."""
         # Read always, so that asyncio never warns of an exception not retrieved.
         error = None if task.cancelled() else task.exception()
-        if error is not None and task in self._initial and not self._closing:
+        if error is not None and task in self._initial and not self._closed:
             # Emitted while it still runs, so that the end never comes before it.
-            await self._emit_event(_Failed(error))
+            await self._events.put(_Failed(error))
         async with self._state:
             self._running_tasks.discard(task)
             self._pending_tasks.pop(task, None)
             self._state.notify_all()
 
     async def _add_tasks(self, tasks: list[PathTask]) -> None:
-        """Add tasks to start, each waiting for room: once stopping, cancel them instead."""
+        """Add tasks to start, each waiting for room: once closed, cancel them instead."""
         async with self._state:
             for task in tasks:
                 if task._task is not None or task in self._pending_tasks:
@@ -276,11 +290,9 @@ class TreeTraversal:
                 if task.done():
                     continue  # Cancelled already: nothing to run.
                 await self._state.wait_for(
-                    lambda: (
-                        self._stopping or len(self._pending_tasks) < self.max_pending
-                    )
+                    lambda: self._closed or len(self._pending_tasks) < self.max_pending
                 )
-                if self._stopping:
+                if self._closed:
                     task._cancelled = True  # Never runs: its parent sees it done.
                 else:
                     self._pending_tasks[task] = self.split(task.path)
@@ -321,19 +333,6 @@ class TreeTraversal:
         return [t.result() for t in tasks]
 
     async def _emit_event(self, event: Any) -> None:
+        if self._closed:
+            raise RuntimeError("The traversal is closed: no event is emitted.")
         await self._events.put(event)
-
-    async def _close(self, scheduler: asyncio.Task[None]) -> None:
-        """Cancel the scheduler and every task running, and wait for them to end."""
-        self._stopping = True
-        self._closing = True
-        self._drop_pending()
-        running = [scheduler, *(t._task for t in self._running_tasks if t._task)]
-        for task in running:
-            task.cancel()
-        await asyncio.gather(*running, return_exceptions=True)
-        # Those ending above have spawned their _done: none is needed now.
-        own = list(self._own_tasks)
-        for task in own:
-            task.cancel()
-        await asyncio.gather(*own, return_exceptions=True)

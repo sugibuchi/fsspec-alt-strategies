@@ -182,19 +182,56 @@ async def test_an_error_emitted_is_yielded() -> None:
     assert isinstance(error, OSError)
 
 
-async def test_cancel_starts_nothing_more() -> None:
+async def test_close_cancels_every_task_and_ends_the_events() -> None:
+    cancelled = []
+
     async def leaf(task: _Call) -> None:
-        await asyncio.sleep(0.01)
         await task._emit_event(task.path)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(task.path)
+            raise
+
+    async def parent(task: _Call) -> None:
+        try:
+            await task._run_tasks([_Call(engine, f"p/{c}", leaf) for c in "abcd"])
+        except asyncio.CancelledError:
+            cancelled.append(task.path)
+            raise
+
+    engine = TreeTraversal(max_running=2)
+    seen = []
+    async for event in engine.events([_Call(engine, "p", parent)]):
+        seen.append(event)
+        engine.close()
+    # Both running children emitted before the close: those events are read,
+    # and nothing starts after. The running children and their parent are
+    # cancelled.
+    assert seen == ["p/a", "p/b"]
+    assert sorted(cancelled) == ["p", "p/a", "p/b"]
+
+
+async def test_no_event_is_emitted_once_closed() -> None:
+    raised = []
+
+    async def emit(task: _Call) -> None:
+        await task._emit_event(1)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            try:
+                await task._emit_event(2)
+            except RuntimeError as error:
+                raised.append(error)
 
     engine = TreeTraversal(max_running=1)
     seen = []
-    async for event in engine.events([_Call(engine, p, leaf) for p in "abcd"]):
+    async for event in engine.events([_Call(engine, "x", emit)]):
         seen.append(event)
-        engine.cancel()
-    # The task running as it was cancelled may still emit: no later one does.
-    assert seen[0] == "a"
-    assert len(seen) <= 2
+        engine.close()
+    assert seen == [1]
+    assert len(raised) == 1
 
 
 async def test_closing_early_cancels_the_tasks_running() -> None:
