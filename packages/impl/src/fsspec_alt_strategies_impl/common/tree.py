@@ -206,8 +206,7 @@ class TreeTraversal:
             task._cancelled = True  # Never starts: its parent sees it done.
         self._pending_tasks.clear()
         for task in self._running_tasks:
-            if task._task is not None:
-                task._task.cancel()
+            task.cancel()
         self._spawn(self._notify())
 
     async def _notify(self) -> None:
