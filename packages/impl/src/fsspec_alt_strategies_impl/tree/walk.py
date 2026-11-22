@@ -127,11 +127,7 @@ def _tree_walk(
             return _WalkTopDown(engine, entry, action, handler, **options)
         top = len(tuple(handler.segments(path)))
         action = _WalkBottomUp(engine._emit_event, handler, top, maxdepth)
-        if maxdepth is None and handler.profile.recursive_ls_depth_first_preorder:
-            # Each directory's descendants come together: streamed, by one listing.
-            return TraverseSubtree(engine, entry, action, handler, **options)
-        # Else a directory per listing: one failing fails only itself.
-        return VisitDirectory(engine, entry, action, handler, **options)
+        return _bottom_up(engine, entry, action, handler, **options)
 
     async def run(
         op: Operation[_Walked, WalkState],
@@ -166,6 +162,36 @@ def _tree_walk(
                         walked.set()  # The directory goes on, with the dirs left.
 
     return Operation(run, WalkState(directories_listed=0))
+
+
+def _bottom_up(
+    engine: TreeTraversal,
+    entry: Entry,
+    action: PathAction,
+    handler: TreeFileOperationHandler,
+    **options: Any,
+) -> _TraversalTask:
+    """The root task of a traversal whose action needs no order but its own: one listing where it streams right.
+
+    Where the handler's profile declares ``recursive_ls_depth_first_preorder``
+    and no ``maxdepth`` prunes it, each directory's descendants come together,
+    so one recursive listing is streamed. Else a directory per listing: one
+    failing fails only itself. The handler is open, its profile read.
+    """
+    if (
+        options.get("maxdepth") is None
+        and handler.profile.recursive_ls_depth_first_preorder
+    ):
+        return TraverseSubtree(engine, entry, action, handler, **options)
+    return VisitDirectory(engine, entry, action, handler, **options)
+
+
+def _unlisted(
+    handler: TreeFileOperationHandler, top: int, maxdepth: int | None, entry: Entry
+) -> bool:
+    """Whether a directory is reduced unlisted, at ``maxdepth``: ``top`` is the root's segments counted."""
+    depth = len(tuple(handler.segments(entry["name"]))) - top
+    return maxdepth is not None and depth >= maxdepth
 
 
 class _WalkTopDown(VisitDirectory):
@@ -220,9 +246,8 @@ class _WalkBottomUp(PathAction):
     async def reduce(
         self, entry: Entry, match: bool, value: Any, values: list[Any]
     ) -> Any:
-        depth = len(tuple(self.handler.segments(entry["name"]))) - self.top
-        listed = self.maxdepth is None or depth < self.maxdepth
-        if entry["type"] == "directory" and listed:
+        unlisted = _unlisted(self.handler, self.top, self.maxdepth, entry)
+        if entry["type"] == "directory" and not unlisted:
             path, dirs, files = _triples(_trim(entry["name"]), values, detail=True)
             await self._emit_event((None, path, dirs, files))
         return entry
