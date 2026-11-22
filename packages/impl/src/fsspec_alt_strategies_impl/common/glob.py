@@ -13,9 +13,10 @@ below it, `reduce` after. So either may traverse any subtree, and a
 
 Patterns, `patterns._Search`s, prune: the directories descended into, and
 the subtrees listed whole. A directory not descended into is visited only if
-a pattern matches it, and then not listed: its `reduce` gets no values.
-Every path visited is acted on, and told whether a pattern matches it: a path
-may be visited only on the way to others.
+a pattern matches it, and then not listed: its `reduce` gets no values. A
+file is visited only if a pattern matches it. Every path visited is acted on,
+and told whether a pattern matches it: a directory may be visited only on the
+way to others.
 
 An error, of ``ils`` or of the action, ends the path's task. Below a
 `VisitDirectory`, the other items run on, then its `reduce` is skipped, and
@@ -69,7 +70,8 @@ class PathAction:
 
         ``entry`` is the path's entry, as a listing or ``info`` gave it.
         ``match`` is whether the task's patterns match the path, True where it
-        has none: a path visited only on the way to others is not matched.
+        has none: a directory visited only on the way to others is not
+        matched. A file below the root is visited only if matched.
         """
         return None
 
@@ -114,13 +116,14 @@ class _TraversalTask(PathTask):
         return tuple(self.handler._split(path))
 
     def prune(self, entries: list[Entry]) -> list[Entry]:
-        """A directory's listing as traversed: without its own marker, each subdirectory once, and only those to descend into or matched.
+        """A directory's listing as traversed: without its own marker, each subdirectory once, only those to descend into or matched, and only the files matched.
 
         A storage may list a directory's marker object in it, and a
         subdirectory twice, e.g. as a prefix and as its marker. A
         subdirectory the patterns neither descend into nor match is dropped,
         with all below it: one matched alone is kept, as a glob reports it,
-        but not listed. The entries kept are as the listing gave them.
+        but not listed. A file is kept only where a pattern matches it. The
+        entries kept are as the listing gave them.
         """
         kept: list[Entry] = []
         subdirs: set[tuple[str, ...]] = set()
@@ -132,6 +135,8 @@ class _TraversalTask(PathTask):
                 if key in subdirs or not (self._descend(found) or self._matched(found)):
                     continue
                 subdirs.add(key)
+            elif not self._matched(found):
+                continue
             kept.append(found)
         return kept
 
@@ -309,9 +314,9 @@ class _Span:
             elif not _below(key, found):
                 break
             elif in_root and next["type"] != "directory":
-                item_match = task._matched(next)
-                item = await task.action.map(next, item_match)
-                values.append(await task.action.reduce(next, item_match, item, []))
+                if task._matched(next):  # Else pruned, as a file is.
+                    item = await task.action.map(next, True)
+                    values.append(await task.action.reduce(next, True, item, []))
                 next = await anext(self.entries, None)
             else:
                 # A subdirectory listed, or made from a path below it. Its span

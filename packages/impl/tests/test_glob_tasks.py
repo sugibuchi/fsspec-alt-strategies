@@ -176,17 +176,16 @@ async def test_a_subtree_streams_in_name_order_with_its_markers() -> None:
 
 
 @pytest.mark.parametrize("use_one_listing", [False, True])
-async def test_patterns_prune_the_directories_not_descended_into(
+async def test_patterns_prune_the_paths_none_matches(
     use_one_listing: bool,
 ) -> None:
     patterns = [_Search("r/a/**", ends_with_sep=False, withdirs=False, maxdepth=None)]
     value, action, _ = await _run(use_one_listing, patterns=patterns)
-    # r/c is not descended into, so not visited: every other path is.
-    assert value == 4
+    # r/c is not descended into, and r/1 not matched: neither is visited.
+    assert value == 3
     mapped = sorted(n for c, n in action.calls if c == "map")
     assert mapped == [
         "r",
-        "r/1",
         "r/a",
         "r/a/2",
         "r/a/b",
@@ -196,7 +195,7 @@ async def test_patterns_prune_the_directories_not_descended_into(
     ]
     reduced = sorted(n for c, n in action.calls if c == "reduce")
     assert reduced == mapped
-    # Only the files below r/a match: the others are on the way, or beside.
+    # Every file visited matches: the directories are on the way.
     assert sorted(action.matched) == ["r/a/2", "r/a/b-x/4", "r/a/b/3"]
 
 
