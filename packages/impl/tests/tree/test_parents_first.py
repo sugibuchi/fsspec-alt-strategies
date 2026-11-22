@@ -45,7 +45,7 @@ class _BreadthFirst(SimulatedFileSystem):
 
 def _view(fs: SimulatedFileSystem) -> TreeView:
     # Declared parents first; left unknown, the order is taken so too.
-    profile = StorageProfile(recursive_order="parents_first")
+    profile = StorageProfile(recursive_ls_depth_first_preorder=False)
     return TreeView(fs, recursive_listing=True, storage_profile=profile)
 
 
@@ -76,7 +76,7 @@ async def test_a_parents_first_listing_declared_depth_first_goes_wrong() -> None
     # Why the declaration: taken as depth first, a directory is done as soon as
     # the listing passes to another, though more of it comes later.
     fs = _fs()
-    profile = StorageProfile(recursive_order="depth_first")
+    profile = StorageProfile(recursive_ls_depth_first_preorder=True)
     view = TreeView(fs, recursive_listing=True, storage_profile=profile)
     walked, _ = await _collect_with_errors(_tree_walk(view, "data", topdown=False))
     assert [d for d, _, _ in walked].count("data/a") > 1
@@ -138,12 +138,11 @@ async def test_a_listing_broken_off_yields_its_error(cut_after: int) -> None:
     assert set(names) <= set(await AsyncFileSystem._find(fs, "data", withdirs=True))
 
 
-@pytest.mark.parametrize("order", [None, "parents_first"])
-async def test_the_default_listing_is_depth_first(order: Any) -> None:
+async def test_the_default_listing_is_depth_first() -> None:
     # The library's own listing is depth first, whatever the profile says of the
     # storage's: a handler keeping it declares nothing, and pays no more.
     fs = _fs()
-    view = TreeView(fs, storage_profile=StorageProfile(recursive_order=order))
+    view = TreeView(fs, storage_profile=StorageProfile())
     entries = view.ils(view.entry("data"), recursive=True)
     await view.open()
     assert _depth_first(entries, view.profile)
@@ -152,7 +151,7 @@ async def test_the_default_listing_is_depth_first(order: Any) -> None:
     own = TreeView(
         fs,
         recursive_listing=True,
-        storage_profile=StorageProfile(recursive_order=order),
+        storage_profile=StorageProfile(),
     )
     entries = own.ils(own.entry("data"), recursive=True)
     await own.open()

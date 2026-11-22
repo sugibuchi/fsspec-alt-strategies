@@ -151,15 +151,14 @@ class MyHandler(TreeFileOperationHandler):
 - Both take an entry, to read or to write. A file to write may not exist yet: its entry holds its name, its final
   `"size"` where the caller knows it, and its parent's entry as `"parent"` where the caller holds it.
 - A handler's `ils(entry, recursive=False)` lists a directory's items, or with `recursive` all below it.
-- A tree handler with a recursive listing of its own answers `recursive` in its `ils`. Its profile's `recursive_order`
-  says the listing's order:
-  - "depth_first" gives a directory's entry, then all below it, before any other entry, and covers name order;
-  - "parents_first" only gives a directory's entry before what is below it;
-  - unknown is taken as "parents_first", which costs the walk memory and streaming: declare "depth_first" where it
-    holds.
+- A tree handler with a recursive listing of its own answers `recursive` in its `ils`. Its profile's
+  `recursive_ls_depth_first_preorder` says the listing's order:
+  - True: a directory's entry, then all below it, before any other entry. It covers name order too.
+  - False, the default: only a directory's entry before what is below it. That is right on any storage, but costs the
+    walk memory and streaming, so declare True where it holds.
 - Without a listing of its own, a tree is listed a directory per request, several at once, by the family's default:
   `return super().ils(entry, recursive=True, **kwargs)`. That listing is depth first, so it needs no
-  `recursive_order`. A handler whose storage may refuse its own recursive listing falls back on it so.
+  `recursive_ls_depth_first_preorder`. A handler whose storage may refuse its own recursive listing falls back on it so.
 - Where an operation needs all below a directory, e.g. a `find` without `maxdepth`, the walk lists it by one
   recursive `ils`. A handler answering with the family's default lists that directory alone instead, and is asked
   again of each subdirectory. It may so list a subtree whole only from a depth where it knows subtrees are small, or

@@ -26,7 +26,6 @@ This module depends on nothing else in the package.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 __all__ = ["UNKNOWN", "StorageProfile"]
 
@@ -99,18 +98,17 @@ class StorageProfile:
         place. Unknown by default, taken as False: it writes to a temporary
         name beside the destination, then moves it there, so that no reader
         sees part of a file.
-    recursive_order : {"depth_first", "parents_first"}, optional
-        The order of a tree handler's own recursive ``ils``, its storage's
-        listing of all below a directory. "depth_first" gives a directory's
-        entry, then all below it, before any other entry, and covers name
-        order too, as object stores list keys: the strategies take a
+    recursive_ls_depth_first_preorder : bool, default False
+        Whether a tree handler's own recursive ``ils``, its storage's listing
+        of all below a directory, is depth first in preorder: a directory's
+        entry, then all below it, before any other entry. It covers name
+        order too, as object stores list keys. True, the strategies take a
         directory as done once the listing has passed it, and act on it at
-        once, e.g. delete it once emptied. "parents_first" gives a
-        directory's entry before what is below it, and nothing more, e.g.
-        breadth first, as Dropbox's listing documents. Unknown by default,
-        taken as "parents_first", which a depth-first listing is too: the
-        strategies take every directory as done only once the listing ends.
-        A handler keeping the default listing, a directory per request,
+        once, e.g. delete it once emptied. False by default, the listing is
+        taken only to give a directory's entry before what is below it, e.g.
+        breadth first, as Dropbox's listing documents: right on any storage,
+        the strategies take every directory as done only once the listing
+        ends. A handler keeping the default listing, a directory per request,
         declares nothing: the strategies read it so themselves.
 
     Raises
@@ -135,7 +133,7 @@ class StorageProfile:
     copies_directories: bool | None = None
     case_sensitive: bool | None = None
     atomic_writes: bool | None = None
-    recursive_order: Literal["depth_first", "parents_first"] | None = None
+    recursive_ls_depth_first_preorder: bool = False
 
     def __post_init__(self) -> None:
         for name in ("parents_required", "copy_parents_required"):

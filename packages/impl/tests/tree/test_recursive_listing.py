@@ -32,7 +32,9 @@ def _listings(handler: Any, path: Any, visit: Any = None, **kwargs: Any) -> Any:
 
 def _view(fs: SimulatedFileSystem, **kwargs: Any) -> TreeView:
     # The simulated listing comes by name, declared depth first, which covers it.
-    kwargs.setdefault("storage_profile", StorageProfile(recursive_order="depth_first"))
+    kwargs.setdefault(
+        "storage_profile", StorageProfile(recursive_ls_depth_first_preorder=True)
+    )
     return TreeView(fs, recursive_listing=True, **kwargs)
 
 
@@ -310,7 +312,7 @@ class _OwnDepthFirst(TreeView):
     """A storage whose own recursive listing is depth first: the default one, as the walk does not tell it apart."""
 
     def __init__(self, fs: SimulatedFileSystem, **kwargs: Any) -> None:
-        profile = StorageProfile(recursive_order="depth_first")
+        profile = StorageProfile(recursive_ls_depth_first_preorder=True)
         super().__init__(fs, storage_profile=profile, **kwargs)
 
     def ils(self, entry: dict[str, Any], recursive: bool = False, **kwargs: Any) -> Any:
@@ -427,7 +429,7 @@ async def test_a_handler_chooses_how_a_subtree_is_listed(
     view = _Choosing(
         hierarchical_fs,
         below,
-        storage_profile=StorageProfile(recursive_order="depth_first"),
+        storage_profile=StorageProfile(recursive_ls_depth_first_preorder=True),
     )
     found, errors = await _collect_with_errors(_tree_find(view, "data", withdirs=True))
     assert errors == []

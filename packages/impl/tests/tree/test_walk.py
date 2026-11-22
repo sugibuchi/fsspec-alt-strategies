@@ -189,7 +189,7 @@ async def test_on_error_raise_stops_at_once(topdown: bool) -> None:
                 on_error="raise",
                 concurrency_limit=asyncio.Semaphore(1),
                 # Its default listing, a directory per request, is depth first.
-                profile=StorageProfile(recursive_order="depth_first"),
+                profile=StorageProfile(recursive_ls_depth_first_preorder=True),
             )
         )
     # The default listing is read a directory at a time, depth first, either

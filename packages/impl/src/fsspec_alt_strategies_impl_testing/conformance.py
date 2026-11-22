@@ -7,9 +7,10 @@ wrong declaration gives wrong answers. These checks catch one before it does,
 in a handler's tests, on a dummy or a live storage.
 
 `check_recursive_order` checks the order of a tree handler's recursive ``ils``
-against the profile's ``recursive_order``. Unknown, the order is taken as
-parents first, right on any storage: "depth_first" is the declaration a wrong
-listing would break, a directory then taken as done too early. A handler
+against the profile's ``recursive_ls_depth_first_preorder``. False by default,
+the order is taken as parents first, right on any storage: True is the
+declaration a wrong listing would break, a directory then taken as done too
+early. A handler
 keeping its family's default, a directory per request by ``super().ils``,
 needs no check: the walk reads such a subtree a directory at a time itself.
 
@@ -44,8 +45,9 @@ async def check_recursive_order(handler: TreeFileOperationHandler, root: str) ->
     It writes a few files in a new directory below ``root``, chosen so that
     name order and depth-first order differ, lists the directory by the
     handler's own recursive ``ils``, then deletes it. The listing must give
-    each file once, and keep the order of the profile's ``recursive_order``,
-    as `recursive_order_errors` checks it.
+    each file once, and keep the order of the profile's
+    ``recursive_ls_depth_first_preorder``, as `recursive_order_errors` checks
+    it.
 
     Parameters
     ----------
@@ -70,8 +72,8 @@ async def check_recursive_order(handler: TreeFileOperationHandler, root: str) ->
 
         listing = handler.ils(handler.entry(base), recursive=True)
         entries = [entry async for entry in listing]
-        order = handler.profile.recursive_order
-        errors = recursive_order_errors(entries, base, order)
+        preorder = handler.profile.recursive_ls_depth_first_preorder
+        errors = recursive_order_errors(entries, base, preorder)
         files = sorted(
             e["name"].rstrip("/") for e in entries if e["type"] != "directory"
         )
@@ -81,22 +83,23 @@ async def check_recursive_order(handler: TreeFileOperationHandler, root: str) ->
         if errors:
             raise AssertionError(
                 f"{handler!r} lists {base!r} out of the order its profile declares,"
-                f" {order!r}:\n- " + "\n- ".join(errors)
+                f" {'depth first' if preorder else 'parents first'}:\n- "
+                + "\n- ".join(errors)
             )
     finally:
         await _collect_with_errors(handler.rm(base))
 
 
 def recursive_order_errors(
-    entries: Sequence[dict[str, Any]], root: str, order: str | None
+    entries: Sequence[dict[str, Any]], root: str, depth_first_preorder: bool
 ) -> list[str]:
-    """The ways a recursive listing of ``root`` breaks ``order``: none if it keeps it.
+    """The ways a recursive listing of ``root`` breaks its order: none if it keeps it.
 
-    - "depth_first", which covers name order: once the listing has passed
+    - depth first in preorder, which covers name order: once the listing has passed
       what is below a directory, nothing more below it comes. A directory's
       own entry may come apart from what is below it, as "a/b-x" comes
       between "a/b" and "a/b/c" in name order.
-    - "parents_first", or None, unknown, taken so: a directory's entry, where
+    - else parents first, right on any storage: a directory's entry, where
       listed, comes before what is below it. A directory left out, as object
       stores list only files, breaks nothing.
 
@@ -108,7 +111,7 @@ def recursive_order_errors(
         e["name"].rstrip("/") for e in entries if e.get("type") == "directory"
     }
     errors: list[str] = []
-    if order == "depth_first":
+    if depth_first_preorder:
         # The directories something below which has come, and those the listing then passed.
         entered: set[str] = set()
         passed: set[str] = set()

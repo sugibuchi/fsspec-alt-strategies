@@ -86,7 +86,7 @@ class TreeFileOperationHandler(FileOperationHandler):
     def ils(
         self, entry: Entry, recursive: bool = False, **kwargs: Any
     ) -> AsyncIterator[Entry]:
-        """List a directory, or all below it, at any depth, in the order the profile's ``recursive_order`` says.
+        """List a directory, or all below it, at any depth: depth first where the profile's ``recursive_ls_depth_first_preorder`` says so.
 
         Without ``recursive``, it lists the directory's items, as
         `StorageHandler.ils` says. With ``recursive``:
@@ -107,8 +107,8 @@ class TreeFileOperationHandler(FileOperationHandler):
         by ``ils``, several at a time: a subclass listing a directory per
         request reaches it by ``super().ils(entry, recursive=True)``. The walk
         recognises it, and reads such a subtree a directory at a time itself,
-        so a handler keeping it declares no ``recursive_order``. ``kwargs`` go
-        to each ``ils``.
+        so a handler keeping it declares no
+        ``recursive_ls_depth_first_preorder``. ``kwargs`` go to each ``ils``.
 
         A storage listing a tree in one request answers ``recursive`` itself.
         One whose storage may refuse that listing, as only asking tells, e.g.

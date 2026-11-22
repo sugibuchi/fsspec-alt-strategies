@@ -378,8 +378,8 @@ class _SubtreeReader:
 
     `_Split` turns its entries into each directory's listing, as the listing
     passes each directory: depth first, or in name order. A listing in any
-    other order, e.g. parents first, as the profile's ``recursive_order`` may
-    say, tells no directory done before it ends: it is held whole, then taken
+    other order, e.g. parents first, as a profile without
+    ``recursive_ls_depth_first_preorder`` takes it, tells no directory done before it ends: it is held whole, then taken
     in name order, which is depth first. A listing that fails, whenever it
     breaks, is the root's failure: what it completed before stands, and the
     directories it was in are not listed. A storage resumes its own listing
@@ -442,7 +442,7 @@ def _depth_first(entries: AsyncIterator[Entry], profile: StorageProfile) -> bool
     A storage's own listing keeps the order its profile declares. Unknown, it
     is taken as parents first, which is right on any storage.
     """
-    return isinstance(entries, _DepthFirst) or profile.recursive_order == "depth_first"
+    return isinstance(entries, _DepthFirst) or profile.recursive_ls_depth_first_preorder
 
 
 async def _close(entries: AsyncIterator[Entry]) -> None:

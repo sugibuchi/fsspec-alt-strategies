@@ -50,7 +50,7 @@ ADLFS_PROFILE = StorageProfile(
     deletes_directories=False,
     copies_directories=False,
     case_sensitive=True,
-    recursive_order="depth_first",
+    recursive_ls_depth_first_preorder=True,
 )
 """Azure Blob Storage through adlfs, with a hierarchical namespace or without.
 

@@ -180,9 +180,10 @@ code: read it before adding a strategy or a handler.
   directory per request. A handler listing a directory alone reaches it by `super().ils(entry, recursive=True)`.
 - A storage listing a tree in one request answers `recursive` itself. It falls back on `super().ils` where its
   storage refuses, or where its own listing costs more. Outside `tree/`, call the method, never `_tree_ils`.
-- The profile's `recursive_order` says the order of a storage's own listing: the walk can never tell it.
-  - Unknown is taken as "parents_first", right on any storage.
-  - "depth_first", declared, covers name order too. It lets the walk close each directory as the listing passes it.
+- The profile's `recursive_ls_depth_first_preorder` says the order of a storage's own listing: the walk can never
+  tell it.
+  - False, the default, takes it as parents first, right on any storage.
+  - True, declared, covers name order too. It lets the walk close each directory as the listing passes it.
   - `_tree_ils`'s listing is a `_DepthFirst`, which the walk reads a directory at a time itself, whatever the profile
     says.
 - The tree strategies walk with `tree._walker._TreeWalk`, which is private. It gives one `_Listing` per directory, its

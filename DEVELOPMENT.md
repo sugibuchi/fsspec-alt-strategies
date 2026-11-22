@@ -466,16 +466,17 @@ A storage's own recursive listing keeps one of two orders, which tell the walk w
 - by name: sorted by the whole name, as object stores list keys. A directory's entry may come apart from what is below
   it, as "a/b-x" comes between "a/b" and "a/b/c".
 
-The profile's `recursive_order` declares which order a storage's own listing keeps:
+The profile's `recursive_ls_depth_first_preorder` declares which order a storage's own listing keeps:
 
-- "depth_first" covers both of the above. `_Split` then completes each directory's listing as the listing passes it.
-- "parents_first" covers a directory's entry before what is below it, and nothing more, e.g. breadth first, as
-  Dropbox's recursive listing documents no more. No directory is known done before the listing ends, so the walk holds
-  it whole, then takes it in name order, which is depth first.
-- Unknown, the order is taken as "parents_first". The walk cannot tell that order from a depth-first one: by the time
-  an entry comes under a directory taken as done, that directory's listing has gone, and a move may have deleted it.
+- True covers both of the above. `_Split` then completes each directory's listing as the listing passes it.
+- False, the default, takes the listing as parents first: a directory's entry before what is below it, and nothing
+  more, e.g. breadth first, as Dropbox's recursive listing documents no more. No directory is known done before the
+  listing ends, so the walk holds it whole, then takes it in name order, which is depth first.
 
-"parents_first" is always right, as a depth-first listing is parents first too. It costs the streaming of each
+The walk cannot tell a parents-first order from a depth-first one. By the time an entry comes under a directory taken
+as done, that directory's listing has gone, and a move may have deleted it. So the order is declared, never detected.
+
+Parents first is always right, as a depth-first listing is parents first too. It costs the streaming of each
 directory done, and the memory of the tree's names. So a storage whose own listing is depth first declares it, as
 `AdlfsHandler` does. A handler keeping the default listing declares nothing: the walk reads it by directory.
 
@@ -577,7 +578,7 @@ profile only saves requests or data:
 | `copies_directories`    | True: every request in a directory copied whole by one `cp_tree`       |
 | `case_sensitive`        | False: a path moved onto itself in another case, by one `mv_tree`      |
 | `atomic_writes`         | True: the temporary file and the move of a copy between storages       |
-| `recursive_order`       | "depth_first": the names of a tree held until its listing ends         |
+| `recursive_ls_depth_first_preorder` | True: the names of a tree held until its listing ends      |
 
 - A storage has one profile, which never changes. It is the handler's `profile`: `UNKNOWN` unless the handler sets
   what it knows, or what its `load_profile()` finds with a request.
@@ -591,8 +592,9 @@ profile only saves requests or data:
   `copies_directories` and `case_sensitive` count only within one storage, and `atomic_writes` only between two.
 - Between two storages, a file copied is written: `parents_required` counts. Within one, it goes by the storage's own
   copy, which may make no parent where a write does, as on Microsoft Graph: `copy_parents_required` counts.
-- `recursive_order` tells of a tree handler's own recursive `ils` only, as "The tree strategies" says.
-- A field left None is unknown, and the strategy takes the way right on any storage.
+- `recursive_ls_depth_first_preorder` tells of a tree handler's own recursive `ils` only, as "The tree strategies"
+  says. It is False by default, never None: parents first is the order right on any storage.
+- Any other field left None is unknown, and the strategy takes the way right on any storage.
 - `case_sensitive` is the exception: no way is right on both kinds of names. Unknown, paths are compared as fsspec
   compares them, as strings. On a storage whose names are not case-sensitive, a path copied or moved onto itself in
   another case then goes into itself, as with fsspec's own.

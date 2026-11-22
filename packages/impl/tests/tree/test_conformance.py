@@ -24,34 +24,33 @@ class _BreadthFirst(SimulatedFileSystem):
             yield entry
 
 
-def _view(fs: SimulatedFileSystem, order: Any) -> TreeView:
-    profile = StorageProfile(recursive_order=order)
+def _view(fs: SimulatedFileSystem, preorder: bool) -> TreeView:
+    profile = StorageProfile(recursive_ls_depth_first_preorder=preorder)
     return TreeView(fs, recursive_listing=True, storage_profile=profile)
 
 
-@pytest.mark.parametrize("order", ["depth_first", "parents_first", None])
+@pytest.mark.parametrize("preorder", [True, False])
 async def test_a_listing_by_name_keeps_any_order(
-    any_fs: SimulatedFileSystem, order: Any
+    any_fs: SimulatedFileSystem, preorder: bool
 ) -> None:
     if any_fs.hierarchical:
         any_fs.add_dir("scratch")  # A flat one has no empty directory: none is needed.
-    await check_recursive_order(_view(any_fs, order), "scratch")
+    await check_recursive_order(_view(any_fs, preorder), "scratch")
     # The tree it wrote is gone.
     assert await any_fs._find("scratch") == []
 
 
-@pytest.mark.parametrize("order", ["parents_first", None])
-async def test_a_breadth_first_listing_keeps_parents_first(order: Any) -> None:
+async def test_a_breadth_first_listing_keeps_parents_first() -> None:
     fs = _BreadthFirst(hierarchical=True, asynchronous=True)
     fs.add_dir("scratch")
-    await check_recursive_order(_view(fs, order), "scratch")
+    await check_recursive_order(_view(fs, False), "scratch")
 
 
 async def test_a_breadth_first_listing_declared_depth_first_fails() -> None:
     fs = _BreadthFirst(hierarchical=True, asynchronous=True)
     fs.add_dir("scratch")
     with pytest.raises(AssertionError, match="after the listing passed"):
-        await check_recursive_order(_view(fs, "depth_first"), "scratch")
+        await check_recursive_order(_view(fs, True), "scratch")
     assert await fs._find("scratch") == []
 
 
@@ -62,11 +61,11 @@ def test_the_errors_name_the_entry_out_of_order() -> None:
     # Depth first, coming back below a directory passed. Its own entry apart, as in
     # name order, is no break: only what is below it, before and after another.
     listing = [entry("r/a/x"), entry("r/b/z"), entry("r/a/y")]
-    assert recursive_order_errors(listing, "r", "depth_first") == [
+    assert recursive_order_errors(listing, "r", True) == [
         "'r/a/y' comes after the listing passed 'r/a', below which it is."
     ]
     # Parents first, a file before its directory's entry; a directory never listed breaks nothing.
     listing = [entry("r/a/y"), entry("r/a", "directory"), entry("r/b/z")]
-    assert recursive_order_errors(listing, "r", "parents_first") == [
+    assert recursive_order_errors(listing, "r", False) == [
         "'r/a/y' comes before its directory 'r/a'."
     ]

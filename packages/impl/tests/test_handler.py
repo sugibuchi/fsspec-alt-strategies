@@ -210,7 +210,9 @@ async def test_names_a_listing_gave_are_never_verified_again() -> None:
     fs.add_file("data/a:b/x", b"1")
     fs.add_file("data/y", b"2")
     strict = _Strict(fs)
-    strict.recursive_order = None  # A directory per listing, each by its entry.
+    strict.recursive_ls_depth_first_preorder = (
+        False  # A directory per listing, each by its entry.
+    )
 
     found, errors = await _collect_with_errors(_tree_find(strict, "data"))
     assert (sorted(e["name"] for e in found), errors) == (["data/a:b/x", "data/y"], [])
