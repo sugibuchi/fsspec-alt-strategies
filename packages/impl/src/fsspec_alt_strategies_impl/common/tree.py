@@ -125,10 +125,10 @@ class _Failed:
 class TreeTraversal:
     """One traversal: the tasks pending, running and waiting, and the events not yet read.
 
-    `events` runs it, once. `close` cancels every task, pending or running: a
-    parent waiting for one gets CancelledError. No task emits any more event,
-    and `events` ends once none runs. Closing `events` early closes it, and
-    waits for the tasks to end.
+    `events` runs it, once. `close`, or `_aclose`, cancels every task, pending
+    or running: a parent waiting for one gets CancelledError. No task emits
+    any more event, and `events` ends once none runs. Closing `events` early
+    closes it, and waits for the tasks to end.
     """
 
     def __init__(
@@ -159,8 +159,12 @@ class TreeTraversal:
         # The traversal's own tasks, finishing a task or cancelling: closing
         # cancels those left, e.g. one emitting to a queue no longer read.
         self._own_tasks: set[asyncio.Task[None]] = set()
+        # The task starting the others, while events runs.
+        self._scheduler: asyncio.Task[None] | None = None
         self._started = False
         self._closed = False
+        # Whether events is read still: once its generator ends, none reads.
+        self._reading = False
 
     async def events(self, tasks: Iterable[PathTask]) -> AsyncGenerator[Any]:
         """Run ``tasks``, and those they run, yielding every event they emit, in order.
@@ -179,7 +183,8 @@ class TreeTraversal:
             self._initial.add(task)
             self._pending_tasks[task] = self.split(task.path)
 
-        scheduler = asyncio.create_task(self._schedule())
+        self._scheduler = asyncio.create_task(self._schedule())
+        self._reading = True
         try:
             while True:
                 event = await self._events.get()
@@ -190,40 +195,46 @@ class TreeTraversal:
                 else:
                     yield event
         finally:
-            await self._aclose(scheduler)
+            self._reading = False
+            await self._aclose()
 
     def close(self) -> None:
-        """Cancel every task, pending or running, and every event emitted after.
+        """Cancel every task, pending or running, and every event emitted after: `_aclose` in a task.
 
-        A parent waiting for a task cancelled gets CancelledError, and is
-        cancelled too. The events emitted before are still yielded, and
-        `events` ends once no task runs.
+        Closed at once, it starts no task and emits no event more, though the
+        tasks are cancelled once `_aclose` runs.
         """
-        if self._closed:
-            return
         self._closed = True
-        for task in self._pending_tasks:
-            task._cancelled = True  # Never starts: its parent sees it done.
-        self._pending_tasks.clear()
-        for task in self._running_tasks:
-            task.cancel()
-        self._spawn(self._notify())
+        self._spawn(self._aclose())
 
-    async def _notify(self) -> None:
+    async def _aclose(self) -> None:
+        """Cancel every task, pending or running: a parent waiting for one gets CancelledError.
+
+        While `events` is read, the events emitted before are yielded, and it
+        ends once no task runs. Once its generator ends, none reads: so the
+        tasks running, the scheduler and the traversal's own tasks are waited
+        for, or cancelled, here.
+        """
+        self._closed = True
         async with self._state:
+            for task in self._pending_tasks:
+                task._cancelled = True  # Never starts: its parent sees it done.
+            self._pending_tasks.clear()
+            for task in self._running_tasks:
+                task.cancel()
             self._state.notify_all()
+        if self._reading:
+            return
 
-    async def _aclose(self, scheduler: asyncio.Task[None]) -> None:
-        """Close the traversal, and wait for every task, the scheduler and its own, to end."""
-        self.close()
         running = [t._task for t in self._running_tasks if t._task is not None]
         await asyncio.gather(*running, return_exceptions=True)
-        scheduler.cancel()
-        await asyncio.gather(scheduler, return_exceptions=True)
+        if self._scheduler is not None:
+            self._scheduler.cancel()
+            await asyncio.gather(self._scheduler, return_exceptions=True)
         # Those ending above have spawned their _done: none is needed now.
-        own = list(self._own_tasks)
-        for task in own:
-            task.cancel()
+        own = [t for t in self._own_tasks if t is not asyncio.current_task()]
+        for own_task in own:
+            own_task.cancel()
         await asyncio.gather(*own, return_exceptions=True)
 
     async def _schedule(self) -> None:
