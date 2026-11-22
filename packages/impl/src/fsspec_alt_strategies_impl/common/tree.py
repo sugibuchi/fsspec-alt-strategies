@@ -296,9 +296,42 @@ class TreeTraversal:
         RuntimeError if called twice.
 
         As it ends, it closes the traversal by `_aclose`, which raises the
-        errors of the tasks closing: the error ending it, if any, is then
-        their ExceptionGroup's context.
+        errors of the tasks closing. Where an error ends it, e.g. a task's or
+        a CancelledError, that error is raised, with their ExceptionGroup as
+        its context.
         """
+        self._start(tasks)
+        try:
+            while True:
+                if self._closed and self._events.empty():
+                    break  # No event is emitted once closed: all are read.
+                event = await self._events.get()
+                async with self._state:
+                    self._state.notify_all()  # Room for an event more.
+                if isinstance(event, _End):
+                    break
+                elif isinstance(event, _Failed):
+                    self._initial.discard(event.task)  # Raised: not again.
+                    raise event.error
+                else:
+                    yield event
+        except GeneratorExit:
+            # Closed early by the caller: aclose swallows GeneratorExit, so the
+            # closing errors replace it, or they would be lost.
+            await self._aclose()
+            raise
+        except BaseException as ext:
+            # The error ending it is raised, never replaced: a CancelledError
+            # stays one. The closing errors are its context.
+            try:
+                await self._aclose()
+            except BaseException as closing:
+                ext.__context__ = closing
+            raise
+        await self._aclose()
+
+    def _start(self, tasks: Iterable[PathTask]) -> None:
+        """Pend the tasks given to `events`, and start the scheduler: once."""
         if self._started:
             raise RuntimeError("A traversal runs once.")
         self._started = True
@@ -308,24 +341,7 @@ class TreeTraversal:
             # Given up front, they are in memory already: no room is waited for.
             self._initial.add(task)
             self._pend(task)
-
         self._scheduler = asyncio.create_task(self._schedule())
-        try:
-            while True:
-                if self._closed and self._events.empty():
-                    return  # No event is emitted once closed: all are read.
-                event = await self._events.get()
-                async with self._state:
-                    self._state.notify_all()  # Room for an event more.
-                if isinstance(event, _End):
-                    return
-                elif isinstance(event, _Failed):
-                    self._initial.discard(event.task)  # Raised: not again.
-                    raise event.error
-                else:
-                    yield event
-        finally:
-            await self._aclose()
 
     def cancel(self) -> None:
         """Start no task more: those pending are cancelled, those running run on and emit their events.

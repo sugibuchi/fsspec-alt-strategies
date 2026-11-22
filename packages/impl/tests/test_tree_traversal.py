@@ -383,13 +383,29 @@ async def test_an_error_closing_is_raised_after_the_error_ending() -> None:
 
     engine = TreeTraversal(max_running=2)
     tasks = [_Call(engine, "a", fail), _Call(engine, "b", cleanup_fails)]
-    with pytest.raises(BaseExceptionGroup) as raised:
+    with pytest.raises(OSError, match="a") as raised:
         await _all(engine, tasks)
-    # The closing raises its own group, chained to the error ending events.
-    [error] = raised.value.exceptions
+    # The error ending events is raised: the closing's group is its context.
+    [error] = raised.value.__context__.exceptions
     assert (type(error), str(error)) == (ValueError, "b")
-    ending = raised.value.__context__
-    assert (type(ending), str(ending)) == (OSError, "a")
+
+
+async def test_a_cancelled_reader_stays_cancelled_whatever_the_closing_raises() -> None:
+    async def cleanup_fails(task: _Call) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            raise ValueError(task.path)  # As a failing cleanup.
+
+    engine = TreeTraversal(max_running=1)
+    reading = asyncio.ensure_future(_all(engine, [_Call(engine, "x", cleanup_fails)]))
+    for _ in range(5):
+        await asyncio.sleep(0)  # Until x runs.
+    reading.cancel()
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await reading
+    [error] = raised.value.__context__.exceptions
+    assert (type(error), str(error)) == (ValueError, "x")
 
 
 async def test_a_child_error_is_raised_by_its_parent_alone() -> None:
