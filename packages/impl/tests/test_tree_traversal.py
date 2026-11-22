@@ -361,6 +361,53 @@ async def test_a_child_error_is_raised_by_its_parent_alone() -> None:
     assert raised.value.__context__ is None
 
 
+async def test_cancel_starts_nothing_more_and_lets_the_running_end() -> None:
+    async def leaf(task: _Call) -> str:
+        await task._emit_event(task.path)
+        await asyncio.sleep(0.01)
+        await task._emit_event(task.path + " done")
+        return task.path
+
+    async def parent(task: _Call) -> None:
+        try:
+            await task._run_tasks([_Call(engine, f"p/{c}", leaf) for c in "abcd"])
+        except asyncio.CancelledError:
+            await task._emit_event("p cancelled")  # Still running: it emits.
+            raise
+
+    engine = TreeTraversal(max_running=2)
+    seen = []
+    async for event in engine.events([_Call(engine, "p", parent)]):
+        seen.append(event)
+        engine.cancel()
+    # The two running end, and emit: the two pending never start.
+    assert sorted(seen) == ["p cancelled", "p/a", "p/a done", "p/b", "p/b done"]
+    assert seen[-1] == "p cancelled"
+
+
+async def test_a_child_error_its_cancelled_parent_drops_is_raised_closing() -> None:
+    async def cleanup_fails(task: _Call) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            raise ValueError(task.path)  # As a failing cleanup.
+
+    async def parent(task: _Call) -> None:
+        await task._run_tasks([_Call(engine, "p/c", cleanup_fails)])
+
+    engine = TreeTraversal(max_running=1)
+    events = engine.events([_Call(engine, "p", parent)])
+    reading = asyncio.ensure_future(anext(events, None))
+    for _ in range(5):
+        await asyncio.sleep(0)  # Until p/c runs.
+    engine.close()
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await reading
+    # Raised once, by close's _aclose, inside the group of the one ending events.
+    [[error]] = [group.exceptions for group in raised.value.exceptions]
+    assert (type(error), str(error)) == (ValueError, "p/c")
+
+
 async def test_a_traversal_runs_once() -> None:
     engine = TreeTraversal(max_running=1)
     await _all(engine, [])

@@ -90,7 +90,7 @@ class PathAction:
 class _TraversalTask(PathTask):
     """What both tasks share: the handler, the action, and the patterns pruning.
 
-    Paths are compared by the handler, never as strings: a listing may name a
+    Paths are compared by their keys, the handler's segments, never as strings: a listing may name a
     directory with a trailing delimiter, as an object store does, or escape
     its names. A listing's entries are passed on whole, as the storage gave
     them.
@@ -126,12 +126,13 @@ class _TraversalTask(PathTask):
         entries kept are as the listing gave them.
         """
         kept: list[Entry] = []
+        own = self._key(self.entry["name"])
         subdirs: set[tuple[str, ...]] = set()
         for found in entries:
-            if self.handler.equals(found["name"], self.entry["name"]):
+            key = self._key(found["name"])
+            if key == own:
                 continue
             if found["type"] == "directory":
-                key = self._key(found["name"])
                 if key in subdirs or not (self._descend(found) or self._matched(found)):
                     continue
                 subdirs.add(key)
