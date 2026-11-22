@@ -450,9 +450,36 @@ async def test_a_child_error_its_cancelled_parent_drops_is_raised_closing() -> N
     engine.close()
     with pytest.raises(BaseExceptionGroup) as raised:
         await reading
-    # Raised once, by close's _aclose, inside the group of the one ending events.
-    [[error]] = [group.exceptions for group in raised.value.exceptions]
+    # Raised once, by close's _aclose: unpacked into the group of the one
+    # ending events.
+    [error] = raised.value.exceptions
     assert (type(error), str(error)) == (ValueError, "p/c")
+
+
+async def test_an_error_below_is_one_level_down_whatever_its_depth() -> None:
+    async def fail(task: _Call) -> None:
+        raise OSError(task.path)
+
+    async def own_group(task: _Call) -> None:
+        raise ExceptionGroup("its own", [ValueError(task.path)])
+
+    async def parent(task: _Call) -> None:
+        depth = task.path.count("/")
+        if depth < 2:
+            await task._run_tasks([_Call(engine, f"{task.path}/d", parent)])
+        else:
+            await task._run_tasks(
+                [_Call(engine, f"{task.path}/x", fail), _Call(engine, "y", own_group)]
+            )
+
+    engine = TreeTraversal(max_running=1)
+    with pytest.raises(ExceptionGroup) as raised:
+        await _all(engine, [_Call(engine, "p", parent)])
+    [error, group] = raised.value.exceptions
+    assert (type(error), str(error)) == (OSError, "p/d/d/x")
+    # A group a task raises itself is kept whole.
+    assert type(group) is ExceptionGroup
+    assert [str(e) for e in group.exceptions] == ["y"]
 
 
 async def test_a_traversal_runs_once() -> None:

@@ -40,7 +40,7 @@ import itertools
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable as AsyncIterableABC
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -49,6 +49,7 @@ if TYPE_CHECKING:
         AsyncIterator,
         Callable,
         Iterable,
+        Sequence,
     )
 
 __all__: list[str] = []
@@ -174,6 +175,36 @@ async def _aiter(
     else:
         for task in tasks:
             yield task
+
+
+class _Failures(BaseExceptionGroup):
+    """The errors the traversal raises together, of the tasks a `_run_tasks` ran, or closing.
+
+    Flat: one of them in the errors is unpacked into its own, so that an
+    error below is one level down whatever its depth. A group a task raises
+    itself is kept whole. An ExceptionGroup, `_ExceptionFailures`, unless an
+    error is no Exception, e.g. a KeyboardInterrupt.
+    """
+
+    def __new__(cls, message: str, errors: Sequence[BaseException]) -> Self:
+        flat: list[BaseException] = []
+        for error in errors:
+            if isinstance(error, _Failures):
+                flat += error.exceptions
+            else:
+                flat.append(error)
+        made: type[Any] = cls
+        if cls is _Failures and all(isinstance(e, Exception) for e in flat):
+            made = _ExceptionFailures
+        return super().__new__(made, message, flat)
+
+    def __init__(self, message: str, errors: Sequence[BaseException]) -> None:
+        # The flat errors are __new__'s: BaseExceptionGroup keeps them.
+        pass
+
+
+class _ExceptionFailures(ExceptionGroup, _Failures):
+    """`_Failures` of Exceptions alone: caught as any Exception."""
 
 
 class _End:
@@ -404,7 +435,7 @@ class TreeTraversal:
             e for t in ends if not t.cancelled() and (e := t.exception()) is not None
         ]
         if errors:
-            raise BaseExceptionGroup("The traversal failed to close.", errors)
+            raise _Failures("The traversal failed to close.", errors)
 
     async def _schedule(self) -> None:
         """Start the leftmost pending task while a slot is free, until nothing is pending or running."""
@@ -541,10 +572,7 @@ class TreeTraversal:
                 raise failed
             errors.insert(0, failed)
         if errors:
-            # An ExceptionGroup, unless an error is no Exception, e.g. a KeyboardInterrupt.
-            raise BaseExceptionGroup(
-                f"{len(errors)} of {len(added)} tasks failed", errors
-            )
+            raise _Failures(f"{len(errors)} of {len(added)} tasks failed", errors)
         return [t.result() for t in added]
 
     async def _emit_event(self, event: Any) -> None:
