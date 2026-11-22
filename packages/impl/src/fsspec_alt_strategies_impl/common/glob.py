@@ -99,7 +99,17 @@ class PathAction:
         ``match`` is as `map` was given it. ``value`` is what `map` returned
         for it, and ``values`` the values of the items in it, in no order:
         none for a file. An item whose listing failed, its error handled as
-        ``on_error`` says, is None among them, never reduced.
+        ``on_error`` says, is never reduced: its value is what `failed`
+        returned for it.
+        """
+        return None
+
+    async def failed(self, entry: Entry) -> Any:
+        """The value of a directory whose listing failed, for its parent's `reduce`: None by default.
+
+        Its error is handled as ``on_error`` says, apart from this: e.g. a
+        walk still names the directory in its parent's ``dirs``, as fsspec's
+        does.
         """
         return None
 
@@ -162,13 +172,23 @@ class _TraversalTask(PathTask):
         Never across the whole listing: a listing streaming into tasks waits
         for room among those pending, while they wait for permits. Its error
         is kept as ``_listing_error``, then raised.
+
+        A root that is a file lists itself: its listing fails with
+        NotADirectoryError.
         """
         entries = self.handler.ils(self.entry, recursive=recursive, **self.ils_kwargs)
+        root = self.entry["name"] if self._group is None else None
         try:
             while True:
                 async with self.handler.operation_limit:
                     try:
                         entry = await anext(entries)
+                        if (
+                            root is not None
+                            and entry["type"] != "directory"
+                            and self.handler.equals(entry["name"], root)
+                        ):
+                            raise NotADirectoryError(root)
                     except StopAsyncIteration:
                         return
                     except Exception as error:
@@ -183,15 +203,16 @@ class _TraversalTask(PathTask):
         """Handle the path's listing error as ``on_error`` says.
 
         The root's is raised whatever it says, as fsspec's walk raises it,
-        and so is any with "raise". None emits it as an event, a callable is
-        called with it, and "omit" leaves it out.
+        and so is any with "raise". None emits ``(entry, error)`` as an event,
+        the path's entry naming what failed, a callable is called with the
+        error, and "omit" leaves it out.
         """
         error = self._listing_error
         assert error is not None
         if self._group is None or self.on_error == "raise":
             raise error
         elif self.on_error is None:
-            await self._emit_event(error)
+            await self._emit_event((self.entry, error))
         elif callable(self.on_error):
             self.on_error(error)
 
@@ -276,7 +297,7 @@ class VisitDirectory(_TraversalTask):
             if self._listing_error is not None:
                 # The items taken ran: the directory, listed in part, is not reduced.
                 await self._listing_failed()
-                return None
+                return await self.action.failed(entry)
         return await self.action.reduce(entry, match, value, values)
 
     async def _items(self) -> AsyncIterator[Entry]:
@@ -353,7 +374,7 @@ class TraverseSubtree(_TraversalTask):
                 raise  # The action's.
             # No directory open is reduced, the subtree's included.
             await self._listing_failed()
-            return None
+            return await self.action.failed(self.entry)
         finally:
             await entries.aclose()
 

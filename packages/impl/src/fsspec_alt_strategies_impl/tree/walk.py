@@ -3,15 +3,16 @@
 """A concurrent walk of a directory tree, as fsspec's ``walk`` answers.
 
 `_tree_walk` yields each directory's ``(path, dirs, files)``, as fsspec's
-``walk`` gives them, by `_walker._TreeWalk`, the walk under every tree
-strategy, in the order fsspec's ``walk`` promises: top down, a directory
-before those below it; bottom up, after all of them.
+``walk`` gives them, on `common.tree`'s traversal, in the order fsspec's
+``walk`` promises:
 
-`_walk_top_down` walks top down on `common.tree`'s traversal instead, by a
-`_WalkTopDown` per directory: its caller may prune by changing ``dirs``.
+- top down, a directory before those below it, by a `_WalkTopDown` per
+  directory: its caller may prune by changing ``dirs``;
+- bottom up, a directory after all of those below it, by `_WalkBottomUp`,
+  which emits each directory as `common.glob`'s tasks reduce it.
 
-This module depends on `_visit` and `_walker`, and `glob`, `handler`,
-`operation`, `paths` and `tree` of `common`.
+This module depends on `glob`, `handler`, `operation`, `paths` and `tree` of
+`common`.
 """
 
 from __future__ import annotations
@@ -19,29 +20,34 @@ from __future__ import annotations
 import asyncio
 from contextlib import aclosing
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import WalkState
 
-from ..common.glob import OnError, PathAction, VisitDirectory
+from ..common.glob import (
+    OnError,
+    PathAction,
+    TraverseSubtree,
+    VisitDirectory,
+    _TraversalTask,
+)
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim, _triples
 from ..common.tree import TreeTraversal
-from ._visit import _Pruned
-from ._walker import _TreeWalk
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
+    from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 
     from ..common.handler import Entry, StoragePath
-    from ._walker import _Listing
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
 
-# The directories in flight at most, top down: the requests are bounded by the
-# handler's operation_limit, so this bounds only the tasks held in memory.
+# The directories in flight at most: the requests are bounded by the handler's
+# operation_limit, so this bounds only the tasks held in memory.
 _MAX_RUNNING = 64
+
+_Walked = tuple[str, dict[str, Any], dict[str, Any]]
 
 
 def _tree_walk(
@@ -50,29 +56,31 @@ def _tree_walk(
     *,
     maxdepth: int | None = None,
     topdown: bool = True,
-    on_error: Literal["omit", "raise"] | Callable[[Exception], object] | None = None,
+    on_error: OnError = None,
     ils_kwargs: dict[str, Any] | None = None,
-) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
+    max_running: int = _MAX_RUNNING,
+) -> Operation[_Walked, WalkState]:
     """Walk a directory tree, listing several directories at a time.
 
     It yields each directory listed as ``(path, dirs, files)``, as fsspec's
-    ``walk`` does with ``detail=True``: ``path`` itself first, then each
-    directory below it. ``dirs`` and ``files`` map the names in the directory
-    to their ``ils`` entries. An empty directory yields empty ones. A directory
-    that fails to list yields its error instead, and the walk goes on with the
-    others. ``on_error``, below, may handle
-    those errors instead, as with fsspec's ``walk``.
+    ``walk`` does with ``detail=True``. ``dirs`` and ``files`` map the names
+    in the directory to their ``ils`` entries. An empty directory yields empty
+    ones. A directory that fails to list yields its error instead, as the
+    storage raised it, and the walk goes on with the others: the state's
+    ``current`` is then its path. ``on_error``, below, may handle those errors
+    instead, as with fsspec's ``walk``. A subdirectory that failed is still in
+    its parent's ``dirs``, as its parent's listing found it.
 
-    With ``topdown``, it is `_walk_top_down`: each directory listed on its
-    own, several at a time, and a caller may prune by changing ``dirs`` in
-    place, as with fsspec's ``walk``. Without, a directory comes after all of
-    those below it, and the tree is listed by one recursive ``ils``, unless
-    ``maxdepth`` prunes it. A listing broken off part way yields its error, as
-    soon as it comes, and leaves out the directories it had not passed whole,
-    as a walk bottom up that is cancelled does.
+    With ``topdown``, a directory comes before those below it, each listed on
+    its own, and a caller may prune by changing ``dirs`` in place, as with
+    fsspec's ``walk``. Without, a directory comes after all of those below it.
+    Where the handler's profile declares ``recursive_ls_depth_first_preorder``
+    and no ``maxdepth`` prunes it, the tree is listed by one recursive ``ils``,
+    streamed: a listing broken off part way fails the whole tree. Otherwise
+    each directory is listed on its own.
 
-    Once cancelled, it starts no new directory, and yields those started: top
-    down, those whose pages wait for a permit too, as the permits bound the
+    Once cancelled, it starts no new directory, and yields those started:
+    those whose pages wait for a permit too, as the permits bound the
     requests, not the directories. Iterating it raises these errors, which end
     it:
 
@@ -81,15 +89,14 @@ def _tree_walk(
     - with ``on_error="raise"``, the error of the first directory that failed to
       list.
 
-    Requests: top down, or when pruned, one ``ils`` per directory walked, as
-    the handler's ``operation_limit`` allows. Bottom up otherwise, one
-    recursive ``ils`` of ``path``, which a storage without a recursive listing
-    answers with one per directory.
+    Requests: one ``ils`` per directory walked, or bottom up by one listing,
+    one recursive ``ils`` of ``path``. Each page holds a permit of the
+    handler's ``operation_limit``.
 
     ``path`` is the directory the walk starts from, listed by the ``ils`` of
-    ``handler``. ``maxdepth`` of 1 lists only ``path``. ``topdown`` puts a directory
-    before those below it. ``ils_kwargs`` go to each ``ils``, as fsspec's
-    ``walk`` passes its own on.
+    ``handler``. ``maxdepth`` of 1 lists only ``path``. ``ils_kwargs`` go to
+    each ``ils``, as fsspec's ``walk`` passes its own on. ``max_running``
+    bounds the directories in flight.
 
     ``on_error`` says what becomes of the error of a directory that fails to
     list:
@@ -106,135 +113,42 @@ def _tree_walk(
     _check_maxdepth(maxdepth)
     if not (on_error in (None, "omit", "raise") or callable(on_error)):
         raise ValueError(f"on_error must be 'omit', 'raise' or callable: {on_error!r}")
-    if topdown:
-        return _walk_top_down(
-            handler, path, maxdepth=maxdepth, on_error=on_error, ils_kwargs=ils_kwargs
-        )
 
-    visit = _Pruned(maxdepth=maxdepth)
-    root = _trim(path)
-
-    async def run(
-        op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
-    ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
-        walk = _TreeWalk(
-            handler,
-            path,
-            visit,
-            order="bottomup",
-            ils_kwargs=ils_kwargs,
-            stopping=op.cancelling,
-        )
-        listings = walk.listings()
-        async with aclosing(listings):
-            async for listing in listings:
-                if listing.error is not None and (
-                    on_error == "raise" or listing.directory == root
-                ):
-                    # The root's failure ends the walk, as fsspec's does.
-                    raise listing.error
-                op.state = _walk_state(op.state, listing)
-                if (item := _walked(listing, on_error)) is not None:
-                    yield item
-
-    return Operation(run, WalkState(directories_listed=0))
-
-
-class _WalkTopDown(VisitDirectory):
-    """A directory of a walk top down: its ``(path, dirs, files)`` out before any below it, pruned by the caller.
-
-    Its listing pruned, it emits ``(walked, path, dirs, files)``, and waits
-    for ``walked``, an `asyncio.Event`, which the caller sets once it has
-    taken them. A subdirectory the caller removed from ``dirs`` meanwhile is
-    not walked, as with `os.walk` top down. So a directory comes after its
-    parent's, which waits: never before it.
-
-    A directory that fails to list emits nothing: `VisitDirectory` handles
-    its error as ``on_error`` says.
-    """
-
-    async def prune(self, entries: AsyncIterable[Entry]) -> AsyncIterator[Entry]:
-        if self._group is None:
-            entries = self._of_a_directory(entries)
-        kept = [e async for e in super().prune(entries)]
-        if self._listing_error is not None:
-            return  # Listed in part: never walked.
-        path, dirs, files = _triples(_trim(self.entry["name"]), kept, detail=True)
-        walked = asyncio.Event()
-        await self._emit_event((walked, path, dirs, files))
-        await walked.wait()
-        for entry in dirs.values():  # Those the caller left.
-            yield entry
-
-    async def _listing_failed(self) -> None:
-        """As `VisitDirectory`'s, but an error emitted comes with its directory, for the walk's state."""
-        if self._group is not None and self.on_error is None:
-            assert self._listing_error is not None
-            await self._emit_event(
-                (None, _trim(self.entry["name"]), self._listing_error)
-            )
-        else:
-            await super()._listing_failed()
-
-    async def _of_a_directory(
-        self, entries: AsyncIterable[Entry]
-    ) -> AsyncIterator[Entry]:
-        """The root's entries, or NotADirectoryError: a root that is a file lists itself."""
-        root = self.entry["name"]
-        async for entry in entries:
-            if entry["type"] != "directory" and self.handler.equals(
-                entry["name"], root
-            ):
-                raise NotADirectoryError(root)
-            yield entry
-
-
-def _walk_top_down(
-    handler: TreeFileOperationHandler,
-    path: StoragePath,
-    *,
-    max_running: int = _MAX_RUNNING,
-    maxdepth: int | None = None,
-    on_error: OnError = None,
-    ils_kwargs: dict[str, Any] | None = None,
-) -> Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState]:
-    """Walk a tree top down, yielding each directory's ``(path, dirs, files)``, or its error.
-
-    The caller may prune by removing names from ``dirs`` before it takes the
-    next item: the directory's task waits until then. ``maxdepth`` and
-    ``on_error`` are fsspec's walk's: an error is yielded where ``on_error``
-    is None. The root's error is raised.
-
-    Once cancelled, it starts no new listing, and yields the directories of
-    those in flight. The call raises ValueError if ``maxdepth`` is less than 1.
-    """
-    _check_maxdepth(maxdepth)
+    def root(engine: TreeTraversal) -> _TraversalTask:
+        entry = {"name": path, "type": "directory"}
+        options: dict[str, Any] = {
+            "maxdepth": maxdepth,
+            # "raise" is the walk's, so that the error comes bare, not in a group.
+            "on_error": None if on_error == "raise" else on_error,
+            "ils_kwargs": ils_kwargs,
+        }
+        if topdown:
+            action = PathAction(engine._emit_event)
+            return _WalkTopDown(engine, entry, action, handler, **options)
+        top = len(tuple(handler.segments(path)))
+        action = _WalkBottomUp(engine._emit_event, handler, top, maxdepth)
+        if maxdepth is None and handler.profile.recursive_ls_depth_first_preorder:
+            # Each directory's descendants come together: streamed, by one listing.
+            return TraverseSubtree(engine, entry, action, handler, **options)
+        # Else a directory per listing: one failing fails only itself.
+        return VisitDirectory(engine, entry, action, handler, **options)
 
     async def run(
-        op: Operation[tuple[str, dict[str, Any], dict[str, Any]], WalkState],
-    ) -> AsyncGenerator[tuple[str, dict[str, Any], dict[str, Any]] | Exception]:
+        op: Operation[_Walked, WalkState],
+    ) -> AsyncGenerator[_Walked | Exception]:
         engine = TreeTraversal(max_running=max_running, split=handler.segments)
         op._on_cancel = engine.cancel
-        root = _WalkTopDown(
-            engine,
-            {"name": path, "type": "directory"},
-            PathAction(engine._emit_event),
-            handler,
-            maxdepth=maxdepth,
-            # "raise" is the walk's, so that the error comes bare, not in a group.
-            on_error=None if on_error == "raise" else on_error,
-            ils_kwargs=ils_kwargs,
-        )
-        async with aclosing(engine.events([root])) as events:
+        await handler.open()  # Its profile, read by root.
+        async with aclosing(engine.events([root(engine)])) as events:
             async for event in events:
                 state = op.state
-                if event[0] is None:  # A directory failed: (None, path, error).
-                    _, directory, error = event
+                if len(event) == 2:  # A directory failed: (entry, error).
+                    entry, error = event
                     if on_error == "raise":
                         raise error
                     # Its path is the state's current, for a caller yielding it.
                     op.state = replace(
-                        state, current=directory, errors=state.errors + 1
+                        state, current=_trim(entry["name"]), errors=state.errors + 1
                     )
                     yield error
                     continue
@@ -248,30 +162,70 @@ def _walk_top_down(
                 try:
                     yield directory, dirs, files
                 finally:
-                    walked.set()  # The directory goes on, with the dirs left.
+                    if walked is not None:
+                        walked.set()  # The directory goes on, with the dirs left.
 
     return Operation(run, WalkState(directories_listed=0))
 
 
-def _walked(
-    listing: _Listing,
-    on_error: Literal["omit", "raise"] | Callable[[Exception], object] | None,
-) -> tuple[str, dict[str, Any], dict[str, Any]] | Exception | None:
-    """What the walk yields of a whole listing: its directory, its error, or None, as ``on_error`` says."""
-    if listing.error is None:
-        return _triples(listing.directory, listing.entries, detail=True)
-    if on_error is None:
-        return listing.error
-    if callable(on_error):
-        on_error(listing.error)
-    return None  # "omit", or handled by the callable: left out.
+class _WalkTopDown(VisitDirectory):
+    """A directory of a walk top down: its ``(path, dirs, files)`` out before any below it, pruned by the caller.
+
+    Its listing pruned, it emits ``(walked, path, dirs, files)``, and waits
+    for ``walked``, an `asyncio.Event`, which the caller sets once it has
+    taken them. A subdirectory the caller removed from ``dirs`` meanwhile is
+    not walked, as with `os.walk` top down. So a directory comes after its
+    parent's, which waits: never before it.
+
+    A directory that fails to list emits nothing of its own: `VisitDirectory`
+    handles its error as ``on_error`` says.
+    """
+
+    async def prune(self, entries: AsyncIterable[Entry]) -> AsyncIterator[Entry]:
+        kept = [e async for e in super().prune(entries)]
+        if self._listing_error is not None:
+            return  # Listed in part: never walked.
+        path, dirs, files = _triples(_trim(self.entry["name"]), kept, detail=True)
+        walked = asyncio.Event()
+        await self._emit_event((walked, path, dirs, files))
+        await walked.wait()
+        for entry in dirs.values():  # Those the caller left.
+            yield entry
 
 
-def _walk_state(state: WalkState, listing: _Listing) -> WalkState:
-    """The walk's state once a directory's listing is out."""
-    return WalkState(
-        errors=state.errors + (listing.error is not None),
-        current=listing.directory,
-        directories_listed=(state.directories_listed or 0) + 1,
-        found=state.found + len(listing.entries),
-    )
+class _WalkBottomUp(PathAction):
+    """A walk bottom up: each directory's ``(None, path, dirs, files)`` emitted as it is reduced, after all below it.
+
+    Each item's value is its entry, a failed subdirectory's too, so that its
+    parent names it in ``dirs``, as its listing found it. A directory at
+    ``maxdepth`` is reduced unlisted, and emits nothing: ``top`` is the
+    root's segments counted.
+    """
+
+    def __init__(
+        self,
+        emit_event: Any,
+        handler: TreeFileOperationHandler,
+        top: int,
+        maxdepth: int | None,
+    ) -> None:
+        super().__init__(emit_event)
+        self.handler = handler
+        self.top = top
+        self.maxdepth = maxdepth
+
+    async def map(self, entry: Entry, match: bool) -> Any:
+        return entry
+
+    async def reduce(
+        self, entry: Entry, match: bool, value: Any, values: list[Any]
+    ) -> Any:
+        depth = len(tuple(self.handler.segments(entry["name"]))) - self.top
+        listed = self.maxdepth is None or depth < self.maxdepth
+        if entry["type"] == "directory" and listed:
+            path, dirs, files = _triples(_trim(entry["name"]), values, detail=True)
+            await self._emit_event((None, path, dirs, files))
+        return entry
+
+    async def failed(self, entry: Entry) -> Any:
+        return entry

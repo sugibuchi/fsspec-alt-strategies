@@ -240,8 +240,8 @@ async def test_a_listing_error_is_emitted_and_the_others_go_on(
 ) -> None:
     handler = _Handler(_FILES, failing="r/a")
     value, action, events = await _run(use_one_listing, handler=handler)
-    errors = [e for e in events if isinstance(e, Exception)]
-    assert [str(e) for e in errors] == ["r/a"]
+    errors = [(n["name"], e) for n, e in events if isinstance(e, Exception)]
+    assert [(n, str(e)) for n, e in errors] == [("r/a", "r/a")]  # With its entry.
     # r/a is left out, and r reduced with the others' values.
     assert value == 2
     assert ("reduce", "r/a") not in action.calls
@@ -252,7 +252,7 @@ async def test_a_listing_error_omitted_or_called_back() -> None:
     for on_error in ("omit", called.append):
         handler = _Handler(_FILES, failing="r/a")
         _, _, events = await _run(False, handler=handler, on_error=on_error)
-        assert not [e for e in events if isinstance(e, Exception)]
+        assert not [e for _, e in events if isinstance(e, Exception)]
     assert [str(e) for e in called] == ["r/a"]
 
 

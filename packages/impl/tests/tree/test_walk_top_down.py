@@ -1,4 +1,4 @@
-"""Tests of `_walk_top_down`, the walk top down on `common.tree`'s traversal, which its caller prunes."""
+"""Tests of `_tree_walk` top down on `common.tree`'s traversal, which its caller prunes."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
-from fsspec_alt_strategies_impl.tree.walk import _walk_top_down
+from fsspec_alt_strategies_impl.tree.walk import _tree_walk
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 
@@ -25,7 +25,7 @@ async def test_yields_what_fsspecs_walk_yields_top_down(
     _tree(any_fs)
     walked = [
         w
-        async for w in _walk_top_down(
+        async for w in _tree_walk(
             TreeView(any_fs), "data", max_running=3, maxdepth=maxdepth
         )
     ]
@@ -44,7 +44,7 @@ async def test_yields_what_fsspecs_walk_yields_top_down(
 async def test_the_caller_prunes_by_changing_dirs(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
     walked = []
-    async for path, dirs, _ in _walk_top_down(TreeView(any_fs), "data", max_running=3):
+    async for path, dirs, _ in _tree_walk(TreeView(any_fs), "data", max_running=3):
         walked.append(path)
         dirs.pop("2023", None)
         dirs.pop("02", None)
@@ -56,7 +56,7 @@ async def test_its_state_counts_the_directories_and_items(
     any_fs: SimulatedFileSystem,
 ) -> None:
     _tree(any_fs)
-    op = _walk_top_down(TreeView(any_fs), "data", max_running=3)
+    op = _tree_walk(TreeView(any_fs), "data", max_running=3)
     walked = [w async for w in op]
     assert op.state.directories_listed == len(walked) == 7
     assert op.state.found == sum(len(d) + len(f) for _, d, f in walked)
@@ -65,7 +65,7 @@ async def test_its_state_counts_the_directories_and_items(
 
 async def test_cancelled_it_starts_no_listing(any_fs: SimulatedFileSystem) -> None:
     _tree(any_fs)
-    op = _walk_top_down(TreeView(any_fs), "data", max_running=3)
+    op = _tree_walk(TreeView(any_fs), "data", max_running=3)
     walked = []
     async for path, _, _ in op:
         walked.append(path)
@@ -89,7 +89,7 @@ async def test_a_directory_failing_yields_its_error(
     view = TreeView(any_fs)
     view_ils = view.ils
     view.ils = ils  # type: ignore[method-assign]
-    walked = [w async for w in _walk_top_down(view, "data", max_running=3)]
+    walked = [w async for w in _tree_walk(view, "data", max_running=3)]
     errors = [w for w in walked if isinstance(w, Exception)]
     assert [str(e) for e in errors] == ["data/2023"]
     assert sorted(w[0] for w in walked if not isinstance(w, Exception)) == [

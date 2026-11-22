@@ -150,11 +150,12 @@ async def test_bottom_up_a_failed_listing_is_yielded_and_the_rest_walked() -> No
     # and its error comes as it does.
     errors = [i for i in items if isinstance(i, Exception)]
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].directory == "data/2023"
-    assert errors[0].__notes__ == ["Listing 'data/2023' failed."]
-    paths = [i[0] for i in items if not isinstance(i, Exception)]
+    walked = [i for i in items if not isinstance(i, Exception)]
+    paths = [p for p, _, _ in walked]
     assert sorted(paths) == ["data", "data/2024", "data/2024/01", "data/2024/02"]
     assert paths[-1] == "data"
+    # Its parent's listing found it: it is still in its parent's dirs.
+    assert sorted(walked[-1][1]) == ["2023", "2024"]
 
 
 class _Recording(_Forbidding):
