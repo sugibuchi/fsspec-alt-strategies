@@ -117,7 +117,7 @@ class _TraversalTask(PathTask):
         self.handler = handler
         self.patterns = patterns
 
-    def segments(self, path: str) -> tuple[str, ...]:
+    def _segments(self, path: str) -> tuple[str, ...]:
         """A path's segments, the handler's: equal for two names `equals` matches."""
         return tuple(self.handler.segments(path))
 
@@ -132,10 +132,10 @@ class _TraversalTask(PathTask):
         entries kept are as the listing gave them, as it streams: only the
         subdirectories' segments are held.
         """
-        own = self.segments(self.entry["name"])
+        own = self._segments(self.entry["name"])
         subdirs: set[tuple[str, ...]] = set()
         async for found in entries:
-            key = self.segments(found["name"])
+            key = self._segments(found["name"])
             if key == own:
                 continue
             if found["type"] == "directory":
@@ -277,8 +277,8 @@ class TraverseSubtree(_TraversalTask):
 
         E.g. ``{"name": "a/b/c"}`` for ``a/b`` and ``a/b/c/d``.
         """
-        depth = len(self.segments(root["name"]))
-        name = self.handler.join(root["name"], self.segments(entry["name"])[depth])
+        depth = len(self._segments(root["name"]))
+        name = self.handler.join(root["name"], self._segments(entry["name"])[depth])
         return {"name": name, "size": 0, "type": "directory"}
 
 
@@ -312,11 +312,11 @@ class _Span:
             # A directory matched alone: reduced with no values, nothing below.
             return await task.action.reduce(root, match, value, []), await self._skip()
 
-        key = task.segments(root["name"])
+        key = task._segments(root["name"])
         values: list[Any] = []
         next = self.next
         while next is not None:
-            found = task.segments(next["name"])
+            found = task._segments(next["name"])
             in_root = len(found) == len(key) + 1
             if found == key:
                 next = await anext(self.entries, None)  # Its own marker.
@@ -342,10 +342,10 @@ class _Span:
 
     async def _skip(self) -> Entry | None:
         """Read past the span unread: the first entry not below the directory."""
-        key = self.task.segments(self.root["name"])
+        key = self.task._segments(self.root["name"])
         next = self.next
         while next is not None:
-            found = self.task.segments(next["name"])
+            found = self.task._segments(next["name"])
             if found != key and not _below(key, found):
                 break
             next = await anext(self.entries, None)
