@@ -478,8 +478,12 @@ The tree strategies run on `common/tree.py`'s `TreeTraversal`, with `common/glob
 - `tree/walk.py`'s `_root_task` takes `TraverseSubtree` where the profile declares the order and nothing prunes the
   root, else `VisitDirectory`, which streams each subtree it can.
 
-What a strategy does on each path is a `PathAction`: `map` before what is below the path, `reduce` after, with the
-values of the items in it. So a strategy is a map-reduce:
+What a strategy does on each path is a `PathAction`. So a strategy is a map-reduce:
+
+- `visit` is called on each item a listing gives, in its order, and may prune it with all below it.
+- `map` acts on a path before what is below it, given its parent directory's `map` value.
+- `reduce` reads the values of the items in the path as they end, in no order, from an async generator. That
+  generator raises the errors below the path once read through.
 
 | Strategies                             | Their action                                             |
 |----------------------------------------|----------------------------------------------------------|

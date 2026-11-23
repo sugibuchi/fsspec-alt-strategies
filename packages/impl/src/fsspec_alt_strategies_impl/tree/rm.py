@@ -309,7 +309,7 @@ class _Deletion(PathAction):
         self.batches: dict[tuple[str, ...], _Batch] = {}
 
     async def reduce(
-        self, entry: Entry, match: bool, value: Any, values: list[Any]
+        self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
     ) -> Any:
         key = tuple(self.handler.segments(entry["name"]))
         if entry["type"] != "directory":
@@ -319,9 +319,13 @@ class _Deletion(PathAction):
             if len(batch.waiting) >= self.batch_size:
                 await self.send(batch)
             return True
+        # Its files join its batch as their values come.
+        emptied = True
+        async for deleted in values:
+            emptied &= deleted is True
         last = self.batches.pop(key, _Batch())
         await self.send(last)  # Its last, smaller one, if any.
-        if not last.deleted or not all(v is True for v in values):
+        if not last.deleted or not emptied:
             return False  # Kept, with what failed in it.
         return await self.delete_directory(entry)
 

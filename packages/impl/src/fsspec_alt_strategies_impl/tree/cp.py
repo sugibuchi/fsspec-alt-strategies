@@ -435,12 +435,10 @@ class _Sending(PathAction):
         self.names: dict[str, set[str]] = {}
         # Each source directory's batch, until its reduce.
         self.batches: dict[str, _Batch] = {}
-        # The source directories listed whole: one at maxdepth is not.
-        self.listed_whole: set[str] = set()
 
     # The traversal's calls.
 
-    async def map(self, entry: Entry, match: bool) -> Any:
+    async def map(self, entry: Entry, match: bool, parent_value: Any) -> Any:
         if entry["type"] != "directory":
             return None
         name = _trim(entry["name"])
@@ -453,32 +451,33 @@ class _Sending(PathAction):
         return target
 
     async def reduce(
-        self, entry: Entry, match: bool, value: Any, values: list[Any]
+        self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
     ) -> Any:
         name = _trim(entry["name"])
         if entry["type"] != "directory":
             return await self.file(entry, name)
+        # Its files join its batch as their values come.
+        items = 0
+        went = True
+        async for item in values:
+            items += 1
+            went &= item is True
         if value is None:
             return False  # Refused, with all in it.
 
         last = self.batches.pop(name, _Batch())
         await self.send(last)
-        if name not in self.listed_whole:
-            return False  # At maxdepth: found, not listed, and kept.
-        went = last.done and all(v is True for v in values)
-        if not values:
+        went &= last.done
+        if not items:
             # An empty directory is made, whatever the storage. With maxdepth,
             # fsspec's copy leaves out directories, and copies files only: a
-            # move then leaves it where it is.
+            # move then leaves it where it is, as one at maxdepth, not listed.
             if self.place.maxdepth is not None:
                 return False
             went = await self.make(value, name, always=True) and went
         if self.move and went:
             return await self.remove(entry, name, value)
         return went
-
-    async def listed(self, entry: Entry) -> None:
-        self.listed_whole.add(_trim(entry["name"]))
 
     async def failed(self, entry: Entry) -> Any:
         self.batches.pop(_trim(entry["name"]), None)

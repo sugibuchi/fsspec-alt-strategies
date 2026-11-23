@@ -18,6 +18,7 @@ This module depends on `glob`, `handler`, `operation`, `paths` and `tree` of
 from __future__ import annotations
 
 import asyncio
+import itertools
 from contextlib import aclosing
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
@@ -188,6 +189,10 @@ def _root_task(
     return root
 
 
+def _first(pair: tuple[int, Any]) -> int:
+    return pair[0]
+
+
 def _unlisted(
     handler: TreeFileOperationHandler, top: int, maxdepth: int | None, entry: Entry
 ) -> bool:
@@ -228,6 +233,10 @@ class _WalkBottomUp(PathAction):
     parent names it in ``dirs``, as its listing found it. A directory at
     ``maxdepth`` is reduced unlisted, and emits nothing: ``top`` is the
     root's segments counted.
+
+    The values come as the items end: `visit` numbers each item as its
+    listing gives it, so that ``dirs`` and ``files`` are in the listing's
+    order, as fsspec's are.
     """
 
     def __init__(
@@ -241,16 +250,29 @@ class _WalkBottomUp(PathAction):
         self.handler = handler
         self.top = top
         self.maxdepth = maxdepth
+        # Each item's place in its listing, until its directory is reduced:
+        # the listings run at once, but each gives its items in order.
+        self.places: dict[str, int] = {}
+        self.visited = itertools.count()
 
-    async def map(self, entry: Entry, match: bool) -> Any:
+    async def visit(self, entry: Entry) -> bool:
+        self.places[entry["name"]] = next(self.visited)
+        return True
+
+    async def map(self, entry: Entry, match: bool, parent_value: Any) -> Any:
         return entry
 
     async def reduce(
-        self, entry: Entry, match: bool, value: Any, values: list[Any]
+        self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
     ) -> Any:
+        items = [item async for item in values]
+        places = [self.places.pop(item["name"], 0) for item in items]
         unlisted = _unlisted(self.handler, self.top, self.maxdepth, entry)
         if entry["type"] == "directory" and not unlisted:
-            path, dirs, files = _triples(_trim(entry["name"]), values, detail=True)
+            ordered = [
+                item for _, item in sorted(zip(places, items, strict=True), key=_first)
+            ]
+            path, dirs, files = _triples(_trim(entry["name"]), ordered, detail=True)
             await self._emit_event((None, path, dirs, files))
         return entry
 

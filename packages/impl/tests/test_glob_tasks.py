@@ -17,7 +17,7 @@ from fsspec_alt_strategies_impl.common.patterns import _Search
 from fsspec_alt_strategies_impl.common.tree import TreeTraversal
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator
 
 _FILES = ["r/1", "r/a/2", "r/a/b/3", "r/a/b-x/4", "r/c/5"]
 
@@ -81,23 +81,29 @@ class _Count(PathAction):
         self.calls: list[tuple[str, str]] = []
         self.matched: set[str] = set()
 
-    async def map(self, entry: dict[str, Any], match: bool) -> Any:
+    async def map(self, entry: dict[str, Any], match: bool, parent_value: Any) -> Any:
         self.calls.append(("map", entry["name"]))
         if match:
             self.matched.add(entry["name"])
         return 1 if entry["type"] == "file" else 0
 
     async def reduce(
-        self, entry: dict[str, Any], match: bool, value: Any, values: list[Any]
+        self,
+        entry: dict[str, Any],
+        match: bool,
+        value: Any,
+        values: AsyncGenerator[Any],
     ) -> Any:
         assert match == (entry["name"] in self.matched)
+        # A listing failed: None.
+        items = [v async for v in values if v is not None]
+        # Logged once all below is reduced, as values are read through.
         self.calls.append(("reduce", entry["name"]))
         if entry["type"] == "file":
-            assert values == []
-        values = [v for v in values if v is not None]  # A listing failed: None.
+            assert items == []
         if entry["type"] != "file":
-            await self._emit_event((entry["name"], sum(values)))
-        return value + sum(values)
+            await self._emit_event((entry["name"], sum(items)))
+        return value + sum(items)
 
 
 async def _run(
@@ -306,7 +312,9 @@ async def test_the_items_are_mapped_in_parallel_after_their_directory(
     early: list[str] = []
 
     class _Slow(PathAction):
-        async def map(self, entry: dict[str, Any], match: bool) -> Any:
+        async def map(
+            self, entry: dict[str, Any], match: bool, parent_value: Any
+        ) -> Any:
             nonlocal active, peak
             parent = entry["name"].rpartition("/")[0]
             if parent and parent not in mapped:

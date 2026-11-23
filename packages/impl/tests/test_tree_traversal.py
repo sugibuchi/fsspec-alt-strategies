@@ -103,7 +103,7 @@ async def test_depth_first_top_down_or_bottom_up(
     assert await _all(engine, [_Node(engine, "r", _TREE, after=after)]) == expected
 
 
-async def test_results_in_the_order_given() -> None:
+async def test_results_in_the_order_they_end() -> None:
     async def leaf(task: _Call) -> str:
         await asyncio.sleep(0.01 * (3 - int(task.path)))  # The last ends first.
         return task.path
@@ -113,7 +113,7 @@ async def test_results_in_the_order_given() -> None:
         await task._emit_event(await _results(task, children))
 
     engine = TreeTraversal(max_running=3)
-    assert await _all(engine, [_Call(engine, "p", parent)]) == [["0", "1", "2"]]
+    assert await _all(engine, [_Call(engine, "p", parent)]) == [["2", "1", "0"]]
 
 
 async def test_results_are_yielded_while_tasks_are_still_taken() -> None:
@@ -218,7 +218,8 @@ async def test_failed_children_raise_an_exception_group_after_all_ran() -> None:
             await task._emit_event([str(e) for e in group.exceptions])
 
     engine = TreeTraversal(max_running=1)
-    assert await _all(engine, [_Call(engine, "p", parent)]) == [["c", "a"]]
+    # In the order they ended: one at a time, the leftmost path first.
+    assert await _all(engine, [_Call(engine, "p", parent)]) == [["a", "c"]]
     assert sorted(ran) == ["a", "b", "c"]
 
 

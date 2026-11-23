@@ -38,7 +38,6 @@ import asyncio
 import heapq
 import itertools
 from abc import ABC, abstractmethod
-from collections import deque
 from collections.abc import AsyncIterable as AsyncIterableABC
 from functools import partial
 from typing import TYPE_CHECKING, Any, Self, TypeVar
@@ -82,7 +81,7 @@ class PathTask(ABC):
     def _tell_group(self) -> None:
         """Tell its group it is done, ended or cancelled before it started."""
         if self._group is not None:
-            self._group.on_task_done()
+            self._group.on_task_done(self)
 
     @abstractmethod
     async def run(self) -> Any:
@@ -137,42 +136,47 @@ class PathTask(ABC):
 
 
 class PathTaskGroup:
-    """The tasks one `_run_tasks` runs for its caller, not yet read, in the order given.
+    """The tasks one `_run_tasks` runs for its caller, not yet read.
 
-    A task done leaves `_remaining` by `on_task_done` once those before it
-    have, for the caller to read by `take_done`. Each task leaves once, and
-    each check stops at the first not done: O(n) in all, whatever order the
-    tasks end in. So the caller waiting reads `done` in O(1) at each wake.
+    A task leaves `_remaining` by `on_task_done` as it is done, in whatever
+    order the tasks end, for the caller to read by `take_done`. Each step is
+    O(1), so the caller waiting reads `done` in O(1) at each wake.
     """
 
     def __init__(self, caller: PathTask) -> None:
         self.caller = caller
-        # The tasks taken, not done or not yet in order.
-        self._remaining: deque[PathTask] = deque()
-        # The tasks done in order, which the caller has not taken yet.
+        # The tasks taken and not done.
+        self._remaining: set[PathTask] = set()
+        # The tasks done, in the order they ended, which the caller has not
+        # taken yet.
         self._done_tasks: list[PathTask] = []
         # Every task is taken: no more comes.
         self._add_tasks_done = False
 
     def add(self, task: PathTask) -> None:
+        if self._add_tasks_done:
+            raise RuntimeError(
+                f"Task {task.path!r} is added after every task was taken."
+            )
         task._group = self
-        self._remaining.append(task)
+        self._remaining.add(task)
 
-    def on_task_done(self) -> None:
-        """Move the tasks done in order out of those remaining, once one is done."""
-        while self._remaining and self._remaining[0].done():
-            self._done_tasks.append(self._remaining.popleft())
+    def on_task_done(self, task: PathTask) -> None:
+        """Move a task done out of those remaining: once, though it may be told twice."""
+        if task in self._remaining:
+            self._remaining.remove(task)
+            self._done_tasks.append(task)
 
     def on_add_tasks_done(self) -> None:
         """Every task is taken: no more comes."""
         self._add_tasks_done = True
 
     def has_done(self) -> bool:
-        """Whether tasks done in order wait to be taken."""
+        """Whether tasks done wait to be taken."""
         return bool(self._done_tasks)
 
     def take_done(self) -> list[PathTask]:
-        """The tasks done in order since the last call, in the order given."""
+        """The tasks done since the last call, in the order they ended."""
         done, self._done_tasks = self._done_tasks, []
         return done
 
@@ -605,7 +609,7 @@ class TreeTraversal:
         return None
 
     async def _wait_ready(self, group: PathTaskGroup) -> tuple[list[PathTask], bool]:
-        """Wait for tasks of a group done in order, not yet read: them, and whether all are.
+        """Wait for tasks of a group done, not yet read: them, and whether all are.
 
         Its caller counts no more against ``max_running`` while it waits.
         """
@@ -622,7 +626,7 @@ class TreeTraversal:
     async def _run_tasks(
         self, caller: PathTask, tasks: Iterable[PathTask] | AsyncIterable[PathTask]
     ) -> AsyncGenerator[Any]:
-        """Run ``tasks`` for ``caller``: yield their results in the order given, as they end.
+        """Run ``tasks`` for ``caller``: yield their results as they end.
 
         ``tasks`` may be an async iterator, e.g. made from a listing as it
         streams: each is taken once there is room for it among those pending,
@@ -630,13 +634,13 @@ class TreeTraversal:
         They are taken in a task of their own, so that results are yielded
         while more are taken.
 
-        A result is yielded once its task and those before it are done.
-        ``caller`` counts no more against ``max_running`` while it waits for
+        A result is yielded once its task is done, in the order they end, not
+        the order given. ``caller`` counts no more against ``max_running`` while it waits for
         one, and counts again while it handles one yielded.
 
         A task failed or cancelled yields nothing. Once all are done, it raises
         CancelledError if any was cancelled, else an ExceptionGroup of those
-        that failed, in the order given. None is cancelled for another's
+        that failed, in the order they ended. None is cancelled for another's
         failure. An error of ``tasks`` itself, e.g. of the listing, lets those
         taken end: it is raised alone where none failed, else first in their
         group. Closed early, it takes no more tasks, and those taken run on.

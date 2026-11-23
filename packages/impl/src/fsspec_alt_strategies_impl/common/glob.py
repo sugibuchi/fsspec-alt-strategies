@@ -35,6 +35,7 @@ This module depends on `handler`, `patterns` and `tree`.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, Literal
 
 from .tree import PathTask
@@ -61,18 +62,20 @@ OnError = Literal["omit", "raise"] | Callable[[Exception], object] | None
 class PathAction:
     """What an operation does on each path a traversal visits: the strategy is the task's.
 
-    A task calls `map` on a path before traversing what is below it, and
-    `reduce` after: on a file at once, with no values. An item's value is what
-    `reduce` returned for it. Each defaults to None, so a subclass writes only
-    those it needs.
+    A task calls `map` on a path before traversing what is below it, then
+    `reduce`, which reads the values of the items below as they are traversed.
+    An item's value is what `reduce` returned for it. `visit` prunes the
+    items further than the task does. Each has a default, so a subclass
+    writes only those it needs.
 
     The root is a path like any other: `map` and `reduce` are called on it,
-    whether a file or a directory.
+    whether a file or a directory. `visit` is called on the items below it
+    only.
 
-    Which paths are visited is the task's, e.g. within a ``maxdepth`` or a
-    glob's pattern: an action never prunes. So are its errors: where `map`
-    raises, or anything below the path fails, `reduce` is not called, and the
-    task handles the error.
+    Which paths are visited is first the task's, e.g. within a ``maxdepth``
+    or a glob's pattern. So are the errors: where `map` raises, the path's
+    task ends. An error below a path is raised by its ``values``, through
+    `reduce`, and the task handles it.
     """
 
     def __init__(self, emit_event: Callable[[Any], Coroutine[Any, Any, None]]) -> None:
@@ -81,35 +84,45 @@ class PathAction:
         # waiting while too many are unread.
         self._emit_event = emit_event
 
-    async def map(self, entry: Entry, match: bool) -> Any:
+    async def visit(self, entry: Entry) -> bool:
+        """Whether an item a listing found is traversed: False prunes it with all below it.
+
+        Called once on each item the task keeps, in the listing's order,
+        before the item's `map`. Never on the root. True by default.
+        """
+        return True
+
+    async def map(self, entry: Entry, match: bool, parent_value: Any) -> Any:
         """Act on a path, before its subtree is traversed: a value for `reduce`, or None.
 
         ``entry`` is the path's entry, as a listing or ``info`` gave it.
         ``match`` is whether the task's patterns match the path, True where it
         has none: a directory visited only on the way to others is not
         matched. A file below the root is visited only if matched.
+        ``parent_value`` is what `map` returned for the directory the path is
+        in, None for the traversal's root.
         """
         return None
 
     async def reduce(
-        self, entry: Entry, match: bool, value: Any, values: list[Any]
+        self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
     ) -> Any:
-        """Act on a path, after its subtree is traversed: its value, or None.
+        """Act on a path, reading the values of the items below it as they are traversed: its value, or None.
 
         ``match`` is as `map` was given it. ``value`` is what `map` returned
-        for it, and ``values`` the values of the items in it, in no order:
-        none for a file. An item whose listing failed, its error handled as
-        ``on_error`` says, is never reduced: its value is what `failed`
-        returned for it.
+        for it. ``values`` yields the values of the items in it, in no order,
+        as they are reduced: none for a file, nor for a directory not listed.
+        An item whose listing failed, its error handled as ``on_error`` says,
+        is never reduced: its value is what `failed` returned for it.
+
+        ``values`` raises, once read through, the errors below: the path's
+        own listing's, and those of the items. They end `reduce`, unless it
+        catches them. What it leaves unread is read once it returns, and an
+        error then still ends the path's task, its value lost.
         """
+        async for _ in values:
+            pass
         return None
-
-    async def listed(self, entry: Entry) -> None:
-        """A directory's listing is whole, its items acted on: called before its `reduce`.
-
-        Never for a directory reduced unlisted, e.g. at ``maxdepth``, nor one
-        that failed: e.g. a strategy counts the directories listed by it.
-        """
 
     async def failed(self, entry: Entry) -> Any:
         """The value of a directory whose listing failed, for its parent's `reduce`: None by default.
@@ -142,9 +155,12 @@ class _TraversalTask(PathTask):
         on_error: OnError = None,
         top: int | None = None,
         ils_kwargs: dict[str, Any] | None = None,
+        parent_value: Any = None,
     ) -> None:
         super().__init__(engine, entry["name"])
         self.entry = entry
+        # What map returned for the directory the path is in: None for a root.
+        self.parent_value = parent_value
         self.action = action
         self.handler = handler
         self.patterns = patterns
@@ -231,7 +247,8 @@ class _TraversalTask(PathTask):
         subdirectory the patterns neither descend into nor match is dropped,
         with all below it: one matched alone is kept, as a glob reports it,
         but not listed. A file is kept only where a pattern matches it. The
-        entries kept are as the listing gave them, as it streams: only the
+        action's `PathAction.visit` prunes those kept further. The entries
+        kept are as the listing gave them, as it streams: only the
         subdirectories' segments are held.
         """
         own = self._segments(self.entry["name"])
@@ -243,10 +260,11 @@ class _TraversalTask(PathTask):
             if found["type"] == "directory":
                 if key in subdirs or not (self._descend(found) or self._matched(found)):
                     continue
-                subdirs.add(key)
+                subdirs.add(key)  # Visited once, kept or not.
             elif not self._matched(found):
                 continue
-            yield found
+            if await self.action.visit(found):
+                yield found
 
     def _descend(self, entry: Entry) -> bool:
         """Whether a directory is listed: within ``maxdepth``, and as a pattern descends."""
@@ -290,26 +308,32 @@ class VisitDirectory(_TraversalTask):
     async def run(self) -> Any:
         entry = self.entry
         match = self._matched(entry)
-        value = await self.action.map(entry, match)
+        value = await self.action.map(entry, match, self.parent_value)
         if entry.get("type") != "directory" or not self._descend(entry):
             # A file, or a directory kept as matched: reduced with no values.
-            values = []
-        else:
-            # Each item's task is made as the listing streams, and taken once
-            # there is room among those pending: a wide directory's are never
-            # all in memory before they start.
-            values = [
-                value
-                async for value in self._run_tasks(
-                    self._subtree(e) async for e in self.prune(self._items())
-                )
-            ]
-            if self._listing_error is not None:
-                # The items taken ran: the directory, listed in part, is not reduced.
-                await self._listing_failed()
-                return await self.action.failed(entry)
-            await self.action.listed(entry)
-        return await self.action.reduce(entry, match, value, values)
+            return await _reduce(self.action, entry, match, value, _no_values())
+        try:
+            return await _reduce(self.action, entry, match, value, self._values(value))
+        except Exception as error:
+            if error is not self._listing_error:
+                raise
+            # The items taken ran: the directory, listed in part, is not reduced.
+            await self._listing_failed()
+            return await self.action.failed(entry)
+
+    async def _values(self, value: Any) -> AsyncGenerator[Any]:
+        """The items' values, as their tasks end, then the listing's error, if any.
+
+        Each item's task is made as the listing streams, and taken once there
+        is room among those pending: a wide directory's are never all in
+        memory before they start.
+        """
+        async for item in self._run_tasks(
+            self._subtree(e, value) async for e in self.prune(self._items())
+        ):
+            yield item
+        if self._listing_error is not None:
+            raise self._listing_error
 
     async def _items(self) -> AsyncIterator[Entry]:
         """The directory's listing, ended by its error, which `run` handles once the items taken ran."""
@@ -320,11 +344,12 @@ class VisitDirectory(_TraversalTask):
             if error is not self._listing_error:
                 raise
 
-    def _subtree(self, entry: Entry) -> PathTask:
+    def _subtree(self, entry: Entry, parent_value: Any) -> PathTask:
         """All below a subdirectory by one listing, where asked and whole, else listed alone."""
+        options = {**self._options(), "parent_value": parent_value}
         if self.use_one_listing and entry["type"] == "directory" and self._whole(entry):
             return TraverseSubtree(
-                self._engine, entry, self.action, self.handler, **self._options()
+                self._engine, entry, self.action, self.handler, **options
             )
         else:
             # Its own class: a subclass's directories are each one of it.
@@ -334,8 +359,29 @@ class VisitDirectory(_TraversalTask):
                 self.action,
                 self.handler,
                 use_one_listing=self.use_one_listing,
-                **self._options(),
+                **options,
             )
+
+
+async def _no_values() -> AsyncGenerator[Any]:
+    """The values of a path with nothing traversed below it: none."""
+    return
+    yield
+
+
+async def _reduce(
+    action: PathAction,
+    entry: Entry,
+    match: bool,
+    value: Any,
+    values: AsyncGenerator[Any],
+) -> Any:
+    """A path's `PathAction.reduce`, then what it left of ``values`` read: their errors raised."""
+    async with aclosing(values):
+        reduced = await action.reduce(entry, match, value, values)
+        async for _ in values:
+            pass
+    return reduced
 
 
 def _below(directory: tuple[str, ...], key: tuple[str, ...]) -> bool:
@@ -378,8 +424,8 @@ class TraverseSubtree(_TraversalTask):
         entries = self._listing(recursive=True)
         try:
             first = await anext(entries, None)
-            value, _ = await _Span(self, self.entry, first, entries).map_reduce()
-            return value
+            span = _Span(self, self.entry, first, entries)
+            return await span.map_reduce(self.parent_value)
         except Exception as error:
             if error is not self._listing_error:
                 raise  # The action's.
@@ -402,9 +448,10 @@ class TraverseSubtree(_TraversalTask):
 class _Span:
     """A directory, and the run of a listing below it, starting at ``next``.
 
-    `map_reduce` maps the directory, acts on each path below it, a
-    subdirectory by a span of its own, and reduces it. It returns its value,
-    and the first entry not below it, for its parent to go on from.
+    `map_reduce` maps the directory, then reduces it, as its values act on
+    each path below it, a subdirectory by a span of its own. It returns its
+    value. Its ``next`` is then the first entry not below it, for its parent
+    to go on from.
     """
 
     def __init__(
@@ -419,21 +466,25 @@ class _Span:
         self.next = next
         self.entries = entries
 
-    async def map_reduce(self) -> tuple[Any, Entry | None]:
+    async def map_reduce(self, parent_value: Any) -> Any:
         task, root = self.task, self.root
         match = task._matched(root)
-        value = await task.action.map(root, match)
-        if root.get("type") != "directory":
-            return await task.action.reduce(root, match, value, []), self.next
-        if not task._descend(root):
+        value = await task.action.map(root, match, parent_value)
+        if root.get("type") == "directory" and task._descend(root):
+            return await _reduce(task.action, root, match, value, self._values(value))
+        if root.get("type") == "directory":
             # A directory matched alone: reduced with no values, nothing below.
-            return await task.action.reduce(root, match, value, []), await self._skip()
+            self.next = await self._skip()
+        return await _reduce(task.action, root, match, value, _no_values())
 
+    async def _values(self, value: Any) -> AsyncGenerator[Any]:
+        """The values of the paths in the directory, as the listing gives them: ``next`` then follows them."""
+        task, root = self.task, self.root
         key = task._segments(root["name"])
-        values: list[Any] = []
         # The subdirectories listed, held until the first path below each
         # comes: in byte order, "a/b.txt" comes between "a/b" and "a/b/c".
-        held: dict[tuple[str, ...], Entry] = {}
+        # One the action pruned is held as None.
+        held: dict[tuple[str, ...], Entry | None] = {}
         next = self.next
         while next is not None:
             found = task._segments(next["name"])
@@ -443,36 +494,63 @@ class _Span:
             elif not _below(key, found):
                 break
             elif in_root and next["type"] != "directory":
-                if task._matched(next):  # Else pruned, as a file is.
-                    item = await task.action.map(next, True)
-                    values.append(await task.action.reduce(next, True, item, []))
+                # Else pruned, as a file is.
+                if task._matched(next) and await task.action.visit(next):
+                    item = await task.action.map(next, True, value)
+                    yield await _reduce(task.action, next, True, item, _no_values())
                 next = await anext(self.entries, None)
             elif in_root:
                 # A subdirectory listed, or listed again, e.g. as its marker.
-                held.setdefault(found, next)
+                await self._hold(held, found, next)
                 next = await anext(self.entries, None)
             else:
                 # A path below a subdirectory, listed or made from it.
-                sub = found[: len(key) + 1]
-                subdir = held.pop(sub, None) or task.subdir_entry(root, next)
-                item, next = await self._below(subdir, next)
-                values.extend(item)
+                span, kept = await self._subspan(held, found[: len(key) + 1], next)
+                if kept:
+                    yield await span.map_reduce(value)
+                    next = span.next
+                else:
+                    next = await span._skip()  # Pruned, with all below it.
+        self.next = next
         for subdir in held.values():  # Listed, with nothing below.
-            item, _ = await self._below(subdir, None)
-            values.extend(item)
-        await task.action.listed(root)
-        return await task.action.reduce(root, match, value, values), next
+            if subdir is not None:
+                yield await _Span(task, subdir, None, self.entries).map_reduce(value)
 
-    async def _below(
-        self, subdir: Entry, next: Entry | None
-    ) -> tuple[list[Any], Entry | None]:
-        """A subdirectory's span, from ``next``: its value, if not pruned, and the first entry not below it."""
+    async def _hold(
+        self,
+        held: dict[tuple[str, ...], Entry | None],
+        sub: tuple[str, ...],
+        subdir: Entry,
+    ) -> None:
+        """Hold a subdirectory listed, visited once, in the listing's order: as None if pruned."""
+        if sub not in held:
+            held[sub] = subdir if await self._visit(subdir) else None
+
+    async def _subspan(
+        self,
+        held: dict[tuple[str, ...], Entry | None],
+        sub: tuple[str, ...],
+        next: Entry,
+    ) -> tuple[_Span, bool]:
+        """The span of the subdirectory ``next`` is below, from ``next``, and whether it is traversed.
+
+        A subdirectory held was visited as listed. One not listed is made,
+        and visited now.
+        """
+        made = self.task.subdir_entry(self.root, next)
+        if sub in held:
+            subdir = held.pop(sub)
+        else:
+            subdir = made if await self._visit(made) else None
+        span = _Span(self.task, subdir or made, next, self.entries)
+        return span, subdir is not None
+
+    async def _visit(self, subdir: Entry) -> bool:
+        """Whether a subdirectory is traversed: as the patterns, then the action, say."""
         task = self.task
-        span = _Span(task, subdir, next, self.entries)
-        if task._descend(subdir) or task._matched(subdir):
-            item, next = await span.map_reduce()
-            return [item], next
-        return [], await span._skip()  # Pruned, with all below it.
+        if not (task._descend(subdir) or task._matched(subdir)):
+            return False
+        return await task.action.visit(subdir)
 
     async def _skip(self) -> Entry | None:
         """Read past the span unread: the first entry not below the directory."""

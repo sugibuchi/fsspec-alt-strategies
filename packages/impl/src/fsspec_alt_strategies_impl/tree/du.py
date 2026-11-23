@@ -19,10 +19,9 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import DuState
 
-from ..common.glob import PathAction
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
-from .find import _listed, _read
+from .find import _listed, _read, _Reading
 from .walk import _MAX_RUNNING
 
 if TYPE_CHECKING:
@@ -88,7 +87,7 @@ def _tree_du(
             handler,
             _trim(path),
             op,
-            lambda emit, _: _Du(emit, op),
+            lambda emit, root: _Du(emit, op, root),
             count=counted,
             max_running=max_running,
             maxdepth=maxdepth,
@@ -101,24 +100,22 @@ def _tree_du(
     return Operation(run, DuState(directories_listed=0))
 
 
-class _Du(PathAction):
+class _Du(_Reading):
     """du as a map-reduce: a file's value is its size, a directory's the sum of its items'.
 
     Each file's entry is emitted as it is counted. A directory that failed
     adds nothing.
     """
 
-    def __init__(self, emit_event: Any, op: Operation[Any, DuState]) -> None:
-        super().__init__(emit_event)
-        self.op = op
-
     async def reduce(
-        self, entry: Entry, match: bool, value: Any, values: list[Any]
+        self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
     ) -> Any:
         if entry["type"] != "directory":
             await self._emit_event(entry)
             return entry.get("size") or 0
-        return sum(v for v in values if v is not None)
-
-    async def listed(self, entry: Entry) -> None:
-        self.op.state = _listed(self.op.state, entry)
+        total = 0
+        async for size in values:
+            total += size or 0
+        if entry is self.root:
+            self.op.state = _listed(self.op.state, entry)
+        return total

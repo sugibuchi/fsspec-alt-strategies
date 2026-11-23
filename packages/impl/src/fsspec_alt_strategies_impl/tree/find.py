@@ -112,12 +112,40 @@ def _tree_find(
     return Operation(run, FindState(directories_listed=0))
 
 
-class _Found(PathAction):
-    """find's and glob's action: each path matched emitted as it is listed, each directory listed counted.
+class _Reading(PathAction):
+    """What the actions that only read share: each directory traversed counted as listed.
 
-    ``root``, the root task's own entry, made, is never emitted: `_read`
-    asks its ``info`` instead. Without ``withdirs``, only files are. A path in
-    ``found`` already, e.g. a glob's literal, is not emitted again.
+    A directory counts once visited, before it is listed: one at
+    ``maxdepth``, or matched alone, counts too. ``root``, the root task's own
+    entry, made, counts once its listing is read through: a file root's
+    fails.
+    """
+
+    def __init__(self, emit_event: Any, op: Operation[Any, Any], root: Entry) -> None:
+        super().__init__(emit_event)
+        self.op = op
+        self.root = root
+
+    async def visit(self, entry: Entry) -> bool:
+        if entry["type"] == "directory":
+            self.op.state = _listed(self.op.state, entry)
+        return True
+
+    async def reduce(
+        self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
+    ) -> Any:
+        async for _ in values:
+            pass
+        if entry is self.root:
+            self.op.state = _listed(self.op.state, entry)
+
+
+class _Found(_Reading):
+    """find's and glob's action: each path matched emitted as it is listed.
+
+    ``root`` is never emitted: `_read` asks its ``info`` instead. Without
+    ``withdirs``, only files are. A path in ``found`` already, e.g. a glob's
+    literal, is not emitted again.
     """
 
     def __init__(
@@ -129,13 +157,11 @@ class _Found(PathAction):
         withdirs: bool,
         found: set[str] | None = None,
     ) -> None:
-        super().__init__(emit_event)
-        self.op = op
-        self.root = root
+        super().__init__(emit_event, op, root)
         self.withdirs = withdirs
         self.found = found if found is not None else set()
 
-    async def map(self, entry: Entry, match: bool) -> Any:
+    async def map(self, entry: Entry, match: bool, parent_value: Any) -> Any:
         if (
             match
             and entry is not self.root
@@ -144,12 +170,9 @@ class _Found(PathAction):
         ):
             await self._emit_event(entry)
 
-    async def listed(self, entry: Entry) -> None:
-        self.op.state = _listed(self.op.state, entry)
-
 
 def _listed(state: _S, entry: Entry) -> _S:
-    """A state once a directory's listing is whole."""
+    """A state once a directory is counted as listed."""
     return replace(
         state,
         current=_trim(entry["name"]),
