@@ -10,7 +10,14 @@ import pytest
 from fsspec_alt_strategies_impl.common.tree import PathTask, TreeTraversal
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
+
+
+async def _results(
+    caller: PathTask, tasks: Iterable[PathTask] | AsyncIterable[PathTask]
+) -> list[Any]:
+    """The results ``caller``'s `_run_tasks` yields, all of them."""
+    return [result async for result in caller._run_tasks(tasks)]
 
 
 class _Node(PathTask):
@@ -36,7 +43,7 @@ class _Node(PathTask):
             for c in self.tree.get(self.path, [])
         ]
         if children:
-            await self._run_tasks(children)
+            await _results(self, children)
         if self.after:
             await self._emit_event(self.path)
         return self.path
@@ -103,10 +110,30 @@ async def test_results_in_the_order_given() -> None:
 
     async def parent(task: _Call) -> None:
         children: list[PathTask] = [_Call(engine, str(i), leaf) for i in range(3)]
-        await task._emit_event(await task._run_tasks(children))
+        await task._emit_event(await _results(task, children))
 
     engine = TreeTraversal(max_running=3)
     assert await _all(engine, [_Call(engine, "p", parent)]) == [["0", "1", "2"]]
+
+
+async def test_results_are_yielded_while_tasks_are_still_taken() -> None:
+    gate = asyncio.Event()
+
+    async def leaf(task: _Call) -> str:
+        return task.path
+
+    async def children() -> AsyncIterator[PathTask]:
+        yield _Call(engine, "p/a", leaf)
+        await gate.wait()  # The stream goes on only once a result is read.
+        yield _Call(engine, "p/b", leaf)
+
+    async def parent(task: _Call) -> None:
+        async for result in task._run_tasks(children()):
+            await task._emit_event(result)
+            gate.set()
+
+    engine = TreeTraversal(max_running=1)
+    assert await _all(engine, [_Call(engine, "p", parent)]) == ["p/a", "p/b"]
 
 
 async def test_the_limits_hold() -> None:
@@ -121,7 +148,7 @@ async def test_the_limits_hold() -> None:
         active -= 1
 
     async def parent(task: _Call) -> None:
-        await task._run_tasks([_Call(engine, f"p/{i:02}", leaf) for i in range(20)])
+        await _results(task, [_Call(engine, f"p/{i:02}", leaf) for i in range(20)])
 
     engine = TreeTraversal(max_running=3, max_pending=2)
     await _all(engine, [_Call(engine, "p", parent)])
@@ -146,7 +173,7 @@ async def test_tasks_streamed_are_taken_as_room_frees() -> None:
             yield _Call(engine, f"p/{i:02}", leaf)
 
     async def parent(task: _Call) -> None:
-        await task._emit_event(len(await task._run_tasks(children())))
+        await task._emit_event(len(await _results(task, children())))
 
     engine = TreeTraversal(max_running=2, max_pending=3)
     assert await _all(engine, [_Call(engine, "p", parent)]) == [20]
@@ -167,7 +194,7 @@ async def test_a_stream_breaking_off_lets_the_tasks_taken_end() -> None:
         raise OSError("listing")
 
     async def parent(task: _Call) -> None:
-        await task._run_tasks(children())
+        await _results(task, children())
 
     engine = TreeTraversal(max_running=2)
     # The stream's error alone, none of the tasks failing: raised as it is.
@@ -186,7 +213,7 @@ async def test_failed_children_raise_an_exception_group_after_all_ran() -> None:
 
     async def parent(task: _Call) -> None:
         try:
-            await task._run_tasks([_Call(engine, p, leaf) for p in "cab"])
+            await _results(task, [_Call(engine, p, leaf) for p in "cab"])
         except ExceptionGroup as group:
             await task._emit_event([str(e) for e in group.exceptions])
 
@@ -203,7 +230,7 @@ async def test_a_child_cancelled_before_it_starts_raises_cancelled() -> None:
         children: list[PathTask] = [_Call(engine, p, leaf) for p in "ab"]
         children[0].cancel()
         try:
-            await task._run_tasks(children)
+            await _results(task, children)
         except asyncio.CancelledError:
             await task._emit_event("cancelled")
 
@@ -242,7 +269,7 @@ async def test_close_cancels_every_task_and_ends_the_events() -> None:
 
     async def parent(task: _Call) -> None:
         try:
-            await task._run_tasks([_Call(engine, f"p/{c}", leaf) for c in "abcd"])
+            await _results(task, [_Call(engine, f"p/{c}", leaf) for c in "abcd"])
         except asyncio.CancelledError:
             cancelled.append(task.path)
             raise
@@ -413,7 +440,7 @@ async def test_a_child_error_is_raised_by_its_parent_alone() -> None:
         raise OSError(task.path)
 
     async def parent(task: _Call) -> None:
-        await task._run_tasks([_Call(engine, "p/c", fail)])
+        await _results(task, [_Call(engine, "p/c", fail)])
 
     engine = TreeTraversal(max_running=1)
     with pytest.raises(BaseExceptionGroup) as raised:
@@ -433,7 +460,7 @@ async def test_cancel_starts_nothing_more_and_lets_the_running_end() -> None:
 
     async def parent(task: _Call) -> None:
         try:
-            await task._run_tasks([_Call(engine, f"p/{c}", leaf) for c in "abcd"])
+            await _results(task, [_Call(engine, f"p/{c}", leaf) for c in "abcd"])
         except asyncio.CancelledError:
             await task._emit_event("p cancelled")  # Still running: it emits.
             raise
@@ -456,7 +483,7 @@ async def test_a_child_error_its_cancelled_parent_drops_is_raised_closing() -> N
             raise ValueError(task.path)  # As a failing cleanup.
 
     async def parent(task: _Call) -> None:
-        await task._run_tasks([_Call(engine, "p/c", cleanup_fails)])
+        await _results(task, [_Call(engine, "p/c", cleanup_fails)])
 
     engine = TreeTraversal(max_running=1)
     events = engine.events([_Call(engine, "p", parent)])
@@ -482,10 +509,11 @@ async def test_an_error_below_is_one_level_down_whatever_its_depth() -> None:
     async def parent(task: _Call) -> None:
         depth = task.path.count("/")
         if depth < 2:
-            await task._run_tasks([_Call(engine, f"{task.path}/d", parent)])
+            await _results(task, [_Call(engine, f"{task.path}/d", parent)])
         else:
-            await task._run_tasks(
-                [_Call(engine, f"{task.path}/x", fail), _Call(engine, "y", own_group)]
+            await _results(
+                task,
+                [_Call(engine, f"{task.path}/x", fail), _Call(engine, "y", own_group)],
             )
 
     engine = TreeTraversal(max_running=1)

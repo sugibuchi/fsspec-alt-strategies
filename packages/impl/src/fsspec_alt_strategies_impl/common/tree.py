@@ -120,11 +120,11 @@ class PathTask(ABC):
             self._engine._cancelled_before_start(self)
             return True
 
-    async def _run_tasks(
+    def _run_tasks(
         self, tasks: Iterable[PathTask] | AsyncIterable[PathTask]
-    ) -> list[Any]:
-        """Run ``tasks`` and wait for all of them: see `TreeTraversal._run_tasks`."""
-        return await self._engine._run_tasks(self, tasks)
+    ) -> AsyncGenerator[Any]:
+        """Run ``tasks``, yielding their results as they end: see `TreeTraversal._run_tasks`."""
+        return self._engine._run_tasks(self, tasks)
 
     async def _emit_event(self, event: Any) -> None:
         """Emit an event to the traversal's caller, waiting while too many are unread."""
@@ -145,20 +145,24 @@ class PathTaskGroup:
     def __init__(self, caller: PathTask) -> None:
         self.caller = caller
         self.tasks: list[PathTask] = []
-        # Read only once all are taken, and checked again then: while a
-        # stream of them runs on, it may be true for those taken so far.
+        # Every task taken so far is done: while a stream of them runs on,
+        # more may come.
         self._done = False
+        # Every task is taken: no more comes.
+        self._add_tasks_done = False
         # The tasks before it are done. It only moves on, each task passed
         # once, and each check stops at the first not done: O(n) in all, in
         # whatever order the tasks end.
         self._first_not_done = 0
+        # The tasks before it are read by the caller: their results yielded.
+        self.read = 0
 
     def add(self, task: PathTask) -> None:
         task._group = self
         self.tasks.append(task)
 
     def on_task_done(self) -> None:
-        """Check the status of the tasks, once one is done or all are taken."""
+        """Check the status of the tasks, once one is done."""
         while (
             self._first_not_done < len(self.tasks)
             and self.tasks[self._first_not_done].done()
@@ -166,9 +170,18 @@ class PathTaskGroup:
             self._first_not_done += 1
         self._done = self._first_not_done == len(self.tasks)
 
+    def on_add_tasks_done(self) -> None:
+        """Every task is taken: checked again, as all may be done already."""
+        self._add_tasks_done = True
+        self.on_task_done()
+
+    def done_count(self) -> int:
+        """How many tasks are done in a row from the first: their results can be read in order."""
+        return self._first_not_done
+
     def done(self) -> bool:
         """Whether every task is taken and done."""
-        return self._done
+        return self._done and self._add_tasks_done
 
 
 async def _aiter(
@@ -562,48 +575,84 @@ class TreeTraversal:
                 self._pend(task)
             self._state.notify_all()
 
+    async def _add_tasks(
+        self, group: PathTaskGroup, tasks: Iterable[PathTask] | AsyncIterable[PathTask]
+    ) -> Exception | None:
+        """Add every task of a group, then tell it all are taken: the error of ``tasks`` itself, if any."""
+        try:
+            async for task in _aiter(tasks):
+                await self._add_task(group, task)
+        except Exception as error:  # Never CancelledError: it propagates.
+            return error
+        finally:
+            async with self._state:
+                group.on_add_tasks_done()
+                self._state.notify_all()
+        return None
+
+    async def _wait_ready(self, group: PathTaskGroup) -> tuple[list[PathTask], bool]:
+        """Wait for tasks of a group done in order, not yet read: them, and whether all are.
+
+        Its caller counts no more against ``max_running`` while it waits.
+        """
+        read = group.read
+        async with self._state:
+            self._waiting_tasks.add(group.caller)
+            self._state.notify_all()
+            try:
+                await self._state.wait_for(
+                    lambda: group.done_count() > read or group.done()
+                )
+            finally:
+                self._waiting_tasks.discard(group.caller)
+                self._state.notify_all()
+            group.read = group.done_count()
+            return group.tasks[read : group.read], group.done()
+
     async def _run_tasks(
         self, caller: PathTask, tasks: Iterable[PathTask] | AsyncIterable[PathTask]
-    ) -> list[Any]:
-        """Run ``tasks`` for ``caller``, which waits: their results, in the order given.
+    ) -> AsyncGenerator[Any]:
+        """Run ``tasks`` for ``caller``: yield their results in the order given, as they end.
 
         ``tasks`` may be an async iterator, e.g. made from a listing as it
         streams: each is taken once there is room for it among those pending,
         so that a wide directory's are never all in memory before they start.
+        They are taken in a task of their own, so that results are yielded
+        while more are taken.
 
-        ``caller`` counts no more against ``max_running`` while it waits. Once
-        all are done, it raises CancelledError if any was cancelled, else an
-        ExceptionGroup of those that failed, in the order given. None is
-        cancelled for another's failure. An error of ``tasks`` itself, e.g. of
-        the listing, lets those taken end: it is raised alone where none
-        failed, else first in their group.
+        A result is yielded once its task and those before it are done.
+        ``caller`` counts no more against ``max_running`` while it waits for
+        one, and counts again while it handles one yielded.
+
+        A task failed or cancelled yields nothing. Once all are done, it raises
+        CancelledError if any was cancelled, else an ExceptionGroup of those
+        that failed, in the order given. None is cancelled for another's
+        failure. An error of ``tasks`` itself, e.g. of the listing, lets those
+        taken end: it is raised alone where none failed, else first in their
+        group. Closed early, it takes no more tasks, and those taken run on.
         """
         async with self._state:
             if caller not in self._running_tasks or caller in self._waiting_tasks:
                 raise ValueError(
                     f"Task {caller.path!r} is not running, or waits already."
                 )
-            self._waiting_tasks.add(caller)
-            self._state.notify_all()
         group = PathTaskGroup(caller)
         added = group.tasks
-        failed: Exception | None = None
+        adding = asyncio.create_task(self._add_tasks(group, tasks))
         try:
-            try:
-                async for task in _aiter(tasks):
-                    await self._add_task(group, task)
-            except Exception as error:  # Never CancelledError: it propagates.
-                failed = error
-            async with self._state:
-                # All taken: checked again, as done may hold for those
-                # taken so far only, and all may be done already.
-                group.on_task_done()
-                await self._state.wait_for(group.done)
+            finished = False
+            while not finished:
+                ready, finished = await self._wait_ready(group)
+                for task in ready:
+                    if not task.cancelled() and task.exception() is None:
+                        yield task.result()
+            failed = await adding
         finally:
-            async with self._state:
-                self._waiting_tasks.discard(caller)
-                self._state.notify_all()
+            if not adding.done():
+                adding.cancel()
+                await asyncio.wait([adding])
 
+        # All are done: those failed or cancelled are raised together.
         if any(t.cancelled() for t in added):
             raise asyncio.CancelledError()
         errors: list[BaseException] = [
@@ -615,7 +664,6 @@ class TreeTraversal:
             errors.insert(0, failed)
         if errors:
             raise _Failures(f"{len(errors)} of {len(added)} tasks failed", errors)
-        return [t.result() for t in added]
 
     async def _emit_event(self, event: Any) -> None:
         if self._closed:

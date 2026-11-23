@@ -298,9 +298,12 @@ class VisitDirectory(_TraversalTask):
             # Each item's task is made as the listing streams, and taken once
             # there is room among those pending: a wide directory's are never
             # all in memory before they start.
-            values = await self._run_tasks(
-                self._subtree(e) async for e in self.prune(self._items())
-            )
+            values = [
+                value
+                async for value in self._run_tasks(
+                    self._subtree(e) async for e in self.prune(self._items())
+                )
+            ]
             if self._listing_error is not None:
                 # The items taken ran: the directory, listed in part, is not reduced.
                 await self._listing_failed()
