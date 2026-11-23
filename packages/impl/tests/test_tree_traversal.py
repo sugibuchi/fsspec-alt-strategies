@@ -136,6 +136,34 @@ async def test_results_are_yielded_while_tasks_are_still_taken() -> None:
     assert await _all(engine, [_Call(engine, "p", parent)]) == ["p/a", "p/b"]
 
 
+async def test_results_unread_pause_the_stream() -> None:
+    made = 0
+
+    async def leaf(task: _Call) -> str:
+        return task.path
+
+    async def children() -> AsyncIterator[PathTask]:
+        nonlocal made
+        for i in range(20):
+            made += 1
+            yield _Call(engine, f"p/{i:02}", leaf)
+
+    async def parent(task: _Call) -> None:
+        results = task._run_tasks(children())
+        await anext(results)
+        # Reading nothing more: the children end, and their results wait.
+        await asyncio.sleep(0.05)
+        await task._emit_event(made)
+        await task._emit_event(1 + len([r async for r in results]))
+
+    engine = TreeTraversal(max_running=4, max_pending=3)
+    events = await _all(engine, [_Call(engine, "p", parent)])
+    # Those unread and pending stay within max_pending, beside those running,
+    # the one read and the one made waiting for room: not all 20.
+    assert events[0] <= 3 + 4 + 1 + 1
+    assert events[1] == 20
+
+
 async def test_the_limits_hold() -> None:
     active = peak = pending = 0
 
