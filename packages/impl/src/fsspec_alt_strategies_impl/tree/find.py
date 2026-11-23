@@ -126,7 +126,7 @@ class _Reading(PathAction):
         self.op = op
         self.root = root
 
-    async def visit(self, entry: Entry) -> bool:
+    async def visit_child(self, entry: Entry, parent_value: Any) -> bool:
         if entry["type"] == "directory":
             self.op.state = _listed(self.op.state, entry)
         return True

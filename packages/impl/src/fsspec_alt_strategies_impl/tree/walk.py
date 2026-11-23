@@ -234,7 +234,7 @@ class _WalkBottomUp(PathAction):
     ``maxdepth`` is reduced unlisted, and emits nothing: ``top`` is the
     root's segments counted.
 
-    The values come as the items end: `visit` numbers each item as its
+    The values come as the items end: `visit_child` numbers each item as its
     listing gives it, so that ``dirs`` and ``files`` are in the listing's
     order, as fsspec's are.
     """
@@ -255,7 +255,7 @@ class _WalkBottomUp(PathAction):
         self.places: dict[str, int] = {}
         self.visited = itertools.count()
 
-    async def visit(self, entry: Entry) -> bool:
+    async def visit_child(self, entry: Entry, parent_value: Any) -> bool:
         self.places[entry["name"]] = next(self.visited)
         return True
 
