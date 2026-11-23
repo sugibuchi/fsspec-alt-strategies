@@ -38,6 +38,7 @@ import asyncio
 import heapq
 import itertools
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import AsyncIterable as AsyncIterableABC
 from functools import partial
 from typing import TYPE_CHECKING, Any, Self, TypeVar
@@ -136,52 +137,48 @@ class PathTask(ABC):
 
 
 class PathTaskGroup:
-    """The tasks one `_run_tasks` runs for its caller, and how many of them are done.
+    """The tasks one `_run_tasks` runs for its caller, not yet read, in the order given.
 
-    Its status is checked as a task is done, by `on_task_done`, so that the
-    caller waiting reads `done` in O(1) at each wake.
+    A task done leaves `_remaining` by `on_task_done` once those before it
+    have, for the caller to read by `take_done`. Each task leaves once, and
+    each check stops at the first not done: O(n) in all, whatever order the
+    tasks end in. So the caller waiting reads `done` in O(1) at each wake.
     """
 
     def __init__(self, caller: PathTask) -> None:
         self.caller = caller
-        self.tasks: list[PathTask] = []
-        # Every task taken so far is done: while a stream of them runs on,
-        # more may come.
-        self._done = False
+        # The tasks taken, not done or not yet in order.
+        self._remaining: deque[PathTask] = deque()
+        # The tasks done in order, which the caller has not taken yet.
+        self._done_tasks: list[PathTask] = []
         # Every task is taken: no more comes.
         self._add_tasks_done = False
-        # The tasks before it are done. It only moves on, each task passed
-        # once, and each check stops at the first not done: O(n) in all, in
-        # whatever order the tasks end.
-        self._first_not_done = 0
-        # The tasks before it are read by the caller: their results yielded.
-        self.read = 0
 
     def add(self, task: PathTask) -> None:
         task._group = self
-        self.tasks.append(task)
+        self._remaining.append(task)
 
     def on_task_done(self) -> None:
-        """Check the status of the tasks, once one is done."""
-        while (
-            self._first_not_done < len(self.tasks)
-            and self.tasks[self._first_not_done].done()
-        ):
-            self._first_not_done += 1
-        self._done = self._first_not_done == len(self.tasks)
+        """Move the tasks done in order out of those remaining, once one is done."""
+        while self._remaining and self._remaining[0].done():
+            self._done_tasks.append(self._remaining.popleft())
 
     def on_add_tasks_done(self) -> None:
-        """Every task is taken: checked again, as all may be done already."""
+        """Every task is taken: no more comes."""
         self._add_tasks_done = True
-        self.on_task_done()
 
-    def done_count(self) -> int:
-        """How many tasks are done in a row from the first: their results can be read in order."""
-        return self._first_not_done
+    def has_done(self) -> bool:
+        """Whether tasks done in order wait to be taken."""
+        return bool(self._done_tasks)
+
+    def take_done(self) -> list[PathTask]:
+        """The tasks done in order since the last call, in the order given."""
+        done, self._done_tasks = self._done_tasks, []
+        return done
 
     def done(self) -> bool:
         """Whether every task is taken and done."""
-        return self._done and self._add_tasks_done
+        return self._add_tasks_done and not self._remaining
 
 
 async def _aiter(
@@ -224,6 +221,23 @@ class _Failures(BaseExceptionGroup):
 
 class _ExceptionFailures(ExceptionGroup, _Failures):
     """`_Failures` of Exceptions alone: caught as any Exception."""
+
+
+def _raise_failures(
+    count: int,
+    cancelled: bool,
+    errors: list[BaseException],
+    failed: Exception | None,
+) -> None:
+    """Raise what ended a `_run_tasks` of ``count`` tasks, if anything: see there."""
+    if cancelled:
+        raise asyncio.CancelledError()
+    if failed is not None:
+        if not errors:
+            raise failed
+        errors.insert(0, failed)
+    if errors:
+        raise _Failures(f"{len(errors)} of {count} tasks failed", errors)
 
 
 async def _write(request: Awaitable[_T]) -> _T:
@@ -595,19 +609,15 @@ class TreeTraversal:
 
         Its caller counts no more against ``max_running`` while it waits.
         """
-        read = group.read
         async with self._state:
             self._waiting_tasks.add(group.caller)
             self._state.notify_all()
             try:
-                await self._state.wait_for(
-                    lambda: group.done_count() > read or group.done()
-                )
+                await self._state.wait_for(lambda: group.has_done() or group.done())
             finally:
                 self._waiting_tasks.discard(group.caller)
                 self._state.notify_all()
-            group.read = group.done_count()
-            return group.tasks[read : group.read], group.done()
+            return group.take_done(), group.done()
 
     async def _run_tasks(
         self, caller: PathTask, tasks: Iterable[PathTask] | AsyncIterable[PathTask]
@@ -637,14 +647,21 @@ class TreeTraversal:
                     f"Task {caller.path!r} is not running, or waits already."
                 )
         group = PathTaskGroup(caller)
-        added = group.tasks
         adding = asyncio.create_task(self._add_tasks(group, tasks))
+        count = 0
+        cancelled = False
+        errors: list[BaseException] = []
         try:
             finished = False
             while not finished:
                 ready, finished = await self._wait_ready(group)
+                count += len(ready)
                 for task in ready:
-                    if not task.cancelled() and task.exception() is None:
+                    if task.cancelled():
+                        cancelled = True
+                    elif (error := task.exception()) is not None:
+                        errors.append(error)
+                    else:
                         yield task.result()
             failed = await adding
         finally:
@@ -653,17 +670,7 @@ class TreeTraversal:
                 await asyncio.wait([adding])
 
         # All are done: those failed or cancelled are raised together.
-        if any(t.cancelled() for t in added):
-            raise asyncio.CancelledError()
-        errors: list[BaseException] = [
-            e for t in added if (e := t.exception()) is not None
-        ]
-        if failed is not None:
-            if not errors:
-                raise failed
-            errors.insert(0, failed)
-        if errors:
-            raise _Failures(f"{len(errors)} of {len(added)} tasks failed", errors)
+        _raise_failures(count, cancelled, errors, failed)
 
     async def _emit_event(self, event: Any) -> None:
         if self._closed:
