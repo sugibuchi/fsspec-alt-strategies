@@ -244,7 +244,7 @@ async def _read(
         return
     except Exception as error:
         # The root's other failures are a failed directory, as any is.
-        op.state = _failed(op.state, _trim(path))
+        op.state = _failed(op.state, _trim(path), root=True)
         yield error
         return
 
@@ -254,13 +254,17 @@ async def _read(
         yield entry
 
 
-def _failed(state: _S, directory: str) -> _S:
-    """A state once a directory failed to list: listed, though failed, and its error."""
+def _failed(state: _S, directory: str, *, root: bool = False) -> _S:
+    """A state once a directory failed to list: its error.
+
+    A directory below the root was counted as listed once visited. The root,
+    never visited, is counted here, though failed.
+    """
     return replace(
         state,
         current=directory,
         errors=state.errors + 1,
-        directories_listed=(state.directories_listed or 0) + 1,
+        directories_listed=(state.directories_listed or 0) + root,
     )
 
 

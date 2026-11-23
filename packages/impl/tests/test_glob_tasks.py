@@ -337,3 +337,163 @@ async def test_the_items_are_mapped_in_parallel_after_their_directory(
     [_ async for _ in engine.events([task])]
     assert peak == 4
     assert early == []
+
+
+# The action's contract: visit_child, parent_value and values.
+
+_TASKS = ["directory", "one_listing", "subtree"]
+
+
+def _task(kind: str, engine: TreeTraversal, action: PathAction, handler: Any) -> Any:
+    """The root task of a traversal: a directory per listing, streaming subtrees below, or one listing."""
+    if kind == "subtree":
+        return TraverseSubtree(engine, _dir("r"), action, handler)
+    return VisitDirectory(
+        engine, _dir("r"), action, handler, use_one_listing=kind == "one_listing"
+    )
+
+
+class _Pruning(PathAction):
+    """Counts the files, pruning the children named in ``pruned``, and records each call's parent_value."""
+
+    def __init__(self, emit_event: Any, pruned: frozenset[str] = frozenset()) -> None:
+        super().__init__(emit_event)
+        self.pruned = pruned
+        self.mapped: dict[str, Any] = {}
+        self.visited: dict[str, Any] = {}
+
+    async def map(self, entry: dict[str, Any], match: bool, parent_value: Any) -> Any:
+        name = entry["name"].rstrip("/")
+        self.mapped[name] = parent_value
+        return name  # Its children's parent_value.
+
+    async def visit_child(self, entry: dict[str, Any], parent_value: Any) -> bool:
+        name = entry["name"].rstrip("/")
+        assert parent_value in self.mapped  # Its directory is mapped first.
+        self.visited[name] = parent_value
+        return name not in self.pruned
+
+    async def reduce(
+        self,
+        entry: dict[str, Any],
+        match: bool,
+        value: Any,
+        values: AsyncGenerator[Any],
+    ) -> Any:
+        total = sum([v async for v in values])
+        return total + (entry["type"] == "file")
+
+
+@pytest.mark.parametrize("kind", _TASKS)
+async def test_each_path_is_given_its_directorys_map_value(kind: str) -> None:
+    engine = TreeTraversal(max_running=2)
+    action = _Pruning(engine._emit_event)
+    task = _task(kind, engine, action, _Handler(_FILES))
+    [_ async for _ in engine.events([task])]
+    assert task.result() == 5
+    parents = {n: n.rpartition("/")[0] for n in action.mapped if n != "r"}
+    assert action.mapped == {"r": None, **parents}
+    # Each child visited once, given its directory's map value: never the root.
+    assert action.visited == parents
+
+
+@pytest.mark.parametrize("kind", _TASKS)
+async def test_visit_child_prunes_a_subtree(kind: str) -> None:
+    engine = TreeTraversal(max_running=2)
+    action = _Pruning(engine._emit_event, frozenset({"r/a", "r/1"}))
+    task = _task(kind, engine, action, _Handler(_FILES))
+    [_ async for _ in engine.events([task])]
+    assert task.result() == 1  # r/c/5 alone.
+    assert sorted(action.mapped) == ["r", "r/c", "r/c/5"]
+    # Visited, but nothing below them.
+    assert {"r/a", "r/1"} <= action.visited.keys()
+    assert not any(n.startswith("r/a/") for n in action.visited)
+
+
+async def test_reduce_reads_values_while_children_still_run() -> None:
+    first = asyncio.Event()
+
+    class _Early(_Pruning):
+        async def map(
+            self, entry: dict[str, Any], match: bool, parent_value: Any
+        ) -> Any:
+            if entry["name"] == "r/c":
+                await first.wait()  # Ends only once r reads a value.
+            return await super().map(entry, match, parent_value)
+
+        async def reduce(
+            self,
+            entry: dict[str, Any],
+            match: bool,
+            value: Any,
+            values: AsyncGenerator[Any],
+        ) -> Any:
+            total = entry["type"] == "file"
+            async for item in values:
+                if entry["name"] == "r":
+                    first.set()
+                total += item
+            return total
+
+    engine = TreeTraversal(max_running=4)
+    action = _Early(engine._emit_event)
+    task = _task("directory", engine, action, _Handler(_FILES))
+    await asyncio.wait_for(_drain(engine.events([task])), timeout=5)
+    assert task.result() == 5
+
+
+async def _drain(events: AsyncIterator[Any]) -> None:
+    async for _ in events:
+        pass
+
+
+@pytest.mark.parametrize("kind", _TASKS)
+async def test_values_left_unread_are_read_after_reduce(kind: str) -> None:
+    class _Unread(_Pruning):
+        async def reduce(
+            self,
+            entry: dict[str, Any],
+            match: bool,
+            value: Any,
+            values: AsyncGenerator[Any],
+        ) -> Any:
+            return None  # Reads nothing.
+
+    engine = TreeTraversal(max_running=2)
+    action = _Unread(engine._emit_event)
+    task = _task(kind, engine, action, _Handler(_FILES))
+    [_ async for _ in engine.events([task])]
+    # All below the root still traversed.
+    assert set(_FILES) <= action.mapped.keys()
+
+
+@pytest.mark.parametrize("kind", _TASKS)
+async def test_an_error_below_is_raised_through_unread_values(kind: str) -> None:
+    class _Failing(_Pruning):
+        async def map(
+            self, entry: dict[str, Any], match: bool, parent_value: Any
+        ) -> Any:
+            if entry["name"] == "r/c/5":
+                raise ValueError(entry["name"])
+            return await super().map(entry, match, parent_value)
+
+        async def reduce(
+            self,
+            entry: dict[str, Any],
+            match: bool,
+            value: Any,
+            values: AsyncGenerator[Any],
+        ) -> Any:
+            return None  # Reads nothing: the error comes once it returns.
+
+    engine = TreeTraversal(max_running=2)
+    action = _Failing(engine._emit_event)
+    task = _task(kind, engine, action, _Handler(_FILES))
+    with pytest.raises(Exception) as raised:
+        [_ async for _ in engine.events([task])]
+    errors = (
+        raised.value.exceptions
+        if isinstance(raised.value, BaseExceptionGroup)
+        else (raised.value,)
+    )
+    assert [str(e) for e in errors] == ["r/c/5"]

@@ -135,6 +135,8 @@ async def test_a_failed_dir_is_yielded() -> None:
         "data/README.md",
     ]
     assert op.state.errors == 1
+    # data, its two years and 2024's two months: data/2023, failed, counted once.
+    assert op.state.directories_listed == 5
 
 
 async def test_a_failed_dir_in_the_recursive_listing_is_resumed_past() -> None:
