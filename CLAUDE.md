@@ -124,7 +124,7 @@ code: read it before adding a strategy or a handler.
     `mv_tree` take it too.
 
   The flat family keeps them in `_Placement`. The tree family keeps them in each directory's map value, a
-  `tree.cp._Dir`.
+  `tree.cp._Into`.
 
   `makedirs` returns the entry of the directory made, or None. Every override of those primitives takes `missing` and
   `parent`, used or not.

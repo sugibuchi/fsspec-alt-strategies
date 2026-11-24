@@ -14,7 +14,7 @@ and traverses only what it cannot copy so.
 
 `_transfers` runs both `_tree_cp` and `_tree_mv`. `common.placement._place_roots`
 places the roots, as fsspec's ``copy`` does. `_Sending` places each path below
-them under its directory's map value, a `_Dir`, then copies or moves it.
+them under its directory's map value, an `_Into`, then copies or moves it.
 
 This module depends on `glob`, `rm` and `walk`, and `glob`, `handler`,
 `jobs`, `operation`, `paths` and `tree` of `common`.
@@ -27,7 +27,7 @@ import contextlib
 import errno
 from contextlib import aclosing
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import TYPE_CHECKING, Any, NamedTuple, cast, overload
 
 from fsspec_alt_strategies.states import CpState, MvState
 
@@ -368,64 +368,43 @@ def _on(
     return run
 
 
-class _Dir:
-    """A destination directory, a source directory's map value: where what is in it goes.
+class _Into(NamedTuple):
+    """A source directory's map value: where it goes, and so what is in it.
 
-    ``missing`` is whether nothing is there, as found above it. ``parent`` is
-    the one above it, if known, whose ``entry`` is its parent hint.
-    ``exists`` is whether it needs no mkdir, and ``entry`` its entry, once
-    found or made. ``made`` is its one mkdir, once tried: whether it is there.
+    ``missing`` is whether nothing is there, as found above it. ``made`` is
+    whether it needs no mkdir, as placing the roots found it. ``entry`` is
+    its entry, if found, the parent hint of what goes in it, and ``parent``
+    its own parent's.
     """
 
-    def __init__(
-        self,
-        target: StoragePath,
-        *,
-        missing: bool,
-        parent: _Dir | None,
-        exists: bool = False,
-        entry: Entry | None = None,
-    ) -> None:
-        self.target = target
-        self.missing = missing
-        self.parent = parent
-        self.exists = exists
-        self.entry = entry
-        self.made: asyncio.Future[bool] | None = None
-
-    def hint(self) -> Entry | None:
-        """The entry the primitives take as the parent hint of what goes in it."""
-        return self.entry
-
-
-def _above(dst: StorageHandler, root: _Root) -> _Dir | None:
-    """The destination directory a root goes into, as placing it found it."""
-    try:
-        target = dst.parent(root.target)
-    except ValueError:
-        return None  # At the root: no parent of the destination's.
-    return _Dir(
-        target, missing=False, parent=None, exists=root.parent_exists, entry=root.parent
-    )
+    path: StoragePath
+    missing: bool
+    made: bool
+    entry: Entry | None
+    parent: Entry | None
 
 
 class _Sending(PathAction):
     """A copy's or a move's action, planning what goes, and `consume` sending it.
 
-    The traversal plans. A directory's `map` places it under its parent's
-    value, a `_Dir`, refusing a name the destination takes not, and makes it
-    first where the storage makes every directory before what is in it. A
-    root's is as `_place_roots` placed it. A file's `reduce` emits
-    ``("file", entry, target, directory, missing, alone)``. A directory's
-    `reduce`, once all below it is emitted, emits ``("dir", entry,
-    directory, empty)`` if it is empty, to be made, or for a move, to delete
-    its source. A value is whether all below was planned.
+    The traversal plans, and writes nothing. A directory's `map` places it
+    under its parent's value, an `_Into`, refusing a name the destination
+    takes not. A root's is as `_place_roots` placed it. A file's `reduce`
+    emits ``("file", entry, target, into, alone)``, ``into`` its directory's
+    value. A directory's `reduce`, once all below it is emitted, emits
+    ``("dir", entry, into, empty)`` if it is empty, to be made, or for a
+    move, to delete its source. A value is whether all below was planned.
+    Where the storage makes one directory per request, its parent existing,
+    `map` emits ``("mkdir", entry, into)`` too, before all below it.
 
-    `consume` sends a batch of those events, as `_transfers` reads them: the
-    files by the source's ``cp_files`` or ``mv_files``, in batches of its
-    batch size, each into its directory made once, if needed. A move
-    deletes its source directories at once with them, each after all below
-    it. One holding anything that stayed is kept, and so is each above it.
+    `consume` sends a batch of those events, as `_transfers` reads them. It
+    first makes the directories of its ``mkdir`` events, in order. Then it
+    makes the batch's destination directories holding files, where the
+    storage requires parents: each once, as ``made`` keeps them. Then it
+    sends the files by the source's ``cp_files`` or ``mv_files``, in batches
+    of its batch size. A move deletes its source directories at once with
+    them, each after all below it. One holding anything that stayed is kept,
+    and so is each above it.
 
     Each request is a `common.tree._write` under a permit of the source's
     ``operation_limit``, none starting once cancelled. Each path gone is an
@@ -456,10 +435,8 @@ class _Sending(PathAction):
         self.limit = src.operation_limit
         self.batch_size = placed.batch_size
         self.batching = placed.batching
-
         self.implicit_directories = placed.implicit_directories
         self.parents_required = placed.parents_required
-
         # Parents first, each directory is made before what is in it, by one
         # mkdir each: a storage requiring parents makes a missing one by more.
         # Not with maxdepth, as fsspec's copy makes no empty directory then.
@@ -476,6 +453,10 @@ class _Sending(PathAction):
         self.names: dict[_Key, set[str]] = {}
         # The source directories holding something that stayed, until they come.
         self.kept: set[_Key] = set()
+        # The destination directories made, or tried: the entry makedirs
+        # returned, the parent hint of what goes in it, or False if it failed.
+        # Only the consumer reads or writes it.
+        self.made: dict[str, Entry | bool] = {}
         # The outcomes of the batch consumed.
         self.out: list[Any] = []
 
@@ -489,23 +470,20 @@ class _Sending(PathAction):
             root = self.roots.get(self.key(name))
             if root is None:
                 return None  # Below a directory refused: its error tells.
-            directory = _Dir(
-                root.target,
-                missing=root.missing,
-                parent=_above(self.dst, root),
-                exists=root.made,
-                entry=root.directory,
+            into = _Into(
+                root.target, root.missing, root.made, root.directory, root.parent
             )
         else:
             try:
-                target = self.dst.join(parent_value.target, self.key(name)[-1])
+                target = self.dst.join(parent_value.path, self.key(name)[-1])
             except ValueError as error:
                 await self._emit_event((entry, error))
                 return None
-            directory = _Dir(target, missing=parent_value.missing, parent=parent_value)
-        if self.parents_first:
-            await self.make(directory, name, self._emit_event)
-        return directory
+            into = _Into(target, parent_value.missing, False, None, parent_value.entry)
+        if self.parents_first and not into.made:
+            # Emitted before all below it: the consumer makes it first.
+            await self._emit_event(("mkdir", entry, into))
+        return into
 
     async def reduce(
         self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
@@ -560,26 +538,29 @@ class _Sending(PathAction):
 
     async def plan_root(self, root: _Root) -> None:
         """Plan a root that is a file: it goes alone."""
-        event = self.plan_root_file(root)
-        if event is not None:
-            await self._emit_event(event)
+        await self._emit_event(self.plan_root_file(root))
 
     async def file_root(self, root: _Root) -> list[Any]:
         """The outcomes of the one root, found a file once the traversal ended: it goes alone."""
-        event = self.plan_root_file(root._replace(entry={**root.entry, "type": "file"}))
-
-        return await self.consume([] if event is None else [event])
+        entry = {**root.entry, "type": "file"}
+        return await self.consume([self.plan_root_file(root._replace(entry=entry))])
 
     def plan_root_file(self, root: _Root) -> Any:
         """A root file's event, its target placed already."""
-
         name = _trim(root.entry["name"])
         self.count(files_found=1)
         if (twice := self.twice(name, root.target)) is not None:
             return (root.entry, twice)
-        directory = _above(self.dst, root)
         entry = {**root.entry, "name": name}
-        return ("file", entry, root.target, directory, root.missing, True)
+        return ("file", entry, root.target, self.above(root), True)
+
+    def above(self, root: _Root) -> _Into:
+        """The directory a root goes into, as placing the root found it."""
+        try:
+            path = self.dst.parent(root.target)
+        except ValueError:
+            path = cast("StoragePath", "")  # At the root: nothing to make.
+        return _Into(path, False, root.parent_exists, root.parent, None)
 
     async def emit_all(self, errors: list[Exception]) -> None:
         """Emit the errors of roots whose target could not be asked."""
@@ -592,20 +573,20 @@ class _Sending(PathAction):
         """A source path's key, by the source's segments: never verified, as a listing gave it."""
         return tuple(self.src.segments(name))
 
-    def plan_file(self, entry: Entry, name: str, directory: _Dir | None) -> Any:
+    def plan_file(self, entry: Entry, name: str, into: _Into | None) -> Any:
         """A file's event: where it goes, or its error; None below a directory refused."""
         self.count(files_found=1)
-        if directory is None:
+        if into is None:
             return None  # No error of its own: its directory's tells.
         try:
-            target = self.dst.join(directory.target, self.key(name)[-1])
+            target = self.dst.join(into.path, self.key(name)[-1])
         except ValueError as error:
             return (entry, error)
         if (twice := self.twice(name, target)) is not None:
             return (entry, twice)
         # The entry goes with its copy, so that cp_entry need not ask it.
         entry = {**entry, "name": name}
-        return ("file", entry, target, directory, directory.missing, False)
+        return ("file", entry, target, into, False)
 
     def twice(self, name: str, target: StoragePath) -> FileExistsError | None:
         """The error of a file whose name another took first in its directory, else None."""
@@ -621,8 +602,9 @@ class _Sending(PathAction):
         """Send what a batch of events plans: their outcomes, after the events passed on, e.g. a listing's error."""
         self.out = []
         files: list[tuple[Any, ...]] = []
-        directories: dict[_Key, tuple[Entry, _Dir, bool]] = {}
+        directories: dict[_Key, tuple[Entry, _Into, bool]] = {}
         wholes: list[_Root] = []
+        mkdirs: list[tuple[Entry, _Into]] = []
         for event in events:
             if event[0] == "file":
                 files.append(event[1:])
@@ -630,8 +612,13 @@ class _Sending(PathAction):
                 directories[self.key(event[1]["name"])] = event[1:]
             elif event[0] == "whole":
                 wholes.append(event[1])
+            elif event[0] == "mkdir":
+                mkdirs.append(event[1:])
             else:
                 self.out.append(event)
+        for entry, into in mkdirs:
+            # In order, so each after its parent, as the storage requires.
+            await self.make(into, entry)
         sending = asyncio.ensure_future(self.send_files(files))
         try:
             holding = {self.key(f[0]["name"])[:-1] for f in files}
@@ -647,28 +634,25 @@ class _Sending(PathAction):
         out, self.out = self.out, []
         return out
 
-    async def report(self, event: Any) -> None:
-        """Keep a consumer's outcome, yielded once its batch is sent."""
-        self.out.append(event)
+    async def send_files(self, planned: list[tuple[Any, ...]]) -> None:
+        """Send files, each into its directory made first, if needed: the source directory of each that stayed is kept.
 
-    async def send_files(self, files: list[tuple[Any, ...]]) -> None:
-        """Send files, each into its directory made: the source directory of each that stayed is kept."""
-        into: dict[_Dir | None, str] = {}
-        for entry, _, directory, _, _ in files:
-            into.setdefault(directory, entry["name"])
-        made = dict(
-            zip(
-                into,
-                await asyncio.gather(
-                    *(self.make(d, s, self.report) for d, s in into.items())
-                ),
-                strict=True,
-            )
-        )
-        ready = [f for f in files if made[f[2]]]
+        A directory failing to be made yields its error once: what goes in it
+        is left out, as each would fail as it did.
+        """
+        directories: dict[str, tuple[_Into, Entry]] = {}
+        for entry, _, into, _ in planned:
+            if self.parents_required:
+                directories.setdefault(into.path, (into, entry))
+        await asyncio.gather(*(self.make(i, e) for i, e in directories.values()))
+        files = [
+            (e, t, self.hint(into), into.missing, alone)
+            for e, t, into, alone in planned
+            if self.made.get(into.path) is not False
+        ]
         # Unless batching, e.g. between two storages, each goes by the transfer.
-        alone = [f for f in ready if f[4] or not self.batching]
-        batched = [f for f in ready if not f[4] and self.batching]
+        alone = [f for f in files if f[4] or not self.batching]
+        batched = [f for f in files if not f[4] and self.batching]
         size = self.batch_size
         outcomes = await asyncio.gather(
             *(self.send(batched[i : i + size]) for i in range(0, len(batched), size)),
@@ -676,28 +660,28 @@ class _Sending(PathAction):
         )
         gone = {name for names in outcomes for name in names}
         self.kept.update(
-            self.key(f[0]["name"])[:-1] for f in files if f[0]["name"] not in gone
+            self.key(f[0]["name"])[:-1] for f in planned if f[0]["name"] not in gone
         )
 
-    async def settle_dir(self, planned: tuple[Entry, _Dir, bool]) -> bool:
+    async def settle_dir(self, planned: tuple[Entry, _Into, bool]) -> bool:
         """Make an empty directory, and for a move delete its source: whether it went."""
-        entry, directory, empty = planned
+        entry, into, empty = planned
         name = _trim(entry["name"])
-        if empty and not await self.make(directory, name, self.report, always=True):
+        if empty and not await self.make(into, entry, always=True):
             return False
         if self.move:
-            return await self.remove(entry, name, directory.target)
+            return await self.remove(entry, name, into.path)
         return True
 
     async def whole(self, root: _Root) -> bool:
         """Copy or move a root with all in it, by the storage's one request, after its parent is made."""
         name = _trim(root.entry["name"])
-        parent = _above(self.dst, root)
+        above = self.above(root)
         always = not self.implicit_directories
-        if not await self.make(parent, name, self.report, always=always):
+        if not await self.make(above, root.entry, always=always):
             return False
         primitive = self.src.mv_tree if self.move else self.src.cp_tree
-        hint = parent.hint() if parent is not None else None
+        hint = self.hint(above)
 
         async def send() -> None:
             await primitive(root.entry, root.target, parent=hint)
@@ -710,10 +694,9 @@ class _Sending(PathAction):
         return True
 
     async def one(
-        self, entry: Entry, target: StoragePath, directory: _Dir | None, missing: bool
+        self, entry: Entry, target: StoragePath, hint: Entry | None, missing: bool
     ) -> list[str]:
         """Send a file by the transfer, replacing a file there the destination keeps: its name, if it went."""
-        hint = directory.hint() if directory is not None else None
 
         async def send() -> None:
             try:
@@ -755,8 +738,7 @@ class _Sending(PathAction):
         if self.op.cancelling():
             return []
         transfers = [
-            FileTransfer(e, t, missing, d.hint() if d is not None else None)
-            for e, t, d, missing, _ in waiting
+            FileTransfer(e, t, missing, hint) for e, t, hint, missing, _ in waiting
         ]
 
         async def transfer() -> tuple[dict[str, Exception | None], list[Exception]]:
@@ -792,10 +774,10 @@ class _Sending(PathAction):
     ) -> list[str]:
         """Count and report each outcome of a batch sent: a file absent from it, e.g. cancelled, did not go."""
         gone: list[str] = []
-        for entry, target, directory, missing, _ in waiting:
+        for entry, target, hint, missing, _ in waiting:
             error = outcomes.get(entry["name"], asyncio.CancelledError())
             if isinstance(error, FileExistsError) and not self.move:
-                gone += await self.one(entry, target, directory, missing)
+                gone += await self.one(entry, target, hint, missing)
             elif error is None:
                 self.count(**{"files_moved" if self.move else "files_copied": 1})
                 self.out.append(("done", entry["name"], target))
@@ -806,63 +788,51 @@ class _Sending(PathAction):
             self.out.append((waiting[0][0], error))
         return gone
 
-    def needs_mkdir(self, directory: _Dir, *, always: bool) -> bool:
-        """Whether a destination directory is made before what goes in it.
+    def hint(self, into: _Into) -> Entry | None:
+        """The entry of a destination directory, as made or found: the parent hint of what goes in it."""
+        made = self.made.get(into.path)
+        return made if isinstance(made, dict) else into.entry
+
+    async def make(self, into: _Into, source: Entry, *, always: bool = False) -> bool:
+        """Make a destination directory once, if needed: whether it is there.
 
         Never the root, nor one known to exist. Else only where the storage
         requires parents, unless ``always``, e.g. for an empty directory,
-        which nothing else makes.
+        which nothing else makes. Failing, it yields its error, as
+        ``source``'s, once: tried again, it fails again at once.
         """
-        if (
-            directory.exists
-            or not directory.target
-            or directory.target == self.dst.root
-        ):
-            return False
-        return always or self.parents_required
-
-    async def make(
-        self,
-        directory: _Dir | None,
-        source: str,
-        emit: Callable[[Any], Awaitable[None]],
-        *,
-        always: bool = False,
-    ) -> bool:
-        """Make a destination directory once, if needed, before what goes in it: whether it is there.
-
-        A directory failing to be made emits its error once, by ``emit``:
-        what goes in it is left out, as each would fail as it did. Its outcome
-        is settled before, so that the consumer, waiting for a directory the
-        traversal makes, never waits for the traversal's emitting.
-        """
-        if directory is None or not self.needs_mkdir(directory, always=always):
+        path = into.path
+        if into.made or not path or path == self.dst.root:
             return True
-        if directory.made is not None:
-            return await directory.made
-        made = directory.made = asyncio.get_running_loop().create_future()
-        parent = directory.parent
+        if path in self.made:
+            return self.made[path] is not False
+        if not (always or self.parents_required):
+            return True
+        made: Entry | None = None
+        try:
+            parent = self.dst.parent(path)
+        except ValueError:
+            parent = None
+        hint = self.made.get(parent) if parent is not None else None
+        if hint is False:
+            self.made[path] = False  # Its parent failed: its error tells.
+            return False
 
         async def mkdir() -> None:
-            directory.entry = await self.dst.makedirs(
-                directory.target,
+            nonlocal made
+            made = await self.dst.makedirs(
+                path,
                 exist_ok=True,
-                missing=directory.missing,
-                parent=parent.hint() if parent is not None else None,
+                missing=into.missing,
+                parent=hint if isinstance(hint, dict) else into.parent,
             )
 
-        try:
-            ok = await self.write(mkdir, {"name": source}, keep=True)
-        except BaseException:
-            made.set_result(False)
-            raise
-        if isinstance(ok, Exception):
-            made.set_result(False)
-            await emit(({"name": source}, ok))
-            return False
-        directory.exists = ok
-        made.set_result(ok)
-        return ok
+        sent = await self.write(mkdir, source)
+        if sent:
+            self.made[path] = made if made is not None else True
+        else:
+            self.made[path] = False  # Failed, its error yielded, or cancelled.
+        return sent
 
     async def remove(self, entry: Entry, name: str, target: StoragePath) -> bool:
         """Delete a source directory now moved, unless it went with its last file: whether it is gone."""
