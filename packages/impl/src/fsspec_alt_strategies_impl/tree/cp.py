@@ -439,6 +439,8 @@ class _Sending(PathAction):
         self.names: dict[_Key, set[str]] = {}
         # The source directories holding something that stayed, until they come.
         self.kept: set[_Key] = set()
+        # The roots going whole: their "dir" event sends them, with all in them.
+        self.wholes: set[_Key] = set()
 
         # The consumer's alone. The destination directories made, or known to
         # exist, each with its entry, if known: the parent hint of what goes in
@@ -541,8 +543,13 @@ class _Sending(PathAction):
         return False
 
     async def plan_whole(self, root: _Root) -> None:
-        """Plan a root going whole, by the storage's one request."""
-        await self._emit_event(("whole", root))
+        """Plan a root going whole, by the storage's one request: a directory whose contents are not traversed, after its parent."""
+        name = _trim(root.entry["name"])
+        self.wholes.add(self.key(name))
+        parent = self.parent(root.target)
+        if parent and (not self.implicit_directories or self.parents_required):
+            await self._emit_event(("mkdir", name, parent))
+        await self._emit_event(("dir", root.entry, root.target))
 
     async def plan_root(self, root: _Root) -> None:
         """Plan a root that is a file: it goes alone, into its directory made if needed."""
@@ -591,7 +598,6 @@ class _Sending(PathAction):
         mkdirs: list[tuple[str, StoragePath]] = []
         files: list[tuple[Entry, StoragePath, bool]] = []
         directories: dict[_Key, tuple[Entry, StoragePath]] = {}
-        wholes: list[_Root] = []
         for event in events:
             if event[0] == "mkdir":
                 mkdirs.append(event[1:])
@@ -599,8 +605,6 @@ class _Sending(PathAction):
                 files.append(event[1:])
             elif event[0] == "dir":
                 directories[self.key(event[1]["name"])] = event[1:]
-            elif event[0] == "whole":
-                wholes.append(event[1])
             else:
                 self.out.append(event)
         if self.parents_first:
@@ -614,7 +618,6 @@ class _Sending(PathAction):
             await asyncio.gather(
                 sending,
                 _bottom_up(directories, sending, holding, self.kept, self.settle_dir),
-                *(self.whole(root) for root in wholes),
             )
         finally:
             if not sending.done():
@@ -691,29 +694,29 @@ class _Sending(PathAction):
         )
 
     async def settle_dir(self, planned: tuple[Entry, StoragePath]) -> bool:
-        """Delete a moved directory's source: whether it went."""
-        entry, target = planned
-        return await self.remove(entry, _trim(entry["name"]), target)
+        """Settle a directory once all in it went: whether it went.
 
-    async def whole(self, root: _Root) -> bool:
-        """Copy or move a root with all in it, by the storage's one request, after its parent is made."""
-        name = _trim(root.entry["name"])
-        parent = self.parent(root.target)
-        if not self.implicit_directories or self.parents_required:
-            await self.make(name, cast("StoragePath", parent))
+        A root going whole goes now, by the storage's one request, with all
+        in it. Another, its contents moved, has its source deleted.
+        """
+        entry, target = planned
+        name = _trim(entry["name"])
+        if self.key(name) not in self.wholes:
+            return await self.remove(entry, name, target)
+        parent = self.parent(target)
         if parent in self.unmade:
-            return False
+            return False  # Its parent's error tells.
         primitive = self.src.mv_tree if self.move else self.src.cp_tree
         hint = self.made.get(parent)
 
         async def send() -> None:
-            await primitive(root.entry, root.target, parent=hint)
+            await primitive(entry, target, parent=hint)
 
-        if not await self.write(send, root.entry):
+        if not await self.write(send, entry):
             return False
         field = "roots_renamed" if self.move else "roots_copied"
         self.count(**{field: 1})
-        self.out.append(("done", name, root.target))
+        self.out.append(("done", name, target))
         return True
 
     async def one(
