@@ -6,8 +6,11 @@
 onto the destination: by its ``join``, folded on a storage whose names are
 not case-sensitive. It keeps what it learns of the destination on the way:
 the paths found missing or existing, the directories made, and their
-entries, which the primitives take as hints. A tree copy uses it alone. A
-flat one joins it with the flat jobs, as `jobs._CopyJobs`.
+entries, which the primitives take as hints. A flat copy joins it with the
+flat jobs, as `jobs._CopyJobs`.
+
+`_place_roots` gives a tree copy its roots alone, each a `_Root` with what is
+known of its target. The traversal places what is below them.
 
 `_glob_roots` finds the roots a glob pattern matches, as fsspec's
 ``_expand_path`` finds them, for any operation changing a storage.
@@ -30,6 +33,8 @@ from .paths import _trim
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    from fsspec_alt_strategies.profile import StorageProfile
 
     from .handler import Entry, FileOperationHandler, StorageHandler
     from .operation import Operation
@@ -452,3 +457,135 @@ class _Placement:
         )
         if made is not None:
             self.directories[path] = made
+
+
+class _Moving(_Placement):
+    """Where a move's paths go: a single path moved onto itself in another case is renamed whole."""
+
+    verb = "move"
+    doing = "Moving"
+    transfers = "move"
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.goes_whole = False  # As _place_roots reads it from the profile.
+
+    def recased(self, root: str, destination: StoragePath) -> _Roots:
+        """A single path moved onto itself in another case: renamed by one ``mv_tree``.
+
+        The destination is the root itself. Found existing, it would take the
+        root into itself: it is taken as missing instead.
+        """
+        if not self.goes_whole:
+            return super().recased(root, destination)
+        self.prefix, self.base = root, destination
+        self.missing.add(destination)
+        self.made.add(self.handler.parent(root))
+        # A directory root, as mv_tree takes a file too.
+        return _Roots([self.path1_entry or {"name": root}])
+
+
+class _Root(NamedTuple):
+    """A root of a copy or move, placed: where it goes, and what is known of the destination there.
+
+    ``missing`` is whether nothing is at ``target``, or above it, as found,
+    and ``existing`` whether something is. ``parent`` is the entry of the
+    target's parent, if found, and ``parent_exists`` whether it needs no
+    mkdir: made, found, or the root. ``matched`` is whether a pattern matched
+    it, not named literally: ``maxdepth`` counts one level less below it.
+    """
+
+    entry: dict[str, Any]
+    target: StoragePath
+    missing: bool
+    existing: bool
+    parent: Entry | None
+    parent_exists: bool
+    matched: bool
+    made: bool
+    directory: Entry | None
+
+
+class _Placed(NamedTuple):
+    """The roots of a copy or move, placed, and how the destination takes them.
+
+    ``errors`` are those of finding the roots, yielded first. ``whole`` is
+    whether a directory root goes whole, by one ``cp_tree`` or ``mv_tree``,
+    where its target is missing. ``batch_size`` is the source's
+    ``cp_batch_size`` or ``mv_batch_size`` where batching, else 1.
+    """
+
+    directories: list[_Root]
+    files: list[_Root]
+    errors: list[Exception]
+    profile: StorageProfile
+    implicit_directories: bool
+    parents_required: bool
+    batching: bool
+    batch_size: int
+    whole: bool
+
+
+async def _place_roots(*, move: bool, **kwargs: Any) -> _Placed:
+    """Place the roots of a copy, or of a move, as fsspec's ``copy`` places them.
+
+    ``kwargs`` are `_Placement`'s. It opens both handlers, and reads the
+    destination's profile. A path onto itself, left as it is, has no root.
+    """
+    place = _Moving(**kwargs) if move else _Placement(**kwargs)
+    await place.setup()
+    whole = _whole(place, move)
+    if isinstance(place, _Moving):
+        place.goes_whole = whole  # Read by recased, in prepare.
+    roots = await place.prepare() or _Roots([])
+
+    def placed(entry: dict[str, Any]) -> _Root:
+        target = place.target(entry["name"])
+        try:
+            parent = place.dst.parent(target)
+        except ValueError:
+            parent = None  # At the root: no parent of the destination's.
+        return _Root(
+            entry=entry,
+            target=target,
+            missing=place.known_missing(target),
+            existing=target in place.existing,
+            parent=place.parent_of(target),
+            parent_exists=parent is None or not place.needs_mkdir(parent, always=True),
+            matched=_trim(entry["name"]) in place.matched,
+            made=not place.needs_mkdir(target, always=True),
+            directory=place.directories.get(target),
+        )
+
+    return _Placed(
+        directories=[placed(d) for d in roots.directories],
+        files=[placed(f) for f in roots.files],
+        errors=place.found,
+        profile=place.profile,
+        implicit_directories=place.implicit_directories,
+        parents_required=place.parents_required,
+        batching=place.batching,
+        batch_size=place.transfer_batch_size if place.batching else 1,
+        whole=whole,
+    )
+
+
+def _whole(place: _Placement, move: bool) -> bool:
+    """Whether the roots go whole, by one ``cp_tree`` or ``mv_tree``, where they can.
+
+    Only within one storage does the profile tell how the source copies or
+    renames. A directory gone whole would take what is deeper than maxdepth
+    along. A move's own setup follows: a rename makes no parent, as a write
+    may, so its directory is made first unless the profile says it renames
+    no file.
+    """
+    profile = place.profile
+    declared = profile.renames_directories if move else profile.copies_directories
+    if move:
+        place.implicit_directories = place.same_storage and place.implicit_directories
+        place.parents_required = place.parents_required or (
+            place.same_storage
+            and not place.implicit_directories
+            and profile.renames_files is not False
+        )
+    return place.same_storage and bool(declared) and place.maxdepth is None

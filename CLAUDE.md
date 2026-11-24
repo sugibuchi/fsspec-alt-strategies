@@ -119,9 +119,12 @@ code: read it before adding a strategy or a handler.
   a file. A move's `mv_entry` defaults to `cp_entry`, then the source's `rm_file`. The router passes its routing
   handler's `cp_across` and `mv_across` so.
 - A copy or move tells `makedirs`, `cp_file`, `mv_file` and its `cp_entry` or `mv_entry` two hints:
-  - `missing=True` where `_Placement.known_missing` holds: the destination, or a directory above it, was found missing;
-  - `parent=`, the destination's parent's entry, as `makedirs` returned it or an `info` found it, kept in
-    `_Placement.directories`. `cp_tree` and `mv_tree` take it too.
+  - `missing=True` where the destination, or a directory above it, was found missing;
+  - `parent=`, the destination's parent's entry, as `makedirs` returned it or an `info` found it. `cp_tree` and
+    `mv_tree` take it too.
+
+  The flat family keeps them in `_Placement`. The tree family keeps them in each directory's map value, a
+  `tree.cp._Dir`.
 
   `makedirs` returns the entry of the directory made, or None. Every override of those primitives takes `missing` and
   `parent`, used or not.
@@ -170,7 +173,9 @@ code: read it before adding a strategy or a handler.
   wrapped filesystem's methods. Write one only where the library saves requests or data beyond fsspec's API.
 - A wrapper of one library declares its profile, limits and batch sizes as class attributes. A `known_implementations`
   entry gives them only to the generic `FsspecTreeHandler` and `FsspecFlatHandler`.
-- A copy or move, in any family, places its paths by `common.placement._Placement`, by the destination's `join`. The flat
+- A copy or move, in any family, places its roots as fsspec's `copy` does, by `common.placement`, and each path by
+  the destination's `join`. The tree family takes the roots from `_place_roots`, then places each path below them
+  under its directory's map value. The flat family places every path by `_Placement`. The flat
   strategies changing a storage run on `common.jobs._Jobs`, e.g. `_CopyOrMove(_CopyJobs, _FlatJobs)`. Their
   constructors take keywords only, and pass the rest on.
 
