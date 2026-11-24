@@ -83,11 +83,14 @@ def _tree_rm(
 
     Files are deleted by the handler's ``rm_files``, in batches of its
     ``rm_batch_size``, as it is once open: by default 1, each by ``rm_file``,
-    as many at once as the limit lets them. A batch holds files of one
-    directory, sent once full, as the listing finds them: its last, smaller
-    one once all below the directory is done. A file its batch
-    refused yields its error and keeps its directory. A batch failing whole
-    yields one error, and keeps its directory.
+    as many at once as the limit lets them. The traversal emits each path to
+    delete, and the operation reads them in rounds: the paths emitted while
+    the last round was deleted, up to the larger of 16 and
+    ``rm_batch_size``. A round's files go in batches of files of any
+    directory, at once with its directories. Each directory is deleted after
+    all below it, and siblings at once. A file its batch refused yields its
+    error and keeps its directory. A batch failing whole yields one error,
+    and keeps the directories of its files.
 
     With ``maxdepth``, it deletes what fsspec's ``_rm`` deletes with it: the
     paths at most ``maxdepth`` levels below ``path``, or below a pattern's
@@ -148,7 +151,11 @@ def _tree_rm(
                 op.state = replace(op.state, errors=op.state.errors + 1)
                 yield error
 
-        engine = TreeTraversal(max_running=max_running, split=handler.segments)
+        engine = TreeTraversal(
+            max_running=max_running,
+            max_events=_events_for(batch_size),
+            split=handler.segments,
+        )
         op._on_cancel = engine.cancel
         deletion = _Deletion(
             engine._emit_event,
@@ -162,8 +169,9 @@ def _tree_rm(
         whole = maxdepth is None and profile.deletes_directories is True
         tasks = _root_tasks(engine, deletion, roots, whole, maxdepth, ils_kwargs)
         try:
-            async with aclosing(engine.events(tasks)) as events:
-                async for event in events:
+            outcomes = _consumed(engine, tasks, deletion.consume)
+            async with aclosing(outcomes):
+                async for event in outcomes:
                     yield deletion.outcome(event)
         except NotADirectoryError:
             # The one root, a file: deleted alone.
@@ -171,7 +179,7 @@ def _tree_rm(
                 return
             entry = {"name": _trim(str(path)), "type": "file"}
             deletion.files_found(1)
-            for event in await deletion.delete_batch([entry]):
+            for event in await deletion.consume([("file", entry)]):
                 yield deletion.outcome(event)
 
     return Operation(run, RmState(directories_deleted=0))
@@ -194,7 +202,7 @@ def _root_tasks(
     tasks: list[PathTask] = []
     for entry in roots.directories:
         if whole:
-            tasks.append(_Call(engine, entry, deletion.delete_tree))
+            tasks.append(_Call(engine, entry, deletion.plan_tree))
             continue
         depth = maxdepth
         if depth is not None and entry.get("matched"):
@@ -211,8 +219,76 @@ def _root_tasks(
     if roots.files:
         files = list(roots.files)
         deletion.files_found(len(files))
-        tasks.append(_Call(engine, files[0], lambda _: deletion.delete_files(files)))
+        tasks.append(_Call(engine, files[0], lambda _: deletion.plan_files(files)))
     return tasks
+
+
+_MAX_EVENTS = 16
+"""The events a traversal changing the storage holds unread, at least."""
+
+
+def _events_for(batch_size: int) -> int:
+    """The events a traversal holds unread: enough to fill a batch of its consumer's."""
+    return max(_MAX_EVENTS, batch_size)
+
+
+async def _consumed(
+    engine: TreeTraversal,
+    tasks: list[PathTask],
+    consume: Callable[[list[Any]], Awaitable[list[Any]]],
+) -> AsyncGenerator[Any]:
+    """Run a traversal planning writes, and ``consume`` each batch of its events: the outcomes.
+
+    A batch is what the traversal emitted while the last was consumed, at
+    most ``max_events``: so the traversal runs ahead by one batch, no more.
+    """
+    batches = engine.event_batches(tasks, engine.max_events)
+    async with aclosing(batches):
+        async for events in batches:
+            for outcome in await consume(events):
+                yield outcome
+
+
+_Key = tuple[str, ...]
+"""A path by its segments, as the handler's ``segments`` gives them: its parent's is one shorter."""
+
+
+async def _bottom_up(
+    directories: dict[_Key, Any],
+    files: Awaitable[Any],
+    holding: set[_Key],
+    kept: set[_Key],
+    remove: Callable[[Any], Awaitable[bool]],
+) -> None:
+    """Remove directories emptied, each after those below it, its siblings at once.
+
+    ``directories`` are by their segments, each emitted after all below it:
+    so a subdirectory is either among them, or settled already. One holding
+    a file of ``files``, the round's sending, waits for it. One in ``kept``,
+    as something in it stayed, is kept, and so is its parent: the parent
+    comes after it. So does one ``remove`` fails.
+    """
+    children: dict[_Key, list[_Key]] = {}
+    tops: list[_Key] = []
+    for key in directories:
+        if key[:-1] in directories:
+            children.setdefault(key[:-1], []).append(key)
+        else:
+            tops.append(key)
+
+    async def go(key: _Key) -> None:
+        below = children.get(key, ())
+        if below:
+            await asyncio.gather(*(go(child) for child in below))
+        if key in holding:
+            await files
+        if key in kept:
+            kept.discard(key)
+        elif await remove(directories[key]):
+            return
+        kept.add(key[:-1])
+
+    await asyncio.gather(*(go(key) for key in tops))
 
 
 class _Globbed(NamedTuple):
@@ -264,27 +340,23 @@ class _Call(PathTask):
         return await self.call(self.entry)
 
 
-class _Batch:
-    """A directory's files waiting to be deleted, and whether all sent so far are."""
-
-    def __init__(self) -> None:
-        self.waiting: list[Entry] = []
-        self.deleted = True
-
-
 class _Deletion(PathAction):
-    """rm as a map-reduce: a directory's value is whether it is deleted.
+    """rm as a map-reduce planning the deletions, and `consume` sending them.
 
-    A file joins its directory's batch, and the file filling it sends it: so
-    files go as the listing finds them, while the traversal goes on. A
-    directory's `reduce`, once all below it is done, sends what is left of its
-    batch, then deletes itself, if all in it is deleted. A subdirectory that
-    failed to list is not: its value, as `failed` gives it, is False. A batch
-    holds files of one directory only.
+    The traversal plans: a file's `reduce` emits ``("file", entry)``, and a
+    directory's ``("dir", entry)`` once all below it is emitted. One with
+    anything below that failed to list emits nothing: its value, as `failed`
+    gives it, is False, and so is each above it. A root deleted whole emits
+    ``("tree", entry)``.
 
-    Each deletion is a `common.tree._write`: closed, the traversal waits for
-    it. Once cancelled, none starts. Each path deleted is emitted as
-    ``("deleted", path, is_directory)``, and each error as ``(entry, error)``,
+    `consume` deletes a batch of those events, as `_tree_rm` reads them: the
+    files by ``rm_files``, in batches of ``rm_batch_size``, at once with the
+    directories, each after all below it. A directory holding anything that
+    stayed is kept, and so is each above it, though planned.
+
+    Each deletion is a `common.tree._write`: closed, it runs to its end. Once
+    cancelled, none starts. Each path deleted is an outcome
+    ``("deleted", path, is_directory)``, and each error ``(entry, error)``,
     as `common.glob`'s tasks emit a listing's.
     """
 
@@ -305,70 +377,105 @@ class _Deletion(PathAction):
         self.implicit_directories = implicit_directories
         # The one path given, missing, raises, as the walk would find it.
         self.missing_raises = missing_raises
-        # Each directory's batch, by its segments, until its reduce.
-        self.batches: dict[tuple[str, ...], _Batch] = {}
+        # The directories holding something that stayed, until they come.
+        self.kept: set[_Key] = set()
+        # The outcomes of the batch consumed.
+        self.out: list[Any] = []
+
+    # The traversal's calls: they plan.
 
     async def reduce(
         self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
     ) -> Any:
-        key = tuple(self.handler.segments(entry["name"]))
         if entry["type"] != "directory":
             self.files_found(1)
-            batch = self.batches.setdefault(key[:-1], _Batch())
-            batch.waiting.append({**entry, "name": _trim(entry["name"])})
-            if len(batch.waiting) >= self.batch_size:
-                await self.send(batch)
+            await self._emit_event(("file", entry))
             return True
-        # Its files join its batch as their values come.
-        emptied = True
-        async for deleted in values:
-            emptied &= deleted is True
-        last = self.batches.pop(key, _Batch())
-        await self.send(last)  # Its last, smaller one, if any.
-        if not last.deleted or not emptied:
-            return False  # Kept, with what failed in it.
-        return await self.delete_directory(entry)
+        planned = True
+        async for below in values:
+            planned &= below is True
+        if not planned:
+            return False  # Kept, with what failed to list in it.
+        await self._emit_event(("dir", entry))
+        return True
 
     async def failed(self, entry: Entry) -> Any:
-        # Its files left waiting are kept with it.
-        self.batches.pop(tuple(self.handler.segments(entry["name"])), _Batch())
-        return False
+        return False  # Kept, with all in it.
 
-    async def send(self, batch: _Batch) -> None:
-        """Send a directory's files waiting, emitting each outcome."""
-        entries, batch.waiting = batch.waiting, []
-        if not entries:
-            return
-        if self.op.cancelling():
-            batch.deleted = False
-            return
-        events = await self.delete_batch(entries)
-        batch.deleted &= sum(e[0] == "deleted" for e in events) == len(entries)
+    async def plan_tree(self, entry: Entry) -> None:
+        """Plan a root's deletion whole, by one ``rm_tree``."""
+        await self._emit_event(("tree", entry))
+
+    async def plan_files(self, entries: list[Entry]) -> None:
+        """Plan the deletion of root files, counted as found already."""
+        for entry in entries:
+            await self._emit_event(("file", entry))
+
+    # The consumer's: it deletes.
+
+    async def consume(self, events: list[Any]) -> list[Any]:
+        """Delete what a batch of events plans: their outcomes, after the events passed on, e.g. a listing's error."""
+        self.out = []
+        files: list[Entry] = []
+        directories: dict[_Key, Entry] = {}
+        trees: list[Entry] = []
         for event in events:
-            await self._emit_event(event)
+            if event[0] == "file":
+                files.append({**event[1], "name": _trim(event[1]["name"])})
+            elif event[0] == "dir":
+                directories[self.key(event[1]["name"])] = event[1]
+            elif event[0] == "tree":
+                trees.append(event[1])
+            else:
+                self.out.append(event)
+        sending = asyncio.ensure_future(self.delete_files(files))
+        try:
+            holding = {self.key(f["name"])[:-1] for f in files}
+            await asyncio.gather(
+                sending,
+                _bottom_up(
+                    directories,
+                    sending,
+                    holding,
+                    self.kept,
+                    self.delete_directory,
+                ),
+                *(self.delete_tree(entry) for entry in trees),
+            )
+        finally:
+            if not sending.done():
+                sending.cancel()
+                await asyncio.wait([sending])
+        out, self.out = self.out, []
+        return out
+
+    def key(self, name: str) -> _Key:
+        """A path's key, by the handler's segments: never verified, as a listing gave it."""
+        return tuple(self.handler.segments(name))
 
     def files_found(self, count: int) -> None:
         state = self.op.state
         self.op.state = replace(state, files_found=state.files_found + count)
 
-    async def delete_files(self, entries: list[Entry]) -> bool:
-        """Delete files in batches, at once, emitting each outcome: whether all are deleted."""
-        if not entries:
-            return True
-        if self.op.cancelling():
-            return False
-        size = self.batch_size
-        async with asyncio.TaskGroup() as group:
-            batches = [
-                group.create_task(self.delete_batch(entries[i : i + size]))
-                for i in range(0, len(entries), size)
-            ]
-        deleted = 0
-        for batch in batches:
-            for event in batch.result():
-                deleted += event[0] == "deleted"
-                await self._emit_event(event)
-        return deleted == len(entries)
+    async def delete_files(self, entries: list[Entry]) -> None:
+        """Delete files in batches, at once: the directory of each that stayed is kept."""
+        deleted: set[str] = set()
+        if entries and not self.op.cancelling():
+            size = self.batch_size
+            batches = await asyncio.gather(
+                *(
+                    self.delete_batch(entries[i : i + size])
+                    for i in range(0, len(entries), size)
+                )
+            )
+            for events in batches:
+                for event in events:
+                    if event[0] == "deleted":
+                        deleted.add(event[1])
+                    self.out.append(event)
+        self.kept.update(
+            self.key(e["name"])[:-1] for e in entries if e["name"] not in deleted
+        )
 
     async def delete_batch(self, entries: list[Entry]) -> list[Any]:
         """A batch's outcomes, by the handler's ``rm_files``: an error raised fails it whole.
@@ -408,11 +515,11 @@ class _Deletion(PathAction):
         except FileNotFoundError:
             return True  # Already gone: an object store's, or deleted by another.
         except Exception as error:
-            await self._emit_event((entry, error))
+            self.out.append((entry, error))
             return False
         if not sent:
             return False  # Cancelled before it was sent.
-        await self._emit_event(("deleted", name, True))
+        self.out.append(("deleted", name, True))
         return True
 
     async def delete_tree(self, entry: Entry) -> bool:
@@ -427,11 +534,11 @@ class _Deletion(PathAction):
                 raise  # The path missing, as the walk would find it.
             return True
         except Exception as error:
-            await self._emit_event((entry, error))
+            self.out.append((entry, error))
             return False
         if not sent:
             return False  # Cancelled before it was sent.
-        await self._emit_event(("deleted", name, True))
+        self.out.append(("deleted", name, True))
         return True
 
     async def _limited(

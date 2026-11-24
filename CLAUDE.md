@@ -69,7 +69,7 @@ code: read it before adding a strategy or a handler.
 - `cp_files(transfers)` and `mv_files(transfers)` copy and move `FileTransfer`s within one storage, by default
   `common.cp_files._cp_each_file` and `_mv_each_file`. A storage overrides them with `cp_by_request` or
   `mv_by_request`, and declares `cp_batch_size` or `mv_batch_size`. The recursive copies and moves within one storage
-  send them their files in batches per directory, or by `_CopyJobs.release` in the flat family, unless the caller gives its own `cp_entry` or `mv_entry`. Each error
+  send them their files in batches, as the traversal plans them, or by `_CopyJobs.release` in the flat family, unless the caller gives its own `cp_entry` or `mv_entry`. Each error
   they yield has its source's path as its `source`.
 - `BaseFileSystem`, in `common/filesystem.py`, implements fsspec's API on a `FileOperationHandler`, a required
   argument. Nobody overrides its fsspec methods. Its recursive methods, such as `_rm` and `_copy`, run the handler's
@@ -196,8 +196,13 @@ code: read it before adding a strategy or a handler.
 - A root's failure to list is raised by the traversal. Each strategy decides what it means, as its fsspec method does.
 - A recursive listing that breaks off fails its whole subtree. Nothing is listed again: a storage resumes its own
   listing, e.g. a page by its continuation token.
-- Those that only read build on `tree.find._read`, which handles the root as `_find` does. `rm`, `cp` and `mv` are
-  each a `PathAction` of their own, batching their files per directory.
+- Those that only read build on `tree.find._read`, which handles the root as `_find` does.
+- `rm`, `cp` and `mv` each have a `PathAction` of their own, which only plans:
+  - `map` makes a destination directory where needed;
+  - `reduce` emits each path to delete, copy or move as an event.
+
+  Their operation consumes the events in batches, by `tree.rm._consumed`. Directories are deleted after all below them,
+  by `tree.rm._bottom_up`. The traversal holds at least a batch of events unread.
 
 #### The flat family
 

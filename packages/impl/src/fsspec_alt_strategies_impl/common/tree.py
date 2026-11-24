@@ -41,6 +41,7 @@ import itertools
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import AsyncIterable as AsyncIterableABC
+from contextlib import aclosing
 from functools import partial
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
@@ -359,21 +360,34 @@ class TreeTraversal:
         a CancelledError, that error is raised, with their ExceptionGroup as
         its context.
         """
+        async with aclosing(self.event_batches(tasks, 1)) as batches:
+            async for batch in batches:
+                yield batch[0]
+
+    async def event_batches(
+        self, tasks: Iterable[PathTask], size: int
+    ) -> AsyncGenerator[list[Any]]:
+        """Run ``tasks`` as `events` does, yielding their events in batches: those ready, at most ``size``.
+
+        A batch waits for its first event only, then takes those already
+        emitted. So a consumer acting on each batch, e.g. deleting its paths,
+        reads what the traversal emitted meanwhile, up to ``max_events``.
+        """
         self._start(tasks)
         try:
             while True:
                 if self._closed and self._events.empty():
                     break  # No event is emitted once closed: all are read.
-                event = await self._events.get()
+                batch, event = self._take_ready(await self._events.get(), size)
                 async with self._state:
-                    self._state.notify_all()  # Room for an event more.
+                    self._state.notify_all()  # Room for events more.
+                if batch:
+                    yield batch
                 if isinstance(event, _End):
                     break
                 elif isinstance(event, _Failed):
                     self._initial.discard(event.task)  # Raised: not again.
                     raise event.error
-                else:
-                    yield event
         except GeneratorExit:
             # Closed early by the caller: aclose swallows GeneratorExit, so the
             # closing errors replace it, or they would be lost.
@@ -388,6 +402,16 @@ class TreeTraversal:
                 ext.__context__ = closing
             raise
         await self._aclose()
+
+    def _take_ready(self, event: Any, size: int) -> tuple[list[Any], Any]:
+        """A batch from ``event`` on, of the events ready, at most ``size``: and the traversal's own event ending it, if any."""
+        batch: list[Any] = []
+        while not isinstance(event, (_End, _Failed)):
+            batch.append(event)
+            if len(batch) >= size or self._events.empty():
+                return batch, None
+            event = self._events.get_nowait()
+        return batch, event
 
     def _start(self, tasks: Iterable[PathTask]) -> None:
         """Pend the tasks given to `events`, and start the scheduler: once."""

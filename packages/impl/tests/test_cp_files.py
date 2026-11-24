@@ -95,9 +95,7 @@ async def _found(fs: SimulatedFileSystem, path: str) -> list[str]:
 
 
 @pytest.mark.parametrize("size", [1, 3, 100])
-async def test_tree_copy_in_batches_of_one_directory_each(
-    any_fs: SimulatedFileSystem, size: int
-) -> None:
+async def test_tree_copy_in_batches(any_fs: SimulatedFileSystem, size: int) -> None:
     _tree(any_fs)
     view = _TreeBatching(any_fs, size)
     copied, errors = await _collect_with_errors(_tree_cp(view, view, "data", "out"))
@@ -106,11 +104,10 @@ async def test_tree_copy_in_batches_of_one_directory_each(
     assert await _found(any_fs, "out") == sorted(
         f.replace("data", "out", 1) for f in _FILES
     )
-    # Each file once, each batch of one directory's files, at most size.
+    # Each file once, each batch of files of any directory, at most size.
     assert sorted(p for _, paths in view.batches for p in paths) == sorted(_FILES)
     for _, paths in view.batches:
         assert len(paths) <= size
-        assert len({p.rpartition("/")[0] for p in paths}) == 1
     assert {kind for kind, _ in view.batches} == {"copy"}
 
 
@@ -127,7 +124,7 @@ async def test_tree_move_in_batches_deletes_each_directory_emptied(
     assert not await any_fs._exists("data")
     moves = [p for k, p in view.batches if k == "move"]
     assert sorted(p for paths in moves for p in paths) == sorted(_FILES)
-    assert all(len({p.rpartition("/")[0] for p in paths}) == 1 for paths in moves)
+    assert all(len(paths) <= 3 for paths in moves)
     assert ("data", "out") in moved
 
 
@@ -169,9 +166,8 @@ async def test_a_batch_failing_whole_is_one_error() -> None:
     view.fail = ConnectionResetError("commit")
     copied, errors = await _collect_with_errors(_tree_cp(view, view, "data", "out"))
     assert copied == []
-    # One error per batch, a batch per directory holding files.
-    directories = {f.rpartition("/")[0] for f in _FILES}
-    assert [type(e) for e in errors] == [ConnectionResetError] * len(directories)
+    # One error per batch, each holding files of any directory.
+    assert errors and {type(e) for e in errors} == {ConnectionResetError}
 
 
 async def test_no_batch_between_two_storages_or_with_the_callers_copy() -> None:

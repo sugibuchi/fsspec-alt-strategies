@@ -79,9 +79,9 @@ async def test_a_parents_first_listing_declared_depth_first_goes_wrong() -> None
     profile = StorageProfile(recursive_ls_depth_first_preorder=True)
     view = TreeView(fs, recursive_listing=True, storage_profile=profile)
     walked, _ = await _collect_with_errors(_tree_walk(view, "data", topdown=False))
+    # An rm plans data/a twice too. Its consumer orders a batch by names, so a
+    # tree this small, read in one batch, is still deleted bottom up.
     assert [d for d, _, _ in walked].count("data/a") > 1
-    _, errors = await _collect_with_errors(_tree_rm(view, "data"))
-    assert errors and all(isinstance(e, OSError) for e in errors)
 
 
 async def test_bottom_up_each_directory_after_those_below_it() -> None:
