@@ -470,8 +470,10 @@ class _Sending(PathAction):
         except ValueError as error:
             await self._emit_event((entry, error))
             return None
-        if entry["type"] != "directory" and (twice := self.twice(name, target)):
-            await self._emit_event((entry, twice))
+        if entry["type"] != "directory" and (
+            exists := self.dst_entry_exists(name, target)
+        ):
+            await self._emit_event((entry, exists))
             return None
         return name, target
 
@@ -565,8 +567,8 @@ class _Sending(PathAction):
         """A root file's events, its target placed already."""
         name = _trim(root.entry["name"])
         self.count(files_found=1)
-        if (twice := self.twice(name, root.target)) is not None:
-            return [(root.entry, twice)]
+        if (exists := self.dst_entry_exists(name, root.target)) is not None:
+            return [(root.entry, exists)]
         file = ("file", {**root.entry, "name": name}, root.target, True)
         parent = self.parent(root.target)
         if parent and self.parents_required:
@@ -582,11 +584,24 @@ class _Sending(PathAction):
         """A source path's key, by the source's segments: never verified, as a listing gave it."""
         return tuple(self.src.segments(name))
 
-    def twice(self, name: str, target: StoragePath) -> FileExistsError | None:
-        """The error of a file whose name another took first in its directory, else None."""
+    def dst_entry_exists(
+        self, name: str, target: StoragePath
+    ) -> FileExistsError | None:
+        """The error of a file whose name another took first in its directory, else None.
+
+        Both would go to one place, the second replacing the first, as on a
+        storage holding several items of one name, e.g. Google Drive. The
+        first goes, and each other is refused, as GNU's `cp` refuses two
+        sources onto one destination: it stays where it is, and so does its
+        directory.
+        """
         names = self.names.setdefault(self.key(name)[:-1], set())
         if name in names:
-            return _twice(target)
+            return FileExistsError(
+                errno.EEXIST,
+                "Another file of this name in its directory goes there",
+                target,
+            )
         names.add(name)
         return None
 
@@ -866,16 +881,3 @@ class _Sending(PathAction):
         current = _trim(entry["name"]) or state.current
         self.op.state = replace(state, current=current, errors=state.errors + 1)
         return cast("Exception", error)
-
-
-def _twice(target: StoragePath) -> FileExistsError:
-    """A file listed under the name of another in its directory: never sent.
-
-    Both would go to one place, the second replacing the first, as on a
-    storage holding several items of one name, e.g. Google Drive. The first
-    goes, and each other is refused, as GNU's `cp` refuses two sources onto
-    one destination: it stays where it is, and so does its directory.
-    """
-    return FileExistsError(
-        errno.EEXIST, "Another file of this name in its directory goes there", target
-    )
