@@ -589,9 +589,14 @@ async def test_closing_waits_for_the_moves_sent() -> None:
         async for _ in op:
             break  # The first file: the nine others were sent with it.
     assert fs._in_flight == 0
-    # Not yielded, but counted, and none left half done.
+    # Not yielded, but counted, and none left half done. The batch read held
+    # root's own deletion too, after its files.
+
     assert op.state.files_moved == 10
-    assert fs.stats.calls["copy"] == fs.stats.calls["delete"] == 10
+
+    assert fs.stats.calls["copy"] == 10
+
+    assert fs.stats.calls["delete"] == 11
 
 
 async def test_paths_it_refuses(any_fs: SimulatedFileSystem) -> None:
@@ -617,9 +622,10 @@ async def test_cancel_yields_the_moves_sent() -> None:
     async for pair in op:
         moved.append(pair)
         op.cancel()
-    # All ten were sent together: each is still yielded, and none after.
-    assert len(moved) == fs.stats.calls["copy"] == 10
-    assert await fs._exists("root")
+    # All ten were sent together, in one batch with root's deletion: each is
+    # still yielded, and none after.
+    assert fs.stats.calls["copy"] == 10
+    assert len(moved) == 11 and ("root", "moved") in moved
     assert op.cancelled()
 
 

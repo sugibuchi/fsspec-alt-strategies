@@ -123,8 +123,8 @@ code: read it before adding a strategy or a handler.
   - `parent=`, the destination's parent's entry, as `makedirs` returned it or an `info` found it. `cp_tree` and
     `mv_tree` take it too.
 
-  The flat family keeps them in `_Placement`. The tree family keeps them in each directory's map value, a
-  `tree.cp._Into`.
+  The flat family keeps them in `_Placement`. The tree family's event consumer keeps them, in `tree.cp._Sending`'s
+  `made` and `missing`.
 
   `makedirs` returns the entry of the directory made, or None. Every override of those primitives takes `missing` and
   `parent`, used or not.

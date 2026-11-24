@@ -390,7 +390,7 @@ Two modules serve the strategies changing a storage:
   the items come from.
 
 A tree copy or move takes only its roots from `placement._place_roots`. Below them, each directory's map value, a
-`tree.cp._Into`, places what is in it and keeps its hints. A flat one joins both, as
+`(source, destination)` pair, places what is in it. A flat one joins both, as
 `_CopyOrMove(_CopyJobs, _FlatJobs)`, where `_CopyJobs` is `_Placement` and `_Jobs`.
 
 ### Copies between storages
