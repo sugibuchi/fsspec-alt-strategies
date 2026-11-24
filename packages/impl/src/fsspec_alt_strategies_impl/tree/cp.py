@@ -27,6 +27,7 @@ import contextlib
 import errno
 from contextlib import aclosing
 from dataclasses import replace
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 from fsspec_alt_strategies.states import CpState, MvState
@@ -39,8 +40,8 @@ from ..common.paths import _check_maxdepth, _trim
 from ..common.placement import _place_roots, _Placed, _Root
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
-from .rm import _bottom_up, _Call, _consumed, _events_for, _Key
-from .walk import _MAX_RUNNING, _root_task
+from .rm import _bottom_up, _Call, _consumed, _events_for, _Key, _traversals
+from .walk import _MAX_RUNNING
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -263,10 +264,6 @@ def _transfers(
             batching=batching,
             ils_kwargs=ils_kwargs,
         )
-        if placed.whole:
-            op.state = replace(
-                op.state, **{"roots_renamed" if move else "roots_copied": 0}
-            )
         for error in placed.errors:
             op.state = replace(op.state, errors=op.state.errors + 1)
             yield error
@@ -291,8 +288,9 @@ def _transfers(
         )
         # A path ending with "/" goes as its contents, never whole.
         whole = placed.whole and not (isinstance(path1, str) and path1.endswith("/"))
-        tasks = await _tasks(engine, action, whole, maxdepth, ils_kwargs)
-
+        tasks, errors = await action.root_tasks(engine, whole, ils_kwargs)
+        for error in errors:
+            yield action.outcome(error)
         try:
             outcomes = _consumed(engine, tasks, action.consume)
             async with aclosing(outcomes):
@@ -302,70 +300,10 @@ def _transfers(
             # The one root, a file: it goes alone.
             if op.cancelling() or not isinstance(path1, str):
                 return
-            for event in await action.file_root(placed.directories[0]):
+            for event in await action.file_root():
                 yield action.outcome(event)
 
     return Operation(run, state)
-
-
-async def _tasks(
-    engine: TreeTraversal,
-    action: _Sending,
-    whole: bool,
-    maxdepth: int | None,
-    ils_kwargs: dict[str, Any] | None,
-) -> list[PathTask]:
-    """A task per root: one going whole, a traversal, or a file's.
-
-    A root goes whole to a target found missing. One whose target exists
-    merges into it, so it is traversed. One whose target could not be asked
-    yields that error, and stays where it is. Below a pattern's match,
-    ``maxdepth`` counts one less.
-    """
-    directories = action.placed.directories
-    goes: list[bool | Exception] = [False] * len(directories)
-    if whole:
-        goes = list(await asyncio.gather(*(action.goes_whole(d) for d in directories)))
-
-    tasks: list[PathTask] = []
-    for root, outcome in zip(directories, goes, strict=True):
-        if isinstance(outcome, Exception):
-            continue  # Yielded by the last task, as found.
-        if outcome:
-            tasks.append(_Call(engine, root.entry, _on(action.plan_whole, root)))
-            continue
-        depth = maxdepth
-        if depth is not None and root.matched:
-            depth -= 1
-        tasks.append(
-            _root_task(
-                engine,
-                {**root.entry, "type": "directory"},
-                action,
-                action.src,
-                maxdepth=depth,
-                ils_kwargs=ils_kwargs,
-            )
-        )
-    tasks.extend(
-        _Call(engine, root.entry, _on(action.plan_root, root))
-        for root in action.placed.files
-    )
-    errors = [o for o in goes if isinstance(o, Exception)]
-    if errors:
-        tasks.append(_Call(engine, {"name": ""}, lambda _: action.emit_all(errors)))
-    return tasks
-
-
-def _on(
-    call: Callable[[_Root], Awaitable[Any]], root: _Root
-) -> Callable[[Entry], Awaitable[Any]]:
-    """A `_Call`'s call on a placed root, rather than on its entry."""
-
-    async def run(_: Entry) -> Any:
-        return await call(root)
-
-    return run
 
 
 class _Sending(PathAction):
@@ -457,6 +395,8 @@ class _Sending(PathAction):
                 self.made[parent] = root.parent
         # The outcomes of the batch consumed.
         self.out: list[Any] = []
+        if placed.whole:
+            self.count(**{"roots_renamed" if move else "roots_copied": 0})
 
     # The traversal's calls: they plan.
 
@@ -529,6 +469,48 @@ class _Sending(PathAction):
 
     # The roots.
 
+    async def root_tasks(
+        self, engine: TreeTraversal, whole: bool, ils_kwargs: dict[str, Any] | None
+    ) -> tuple[list[PathTask], list[Any]]:
+        """A task per root: a traversal, one going whole, or a file's; and the error of each root whose target could not be asked.
+
+        With ``whole``, a directory root goes whole to a target found
+        missing. One whose target exists merges into it, so it is traversed.
+        One whose target could not be asked stays where it is.
+        """
+        traversed = list(self.placed.directories)
+        wholes: list[_Root] = []
+        errors: list[Any] = []
+        if whole:
+            goes = await asyncio.gather(*(self.goes_whole(d) for d in traversed))
+            for root, outcome in zip(list(traversed), goes, strict=True):
+                if outcome is not False:
+                    traversed.remove(root)
+                    if outcome is True:
+                        wholes.append(root)
+                    else:
+                        errors.append((root.entry, outcome))
+        tasks = _traversals(
+            engine,
+            self,
+            self.src,
+            [(r.entry, r.matched) for r in traversed],
+            maxdepth=self.maxdepth,
+            ils_kwargs=ils_kwargs,
+        )
+        tasks += [_Call(engine, r.target, partial(self.plan_whole, r)) for r in wholes]
+        tasks += [
+            _Call(engine, r.target, partial(self.plan_root, r))
+            for r in self.placed.files
+        ]
+        return tasks, errors
+
+    async def file_root(self) -> list[Any]:
+        """The outcomes of the one root, found a file once the traversal ended: it goes alone."""
+        root = self.placed.directories[0]
+        root = root._replace(entry={**root.entry, "type": "file"})
+        return await self.consume(self.plan_root_file(root))
+
     async def goes_whole(self, root: _Root) -> bool | Exception:
         """Whether a root can go whole, as its target is missing: an error asking is returned."""
         if root.missing:
@@ -558,11 +540,6 @@ class _Sending(PathAction):
         for event in self.plan_root_file(root):
             await self._emit_event(event)
 
-    async def file_root(self, root: _Root) -> list[Any]:
-        """The outcomes of the one root, found a file once the traversal ended: it goes alone."""
-        entry = {**root.entry, "type": "file"}
-        return await self.consume(self.plan_root_file(root._replace(entry=entry)))
-
     def plan_root_file(self, root: _Root) -> list[Any]:
         """A root file's events, its target placed already."""
         name = _trim(root.entry["name"])
@@ -574,11 +551,6 @@ class _Sending(PathAction):
         if parent and self.parents_required:
             return [("mkdir", name, parent), file]
         return [file]
-
-    async def emit_all(self, errors: list[Exception]) -> None:
-        """Emit the errors of roots whose target could not be asked."""
-        for error in errors:
-            await self._emit_event(({"name": ""}, error))
 
     def key(self, name: str) -> _Key:
         """A source path's key, by the source's segments: never verified, as a listing gave it."""
