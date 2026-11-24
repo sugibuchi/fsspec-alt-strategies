@@ -624,9 +624,9 @@ class _Sending(PathAction):
                 self.out.append(event)
         if self.parents_first:
             for source, path in mkdirs:  # In order: each after its parent.
-                await self.make(source, path)
+                await self.make_dst_dir(source, path)
         else:
-            await asyncio.gather(*(self.make(s, p) for s, p in mkdirs))
+            await asyncio.gather(*(self.make_dst_dir(s, p) for s, p in mkdirs))
         sending = asyncio.ensure_future(self.send_files(files))
         try:
             holding = {self.key(f[0]["name"])[:-1] for f in files}
@@ -656,7 +656,7 @@ class _Sending(PathAction):
             path = self.parent(cast("StoragePath", path))
         return False
 
-    async def make(self, source: str, path: StoragePath) -> None:
+    async def make_dst_dir(self, source: str, path: StoragePath) -> None:
         """Make a destination directory once, keeping its entry: its error, if any, yielded as ``source``'s.
 
         One below a directory failing to be made is not tried: its error tells.
@@ -683,7 +683,7 @@ class _Sending(PathAction):
                 parent=self.made.get(parent),
             )
 
-        if await self.write(mkdir, {"name": source}):
+        if await self.write_limited(mkdir, {"name": source}):
             self.made[path] = made
         else:
             self.unmade.add(path)
@@ -700,8 +700,11 @@ class _Sending(PathAction):
         batched = [f for f in ready if not f[4] and self.batching]
         size = self.batch_size
         outcomes = await asyncio.gather(
-            *(self.send(batched[i : i + size]) for i in range(0, len(batched), size)),
-            *(self.one(*f[:4]) for f in alone),
+            *(
+                self.transfer_batch(batched[i : i + size])
+                for i in range(0, len(batched), size)
+            ),
+            *(self.transfer_file(*f[:4]) for f in alone),
         )
         gone = {name for names in outcomes for name in names}
         self.kept.update(
@@ -727,14 +730,14 @@ class _Sending(PathAction):
         async def send() -> None:
             await primitive(entry, target, parent=hint)
 
-        if not await self.write(send, entry):
+        if not await self.write_limited(send, entry):
             return False
         field = "roots_renamed" if self.move else "roots_copied"
         self.count(**{field: 1})
         self.out.append(("done", name, target))
         return True
 
-    async def one(
+    async def transfer_file(
         self, entry: Entry, target: StoragePath, hint: Entry | None, missing: bool
     ) -> list[str]:
         """Send a file by the transfer, replacing a file there the destination keeps: its name, if it went."""
@@ -747,7 +750,7 @@ class _Sending(PathAction):
                     raise
                 await self.replace_file(entry, target, hint, refused)
 
-        if not await self.write(send, entry):
+        if not await self.write_limited(send, entry):
             return []
         self.count(**{"files_moved" if self.move else "files_copied": 1})
         self.out.append(("done", entry["name"], target))
@@ -770,11 +773,11 @@ class _Sending(PathAction):
         await self.dst.rm_file({**found, "name": target})
         await self.transfer(entry, target, parent=hint)
 
-    async def send(self, waiting: list[tuple[Any, ...]]) -> list[str]:
+    async def transfer_batch(self, waiting: list[tuple[Any, ...]]) -> list[str]:
         """Send files by the source's ``cp_files`` or ``mv_files``: the names of those gone.
 
         A copy refused by a destination not overwriting is replaced on its own,
-        as `one` replaces it. A batch failing whole emits one error.
+        as `transfer_file` replaces it. A batch failing whole emits one error.
         """
         if self.op.cancelling():
             return []
@@ -805,9 +808,9 @@ class _Sending(PathAction):
         except Exception as error:
             self.out.append((waiting[0][0], error))
             return []
-        return await self.settle(waiting, outcomes, apart)
+        return await self.record_batch(waiting, outcomes, apart)
 
-    async def settle(
+    async def record_batch(
         self,
         waiting: list[tuple[Any, ...]],
         outcomes: dict[str, Exception | None],
@@ -818,7 +821,7 @@ class _Sending(PathAction):
         for entry, target, hint, missing, _ in waiting:
             error = outcomes.get(entry["name"], asyncio.CancelledError())
             if isinstance(error, FileExistsError) and not self.move:
-                gone += await self.one(entry, target, hint, missing)
+                gone += await self.transfer_file(entry, target, hint, missing)
             elif error is None:
                 self.count(**{"files_moved" if self.move else "files_copied": 1})
                 self.out.append(("done", entry["name"], target))
@@ -838,13 +841,15 @@ class _Sending(PathAction):
                 with contextlib.suppress(FileNotFoundError):
                     await self.src.rmdir({**entry, "name": name})
 
-            if not await self.write(rmdir, entry):
+            if not await self.write_limited(rmdir, entry):
                 return False
         self.count(directories_moved=1)
         self.out.append(("done", name, target))
         return True
 
-    async def write(self, request: Callable[[], Awaitable[None]], entry: Entry) -> bool:
+    async def write_limited(
+        self, request: Callable[[], Awaitable[None]], entry: Entry
+    ) -> bool:
         """Run a request under a permit, to its end even when closed: whether it went.
 
         None starts once cancelled. An error is reported, and it did not go.
