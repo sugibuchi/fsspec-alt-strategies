@@ -17,8 +17,9 @@ Three limits bound it:
   runs does not count, so that parents never hold every slot while their
   children wait. Once its children are done, it counts again, so the tasks
   running may briefly exceed it.
-- ``max_pending``: the tasks waiting to start. A task adding more waits for
-  room, which bounds the memory of a wide directory.
+- ``max_pending``: the tasks waiting to start, with those done whose results
+  the task adding them has not read. A task adding more waits for room,
+  which bounds the memory of a wide directory, however slowly it reads.
 - ``max_events``: the events not yet read. A task emitting more waits, so a
   slow caller slows the traversal. The traversal's own, its end and a
   failure, never wait: so finishing a task never blocks.
@@ -38,6 +39,7 @@ import asyncio
 import heapq
 import itertools
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import AsyncIterable as AsyncIterableABC
 from functools import partial
 from typing import TYPE_CHECKING, Any, Self, TypeVar
@@ -149,7 +151,7 @@ class PathTaskGroup:
         self._remaining: set[PathTask] = set()
         # The tasks done, in the order they ended, which the caller has not
         # taken yet.
-        self._done_tasks: list[PathTask] = []
+        self._done_tasks: deque[PathTask] = deque()
         # Every task is taken: no more comes.
         self._add_tasks_done = False
 
@@ -175,10 +177,13 @@ class PathTaskGroup:
         """Whether tasks done wait to be taken."""
         return bool(self._done_tasks)
 
-    def take_done(self) -> list[PathTask]:
-        """The tasks done since the last call, in the order they ended."""
-        done, self._done_tasks = self._done_tasks, []
-        return done
+    def unread(self) -> int:
+        """How many tasks are done, their results not yet taken: they hold memory, and count against ``max_pending``."""
+        return len(self._done_tasks)
+
+    def take_done(self) -> PathTask | None:
+        """The first task done not yet taken, in the order they ended: None if none."""
+        return self._done_tasks.popleft() if self._done_tasks else None
 
     def done(self) -> bool:
         """Whether every task is taken and done."""
@@ -583,8 +588,13 @@ class TreeTraversal:
             if task.done():
                 task._tell_group()  # Cancelled already: nothing to run.
                 return
+            # The group's results not yet read count too: a caller reading
+            # slowly pauses its own stream, holding no slot.
             await self._state.wait_for(
-                lambda: self._stopping or len(self._pending_tasks) < self.max_pending
+                lambda: (
+                    self._stopping
+                    or len(self._pending_tasks) + group.unread() < self.max_pending
+                )
             )
             if self._stopping:
                 task._cancelled = True  # Never runs: its parent sees it done.
@@ -608,10 +618,12 @@ class TreeTraversal:
                 self._state.notify_all()
         return None
 
-    async def _wait_ready(self, group: PathTaskGroup) -> tuple[list[PathTask], bool]:
-        """Wait for tasks of a group done, not yet read: them, and whether all are.
+    async def _wait_ready(self, group: PathTaskGroup) -> PathTask | None:
+        """Wait for a task of a group done, not yet read: it, or None once all are done and read.
 
-        Its caller counts no more against ``max_running`` while it waits.
+        One at a time: those left unread count against ``max_pending``, so
+        that a caller reading slowly pauses its stream. Its caller counts no
+        more against ``max_running`` while it waits.
         """
         async with self._state:
             self._waiting_tasks.add(group.caller)
@@ -621,7 +633,7 @@ class TreeTraversal:
             finally:
                 self._waiting_tasks.discard(group.caller)
                 self._state.notify_all()
-            return group.take_done(), group.done()
+            return group.take_done()
 
     async def _run_tasks(
         self, caller: PathTask, tasks: Iterable[PathTask] | AsyncIterable[PathTask]
@@ -656,17 +668,17 @@ class TreeTraversal:
         cancelled = False
         errors: list[BaseException] = []
         try:
-            finished = False
-            while not finished:
-                ready, finished = await self._wait_ready(group)
-                count += len(ready)
-                for task in ready:
-                    if task.cancelled():
-                        cancelled = True
-                    elif (error := task.exception()) is not None:
-                        errors.append(error)
-                    else:
-                        yield task.result()
+            while True:
+                task = await self._wait_ready(group)
+                if task is None:
+                    break  # All done, and read.
+                count += 1
+                if task.cancelled():
+                    cancelled = True
+                elif (error := task.exception()) is not None:
+                    errors.append(error)
+                else:
+                    yield task.result()
             failed = await adding
         finally:
             if not adding.done():
