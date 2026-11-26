@@ -12,6 +12,7 @@ from fsspec.callbacks import Callback
 from fsspec_alt_strategies.monitor import Call, Monitor, monitoring
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem
+from fsspec_alt_strategies_impl.common.listing import implied_directories
 from fsspec_alt_strategies_impl.common.rm_files import rm_by_request
 from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
@@ -22,7 +23,7 @@ from fsspec_alt_strategies_impl.files.fsspec_transaction import (
     AdaptiveWritableTransaction,
     TransactionFile,
 )
-from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
+from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -79,11 +80,13 @@ async def _open_file(
     return _Writer(inner, path, **kwargs)
 
 
-class _FlatHandler(FlatFileOperationHandler):
-    """A simulated object store's primitives, as a flat handler."""
+class _FlatHandler(TreeFileOperationHandler):
+    """A simulated object store's primitives, listing keys."""
 
     protocol = "flattest"
-    profile = StorageProfile()
+    profile = StorageProfile(
+        implicit_directories=True, recursive_ls=True, recursive_ls_with_prefix=True
+    )
     rm_batch_size = 2
 
     def __init__(
@@ -101,23 +104,30 @@ class _FlatHandler(FlatFileOperationHandler):
     def verify_path(self, path: str) -> None:
         """Nothing: the simulated storage takes any path."""
 
-    def ils(  # type: ignore[override]
-        self,
-        entry: dict[str, Any],
-        recursive: bool = False,
-        *,
-        prefix: str = "",
-        **kwargs: Any,
-    ) -> AsyncIterator[dict[str, Any]]:
-        path = entry["name"]
-        if recursive:
-            return self.inner._list_prefix(f"{path}/{prefix}" if path else prefix)  # type: ignore[no-any-return]
-        else:
-            return self._ls(path)
-
-    async def _ls(self, path: str) -> AsyncIterator[dict[str, Any]]:
-        for listed in await self.inner._ls(path, detail=True):
+    async def ils(self, entry: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
+        for listed in await self.inner._ls(entry["name"], detail=True):
             yield listed
+
+    def ils_recursive(
+        self, entry: dict[str, Any], prefix: bool = False
+    ) -> AsyncIterator[dict[str, Any]]:
+        name = entry["name"]
+        if prefix:
+            keys = self.inner._list_prefix(name)
+            return implied_directories(keys, name.rpartition("/")[0])
+        else:
+            return implied_directories(self._keys(name), name)
+
+    async def _keys(self, name: str) -> AsyncIterator[dict[str, Any]]:
+        # As ils_recursive must: a file lists itself, a missing one raises.
+        listed = False
+        async for key in self.inner._list_prefix(f"{name}/" if name else ""):
+            listed = True
+            yield key
+        if not listed and name:
+            found = await self.inner._info(name)
+            if found["type"] != "directory":
+                yield found
 
     def rm_files(self, entries: list[dict[str, Any]]) -> Any:
         # One request per batch, as an object store deletes keys.
@@ -219,7 +229,7 @@ class _Flat(BaseFileSystem):
         super().__init__(handler, **kwargs)
 
 
-def _on(handler: FlatFileOperationHandler) -> Any:
+def _on(handler: TreeFileOperationHandler) -> Any:
     """A BaseFileSystem on a handler, async."""
     return BaseFileSystem(handler, asynchronous=True)
 
@@ -294,8 +304,9 @@ async def test_walk_answers_as_fsspec(
 async def test_walk_lists_once(inner: SimulatedFileSystem) -> None:
     fs = _Flat(inner, asynchronous=True)
     inner.reset_stats()
-    assert len([t async for t in fs._walk("data")]) == 1 + 6
-    assert inner.stats.calls == {"list": 1}  # fsspec's lists each of the 7 directories.
+    # Bottom up, by one listing: fsspec's lists each of the 7 directories.
+    assert len([t async for t in fs._walk("data", topdown=False)]) == 1 + 6
+    assert inner.stats.calls == {"list": 1}
 
 
 async def test_recursive_rm_copy_and_mv(fs: _Flat, inner: SimulatedFileSystem) -> None:
@@ -336,7 +347,8 @@ async def test_a_file_moves_as_the_profile_says_when_not_recursive(
     fs = _on(Renaming(inner))
     inner.reset_stats()
     await fs._mv("data/README.md", "moved.md")
-    assert renamed == ([("data/README.md", "moved.md")] if renames_files else [])
+    # Unknown, a file moves by mv_file too: right on any storage.
+    assert renamed == [("data/README.md", "moved.md")]
     assert inner._file_data["moved.md"].data == b"x" * 10
     assert "data/README.md" not in inner._file_data
 
@@ -376,9 +388,10 @@ async def test_monitors_and_fsspec_callback_watch_the_calls(fs: _Flat) -> None:
         assert len([t async for t in fs._walk("data")]) == 7
         await fs._rm("data", recursive=True, callback=callback)
     assert monitor.calls == ["walk", "rm"]
-    assert callback.value == len(_FILES)
-    # The walk's directories, then the files deleted.
-    assert monitor.items == 7 + len(_FILES)
+    # The files deleted, and the root, which may have a marker.
+    assert callback.value == len(_FILES) + 1
+    # The walk's directories, then the paths deleted.
+    assert monitor.items == 7 + len(_FILES) + 1
 
 
 @pytest.mark.parametrize("primitive", ["rmdir", "makedirs"])
@@ -387,7 +400,7 @@ def test_a_handler_missing_a_primitive_is_refused(primitive: str) -> None:
     incomplete = type(
         "Incomplete",
         (_FlatHandler,),
-        {primitive: getattr(FlatFileOperationHandler, primitive)},
+        {primitive: getattr(TreeFileOperationHandler, primitive)},
     )
 
     with pytest.raises(TypeError, match=primitive):

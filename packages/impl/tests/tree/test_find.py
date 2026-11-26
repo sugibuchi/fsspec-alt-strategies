@@ -178,7 +178,7 @@ async def test_a_recursive_listing_broken_off_yields_its_error(
     fs.cut_after = cut_after
     _tree(fs)
     # Declared, so that the tree is streamed by its one listing.
-    profile = StorageProfile(recursive_ls_depth_first_preorder=True)
+    profile = StorageProfile(recursive_ls=True)
     view = TreeView(fs, recursive_listing=True, storage_profile=profile)
     op = _tree_find(view, "data", withdirs=withdirs)
     entries, errors = await _collect_with_errors(op)

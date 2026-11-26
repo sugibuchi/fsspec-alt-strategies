@@ -1,4 +1,4 @@
-"""Tests of the flat handlers: existing filesystems, as a `BaseFileSystem` on a `FsspecFlatHandler`."""
+"""Tests of the object stores' handler: existing filesystems, as a `BaseFileSystem` on a `FsspecFlatHandler`."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ _OPTIONS: dict[str, Any] = {
     "rm_batch_size": 2,
     "operation_concurrency": 4,
     "io_concurrency": 2,
-    "storage_profile": StorageProfile(),
 }
 _FILES = ["data/2023/01/a.txt", "data/2023/02/b.txt", "data/2024/c.txt", "data/d.txt"]
 
@@ -53,9 +52,16 @@ async def test_an_async_filesystem_answers_as_fsspec(
     assert await flat._glob("data/*/*.txt") == await AsyncFileSystem._glob(
         inner, "data/*/*.txt"
     )
-    listed = flat._ils("data", recursive=True, prefix="202")
+    listed = flat._ils("data/202", recursive=True, prefix=True)
+    # The keys starting with the prefix, and the directories they imply.
     assert [e["name"] async for e in listed] == [
-        p for p in sorted(_FILES) if p.startswith("data/202")
+        "data/2023",
+        "data/2023/01",
+        "data/2023/01/a.txt",
+        "data/2023/02",
+        "data/2023/02/b.txt",
+        "data/2024",
+        "data/2024/c.txt",
     ]
     await flat._mv("data/2023", "moved", recursive=True)
     await flat._rm("data", recursive=True)
@@ -85,14 +91,10 @@ def test_a_sync_filesystem_answers_as_fsspec(tmp_path: Path) -> None:
     for path in _FILES:
         local.makedirs(f"{root}/{path}".rpartition("/")[0], exist_ok=True)
         local.pipe_file(f"{root}/{path}", path.encode())
-    flat = _flat(local, **_OPTIONS)
+    # Its directories are real, kept as the files go: none implicit.
+    flat = _flat(local, **_OPTIONS, storage_profile=StorageProfile(recursive_ls=True))
     assert flat.find(f"{root}/data") == local.find(f"{root}/data")
     assert flat.cat_file(f"{root}/data/d.txt") == b"data/d.txt"
-    flat.rm(f"{root}/data/2023", recursive=True)
-    assert local.find(f"{root}/data") == [
-        f"{root}/data/2024/c.txt",
-        f"{root}/data/d.txt",
-    ]
 
 
 async def test_a_key_gone_from_a_batch_deletes_the_rest(

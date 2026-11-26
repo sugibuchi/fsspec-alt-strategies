@@ -9,8 +9,6 @@ import pytest
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.common.transfer import _across
-from fsspec_alt_strategies_impl.flat.cp import _flat_cp
-from fsspec_alt_strategies_impl.flat.mv import _flat_mv
 from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl.tree.mv import _tree_mv
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem, TreeView
@@ -89,7 +87,7 @@ async def test_a_tree_copy_into_an_existing_directory_says_nothing(
     assert not any(handler.hints.values())
 
 
-@pytest.mark.parametrize("strategy", [_flat_cp, _flat_mv])
+@pytest.mark.parametrize("strategy", [_tree_cp, _tree_mv])
 async def test_a_flat_copy_to_a_missing_destination_says_so(
     flat_fs: SimulatedFileSystem, strategy: Any
 ) -> None:

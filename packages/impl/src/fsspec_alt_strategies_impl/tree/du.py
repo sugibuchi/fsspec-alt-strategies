@@ -54,14 +54,14 @@ def _tree_du(
     root's too, and the rest of the tree is still measured.
 
     It wins over fsspec's ``_du`` on any storage, as it sends no ``info`` per
-    file. Where the handler's profile declares
-    ``recursive_ls_depth_first_preorder``, e.g. an object store listing a
-    whole tree in one paginated request, it sends that one listing, as summing
-    the sizes from fsspec's ``_find`` with ``detail=True`` would.
+    file. Where the handler's profile declares ``recursive_ls``, e.g. an
+    object store listing a whole tree in one paginated request, it sends that
+    one listing, as summing the sizes from fsspec's ``_find`` with
+    ``detail=True`` would.
 
     Once cancelled, it starts no new directory, and counts those started.
 
-    Requests: one recursive ``ils`` of ``path``, as above, or one ``ils`` per
+    Requests: one ``ils_recursive`` of ``path``, as above, or one ``ils`` per
     directory, each page holding a permit of the handler's
     ``operation_limit``. One ``info`` for ``path``, if a file.
 

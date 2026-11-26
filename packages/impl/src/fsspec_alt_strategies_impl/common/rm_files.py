@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The deletion of files the caller found, a handler's ``rm_files``: by ``rm_file`` each, or by one request.
 
-`_rm_each_file` is the default of both families' handlers: each file by the
+`_rm_each_file` is the default of every handler: each file by the
 handler's ``rm_file``, as many at once as its ``operation_limit`` allows. A
 storage deleting several files by one request, e.g. S3's DeleteObjects or
 Azure's Blob Batch, overrides ``rm_files`` with `rm_by_request`, given that
@@ -143,7 +143,7 @@ def rm_by_request(
 
     Examples
     --------
-    >>> class MyHandler(FlatFileOperationHandler):
+    >>> class MyHandler(TreeFileOperationHandler):
     ...     rm_batch_size = 1000
     ...
     ...     def rm_files(self, entries):

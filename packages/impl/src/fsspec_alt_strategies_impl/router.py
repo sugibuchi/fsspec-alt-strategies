@@ -687,7 +687,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         """The roots of a list copied or moved into ``destination``, each name once.
 
         Each root goes to the destination under its name, whatever its
-        storage, as a family's copy of a list places it. Two roots of one name
+        storage, as a strategy's copy of a list places it. Two roots of one name
         would go to the same place: as there, the first in path order goes,
         and each other is a FileExistsError. Roots in different storages are
         checked here, as no inner filesystem sees them both. A pattern is
@@ -769,7 +769,7 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
 
         fsspec's calls ``_cat_file`` once per range. This gives each inner
         filesystem its ranges in one ``_cat_ranges``, all at once, so that a
-        filesystem merging nearby ranges, as the families' do, merges them. A
+        filesystem merging nearby ranges, as the handlers' do, merges them. A
         path no storage has, or above them, fails in place of its range. The
         answers come in the order asked, as fsspec's do.
         """

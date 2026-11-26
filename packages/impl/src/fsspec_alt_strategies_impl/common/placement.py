@@ -6,8 +6,7 @@
 onto the destination: by its ``join``, folded on a storage whose names are
 not case-sensitive. It keeps what it learns of the destination on the way:
 the paths found missing or existing, the directories made, and their
-entries, which the primitives take as hints. A flat copy joins it with the
-flat jobs, as `jobs._CopyJobs`.
+entries, which the primitives take as hints.
 
 `_place_roots` gives a tree copy its roots alone, each a `_Root` with what is
 known of its target. The traversal places what is below them.
@@ -129,7 +128,7 @@ class _Placement:
     found it already, e.g. to tell a file. A file's is then a root known to be
     a file, not listed to find what it is.
 
-    ``glob`` is the family's glob of a pattern, within ``maxdepth``, which
+    ``glob`` is the strategy's glob of a pattern, within ``maxdepth``, which
     finds the roots of patterns and lists. With ``batching``, `setup` reads
     the source's ``cp_batch_size``, or ``mv_batch_size`` where ``transfers``
     is "move", into ``transfer_batch_size``.

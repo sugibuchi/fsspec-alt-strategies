@@ -1,25 +1,26 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""Existing filesystems, wrapped as a `FlatFileOperationHandler`.
+"""Existing object stores, wrapped as a `TreeFileOperationHandler` listing keys.
 
-`FsspecFlatHandler` wraps an fsspec filesystem, async or sync, so that a
-`FileSystemWrapper` on it answers its recursive methods by the flat
-strategies.
+`FsspecFlatHandler` wraps an fsspec filesystem, async or sync, of an object
+store, so that a `FileSystemWrapper` on it answers its recursive methods by
+the tree strategies, a subtree by one listing.
 
-fsspec has no listing by prefix in pages, which the flat strategies list with.
-The handler's recursive ``ils`` lists with the wrapped filesystem's ``find``
-of the directory, which object stores answer in one paginated listing. That
-costs twice:
+fsspec has no listing by prefix in pages. The handler's ``ils_recursive``
+lists with the wrapped filesystem's ``find`` of the directory, which object
+stores answer in one paginated listing, its directories made up by
+`implied_directories`. That costs twice:
 
 - ``find`` returns the whole listing at once, so the strategies start only
   once all of it has arrived, and it is held in memory, not streamed.
-- It lists the whole directory: for "data" with the prefix "2024-", all of
-  "data/", the keys not starting with the prefix then left out.
+- A prefix lists its whole directory: for "data/2024-", all of "data/", the
+  keys not starting with the prefix then left out.
 
-A subclass overriding recursive ``ils`` with the storage's own listing by
+A subclass overriding ``ils_recursive`` with the storage's own listing by
 prefix, e.g. from its SDK, streams it page by page, and lists only the prefix.
 
-This module depends on `_base`, `rm_files` of `common`, and `handler` of `flat`.
+This module depends on `_base`, `listing` and `rm_files` of `common`, and
+`handler` of `tree`.
 """
 
 from __future__ import annotations
@@ -28,8 +29,11 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
 
+from fsspec_alt_strategies.profile import StorageProfile
+
+from ..common.listing import implied_directories
 from ..common.rm_files import rm_by_request
-from ..flat.handler import FlatFileOperationHandler
+from ..tree.handler import TreeFileOperationHandler
 from ._base import _FsspecHandler
 
 if TYPE_CHECKING:
@@ -37,7 +41,6 @@ if TYPE_CHECKING:
 
     from fsspec import AbstractFileSystem
 
-    from fsspec_alt_strategies.profile import StorageProfile
     from fsspec_alt_strategies.states import RmState
 
     from ..common.handler import Entry
@@ -46,20 +49,24 @@ if TYPE_CHECKING:
 __all__ = ["FsspecFlatHandler"]
 
 
-class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
-    """An fsspec filesystem, async or sync, as a flat handler.
+class FsspecFlatHandler(_FsspecHandler, TreeFileOperationHandler):
+    """An fsspec filesystem of an object store, async or sync, as a handler listing keys.
 
-    Its primitives, such as ``info``, ``cp_file`` and ``mv_file``, are the
-    wrapped filesystem's: its async methods, awaited on its loop, where its
-    ``async_impl`` says it has them, else its sync ones, each in a thread. So
-    are its data methods, such as ``cat_file``, and its files.
+    Its primitives, such as ``ils``, ``info``, ``cp_file`` and ``mv_file``,
+    are the wrapped filesystem's: its async methods, awaited on its loop,
+    where its ``async_impl`` says it has them, else its sync ones, each in a
+    thread. So are its data methods, such as ``cat_file``, and its files.
 
-    Its recursive ``ils`` lists with the wrapped one's ``find`` of the
-    directory. Its ``rm_files`` gives a batch, of ``rm_batch_size``, to the wrapped one's ``rm``,
-    which s3fs, e.g., deletes in one request. That ``rm`` tells no key apart,
-    so any failure but a missing key fails the whole batch.
+    Its ``ils_recursive`` lists with the wrapped one's ``find`` of the
+    directory. Its profile declares by default what an object store does:
+    ``implicit_directories``, ``recursive_ls`` and
+    ``recursive_ls_with_prefix``. A profile given declares them itself. Its
+    ``rm_files`` gives a batch, of ``rm_batch_size``, to the wrapped one's
+    ``rm``, which s3fs, e.g., deletes in one request. That ``rm`` tells no
+    key apart, so any failure but a missing key fails the whole batch. Its
+    ``rmdir`` deletes a directory's marker so.
 
-    It wins on object stores, as the flat strategies do. A
+    It wins on object stores, listing a subtree in one request. A
     `FileSystemWrapper` made on it is not cached: each is new, and may be
     dropped once used.
 
@@ -74,7 +81,8 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
         The data methods' calls at a time, such as ``cat_file``: 1 by default.
         A semaphore is used as it is, shared with what else holds it.
     storage_profile : StorageProfile, optional
-        What the storage does: unknown by default.
+        What the storage does: by default, an object store's, listing by
+        ``find``.
     rm_batch_size : int, optional
         The most keys the wrapped ``rm`` is given at once, e.g. 1000 on S3: 1
         by default.
@@ -106,6 +114,10 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
     ...     flat.rm("bucket/data/2024", recursive=True)
     """
 
+    profile = StorageProfile(
+        implicit_directories=True, recursive_ls=True, recursive_ls_with_prefix=True
+    )
+
     def __init__(
         self,
         fs: AbstractFileSystem,
@@ -131,22 +143,37 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
         if mv_batch_size is not None:
             self.mv_batch_size = mv_batch_size
 
-    def ils(
-        self, entry: Entry, recursive: bool = False, *, prefix: str = "", **kwargs: Any
+    def ils_recursive(
+        self, entry: Entry, prefix: bool = False, **kwargs: Any
     ) -> AsyncIterator[Entry]:
-        if recursive:
-            return self._find(entry, prefix, **kwargs)
-        else:
-            return super().ils(entry, **kwargs)
+        """List all below a directory, or all starting with a prefix, by the wrapped one's ``find``: ``kwargs`` go to it."""
+        name = entry["name"]
+        top = name.rpartition("/")[0] if prefix else name
+        return implied_directories(self._find(name, top, prefix, **kwargs), top)
 
     async def _find(
-        self, entry: Entry, prefix: str = "", **kwargs: Any
+        self, name: str, top: str, prefix: bool, **kwargs: Any
     ) -> AsyncIterator[Entry]:
+        """The keys below ``top``, starting with ``name`` for a prefix, in name order."""
         # fsspec has no listing in pages: the wrapped one's find, all at once.
-        path = entry["name"]
-        found = await self.call("find", path, detail=True, **kwargs)
-        for listed in _starting(list(found.values()), path, prefix):
-            yield listed
+        if not prefix:
+            found = await self.call("find", name, detail=True, **kwargs)
+            if not found:
+                await self.call("info", name)  # Missing, it raises FileNotFoundError.
+            for listed in sorted(found.values(), key=_name):
+                yield listed
+            return
+        try:
+            found = await self.call("find", top, detail=True, **kwargs)
+        except FileNotFoundError:
+            return  # Nothing starts with the prefix.
+        for listed in sorted(found.values(), key=_name):
+            if listed["name"].startswith(name):
+                yield listed
+
+    async def rmdir(self, entry: Entry) -> None:
+        """Delete a directory's marker, the key of its name and "/", by the wrapped one's ``rm``: none is no error."""
+        await self._rm_batch([{**entry, "name": f"{entry['name']}/"}])
 
     def rm_files(self, entries: list[Entry]) -> Operation[str, RmState]:
         # A batch by one call of the wrapped one's rm: see _rm_batch.
@@ -168,13 +195,5 @@ class FsspecFlatHandler(_FsspecHandler, FlatFileOperationHandler):
             await self.call("rm_file", path)
 
 
-def _starting(
-    listing: list[dict[str, Any]], path: str, prefix: str
-) -> list[dict[str, Any]]:
-    """A listing's entries starting with ``path/prefix``, in name order, as recursive ``ils`` yields them."""
-    if not prefix:
-        return sorted(listing, key=lambda e: e["name"])
-    start = f"{path}/{prefix}" if path else prefix
-    return sorted(
-        (e for e in listing if e["name"].startswith(start)), key=lambda e: e["name"]
-    )
+def _name(entry: Entry) -> str:
+    return entry["name"]

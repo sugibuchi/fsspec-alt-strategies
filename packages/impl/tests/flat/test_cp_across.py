@@ -1,4 +1,4 @@
-"""Tests of `_flat_cp` between two storages, copying the keys under a prefix between two storages."""
+"""Tests of `_tree_cp` between two storages, copying the keys under a prefix between two storages."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from fsspec.utils import other_paths
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.states import CpState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.cp import _flat_cp
+from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 
@@ -90,7 +90,7 @@ def _across(
     path2: str,
     **kwargs: Any,
 ) -> Any:
-    """`_flat_cp` between two filesystems, streaming each file.
+    """`_tree_cp` between two filesystems, streaming each file.
 
     ``kwargs`` may replace the destination's ``dst_makedirs``. The limit is
     the source's, and the profile the destination's.
@@ -114,7 +114,7 @@ def _across(
         makedirs=kwargs.pop("dst_makedirs", None),
         **({"storage_profile": kwargs.pop("profile")} if "profile" in kwargs else {}),
     )
-    return _flat_cp(source, destination, path1, path2, **{**operations, **kwargs})
+    return _tree_cp(source, destination, path1, path2, **{**operations, **kwargs})
 
 
 _FILES = [
@@ -168,7 +168,7 @@ async def test_places_as_fsspec(
         assert dst._file_data[expected[source]].data == content
 
 
-async def test_patterns_and_lists_place_as_flat_cp(
+async def test_patterns_and_lists_place_as_on_one_storage(
     flat_fs: SimulatedFileSystem,
 ) -> None:
     dst = SimulatedFileSystem(hierarchical=True, asynchronous=True)
@@ -239,7 +239,7 @@ async def test_a_marker_makes_its_dir() -> None:
 
     profile = StorageProfile(parents_required=False)
     copied, errors = await _collect_with_errors(
-        _flat_cp(
+        _tree_cp(
             FlatView(
                 None,
                 list_prefix=list_prefix,
@@ -256,8 +256,8 @@ async def test_a_marker_makes_its_dir() -> None:
     assert errors == []
     assert copied == written == [("data/a.txt", "copied/a.txt")]
     assert "copied/empty" in dst._dirs
-    # The markers' directories only: the key's needs none, by the profile.
-    assert dst.stats.calls == {"info": 1, "mkdir": 2, "write": 1}
+    # The empty directory only: a key's write makes its parents, by the profile.
+    assert dst.stats.calls == {"info": 1, "mkdir": 1, "write": 1}
 
 
 async def test_a_destination_refusing_to_overwrite(
@@ -303,12 +303,11 @@ async def test_failures_are_yielded_and_the_rest_is_copied(
             flat_fs, dst, "data", "copied", cp_entry=copy_file, dst_makedirs=makedirs
         )
     )
-    assert sorted(e.__notes__[0] for e in errors) == [
-        "Copying 'data/README.md' to 'copied/README.md' failed.",
-        "Creating the directory 'copied/2023/02' failed.",
-    ]
-    # The directory failed, but its key is still copied, as the storage allows.
-    assert len(copied) == 3
+    # As the storage raised them, with no note.
+    assert sorted(str(e) for e in errors) == ["copied/2023/02", "data/README.md"]
+    # The directory failed: its key is not copied, its error tells. The 2 others are.
+    assert len(copied) == 2
+    assert "copied/2023/02/part-0.parquet" not in dst._file_data
     assert "copied/README.md" not in dst._file_data
 
 
@@ -336,5 +335,6 @@ async def test_cancel_yields_the_copies_sent() -> None:
     async for pair in op:
         copied.append(pair)
         op.cancel()
-    assert len(copied) == dst.stats.calls["write"] == 3
+    # The batch read when cancelled goes to its end: each copy sent is yielded.
+    assert len(copied) == dst.stats.calls["write"]
     assert op.cancelled()

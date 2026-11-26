@@ -13,7 +13,7 @@ the handler too: its ``_cat_file``, ``_pipe_file``, ``_get_file`` and
 
 The functions below it shape the answers and errors of fsspec's methods.
 
-This module depends on `operation` and `handler`.
+This module depends on `handler`, `listing` and `operation`.
 """
 
 from __future__ import annotations
@@ -30,11 +30,12 @@ from fsspec.callbacks import DEFAULT_CALLBACK
 
 from fsspec_alt_strategies.monitor import Call, Monitored
 
+from .listing import ils_by_directory
 from .operation import _collect_with_monitors, _with_monitors
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+    from collections.abc import AsyncGenerator, Callable, Sequence
 
     from fsspec import AbstractFileSystem
     from fsspec.callbacks import Callback
@@ -96,8 +97,7 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
 
     See Also
     --------
-    TreeFileOperationHandler : A handler of a storage with a hierarchical namespace.
-    FlatFileOperationHandler : A handler of a flat storage, such as an object store.
+    TreeFileOperationHandler : A handler of any storage, running the tree strategies.
 
     Examples
     --------
@@ -274,8 +274,8 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
         """The entry of the one existing file ``path`` names, with no pattern, else None.
 
         fsspec's ``mv`` of a file that is not recursive copies it, then deletes
-        it, never calling ``_mv_file``. The families move such a file with
-        their recursive strategy instead, which moves it as a recursive move
+        it, never calling ``_mv_file``. The handler moves such a file with
+        its recursive strategy instead, which moves it as a recursive move
         would: by the storage's rename, where the class uses one. A copy goes
         the same way. The entry goes to the strategy, which then need not list
         the file to tell what it is.
@@ -292,22 +292,40 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
 
     # The storage's primitives: the handler's, each on a caller's path, verified by it.
 
-    def _ils(
-        self, path: str, recursive: bool = False, **kwargs: Any
-    ) -> AsyncIterator[dict[str, Any]]:
+    async def _ils(
+        self, path: str, recursive: bool = False, prefix: bool = False, **kwargs: Any
+    ) -> AsyncGenerator[dict[str, Any]]:
         """List a directory, or all below it, as an async iterator of entries.
 
         The entries are as fsspec's ``_ls`` gives them with ``detail``. With
-        ``recursive=True``, all below ``path`` come by the handler's
-        recursive ``ils``, in its family's order, e.g. a flat handler's by
-        name, narrowed by its ``prefix``.
+        ``recursive=True``, all below ``path`` come depth first, by the
+        handler's ``ils_recursive`` where its profile declares
+        ``recursive_ls``, else a directory per ``ils``. With ``prefix`` too,
+        ``path`` is a string all names listed start with, where the profile
+        declares ``recursive_ls_with_prefix``. ``kwargs`` go to the handler's
+        listing.
         """
         handler = self._handler
         entry = handler.entry(path)
-        if recursive:
-            return handler.ils(entry, recursive=True, **kwargs)
+        await handler.open()  # Its profile.
+        profile = handler.profile
+        if prefix and not (recursive and profile.recursive_ls_with_prefix):
+            raise ValueError("prefix needs recursive and recursive_ls_with_prefix")
+        if not recursive:
+            listing = handler.ils(entry, **kwargs)
+        elif profile.recursive_ls:
+            if prefix:
+                listing = handler.ils_recursive(entry, prefix=True, **kwargs)
+            else:
+                listing = handler.ils_recursive(entry, **kwargs)
         else:
-            return handler.ils(entry, **kwargs)
+            listing = ils_by_directory(handler, entry, **kwargs)
+        try:
+            async for found in listing:
+                yield found
+        finally:
+            if (aclose := getattr(listing, "aclose", None)) is not None:
+                await aclose()
 
     async def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         """Describe a path, raising FileNotFoundError if there is none."""

@@ -9,8 +9,6 @@ import pytest
 
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.common.rm_files import rm_by_request
-from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
-from fsspec_alt_strategies_impl.flat.rm import _flat_rm
 from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem, TreeView
@@ -26,13 +24,13 @@ def _entries(*paths: str) -> list[dict[str, Any]]:
     ("view", "default"),
     [
         (TreeView, TreeFileOperationHandler.rm_files),
-        (FlatView, FlatFileOperationHandler.rm_files),
+        (FlatView, TreeFileOperationHandler.rm_files),
     ],
 )
 async def test_the_default_deletes_each_file_a_missing_one_too(
     view: Any, default: Any
 ) -> None:
-    # Each family's default, as a handler not overriding it has: FlatView does.
+    # The default, as a handler not overriding it has: FlatView does.
     fs = SimulatedFileSystem(asynchronous=True)
     for path in _FILES:
         fs.add_file(path)
@@ -135,7 +133,7 @@ async def test_a_recursive_rm_at_a_limit_of_1_runs_its_batches_without_deadlock(
     if family == "tree":
         op = _tree_rm(TreeView(fs, operation_limit=limit, rm_batch_size=2), "d")
     else:
-        op = _flat_rm(
+        op = _tree_rm(
             FlatView(fs, operation_limit=limit, rm_batch_size=2, rm_files=None), "d"
         )
     deleted, errors = await asyncio.wait_for(_collect_with_errors(op), timeout=5)

@@ -14,6 +14,7 @@ from fsspec.spec import AbstractFileSystem
 
 from fsspec_alt_strategies.monitor import Monitor, monitoring
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
+from fsspec_alt_strategies_impl.common.listing import implied_directories
 from fsspec_alt_strategies_impl.router import RoutingFileSystem, RoutingHandler
 from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
 from fsspec_alt_strategies_impl.wrapper.tree import FsspecTreeHandler
@@ -127,19 +128,16 @@ class _TreeHandler(_Files, FsspecTreeHandler):
 
 
 class _FlatHandler(_Files, FsspecFlatHandler):
-    def ils(  # type: ignore[override]
-        self,
-        entry: dict[str, Any],
-        recursive: bool = False,
-        *,
-        prefix: str = "",
-        **kwargs: Any,
+    def ils_recursive(
+        self, entry: dict[str, Any], prefix: bool = False, **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
-        if recursive:
-            path = entry["name"]
-            return self.fs._list_prefix(f"{path}/{prefix}" if path else prefix)
+        name = entry["name"]
+        if prefix:
+            listing = self.fs._list_prefix(name)
+            return implied_directories(listing, name.rpartition("/")[0])
         else:
-            return super().ils(entry, **kwargs)
+            listing = self.fs._list_prefix(f"{name}/" if name else "")
+            return implied_directories(listing, name)
 
 
 _OPTIONS = {"operation_concurrency": 4, "io_concurrency": 2}
@@ -165,7 +163,11 @@ class _Lake(RoutingHandler):
             "flat": lambda: _FlatHandler(
                 self.flat,
                 rm_batch_size=10,
-                storage_profile=StorageProfile(implicit_directories=True),
+                storage_profile=StorageProfile(
+                    implicit_directories=True,
+                    recursive_ls=True,
+                    recursive_ls_with_prefix=True,
+                ),
                 **_OPTIONS,
             ),
             # A plain async fsspec filesystem, wrapped with an unknown profile.
@@ -485,14 +487,15 @@ async def test_du_and_walk_are_the_storages(router: _Router) -> None:
     }
     walked = [item async for item in router._walk("lake/flat/data")]
     assert walked[0] == ("lake/flat/data", ["a", "b"], [])
-    assert router.flat.stats.calls == {"list": 1}  # flat_walk
+    # Top down, a directory per listing, as its caller prunes: data, a and b.
+    assert router.flat.stats.calls == {"list": 3}
     above = [root async for root, _, _ in router._walk("lake", maxdepth=2)]
     assert above[:2] == ["lake", "lake/tree"]
 
 
 async def test_a_glob_in_one_storage_goes_whole_to_it(router: _Router) -> None:
     assert await router._glob("lake/flat/data/*/1.txt") == ["lake/flat/data/a/1.txt"]
-    assert router.flat.stats.calls == {"list": 1}  # flat_glob
+    assert router.flat.stats.calls == {"list": 1}  # By the prefix "data/".
     assert router.tree.stats.calls == {}
 
 
@@ -870,9 +873,8 @@ async def test_cat_ranges_gives_each_storage_its_ranges(router: _Router) -> None
 async def test_transfers_across_storages_load_each_sides_profile_with_its_path(
     router: _Router, move: bool
 ) -> None:
-    # The destination's, which its jobs read, loaded by its handler as it
-    # opens. The tree source's too, for its listing's order: its family is its
-    # handler's class's.
+    # The destination's, which the strategy reads, loaded by its handler as it
+    # opens. The source's too, for its listing: its profile declares it.
     loaded: list[str] = []
     for name in ("tree", "flat"):
         fs = _backend(router, name)._handler

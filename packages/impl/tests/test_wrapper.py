@@ -1,4 +1,4 @@
-"""Tests of what the handlers of both families pass on to the filesystem wrapped."""
+"""Tests of what the wrapping handlers pass on to the filesystem wrapped."""
 
 from __future__ import annotations
 

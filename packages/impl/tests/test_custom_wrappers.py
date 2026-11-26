@@ -28,14 +28,20 @@ _LIMITS: dict[str, Any] = {
 }
 
 
+_KEYS_LISTED = StorageProfile(recursive_ls=True, recursive_ls_with_prefix=True)
+"""A profile knowing only that the handler lists keys, by prefix too."""
+
+
 def _s3fs(fs: Any, **options: Any) -> Any:
-    """A `BaseFileSystem` on an `S3fsHandler` of `fs`."""
-    return FileSystemWrapper(S3fsHandler(fs, **options), asynchronous=True)
+    """A `BaseFileSystem` on an `S3fsHandler` of `fs`, listing its keys."""
+    handler = S3fsHandler(fs, **{**options, "storage_profile": _KEYS_LISTED})
+    return FileSystemWrapper(handler, asynchronous=True)
 
 
 def _gcsfs(fs: Any, **options: Any) -> Any:
-    """A `BaseFileSystem` on a `GcsfsHandler` of `fs`."""
-    return FileSystemWrapper(GcsfsHandler(fs, **options), asynchronous=True)
+    """A `BaseFileSystem` on a `GcsfsHandler` of `fs`, listing its keys."""
+    handler = GcsfsHandler(fs, **{**options, "storage_profile": _KEYS_LISTED})
+    return FileSystemWrapper(handler, asynchronous=True)
 
 
 def _adlfs(fs: Any, **options: Any) -> Any:
@@ -118,21 +124,28 @@ _KEYS = {
 
 async def test_s3fs_lists_a_prefix_in_one_streamed_listing() -> None:
     fs, flat = _s3(_KEYS)
-    names = [e["name"] async for e in flat._ils("bkt/data", True, prefix="2024-")]
-    assert names == ["bkt/data/2024-01.csv", "bkt/data/2024-02/a.csv"]
+    names = [e["name"] async for e in flat._ils("bkt/data/2024-", True, prefix=True)]
+    assert names == [
+        "bkt/data/2024-01.csv",
+        "bkt/data/2024-02",
+        "bkt/data/2024-02/a.csv",
+    ]
     assert fs.calls == [("_iterdir", "bkt", "", "data/2024-")]
 
 
 async def test_s3fs_lists_a_bucket_whole() -> None:
     fs, flat = _s3(_KEYS)
     names = [e["name"] async for e in flat._ils("bkt", True)]
-    assert names == sorted(_KEYS)
+    # The directories the keys imply, each before what is below it.
+    assert names == sorted([*_KEYS, "bkt/data", "bkt/data/2024-02"])
     assert fs.calls == [("_iterdir", "bkt", "", "")]
 
 
 async def test_s3fs_lists_nothing_of_a_missing_bucket() -> None:
     _, flat = _s3(_KEYS)
-    assert [e async for e in flat._ils("missing/data", True)] == []
+    with pytest.raises(FileNotFoundError):
+        [e async for e in flat._ils("missing/data", True)]
+    assert [e async for e in flat._ils("missing/data", True, prefix=True)] == []
 
 
 async def test_s3fs_finds_by_its_listing() -> None:
@@ -169,8 +182,12 @@ async def test_s3fs_moves_by_a_copy_then_a_delete() -> None:
 
 async def test_gcsfs_lists_a_prefix_by_its_find_in_name_order() -> None:
     fs, flat = _gcs(_KEYS)
-    names = [e["name"] async for e in flat._ils("bkt/data", True, prefix="2024-")]
-    assert names == ["bkt/data/2024-01.csv", "bkt/data/2024-02/a.csv"]
+    names = [e["name"] async for e in flat._ils("bkt/data/2024-", True, prefix=True)]
+    assert names == [
+        "bkt/data/2024-01.csv",
+        "bkt/data/2024-02",
+        "bkt/data/2024-02/a.csv",
+    ]
     assert fs.calls == [("_find", "bkt/data", "2024-")]
 
 
@@ -234,7 +251,9 @@ async def test_gcsfs_off_google_deletes_as_fsspec() -> None:
 
 async def test_gcsfs_lists_nothing_of_a_missing_bucket() -> None:
     _, flat = _gcs(_KEYS)
-    assert [e async for e in flat._ils("missing", True)] == []
+    with pytest.raises(FileNotFoundError):
+        [e async for e in flat._ils("missing", True)]
+    assert [e async for e in flat._ils("missing/data", True, prefix=True)] == []
 
 
 # adlfs: a container client of the Azure SDK, listing blobs in pages.
@@ -384,8 +403,12 @@ async def test_s3fs_without_its_private_methods_lists_and_copies_as_fsspec() -> 
 
     fs = Bare(_KEYS)
     flat = _s3fs(fs, rm_batch_size=1000, **_LIMITS)
-    names = [e["name"] async for e in flat._ils("bkt/data", True, prefix="2024-")]
-    assert names == ["bkt/data/2024-01.csv", "bkt/data/2024-02/a.csv"]
+    names = [e["name"] async for e in flat._ils("bkt/data/2024-", True, prefix=True)]
+    assert names == [
+        "bkt/data/2024-01.csv",
+        "bkt/data/2024-02",
+        "bkt/data/2024-02/a.csv",
+    ]
     await flat._handler.cp_file({"name": "bkt/a", "type": "file", "size": 1}, "bkt/b")
     assert fs.calls == [("_find", "bkt/data"), ("_cp_file", "bkt/a", "bkt/b")]
 
@@ -402,8 +425,12 @@ async def test_gcsfs_whose_find_takes_no_prefix_lists_as_fsspec() -> None:
 
     fs = Bare(_KEYS)
     flat = _gcsfs(fs, rm_batch_size=100, **_LIMITS)
-    names = [e["name"] async for e in flat._ils("bkt/data", True, prefix="2024-")]
-    assert names == ["bkt/data/2024-01.csv", "bkt/data/2024-02/a.csv"]
+    names = [e["name"] async for e in flat._ils("bkt/data/2024-", True, prefix=True)]
+    assert names == [
+        "bkt/data/2024-01.csv",
+        "bkt/data/2024-02",
+        "bkt/data/2024-02/a.csv",
+    ]
     assert fs.calls == [("_find", "bkt/data")]
 
 

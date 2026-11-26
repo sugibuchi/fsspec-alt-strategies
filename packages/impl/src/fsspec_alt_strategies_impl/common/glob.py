@@ -5,7 +5,7 @@
 `VisitDirectory` lists one directory by ``ils``, and runs each item as a
 task: the items' `map` run in parallel, once their directory's `map` is done.
 `TraverseSubtree` takes a whole subtree's listing, as
-``ils(..., recursive=True)`` gives it, and acts on its paths as it streams,
+``ils_recursive`` gives it, and acts on its paths as it streams,
 one at a time. Both call the action alike: `map` on a path before what is
 below it, `reduce` after. So either may traverse any subtree, and a
 `VisitDirectory` hands a subtree the patterns take whole to a
@@ -182,6 +182,8 @@ class _TraversalTask(PathTask):
         self.ils_kwargs = ils_kwargs or {}
         # The error of the path's own listing, apart from the action's.
         self._listing_error: Exception | None = None
+        # A recursive listing's prefix: see TraverseSubtree.
+        self.prefix: str | None = None
 
     def _options(self) -> dict[str, Any]:
         """What a task below this one is made with, as it was."""
@@ -198,7 +200,7 @@ class _TraversalTask(PathTask):
         return tuple(self.handler.segments(path))
 
     async def _listing(self, recursive: bool) -> AsyncGenerator[Entry]:
-        """The path's ``ils``, a permit of the handler's ``operation_limit`` held around each step.
+        """The path's ``ils``, or with ``recursive`` its ``ils_recursive``, a permit of the handler's ``operation_limit`` held around each step.
 
         Never across the whole listing: a listing streaming into tasks waits
         for room among those pending, while they wait for permits. Its error
@@ -207,7 +209,15 @@ class _TraversalTask(PathTask):
         A root that is a file lists itself: its listing fails with
         NotADirectoryError.
         """
-        entries = self.handler.ils(self.entry, recursive=recursive, **self.ils_kwargs)
+        handler = self.handler
+        prefix = self.prefix
+        if not recursive:
+            entries = handler.ils(self.entry, **self.ils_kwargs)
+        elif prefix is None:
+            entries = handler.ils_recursive(self.entry, **self.ils_kwargs)
+        else:
+            narrowed = {"name": prefix}
+            entries = handler.ils_recursive(narrowed, prefix=True, **self.ils_kwargs)
         root = self.entry["name"] if self._group is None else None
         try:
             while True:
@@ -399,34 +409,40 @@ def _below(directory: tuple[str, ...], key: tuple[str, ...]) -> bool:
 
 
 class TraverseSubtree(_TraversalTask):
-    """A subtree traversed from one listing of all below it, its handler's ``ils(..., recursive=True)``, as it streams: no task per item.
+    """A subtree traversed from one listing of all below it, its handler's ``ils_recursive``, as it streams: no task per item.
 
-    The listing must give each directory's descendants together, with nothing
-    else between them. The handler's listing answers for it, as any of these
-    orders does:
+    The listing gives each directory's descendants together, with nothing
+    else between them, as ``ils_recursive`` promises. Each directory is a
+    `_Span` of the listing, which maps it, acts on what is below it, and
+    reduces it as the first path not below it comes. Only the directories
+    above the path read are held, and their subdirectories listed but not
+    reached yet.
 
-    - the byte order of names, as S3, GCS and Azure Blob list objects, or as
-      fsspec's ``find(withdirs=True)`` gives them;
-    - the order of segments, as ``sorted(..., key=handler.segments)`` gives it;
-    - depth first, a directory at a time.
-
-    In byte order, a directory named without the delimiter comes apart from
-    what is below it: ``a/b``, ``a/b.txt``, ``a/b/c``. A subdirectory listed
-    is so held until the first path below it comes, or its parent's span
-    ends, with nothing below it.
-
-    Each directory is a `_Span` of the listing, which maps it, acts on what
-    is below it, and reduces it as the first path not below it comes. Only
-    the directories above the path read are held, and their subdirectories
-    listed but not reached yet.
-
-    A directory not listed, as an object store lists only files, is made from
-    the path below it, by `subdir_entry`. A directory's marker listed inside
-    its span is skipped.
+    It takes more than the promise, as a listing in byte order gives it. A
+    directory named without the delimiter may come apart from what is below
+    it: ``a/b``, ``a/b.txt``, ``a/b/c``. A subdirectory listed is so held
+    until the first path below it comes, or its parent's span ends. A
+    directory not listed is made from the path below it, by `subdir_entry`,
+    and one's marker listed inside its span is skipped.
 
     So the items are acted on one at a time, in the listing's order. An
     error ends the whole subtree's task: no directory open is reduced.
     """
+
+    def __init__(
+        self,
+        engine: TreeTraversal,
+        entry: Entry,
+        action: PathAction,
+        handler: StorageHandler,
+        *,
+        prefix: str | None = None,
+        **options: Any,
+    ) -> None:
+        super().__init__(engine, entry, action, handler, **options)
+        # A string all the paths traversed start with, e.g. a glob's "data/2024-":
+        # the listing is then narrowed to it, by ils_recursive with prefix.
+        self.prefix = prefix
 
     async def run(self) -> Any:
         # Listed as the task starts: one pending, or cancelled, holds nothing.
@@ -517,16 +533,36 @@ class _Span:
                 next = await anext(self.entries, None)
             else:
                 # A path below a subdirectory, listed or made from it.
-                span, kept = await self._subspan(held, found[: len(key) + 1], next)
-                if kept:
+                span, after = await self._enter(held, found[: len(key) + 1], next)
+                if span is None:
+                    next = after
+                else:
                     yield await span.map_reduce(value)
                     next = span.next
-                else:
-                    next = await span._skip()  # Pruned, with all below it.
         self.next = next
         for subdir in held.values():  # Listed, with nothing below.
             if subdir is not None:
                 yield await _Span(task, subdir, None, self.entries).map_reduce(value)
+
+    async def _enter(
+        self,
+        held: dict[tuple[str, ...], Entry | None],
+        sub: tuple[str, ...],
+        next: Entry,
+    ) -> tuple[_Span | None, Entry | None]:
+        """The span of the subdirectory ``next`` is below, to traverse: else None, with the entry after it.
+
+        One pruned is skipped, with all below it. So is one whose name the
+        handler refuses, e.g. "..": its error is emitted, as a listing's is.
+        """
+        try:
+            span, kept = await self._subspan(held, sub, next)
+        except ValueError as refused:
+            await self.task.action._emit_event((next, refused))
+            return None, await self._skip_below(sub)
+        if not kept:
+            return None, await span._skip()
+        return span, None
 
     async def _hold(
         self,
@@ -563,6 +599,17 @@ class _Span:
         if not (task._descend(subdir) or task._matched(subdir)):
             return False
         return await task.action.visit_child(subdir, self.value)
+
+    async def _skip_below(self, sub: tuple[str, ...]) -> Entry | None:
+        """Read past the paths below ``sub``, whose directory has no entry: the first entry not below it."""
+        next = await anext(self.entries, None)
+        while (
+            next is not None
+            and _below(sub[:-1], found := self.task._segments(next["name"]))
+            and found[: len(sub)] == sub
+        ):
+            next = await anext(self.entries, None)
+        return next
 
     async def _skip(self) -> Entry | None:
         """Read past the span unread: the first entry not below the directory."""

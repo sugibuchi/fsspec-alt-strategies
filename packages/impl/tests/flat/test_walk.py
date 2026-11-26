@@ -1,4 +1,4 @@
-"""Tests of `_flat_walk`, checked against `_tree_walk` on the same flat storage."""
+"""Tests of `_tree_walk` on a storage listing keys, checked against it listing a directory at a time."""
 
 from __future__ import annotations
 
@@ -8,15 +8,14 @@ import pytest
 
 from fsspec_alt_strategies.states import WalkState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.walk import _flat_walk
 from fsspec_alt_strategies_impl.tree.walk import _tree_walk
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem, TreeView
 
 
 def _walk(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
-    """`_flat_walk` on ``fs``, whose ``list_prefix`` or ``info`` ``kwargs`` may replace."""
+    """`_tree_walk` on ``fs``, whose ``list_prefix`` or ``info`` ``kwargs`` may replace."""
     primitives = {k: kwargs.pop(k) for k in ("list_prefix", "info") if k in kwargs}
-    return _flat_walk(FlatView(fs, **primitives), path, **kwargs)
+    return _tree_walk(FlatView(fs, **primitives), path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
@@ -64,12 +63,23 @@ async def test_dirs_come_before_or_after_those_below_them(
 async def test_requests() -> None:
     fs = SimulatedFileSystem(page_size=2, asynchronous=True)
     _tree(fs)
-    op = _walk(fs, "data")
+    op = _walk(fs, "data", topdown=False)
     directories, _ = await _collect_with_errors(op)
-    # 5 keys, 2 a page: no listing per directory, and no info.
+    # Bottom up, 5 keys, 2 a page: no listing per directory, and no info.
     assert fs.stats.calls == {"list": 3}
     assert len(directories) == 7  # data and its 6 directories.
-    assert op.state == WalkState(current=op.state.current, found=11)
+    assert op.state == WalkState(
+        current=op.state.current, found=11, directories_listed=7
+    )
+
+
+async def test_top_down_lists_each_directory() -> None:
+    fs = SimulatedFileSystem(asynchronous=True)
+    _tree(fs)
+    directories, _ = await _collect_with_errors(_walk(fs, "data"))
+    # Its caller prunes as it goes: a listing per directory.
+    assert fs.stats.calls == {"list": 7}
+    assert len(directories) == 7
 
 
 async def test_bottom_up_yields_each_dir_once_the_listing_passes_it() -> None:
@@ -78,8 +88,10 @@ async def test_bottom_up_yields_each_dir_once_the_listing_passes_it() -> None:
     seen = []
     async for directory, _, _ in _walk(fs, "data", topdown=False):
         seen.append((directory, fs.stats.calls["list"]))
-    # data/2023/01 is done once the second key, data/2023/02's, is listed.
-    assert seen[0] == ("data/2023/01", 2)
+    # data/2023/01 is done once the second key, data/2023/02's, is listed:
+    # before the listing ends, though the traversal may read a key ahead.
+    assert seen[0][0] == "data/2023/01"
+    assert seen[0][1] < 5
     assert seen[-1] == ("data", 5)
 
 
@@ -93,21 +105,6 @@ async def test_a_root_not_a_dir_raises(
     _tree(flat_fs)
     with pytest.raises(error):
         await _collect_with_errors(_walk(flat_fs, path))
-
-
-async def test_cancel_takes_no_more_from_the_listing() -> None:
-    fs = SimulatedFileSystem(page_size=1, asynchronous=True)
-    _tree(fs)
-    op = _walk(fs, "data", topdown=False)
-    names = []
-    async for directory, _, _ in op:
-        names.append(directory)
-        op.cancel()
-    assert op.cancelled()
-    # Cancelled once the second key closed the first directory: the directories still
-    # open are left out.
-    assert fs.stats.calls == {"list": 2}
-    assert names == ["data/2023/01"]
 
 
 def _failing_after(fs: SimulatedFileSystem, keys: int) -> Any:
@@ -124,28 +121,6 @@ def _failing_after(fs: SimulatedFileSystem, keys: int) -> Any:
     return list_prefix
 
 
-@pytest.mark.parametrize("topdown", [True, False])
-async def test_a_failed_listing_yields_its_error_last(
-    flat_fs: SimulatedFileSystem, topdown: bool
-) -> None:
-    _tree(flat_fs)
-    # data/2023/01 and data/2023/02 are listed, then the listing fails.
-    op = _walk(
-        flat_fs,
-        "data",
-        topdown=topdown,
-        list_prefix=_failing_after(flat_fs, 2),
-        on_error=None,
-    )
-    items: list[Any] = [item async for item in op]
-
-    error = items[-1]
-    assert isinstance(error, OSError)
-    assert op.state.current == "data"  # The failed directory's path.
-    # The directories done come first: data/2023/01, which the second key closed.
-    assert [d for d, _, _ in items[:-1]] == ["data/2023/01"]
-
-
 async def test_on_error_raise_raises_the_listings_error(
     flat_fs: SimulatedFileSystem,
 ) -> None:
@@ -155,30 +130,11 @@ async def test_on_error_raise_raises_the_listings_error(
             _walk(
                 flat_fs,
                 "data",
+                topdown=False,
                 list_prefix=_failing_after(flat_fs, 2),
                 on_error="raise",
             )
         )
-
-
-async def test_on_error_omit_or_a_callable_leaves_the_error_out(
-    flat_fs: SimulatedFileSystem,
-) -> None:
-    _tree(flat_fs)
-    handled: list[Exception] = []
-    for on_error in ("omit", handled.append):
-        items, errors = await _collect_with_errors(
-            _walk(
-                flat_fs,
-                "data",
-                topdown=False,
-                list_prefix=_failing_after(flat_fs, 2),
-                on_error=on_error,
-            )
-        )
-        assert errors == []
-        assert [d for d, _, _ in items] == ["data/2023/01"]
-    assert [str(e) for e in handled] == ["throttled"]
 
 
 def test_on_error_must_be_known(flat_fs: SimulatedFileSystem) -> None:

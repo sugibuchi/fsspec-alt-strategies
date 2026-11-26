@@ -98,25 +98,24 @@ class StorageProfile:
         place. Unknown by default, taken as False: it writes to a temporary
         name beside the destination, then moves it there, so that no reader
         sees part of a file.
-    recursive_ls_depth_first_preorder : bool, default False
-        Whether a tree handler's own recursive ``ils``, its storage's listing
-        of all below a directory, is depth first in preorder: a directory's
-        entry, then all below it, before any other entry. It covers name
-        order too, as object stores list keys. True, the strategies take a
-        directory as done once the listing has passed it, and act on it at
-        once, e.g. delete it once emptied. False by default, the listing is
-        taken only to give a directory's entry before what is below it, e.g.
-        breadth first, as Dropbox's listing documents: right on any storage,
-        the strategies take every directory as done only once the listing
-        ends. A handler keeping the default listing, a directory per request,
-        declares nothing: the strategies read it so themselves.
+    recursive_ls : bool, default False
+        Whether the handler implements ``ils_recursive``, listing all below a
+        directory by the storage's own listing, as its docstring says. True,
+        the strategies stream a subtree that nothing prunes by one
+        ``ils_recursive``. False by default, they list each directory by
+        ``ils``.
+    recursive_ls_with_prefix : bool, default False
+        Whether the handler's ``ils_recursive`` takes ``prefix=True``, listing
+        all whose names start with a string, as object stores list keys. It
+        holds only with ``recursive_ls``.
 
     Raises
     ------
     ValueError
         If ``implicit_directories`` is True with ``parents_required`` or
         ``copy_parents_required`` True, as a file's parents then exist as soon
-        as it does.
+        as it does, or if ``recursive_ls_with_prefix`` is True without
+        ``recursive_ls``.
 
     Examples
     --------
@@ -133,9 +132,12 @@ class StorageProfile:
     copies_directories: bool | None = None
     case_sensitive: bool | None = None
     atomic_writes: bool | None = None
-    recursive_ls_depth_first_preorder: bool = False
+    recursive_ls: bool = False
+    recursive_ls_with_prefix: bool = False
 
     def __post_init__(self) -> None:
+        if self.recursive_ls_with_prefix and not self.recursive_ls:
+            raise ValueError("recursive_ls_with_prefix needs recursive_ls")
         for name in ("parents_required", "copy_parents_required"):
             if self.implicit_directories and getattr(self, name):
                 raise ValueError(

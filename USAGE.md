@@ -8,21 +8,20 @@ How to get the library's features, and how to use them. See the
 ### File tree operation strategies
 
 The strategies walk, find, glob, measure, delete, copy and move file trees. Each lists through a storage handler,
-which yields entries as the storage is scanned, and acts on them as they arrive. They come in two families, by what a
-storage's directories are:
+which yields entries as the storage is scanned, and acts on them as they arrive. One handler class,
+`TreeFileOperationHandler` in `tree/`, runs them on every storage. Its profile tells what the storage does:
 
-- the `tree` family, in `tree/`, for storages whose directories are real, such as Azure Data Lake Storage Gen2, SFTP
-  or HDFS. It deletes or renames a directory in one request where the storage can. It scans a tree a directory at a
-  time, several at once, unless the storage lists it in one request;
-- the `flat` family, in `flat/`, for storages whose directories are only prefixes of keys, such as S3. It lists by
-  prefix, and deletes keys in batches.
+- on a storage whose directories are real, such as Azure Data Lake Storage Gen2, SFTP or HDFS, they delete or rename
+  a directory in one request where the storage can;
+- on an object store, such as S3, whose directories are only prefixes of keys, they list a tree in one request,
+  narrowed by prefix, and delete keys in batches;
+- elsewhere, they scan a tree a directory at a time, several at once.
 
-Each family's handler, `TreeFileOperationHandler` or `FlatFileOperationHandler`, runs its strategies. `BaseFileSystem`
-answers fsspec's recursive methods, such as `find`, `rm` and `copy`, with its handler's strategies. The handler comes
-in one of two forms:
+`BaseFileSystem` answers fsspec's recursive methods, such as `find`, `rm` and `copy`, with its handler's strategies.
+The handler comes in one of two forms:
 
 - **Your own handler**, for a new filesystem implementation: you implement the storage's primitives in a subclass of
-  `TreeFileOperationHandler` or `FlatFileOperationHandler`, and `BaseFileSystem` implements fsspec's API on it.
+  `TreeFileOperationHandler`, and `BaseFileSystem` implements fsspec's API on it.
 - **Wrappers**, in `wrapper/`, for existing filesystem implementations: a handler calling the filesystem, and a
   filesystem serving its paths. `monitored()` picks the wrapper for a known filesystem.
 
@@ -87,8 +86,8 @@ code goes with it.
 
 | Feature                           | Modules to copy                                                                  |
 |-----------------------------------|----------------------------------------------------------------------------------|
-| A family's handler and filesystem | `tree/` or `flat/`, and `common/`; `files/` for its file objects                 |
-| Wrappers and `monitored()`        | `wrapper/`, `monitor.py`, `__init__.py`, `tree/`, `flat/`, `common/`, `files/`   |
+| A handler and its filesystem      | `tree/` and `common/`; `files/` for its file objects                             |
+| Wrappers and `monitored()`        | `wrapper/`, `monitor.py`, `__init__.py`, `tree/`, `common/`, `files/`            |
 | Monitor                           | Nothing: it is in the interface package                                          |
 | Async file objects                | `files/`                                                                         |
 | Filesystem router                 | `router.py` and `common/`, with what each storage's handler needs                |
@@ -100,8 +99,7 @@ code goes with it.
 #### Storage handlers
 
 A storage handler holds what is particular to a storage: its primitives, its paths, its profile, its limits and its
-clients. Subclass `TreeFileOperationHandler` or `FlatFileOperationHandler`, and implement the primitives each declares
-abstract:
+clients. Subclass `TreeFileOperationHandler`, and implement the primitives it declares abstract:
 
 ```python
 from fsspec_alt_strategies import UNKNOWN
@@ -122,7 +120,7 @@ class MyHandler(TreeFileOperationHandler):
         if "\\" in path:
             raise ValueError(f"Not a path of the storage: {path!r}")
 
-    async def ils(self, entry, **kwargs):
+    async def ils(self, entry):
         # A directory's entries, as they come, e.g. a page at a time.
         async for page in self.client.list(entry["name"]):
             for item in page:
@@ -150,38 +148,58 @@ class MyHandler(TreeFileOperationHandler):
   adaptive files below.
 - Both take an entry, to read or to write. A file to write may not exist yet: its entry holds its name, its final
   `"size"` where the caller knows it, and its parent's entry as `"parent"` where the caller holds it.
-- A handler's `ils(entry, recursive=False)` lists a directory's items, or with `recursive` all below it.
-- A tree handler with a recursive listing of its own answers `recursive` in its `ils`. Its profile's
-  `recursive_ls_depth_first_preorder` says the listing's order:
-  - True: a directory's entry, then all below it, before any other entry. It covers name order too.
-  - False, the default: only a directory's entry before what is below it. That is right on any storage, but costs the
-    walk memory and streaming, so declare True where it holds.
-- Without a listing of its own, a tree is listed a directory per request, several at once, by the family's default:
-  `return super().ils(entry, recursive=True, **kwargs)`. That listing is depth first, so it needs no
-  `recursive_ls_depth_first_preorder`. A handler whose storage may refuse its own recursive listing falls back on it so.
-- Where an operation needs all below a directory, e.g. a `find` without `maxdepth`, the walk lists it by one
-  recursive `ils`. A handler answering with the family's default lists that directory alone instead, and is asked
-  again of each subdirectory. It may so list a subtree whole only from a depth where it knows subtrees are small, or
-  never, where its storage's recursive listing is slow to start or billed apart.
-- A flat handler answers `ils(entry, recursive=True, prefix=...)`: every key below a directory starting with the
-  prefix, in name order.
+- A handler's `ils(entry)` lists a directory's items. A handler may add keyword options of its own, each optional,
+  named in its docstring. The strategies pass a caller's `ils_kwargs` on as given, so an option it does not take
+  raises TypeError.
+- `ils_recursive(entry, prefix=False)` lists all below a directory by the storage's own listing. It raises
+  NotImplementedError by default, and a handler implementing it declares `recursive_ls=True` in its profile.
+- It lists a tree depth first, in preorder: each directory once, before all below it, all below it together.
+- It lists every directory, those kept only as prefixes of keys too. A marker key ending with "/" comes as its
+  directory's entry, with `"marker": True`, never as an item.
+- A file lists itself, and a missing directory raises FileNotFoundError.
+- A storage listing keys in name order meets that contract by `common.listing.implied_directories`, which makes up
+  the directories the keys imply.
+- With `prefix=True`, the entry's name is a string all listed start with, e.g. "data/2024-", and nothing missing
+  raises. A handler taking it declares `recursive_ls_with_prefix=True`: a glob then lists a tree by one listing,
+  narrowed to its patterns' literal prefix.
+- With `recursive_ls`, a subtree nothing prunes is streamed by one `ils_recursive`, e.g. for a `find` without
+  `maxdepth`. Without it, each directory is listed on its own, several at once.
+- A handler whose storage may refuse its own listing falls back on `common.listing.ils_by_directory`, which lists a
+  tree by one `ils` per directory.
 - `rm_tree`, `mv_tree` and `cp_tree`, a storage's own operations on a whole directory, are optional. The profile
   declares them, by `deletes_directories`, `renames_directories` and `copies_directories`.
-- The family's strategies are its methods: `walk`, `find`, `glob`, `du`, `rm`, `rm_files`, `cp`, `cp_files`, `mv`
+- The strategies are the handler's methods: `walk`, `find`, `glob`, `du`, `rm`, `rm_files`, `cp`, `cp_files`, `mv`
   and `mv_files`. Each returns an operation the filesystem runs. Override one to choose another strategy, e.g. one of
   your own, with the same arguments.
 
 By default, `rm_files` deletes each file by `rm_file`. A storage deleting several files by one request, e.g. an object
-store, overrides it with `common.rm_files.rm_by_request`, and declares `rm_batch_size`. A recursive `rm` or `mv` then
-deletes its files in batches:
+store, overrides it with `common.rm_files.rm_by_request`, and declares `rm_batch_size`. A recursive `rm` then
+deletes its files in batches. So does a move within a storage whose profile declares `renames_files=False`, once it
+has copied them:
 
 ```python
+from fsspec_alt_strategies import StorageProfile
+from fsspec_alt_strategies_impl.common.listing import implied_directories
 from fsspec_alt_strategies_impl.common.rm_files import rm_by_request
-from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
+from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
 
 
-class MyHandler(FlatFileOperationHandler):
+class MyHandler(TreeFileOperationHandler):
+    profile = StorageProfile(
+        implicit_directories=True,
+        renames_files=False,
+        recursive_ls=True,
+        recursive_ls_with_prefix=True,
+    )
     rm_batch_size = 1000  # The most files one request deletes.
+
+    async def ils(self, entry):
+        ...  # One directory's keys and prefixes, by a listing with a delimiter.
+
+    def ils_recursive(self, entry, prefix=False):
+        # Every key starting with the name, in name order, by a listing with no delimiter.
+        top = entry["name"].rpartition("/")[0] if prefix else entry["name"]
+        return implied_directories(self._list_keys(entry["name"]), top)
 
     def rm_files(self, entries):
         return rm_by_request(self, entries, self._delete_objects)
@@ -278,7 +296,7 @@ import fsspec
 from fsspec_alt_strategies_impl import monitored
 
 fs = monitored(fsspec.filesystem("file"))
-fs.rm("data/2024", recursive=True)  # Deletes by the tree family's strategy.
+fs.rm("data/2024", recursive=True)  # Deletes by the library's strategy.
 ```
 
 It returns a `FileSystemWrapper`, which takes the wrapped filesystem's URLs, on a handler calling the filesystem. A
@@ -310,6 +328,8 @@ Each entry's `handler` names the handler class wrapping it:
 
 - a generic handler, "FsspecTreeHandler" or "FsspecFlatHandler", takes the rest from the entry: its profile, its
   concurrency limits and its batch sizes. Each left out is the one right on any storage: unknown, or 1.
+  "FsspecFlatHandler" wraps an object store: its default profile declares `implicit_directories`, `recursive_ls` and
+  `recursive_ls_with_prefix`.
 - a dedicated handler, e.g. "S3fsHandler", which the entries of s3fs, gcsfs and adlfs name, declares its own as class
   attributes. Its entry gives none, and `monitored()` refuses one that does. Make it directly, or subclass it, to
   change them.
@@ -335,16 +355,15 @@ A wrapper is light and not cached: make one when you need it, and drop it after.
 
 None of these is right for every storage, and the library never picks one for you.
 
-- **The family** follows what a storage's directories are: `tree` where they are real, `flat` where they are only
-  prefixes of keys. A filesystem whose keys have no listing by prefix but one directory per request, such as adlfs on
-  Azure Blob Storage, suits `tree` too.
-- **One recursive listing usually wins.** Both families list a whole tree in one paginated request where the storage
-  has one. On Azure, a find of 340 directories took 1 request instead of 342. A storage with none, such as SFTP, is
-  scanned a directory at a time, several at once.
-- **Pruning trades requests for listing less.** A glob or `maxdepth` on a `tree` filesystem lists only the directories
-  it can match, one per request. That wins on a large tree whose pattern has a wildcard early. It loses on a small
-  subtree, which one recursive listing would cover.
-- **The profile** picks the way within a family, e.g. deleting a directory in one request where the storage can. It
+- **One recursive listing usually wins.** The strategies list a whole tree in one paginated request where the
+  profile declares `recursive_ls`. On Azure, a find of 340 directories took 1 request instead of 342. A storage with
+  none, such as SFTP, is scanned a directory at a time, several at once.
+- **A prefix narrows it.** With `recursive_ls_with_prefix`, a glob lists only the keys starting as its patterns do,
+  e.g. `data/2024-` for `data/2024-*`, in one listing.
+- **Pruning trades requests for listing less.** Without a listing by prefix, a glob or `maxdepth` lists only the
+  directories it can match, one per request. That wins on a large tree whose pattern has a wildcard early. It loses
+  on a small subtree, which one recursive listing would cover.
+- **The profile** picks the way, e.g. deleting a directory in one request where the storage can. It
   only saves requests, or data copied. A field left unknown is right on any storage. A field declared wrongly gives
   wrong results: declare only what you know.
 - **The concurrency limits** are the handler's, yours to set. A filesystem unsafe to call from several threads, such
@@ -360,11 +379,11 @@ None of these is right for every storage, and the library never picks one for yo
 
 #### Costs to know
 
-- The generic flat handler lists a prefix with the wrapped filesystem's `find`, as fsspec has no listing by prefix in
-  pages. That listing is held in memory, and covers the prefix's whole directory. A handler answering `recursive` in its
-  `ils` with the storage's own listing by prefix streams it instead, as `S3fsHandler` does.
-- The generic tree handler scans a tree a directory per request, as fsspec has no recursive listing in pages. A
-  handler answering `recursive` in its `ils` with the storage's own recursive listing lists it in one, as `AdlfsHandler`
+- The generic `FsspecFlatHandler` lists a tree with the wrapped filesystem's `find`, as fsspec has no listing by
+  prefix in pages. That listing is held in memory, and covers the prefix's whole directory. A handler implementing
+  `ils_recursive` with the storage's own listing by prefix streams it instead, as `S3fsHandler` does.
+- The generic `FsspecTreeHandler` scans a tree a directory per request, as fsspec has no recursive listing in pages.
+  A handler implementing `ils_recursive` with the storage's own recursive listing lists it in one, as `AdlfsHandler`
   does.
 - `known_implementations` is shared by every copy in a project. Change it with care, or pass your own table.
 
@@ -374,8 +393,13 @@ None of these is right for every storage, and the library never picks one for yo
 real storage would get, and delays each by a latency and a bandwidth you set. It models an object store, or a storage
 with a hierarchical namespace. It is a package of its own, so a copy of the strategies leaves it out.
 
-Its `TreeView` and `FlatView` are handlers of it, each primitive replaceable. Run a strategy on one and the simulated
-filesystem's own method, then compare their requests and times:
+Its `TreeView` and `FlatView` are handlers of it, each primitive replaceable:
+
+- `TreeView` lists a directory per request, or a tree by one listing with `recursive_listing=True`;
+- `FlatView` lists keys by prefix, as an object store does, its profile declaring `recursive_ls` and
+  `recursive_ls_with_prefix`.
+
+Run a strategy on one and the simulated filesystem's own method, then compare their requests and times:
 
 ```python
 from fsspec_alt_strategies_impl.common.filesystem import BaseFileSystem

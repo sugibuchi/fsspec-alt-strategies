@@ -3,7 +3,7 @@
 """Existing filesystems, wrapped by handlers, so that their recursive methods are the strategies.
 
 - `tree`: `FsspecTreeHandler`, which runs the tree strategies;
-- `flat`: `FsspecFlatHandler`, which runs the flat strategies;
+- `flat`: `FsspecFlatHandler`, which runs them on an object store, listing its keys;
 - `s3fs`, `gcsfs` and `adlfs`: the handlers of those filesystems, using
   their own listings and copies where the generic ones would cost more;
 - `filesystem`: `FileSystemWrapper`, the filesystem on any of them.

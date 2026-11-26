@@ -5,7 +5,7 @@
 `_tree_find` is an alternative to fsspec's ``_find``, with the same paths.
 fsspec's walks a tree one directory at a time, unless the filesystem lists
 whole trees. `_tree_find` lists the tree on `common.tree`'s traversal: by one
-recursive ``ils``, or a directory per request, several at a time.
+``ils_recursive``, or a directory per request, several at a time.
 
 `_read` runs the strategies that only read, find, glob and du, on the
 traversal, and handles a tree's root as fsspec's ``_find`` does.
@@ -54,7 +54,7 @@ def _tree_find(
     It finds the paths fsspec's ``_find`` finds. A missing ``path`` finds
     nothing, and a file finds itself. A directory that fails to list yields its
     error, and the rest of the tree is still searched. A tree listed by one
-    recursive ``ils``, broken off, is its root's failure: what it passed is
+    ``ils_recursive``, broken off, is its root's failure: what it passed is
     found, and its error yielded.
 
     It yields each path as it is listed, so the paths are not in order.
@@ -64,13 +64,12 @@ def _tree_find(
     It wins over fsspec's ``_find`` on storages that list one directory per
     request, with many directories: their listings overlap. It gains nothing on
     object stores, which list a whole tree in one paginated request: it sends
-    that same listing, where the profile declares
-    ``recursive_ls_depth_first_preorder``.
+    that same listing, where the profile declares ``recursive_ls``.
 
     Once cancelled, it starts no new directory, and yields the paths of those
     started.
 
-    Requests: one recursive ``ils`` of ``path``, as above, else one ``ils``
+    Requests: one ``ils_recursive`` of ``path``, as above, else one ``ils``
     per directory, each page holding a permit of the handler's
     ``operation_limit``. One ``info`` more for ``path`` itself, if a file, or
     a directory with ``withdirs``.
@@ -190,6 +189,7 @@ async def _read(
     max_running: int,
     maxdepth: int | None = None,
     patterns: Sequence[_Search] | None = None,
+    prefix: str | None = None,
     ils_kwargs: dict[str, Any] | None = None,
     file_root: bool = True,
     dir_root: bool = False,
@@ -209,7 +209,8 @@ async def _read(
       traversal, if ``dir_root`` and the operation is not cancelled.
 
     Any other failure of the root is a failed directory, yielded as any is,
-    the state's ``current`` naming it.
+    the state's ``current`` naming it. ``prefix``, a string all paths
+    traversed start with, narrows the listing, as `_root_task` takes it.
     """
     engine = TreeTraversal(max_running=max_running, split=handler.segments)
     op._on_cancel = engine.cancel
@@ -222,6 +223,7 @@ async def _read(
         handler,
         maxdepth=maxdepth,
         patterns=patterns,
+        prefix=prefix,
         ils_kwargs=ils_kwargs,
     )
     try:

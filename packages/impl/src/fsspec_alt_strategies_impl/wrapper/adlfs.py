@@ -11,9 +11,8 @@ converted by adlfs's own ``_details``. Measured on Azure, a find of 512 files in
 340 directories took 1 request this way, against 342.
 
 The blobs come sorted by the whole name without a hierarchical namespace, and
-depth first with one, as the tree strategies take a recursive listing. A
-directory with no marker blob is left out: the strategies tell it from the
-paths below it.
+depth first with one. A directory with no marker blob is made up by
+`implied_directories`, as ``ils_recursive`` must list it.
 
 Its ``rmdir`` deletes a directory below a container, which adlfs's leaves, so
 that a recursive ``rm`` leaves none with a hierarchical namespace.
@@ -23,7 +22,7 @@ nothing of adlfs or of the Azure SDK: it calls the wrapped filesystem's own
 objects. ``service_client`` and ``_details`` are private, as of adlfs 2026.x:
 where one is missing, the strategies list as with the generic handler.
 
-This module depends on `tree`.
+This module depends on `tree`, and `listing` of `common`.
 """
 
 from __future__ import annotations
@@ -32,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.profile import StorageProfile
 
+from ..common.listing import ils_by_directory, implied_directories
 from .tree import FsspecTreeHandler
 
 if TYPE_CHECKING:
@@ -50,7 +50,7 @@ ADLFS_PROFILE = StorageProfile(
     deletes_directories=False,
     copies_directories=False,
     case_sensitive=True,
-    recursive_ls_depth_first_preorder=True,
+    recursive_ls=True,
 )
 """Azure Blob Storage through adlfs, with a hierarchical namespace or without.
 
@@ -93,22 +93,23 @@ class AdlfsHandler(FsspecTreeHandler):
         else:
             await self.fs._rmdir(container)
 
-    def ils(
-        self, entry: Entry, recursive: bool = False, **kwargs: Any
+    def ils_recursive(
+        self, entry: Entry, prefix: bool = False, **kwargs: Any
     ) -> AsyncIterator[Entry]:
         path = entry["name"]
         container = self.fs.split_path(path)[0] if path.strip("/") else ""
         own = hasattr(self.fs, "service_client") and hasattr(self.fs, "_details")
-        if recursive and container and own and not kwargs:
-            return self._blobs(path)
-        else:
-            # A directory, the containers, adlfs without its own, or a caller's
-            # options, which adlfs's ls takes: recursively, a directory per
-            # request.
-            return super().ils(entry, recursive, **kwargs)
+        if prefix:
+            # Not declared: ADLFS_PROFILE has no recursive_ls_with_prefix.
+            return super().ils_recursive(entry, prefix)
+        if not (container and own and not kwargs):
+            # The containers, adlfs without its own, or a caller's options:
+            # a directory per request, by adlfs's ls.
+            return ils_by_directory(self, entry, **kwargs)
+        return implied_directories(self._blobs(path), path)
 
     async def _blobs(self, path: str) -> AsyncIterator[Entry]:
-        """All below ``path``, by one ListBlobs without a delimiter, a page at a time.
+        """All below ``path``, by one ListBlobs without a delimiter, a page at a time, in name order.
 
         A file lists itself, and a missing path raises FileNotFoundError, as
         ``ils`` does: nothing listed, its info tells which.

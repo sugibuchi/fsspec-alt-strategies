@@ -1,4 +1,4 @@
-"""Tests of `_flat_du`, checked against fsspec's own ``_du``."""
+"""Tests of `_tree_du`, checked against fsspec's own ``_du``."""
 
 from __future__ import annotations
 
@@ -9,14 +9,14 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.states import DuState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.du import _flat_du
+from fsspec_alt_strategies_impl.tree.du import _tree_du
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 
 def _du(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
-    """`_flat_du` on ``fs``, whose ``list_prefix`` or ``info`` ``kwargs`` may replace."""
+    """`_tree_du` on ``fs``, whose ``list_prefix`` or ``info`` ``kwargs`` may replace."""
     primitives = {k: kwargs.pop(k) for k in ("list_prefix", "info") if k in kwargs}
-    return _flat_du(FlatView(fs, **primitives), path, **kwargs)
+    return _tree_du(FlatView(fs, **primitives), path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
@@ -46,5 +46,7 @@ async def test_sends_only_the_listing() -> None:
     _tree(fs)
     op = _du(fs, "data")
     await _collect_with_errors(op)
-    assert op.state == DuState(current=op.state.current, files=5, size=221)
+    assert op.state == DuState(
+        current=op.state.current, files=5, size=221, directories_listed=7
+    )
     assert fs.stats.calls == {"list": 3}

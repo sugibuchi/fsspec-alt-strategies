@@ -34,12 +34,13 @@ import math
 import sys
 import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from fsspec.asyn import AsyncFileSystem, _run_coros_in_chunks, sync
 
 from fsspec_alt_strategies.profile import UNKNOWN, StorageProfile
+from fsspec_alt_strategies_impl.common.listing import implied_directories
 from fsspec_alt_strategies_impl.common.rm_files import rm_by_request
 from fsspec_alt_strategies_impl.files.adaptive import (
     AdaptiveReadableFile,
@@ -50,7 +51,6 @@ from fsspec_alt_strategies_impl.files.fsspec_transaction import (
     AdaptiveWritableTransaction,
     TransactionFile,
 )
-from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
 from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
 
 if TYPE_CHECKING:
@@ -402,7 +402,7 @@ class SimulatedFileSystem(AsyncFileSystem):
     async def _cp_file_entry(
         self, entry: dict[str, Any], path2: str, **kwargs: Any
     ) -> None:
-        """Copy a file by its entry, as the families' ``_cp_file_entry`` takes it, noting the entry."""
+        """Copy a file by its entry, as the views' ``_cp_file_entry`` takes it, noting the entry."""
         self.entries.append(entry)
         await self._cp_file(entry["name"], path2, **kwargs)
 
@@ -422,7 +422,7 @@ class SimulatedFileSystem(AsyncFileSystem):
     async def _rm_files(self, paths: list[str]) -> None:
         """Delete files in one request, as S3's DeleteObjects does.
 
-        It is no fsspec method: the flat strategies delete with it. A path
+        It is no fsspec method: a `FlatView` deletes with it. A path
         that is no file is left out, as object stores leave out a key that
         does not exist. It returns None: every key was deleted.
         """
@@ -796,10 +796,12 @@ class TreeView(_Files, TreeFileOperationHandler):
     and ``cp_tree`` raise NotImplementedError unless given, as a
     `SimulatedFileSystem` has none.
 
-    It has no recursive listing of its own, so the strategies list a tree a
-    directory per request, by the default recursive ``ils``. With
-    ``recursive_listing``, it lists by the filesystem's own recursive listing
-    instead, a page per request, in name order.
+    It has no recursive listing of its own: its ``ils_recursive`` raises
+    NotImplementedError. With ``recursive_listing``, it lists by the
+    filesystem's own recursive listing, a page per request, in name order,
+    its directories made up by `implied_directories`, and with ``prefix`` by
+    the filesystem's listing by prefix. The strategies use it where the
+    profile given declares ``recursive_ls``.
 
     It runs the tree strategies, as a `TreeFileOperationHandler`, so that a
     filesystem may be made on it too. It deletes files by the library's
@@ -856,14 +858,22 @@ class TreeView(_Files, TreeFileOperationHandler):
         """Nothing: the simulated storage takes any path."""
 
     def ils(
-        self, entry: dict[str, Any], recursive: bool = False, **kwargs: Any
+        self, entry: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
-        if not recursive:
-            return self._dir_ils(entry["name"], **kwargs)
-        elif self.recursive_listing:
-            return self.fs._ils_recursive(entry["name"])
+        return self._dir_ils(entry["name"], **kwargs)
+
+    def ils_recursive(
+        self, entry: dict[str, Any], prefix: bool = False
+    ) -> AsyncIterator[dict[str, Any]]:
+        if not self.recursive_listing:
+            return super().ils_recursive(entry, prefix)
+        elif prefix:
+            name = entry["name"]
+            top = name.rpartition("/")[0]
+            return implied_directories(self.fs._list_prefix(name), top)
         else:
-            return super().ils(entry, recursive=True, **kwargs)
+            name = entry["name"]
+            return implied_directories(self.fs._ils_recursive(name), name)
 
     async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         return await self._info(entry["name"], **kwargs)
@@ -942,22 +952,27 @@ class TreeView(_Files, TreeFileOperationHandler):
             await self._cp_tree(entry["name"], path2)
 
 
-class FlatView(_Files, FlatFileOperationHandler):
-    """A simulated storage as a flat handler, its primitives replaceable.
+class FlatView(_Files, TreeFileOperationHandler):
+    """A simulated storage as a handler listing keys, as object stores do, its primitives replaceable.
 
-    The flat strategies take a handler, and call its recursive ``ils``,
-    ``info``, ``rm_files``, ``cp_file``, ``mv_file``, ``makedirs`` and
+    The strategies call its ``ils``, ``ils_recursive``, ``info``,
+    ``rm_files``, ``cp_file``, ``mv_file``, ``makedirs``, ``rmdir`` and
     ``rm_file``. Each calls the filesystem's own method with the entries'
     names, unless a test gives one, e.g. one that fails. ``list_prefix``, a
     listing of every key starting with a raw prefix, e.g. "data/2024-",
-    answers recursive ``ils``: the filesystem's own unless given. A
-    ``cp_file`` or ``mv_file`` given takes paths, the entry's name. ``fs`` may
-    be None when all that a test calls is given.
+    answers ``ils_recursive``, its directories made up by
+    `implied_directories`: the filesystem's own unless given. A ``cp_file``
+    or ``mv_file`` given takes paths, the entry's name. ``fs`` may be None
+    when all that a test calls is given.
 
     It verifies no path. Its ``operation_limit`` is 32 requests at a time
-    unless given, its profile unknown, and its ``rm_batch_size`` 1000. Its
-    files are those of `TreeView`. It runs the flat strategies, as a
-    `FlatFileOperationHandler`.
+    unless given, and its ``rm_batch_size`` 1000. Its profile is unknown
+    unless given, but for ``recursive_ls`` and ``recursive_ls_with_prefix``,
+    always declared, and ``implicit_directories``, declared as the
+    filesystem keeps them where left unknown and nothing else forbids it.
+    ``rm_dir``, its ``rmdir``, takes the directory's name, e.g. to delete a
+    marker. Its files are those of `TreeView`. It runs the tree strategies,
+    as a `TreeFileOperationHandler`.
     """
 
     def __init__(
@@ -971,6 +986,7 @@ class FlatView(_Files, FlatFileOperationHandler):
         mv_file: Any = None,
         makedirs: Any = None,
         rm_file: Any = None,
+        rm_dir: Any = None,
         storage_profile: StorageProfile | None = None,
         operation_limit: asyncio.Semaphore | None = None,
         rm_batch_size: int = 1000,
@@ -992,25 +1008,51 @@ class FlatView(_Files, FlatFileOperationHandler):
         )
         self._makedirs = own("_makedirs", makedirs)
         self._rm_file = own("_rm_file", rm_file)
-        self.profile = storage_profile or UNKNOWN
+        self._rmdir = own("_rmdir", rm_dir)
+        # It lists keys, as object stores do: its profile says so, whatever it is
+        # given, and that its directories are implicit, unless it says otherwise.
+        profile = storage_profile or UNKNOWN
+        implicit = profile.implicit_directories
+        if implicit is None and not (
+            profile.parents_required or profile.copy_parents_required
+        ):
+            implicit = not getattr(fs, "hierarchical", False)
+        self.profile = replace(
+            profile,
+            implicit_directories=implicit,
+            recursive_ls=True,
+            recursive_ls_with_prefix=True,
+        )
         self.rm_batch_size = rm_batch_size
 
     def verify_path(self, path: str) -> None:
         """Nothing: the simulated storage takes any path."""
 
     def ils(
-        self,
-        entry: dict[str, Any],
-        recursive: bool = False,
-        *,
-        prefix: str = "",
-        **kwargs: Any,
+        self, entry: dict[str, Any], **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
-        path = entry["name"]
-        if recursive:
-            return self._list_prefix(f"{path}/{prefix}" if path else prefix)
+        return dir_ils(self.fs)(entry["name"], **kwargs)
+
+    def ils_recursive(
+        self, entry: dict[str, Any], prefix: bool = False
+    ) -> AsyncIterator[dict[str, Any]]:
+        name = entry["name"]
+        if prefix:
+            top = name.rpartition("/")[0]
+            return implied_directories(self._list_prefix(name), top)
         else:
-            return dir_ils(self.fs)(path, **kwargs)
+            return implied_directories(self._keys(name), name)
+
+    async def _keys(self, name: str) -> AsyncIterator[dict[str, Any]]:
+        """The keys below a directory, by ``list_prefix``: a file lists itself, a missing one raises."""
+        listed = False
+        async for key in self._list_prefix(f"{name}/" if name else ""):
+            listed = True
+            yield key
+        if not listed and name:
+            found = await self._info(name)  # Missing, it raises FileNotFoundError.
+            if found["type"] != "directory":
+                yield found
 
     async def info(self, entry: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         return await self._info(entry["name"], **kwargs)
@@ -1019,7 +1061,7 @@ class FlatView(_Files, FlatFileOperationHandler):
         await self._rm_file(entry["name"])
 
     async def rmdir(self, entry: dict[str, Any]) -> None:
-        await self.fs._rmdir(entry["name"])
+        await self._rmdir(entry["name"])
 
     async def makedirs(
         self,

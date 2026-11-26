@@ -34,7 +34,7 @@ from fsspec_alt_strategies.states import CpState, MvState
 
 from ..common.glob import PathAction
 from ..common.handler import FileTransfer
-from ..common.jobs import _transfer_of
+from ..common.jobs import _check_batch_size, _transfer_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
 from ..common.placement import _place_roots, _Placed, _Root
@@ -270,9 +270,13 @@ def _transfers(
         if not placed.directories and not placed.files:
             return
 
+        copies = _moves_by_copies(src, placed, move)
+        size = (
+            max(src.cp_batch_size, src.rm_batch_size) if copies else placed.batch_size
+        )
         engine = TreeTraversal(
             max_running=max_running,
-            max_events=_events_for(placed.batch_size),
+            max_events=_events_for(size),
             split=src.segments,
         )
         op._on_cancel = engine.cancel
@@ -284,6 +288,7 @@ def _transfers(
             dst,
             transfer,
             move=move,
+            copies=copies,
             maxdepth=maxdepth,
         )
         # A path ending with "/" goes as its contents, never whole.
@@ -304,6 +309,21 @@ def _transfers(
                 yield action.outcome(event)
 
     return Operation(run, state)
+
+
+def _moves_by_copies(
+    src: TreeFileOperationHandler, placed: _Placed, move: bool
+) -> bool:
+    """Whether a move copies its files, then deletes them in batches: within a storage renaming no file.
+
+    So an object store's move sends one deletion per ``rm_batch_size``
+    files, not one per file. Its batch sizes are checked.
+    """
+    copies = move and placed.batching and placed.profile.renames_files is False
+    if copies:
+        _check_batch_size(src.cp_batch_size, "cp_batch_size")
+        _check_batch_size(src.rm_batch_size, "rm_batch_size")
+    return copies
 
 
 class _Sending(PathAction):
@@ -346,6 +366,7 @@ class _Sending(PathAction):
         transfer: _Transfer,
         *,
         move: bool,
+        copies: bool = False,
         maxdepth: int | None,
     ) -> None:
         super().__init__(emit_event)
@@ -357,8 +378,11 @@ class _Sending(PathAction):
         self.move = move
         self.maxdepth = maxdepth
         self.limit = src.operation_limit
-        self.batch_size = placed.batch_size
         self.batching = placed.batching
+        # A move by copies: the files copied in batches, then their sources
+        # deleted in batches of the source's rm_batch_size.
+        self.copies = copies
+        self.batch_size = src.cp_batch_size if copies else placed.batch_size
         self.implicit_directories = placed.implicit_directories
         self.parents_required = placed.parents_required
         # One directory per request, its parent existing: each is made before
@@ -679,6 +703,11 @@ class _Sending(PathAction):
             *(self.transfer_file(*f[:4]) for f in alone),
         )
         gone = {name for names in outcomes for name in names}
+        if self.copies:
+            # Copied, not gone yet: each source deleted, even once cancelled.
+            copied = [(e, t) for e, t, *_ in batched if e["name"] in gone]
+            gone -= {e["name"] for e, _ in copied}
+            gone |= await self.delete_sources(copied)
         self.kept.update(
             self.key(e["name"])[:-1] for e, _, _ in files if e["name"] not in gone
         )
@@ -760,7 +789,7 @@ class _Sending(PathAction):
         async def transfer() -> tuple[dict[str, Exception | None], list[Exception]]:
             operation = (
                 self.src.mv_files(transfers)
-                if self.move
+                if self.move and not self.copies
                 else self.src.cp_files(transfers)
             )
             outcomes: dict[str, Exception | None] = {}
@@ -794,6 +823,8 @@ class _Sending(PathAction):
             error = outcomes.get(entry["name"], asyncio.CancelledError())
             if isinstance(error, FileExistsError) and not self.move:
                 gone += await self.transfer_file(entry, target, hint, missing)
+            elif error is None and self.copies:
+                gone.append(entry["name"])  # Copied: done once its source is deleted.
             elif error is None:
                 self.count(**{"files_moved" if self.move else "files_copied": 1})
                 self.out.append(("done", entry["name"], target))
@@ -804,9 +835,47 @@ class _Sending(PathAction):
             self.out.append((waiting[0][0], error))
         return gone
 
+    async def delete_sources(self, copied: list[tuple[Entry, StoragePath]]) -> set[str]:
+        """Delete the sources of files copied, in batches of the source's ``rm_batch_size``: the names of those gone."""
+        size = self.src.rm_batch_size
+        names = await asyncio.gather(
+            *(
+                self.delete_batch(copied[i : i + size])
+                for i in range(0, len(copied), size)
+            )
+        )
+        return {name for batch in names for name in batch}
+
+    async def delete_batch(self, copied: list[tuple[Entry, StoragePath]]) -> list[str]:
+        """Delete a batch of sources copied by the source's ``rm_files``: an error raised fails it whole."""
+        entries = [e for e, _ in copied]
+
+        async def delete() -> list[Any]:
+            async with self.src.rm_files(entries) as operation:
+                return [outcome async for outcome in operation]
+
+        try:
+            outcomes = await _write(delete())
+        except Exception as error:
+            self.out.append((entries[0], error))
+            return []
+        deleted = {o for o in outcomes if not isinstance(o, Exception)}
+        undone = [e for e in entries if e["name"] not in deleted] or entries
+        self.out.extend((undone[0], o) for o in outcomes if isinstance(o, Exception))
+        for entry, target in copied:
+            if entry["name"] in deleted:
+                self.count(files_moved=1)
+                self.out.append(("done", entry["name"], target))
+        return [e["name"] for e in entries if e["name"] in deleted]
+
     async def remove(self, entry: Entry, name: str, target: StoragePath) -> bool:
         """Delete a source directory now moved, unless it went with its last file: whether it is gone."""
-        if not self.implicit_directories:
+        if (
+            not self.implicit_directories
+            or entry.get("marker")
+            or (self.maxdepth is None and self.key(name) in self.roots)
+        ):
+            # Else, without a marker of its own, it went with its last file.
 
             async def rmdir() -> None:
                 # Already gone counts as deleted, as _tree_rm counts it.

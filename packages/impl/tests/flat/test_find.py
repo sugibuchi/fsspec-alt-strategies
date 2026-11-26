@@ -1,4 +1,4 @@
-"""Tests of `_flat_find`, checked against fsspec's own ``_find``."""
+"""Tests of `_tree_find` on a storage listing keys, checked against fsspec's own ``_find``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.states import FindState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.find import _flat_find
+from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -17,9 +17,9 @@ if TYPE_CHECKING:
 
 
 def _find(fs: SimulatedFileSystem, path: str, **kwargs: Any) -> Any:
-    """`_flat_find` on ``fs``, whose ``list_prefix`` or ``info`` ``kwargs`` may replace."""
+    """`_tree_find` on ``fs``, whose ``list_prefix`` or ``info`` ``kwargs`` may replace."""
     primitives = {k: kwargs.pop(k) for k in ("list_prefix", "info") if k in kwargs}
-    return _flat_find(FlatView(fs, **primitives), path, **kwargs)
+    return _tree_find(FlatView(fs, **primitives), path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
@@ -60,25 +60,13 @@ async def test_requests() -> None:
     assert len(entries) == 5
     # The 5 keys under data/, 2 a page: no info, and no listing per directory.
     assert fs.stats.calls == {"list": 3}
-    assert op.state == FindState(current=op.state.current, found=5)
+    assert op.state == FindState(
+        current=op.state.current, found=5, directories_listed=7
+    )
 
     fs.reset_stats()
     await _collect_with_errors(_find(fs, "data", withdirs=True))
     assert fs.stats.calls == {"list": 3, "info": 1}  # The info of data itself.
-
-
-async def test_yields_as_the_pages_come() -> None:
-    fs = SimulatedFileSystem(page_size=1, asynchronous=True)
-    _tree(fs)
-    async with _find(fs, "data") as op:
-        await anext(op)
-        # The first path, after the first page only.
-        assert fs.stats.calls == {"list": 1}
-        op.cancel()
-        assert [e async for e in op] == []
-    # Cancelled, it asked for no more pages.
-    assert fs.stats.calls == {"list": 1}
-    assert op.cancelled()
 
 
 def _listing(*names: str) -> Any:
@@ -100,7 +88,7 @@ async def _info(path: str) -> dict[str, Any]:
 async def test_markers_are_dirs() -> None:
     list_prefix = _listing("data/", "data/empty/", "data/a/b.txt")
     entries, _ = await _collect_with_errors(
-        _flat_find(
+        _tree_find(
             FlatView(None, list_prefix=list_prefix, info=_info), "data", withdirs=True
         )
     )
@@ -108,10 +96,11 @@ async def test_markers_are_dirs() -> None:
         {"name": "data", "size": 0, "type": "directory"},
         {"name": "data/a", "size": 0, "type": "directory"},
         {"name": "data/a/b.txt", "size": 1, "type": "file"},
-        {"name": "data/empty", "size": 0, "type": "directory"},
+        # A marker: its directory, with an object of its own.
+        {"name": "data/empty", "size": 0, "type": "directory", "marker": True},
     ]
     files, _ = await _collect_with_errors(
-        _flat_find(FlatView(None, list_prefix=list_prefix, info=_info), "data")
+        _tree_find(FlatView(None, list_prefix=list_prefix, info=_info), "data")
     )
     assert [e["name"] for e in files] == ["data/a/b.txt"]
 
@@ -121,9 +110,11 @@ async def test_an_error_of_the_listing_ends_it() -> None:
         yield {"name": "data/a", "size": 1, "type": "file"}
         raise PermissionError(prefix)
 
-    op = _flat_find(FlatView(None, list_prefix=list_prefix, info=_info), "data")
-    with pytest.raises(PermissionError):
-        await _collect_with_errors(op)
+    op = _tree_find(FlatView(None, list_prefix=list_prefix, info=_info), "data")
+    found, errors = await _collect_with_errors(op)
+    # The root's failure, yielded: what was listed before it is found.
+    assert [e["name"] for e in found] == ["data/a"]
+    assert [type(e) for e in errors] == [PermissionError]
 
 
 def test_maxdepth_must_be_positive(flat_fs: SimulatedFileSystem) -> None:

@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""gcsfs's ``GCSFileSystem``, wrapped as a `FlatFileOperationHandler`, listing by prefix and deleting in full batches.
+"""gcsfs's ``GCSFileSystem``, wrapped as a handler listing keys, by prefix and deleting in full batches.
 
 `GcsfsHandler` uses what gcsfs has beside fsspec's API:
 
-- its recursive ``ils`` gives gcsfs's ``_find`` the prefix, which lists only
+- its ``ils_recursive`` with ``prefix`` gives gcsfs's ``_find`` the prefix, which lists only
   the objects starting with it: for the glob "data/2024-*", those of
   "data/2024-", not all of "data/". gcsfs still gathers every page before
   answering, so the listing is held whole, not streamed.
@@ -17,17 +17,15 @@ Its copies are the generic one's, as gcsfs's ``objects.rewrite`` asks nothing
 first.
 
 On a bucket with a hierarchical namespace, folders are objects of their own,
-which the flat strategies never delete: a recursive ``rm`` or ``mv`` leaves
-them. Such a bucket suits `FsspecTreeHandler`, whose ``rmdir`` is gcsfs's,
-deleting a folder. As a handler has one profile, the whole of GCS is a
-router, holding a handler per bucket: each wrapped as its kind of bucket
-suits.
+which a recursive ``rm`` or ``mv`` deletes by gcsfs's ``rmdir``, as its
+profile leaves ``implicit_directories`` unknown. As a handler has one
+profile, a router holding a handler per bucket may declare each kind.
 
 It imports nothing of gcsfs: it calls the wrapped filesystem's own methods.
 Those are private, as of gcsfs 2026.x: where ``_find`` takes no ``prefix``, or
 ``_rm_files`` is missing, it lists or deletes as the generic handler does.
 
-This module depends on `flat`.
+This module depends on `flat`, and `listing` of `common`.
 """
 
 from __future__ import annotations
@@ -37,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.profile import StorageProfile
 
+from ..common.listing import implied_directories
 from .flat import FsspecFlatHandler
 
 if TYPE_CHECKING:
@@ -55,12 +54,14 @@ GCSFS_PROFILE = StorageProfile(
     deletes_directories=False,
     copies_directories=False,
     case_sensitive=True,
+    recursive_ls=True,
+    recursive_ls_with_prefix=True,
 )
 """GCS through gcsfs, for buckets without a hierarchical namespace.
 
-One with it has folders of their own, which the flat strategies leave after a
-recursive rm or mv: wrap it as a tree. Both kinds served are a router, a
-filesystem per bucket. Its mv is fsspec's copy, then a delete.
+One with it has folders of their own, deleted by ``rmdir``, as
+``implicit_directories`` is left unknown. Its mv is fsspec's copy, then a
+delete.
 """
 
 _BATCH = 100
@@ -68,7 +69,7 @@ _BATCH = 100
 
 
 class GcsfsHandler(FsspecFlatHandler):
-    """A gcsfs filesystem as a flat handler, listing by prefix and deleting in full batches.
+    """A gcsfs filesystem as a handler listing keys, listing by prefix and deleting in full batches.
 
     It declares what is known of GCS: `GCSFS_PROFILE`, 32 requests and 8 data
     calls at a time, and batches of 100 deletions, the most objects one batch
@@ -86,27 +87,28 @@ class GcsfsHandler(FsspecFlatHandler):
     io_concurrency = 8
     rm_batch_size = _BATCH
 
-    def ils(
-        self, entry: Entry, recursive: bool = False, *, prefix: str = "", **kwargs: Any
+    def ils_recursive(
+        self, entry: Entry, prefix: bool = False, **kwargs: Any
     ) -> AsyncIterator[Entry]:
-        path = entry["name"]
+        name = entry["name"]
+        top, _, start = name.rpartition("/")
         if (
-            recursive
-            and path
+            prefix
+            and top
             and not kwargs
             and self.asynchronous
             and _takes_prefix(self.fs._find)
         ):
-            return self._objects(path, prefix)
+            return implied_directories(self._objects(top, start), top)
         else:
             # A directory, the buckets, or a caller's options, which gcsfs's find
             # takes: as the generic handler lists them.
-            return super().ils(entry, recursive, prefix=prefix, **kwargs)
+            return super().ils_recursive(entry, prefix, **kwargs)
 
-    async def _objects(self, path: str, prefix: str) -> AsyncIterator[Entry]:
-        """Every object starting with ``path/prefix``, in name order, listed by that prefix."""
+    async def _objects(self, top: str, start: str) -> AsyncIterator[Entry]:
+        """Every object starting with ``top/start``, in name order, listed by that prefix."""
         try:
-            found = await self.fs._find(path, detail=True, prefix=prefix)
+            found = await self.fs._find(top, detail=True, prefix=start)
         except FileNotFoundError:
             return  # A missing bucket lists nothing, as a missing prefix does.
         for entry in sorted(found.values(), key=lambda e: e["name"]):

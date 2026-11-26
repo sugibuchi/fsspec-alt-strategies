@@ -75,8 +75,8 @@ def _tree_walk(
     With ``topdown``, a directory comes before those below it, each listed on
     its own, and a caller may prune by changing ``dirs`` in place, as with
     fsspec's ``walk``. Without, a directory comes after all of those below it.
-    Where the handler's profile declares ``recursive_ls_depth_first_preorder``
-    and no ``maxdepth`` prunes it, the tree is listed by one recursive ``ils``,
+    Where the handler's profile declares ``recursive_ls`` and no
+    ``maxdepth`` prunes it, the tree is listed by one ``ils_recursive``,
     streamed: a listing broken off part way fails the whole tree. Otherwise
     each directory is listed on its own.
 
@@ -91,7 +91,7 @@ def _tree_walk(
       list.
 
     Requests: one ``ils`` per directory walked, or bottom up by one listing,
-    one recursive ``ils`` of ``path``. Each page holds a permit of the
+    one ``ils_recursive`` of ``path``. Each page holds a permit of the
     handler's ``operation_limit``.
 
     ``path`` is the directory the walk starts from, listed by the ``ils`` of
@@ -170,17 +170,27 @@ def _root_task(
     entry: Entry,
     action: PathAction,
     handler: TreeFileOperationHandler,
+    *,
+    prefix: str | None = None,
     **options: Any,
 ) -> _TraversalTask:
     """The root task of a traversal whose action needs no order but its own: one listing where it streams right.
 
-    Where the handler's profile declares ``recursive_ls_depth_first_preorder``,
-    each directory's descendants come together, so a subtree that neither
-    ``maxdepth`` nor a pattern prunes is streamed by one recursive listing:
-    the root's, if it is one. Else a directory per listing: one failing fails
-    only itself. The handler is open, its profile read.
+    Where the handler's profile declares ``recursive_ls``, a subtree that
+    neither ``maxdepth`` nor a pattern prunes is streamed by one
+    ``ils_recursive``: the root's, if it is one. Else a directory per
+    listing: one failing fails only itself. The handler is open, its profile
+    read.
+
+    ``prefix`` is a string all the paths traversed start with, e.g. a glob's
+    "data/2024-". Where the profile declares ``recursive_ls_with_prefix``, as
+    an object store lists keys, the whole tree is then streamed by one
+    listing narrowed to it, the patterns and ``maxdepth`` pruning as it
+    streams.
     """
-    declared = handler.profile.recursive_ls_depth_first_preorder
+    if prefix is not None and handler.profile.recursive_ls_with_prefix:
+        return TraverseSubtree(engine, entry, action, handler, prefix=prefix, **options)
+    declared = handler.profile.recursive_ls
     root = VisitDirectory(
         engine, entry, action, handler, use_one_listing=declared, **options
     )

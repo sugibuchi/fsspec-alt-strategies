@@ -1,4 +1,4 @@
-"""Tests of `_flat_rm`, the delete that deletes a prefix's keys in batches as it lists."""
+"""Tests of `_tree_rm` on a storage listing keys: it deletes them in batches as it lists."""
 
 from __future__ import annotations
 
@@ -9,9 +9,10 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fsspec.asyn import AsyncFileSystem
 
+from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.states import RmState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.rm import _flat_rm
+from fsspec_alt_strategies_impl.tree.rm import _tree_rm
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -31,8 +32,8 @@ def _view(fs: Any, kwargs: dict[str, Any]) -> FlatView:
 
 
 def _rm(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`_flat_rm` on ``fs``, whose primitives ``kwargs`` may replace."""
-    return _flat_rm(_view(fs, kwargs), path, **kwargs)
+    """`_tree_rm` on ``fs``, whose primitives ``kwargs`` may replace."""
+    return _tree_rm(_view(fs, kwargs), path, **kwargs)
 
 
 _FILES = [
@@ -55,7 +56,8 @@ async def test_deletes_the_keys_under_the_prefix(flat_fs: SimulatedFileSystem) -
     _tree(flat_fs)
     deleted, errors = await _collect_with_errors(_rm(flat_fs, "data"))
     assert errors == []
-    assert sorted(deleted) == _FILES
+    # The root too, by rmdir: it may have a marker.
+    assert sorted(deleted) == ["data", *_FILES]
     assert sorted(flat_fs._file_data) == ["database.csv", "other/kept"]
 
 
@@ -66,11 +68,18 @@ async def test_requests() -> None:
     await _collect_with_errors(op)
     # 5 keys: 3 pages of 2, and 3 batches of 2. No info, and no request per key.
     assert fs.stats.calls == {"list": 3, "delete": 3}
-    assert op.state == RmState(current=op.state.current, files_found=5, files_deleted=5)
+    assert op.state == RmState(
+        current=op.state.current,
+        files_found=5,
+        files_deleted=5,
+        directories_deleted=1,  # The root, which may have a marker.
+    )
 
 
 async def test_deletes_while_the_listing_goes_on(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
+    for i in range(40):  # More than the events the traversal holds unread.
+        flat_fs.add_file(f"data/many/{i:02}")
     events: list[str] = []
 
     async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
@@ -87,7 +96,7 @@ async def test_deletes_while_the_listing_goes_on(flat_fs: SimulatedFileSystem) -
     )
     # The first batch is deleted before the listing has given the last key.
     assert events.index("deleted") < len(events) - 1 - events[::-1].index("listed")
-    assert events.count("deleted") == 3
+    assert events.count("deleted") == 23
 
 
 async def test_a_file(flat_fs: SimulatedFileSystem) -> None:
@@ -141,10 +150,9 @@ async def test_a_failed_batch_is_yielded_and_the_others_go(
     deleted, errors = await _collect_with_errors(
         _rm(flat_fs, "data", rm_files=rm_files, batch_size=2)
     )
+    # As the storage raised it, with no note.
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].__notes__ == [
-        "Deleting 'data/2023/01/part-0.parquet', 'data/2023/02/part-0.parquet' failed."
-    ]
+    assert not getattr(errors[0], "__notes__", [])
     assert len(deleted) == 3
     assert "data/2023/01/part-0.parquet" in flat_fs._file_data
 
@@ -163,15 +171,15 @@ async def test_a_key_its_batch_refused_is_yielded_and_the_others_counted(
     op = _rm(flat_fs, "data", rm_files=rm_files, batch_size=2)
     deleted, errors = await _collect_with_errors(op)
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].__notes__ == [f"Deleting {refused!r} failed."]
     assert len(deleted) == 4 and refused not in deleted
     assert refused in flat_fs._file_data
     assert (op.state.files_deleted, op.state.errors) == (4, 1)
 
 
-async def test_markers_are_deleted_as_keys() -> None:
-    keys = {"data/": 0, "data/empty/": 0, "data/a.txt": 1}
+async def test_markers_are_deleted_by_rmdir() -> None:
+    keys = {"data/": 0, "data/empty/": 0, "data/a.txt": 1, "data/b/c.txt": 1}
     deleted_keys: list[str] = []
+    directories: list[str] = []
 
     async def list_prefix(prefix: str) -> AsyncIterator[dict[str, Any]]:
         for name in sorted(keys):
@@ -181,22 +189,27 @@ async def test_markers_are_deleted_as_keys() -> None:
     async def rm_files(paths: list[str]) -> None:
         deleted_keys.extend(paths)
 
+    async def rm_dir(path: str) -> None:
+        directories.append(path)
+
     async def info(path: str) -> dict[str, Any]:
         raise AssertionError("not asked")
 
-    view = _view(
+    view = FlatView(
         None,
-        {
-            "list_prefix": list_prefix,
-            "info": info,
-            "rm_files": rm_files,
-            "batch_size": 10,
-            "concurrency_limit": asyncio.Semaphore(4),
-        },
+        list_prefix=list_prefix,
+        info=info,
+        rm_files=rm_files,
+        rm_dir=rm_dir,
+        rm_batch_size=10,
+        operation_limit=asyncio.Semaphore(4),
+        storage_profile=StorageProfile(implicit_directories=True),
     )
-    op = _flat_rm(view, "data")
-    await _collect_with_errors(op)
-    assert sorted(deleted_keys) == ["data/", "data/a.txt", "data/empty/"]
+    _, errors = await _collect_with_errors(_tree_rm(view, "data"))
+    assert errors == []
+    assert sorted(deleted_keys) == ["data/a.txt", "data/b/c.txt"]
+    # A directory with a marker, and the root, which may have one: not data/b.
+    assert sorted(directories) == ["data", "data/empty"]
 
 
 async def test_cancel_sends_no_new_batch() -> None:
@@ -241,9 +254,11 @@ async def test_maxdepth_requests(flat_fs: SimulatedFileSystem) -> None:
     op = _rm(flat_fs, "data", maxdepth=1)
     deleted, _ = await _collect_with_errors(op)
     assert deleted == ["data/README.md"]
-    # The prefix lists every key under it: those deeper are left out.
+    # Within maxdepth, a directory per listing: data alone.
     assert flat_fs.stats.calls == {"list": 1, "delete": 1}
-    assert op.state == RmState(current=op.state.current, files_found=1, files_deleted=1)
+    assert op.state == RmState(
+        current=op.state.current, files_found=1, files_deleted=1, directories_deleted=0
+    )
 
 
 async def test_maxdepth_1_of_a_pattern_lists_no_dir_matched(

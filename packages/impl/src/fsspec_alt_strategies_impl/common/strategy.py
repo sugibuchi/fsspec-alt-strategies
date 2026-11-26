@@ -4,9 +4,8 @@
 
 `Strategy` declares one method per strategy: ``walk``, ``find``, ``glob``,
 ``du``, ``rm``, ``rm_files``, ``cp``, ``cp_files``, ``mv`` and ``mv_files``. Each takes a strategy's arguments, but the
-handler it works on, which is ``self``. A family's handler implements them by
-its family's strategies, e.g. `TreeFileOperationHandler`'s ``rm`` by
-``_tree_rm``. A storage's handler overrides one to choose another, e.g. its
+handler it works on, which is ``self``. `TreeFileOperationHandler` implements
+them by the tree strategies, e.g. its ``rm`` by ``_tree_rm``. A storage's handler overrides one to choose another, e.g. its
 own.
 
 `handler.FileOperationHandler` is a `StorageHandler` with them: what
@@ -48,12 +47,12 @@ __all__ = ["Strategy"]
 class Strategy(ABC):
     """The strategies of a handler, one method each, run on the handler itself.
 
-    Each takes the arguments of a family's strategy, e.g. ``_tree_walk``'s,
+    Each takes the arguments of its strategy, e.g. ``_tree_walk``'s,
     without the handler it works on: the handler is ``self``. A copy or move
     takes the destination's handler, ``dst``, ``self`` again within one
     storage. Each returns an operation, not started: the filesystem runs it.
     The batch strategies, `rm_files`, `cp_files` and `mv_files`, have
-    defaults here, a request per file, which no family changes: a storage
+    defaults here, a request per file, which the tree handler keeps: a storage
     sending several by one request overrides them.
 
     Paths come as the filesystem verified them, without a protocol: each a
@@ -65,7 +64,6 @@ class Strategy(ABC):
     See Also
     --------
     TreeFileOperationHandler : These, by the tree strategies.
-    FlatFileOperationHandler : These, by the flat strategies.
     """
 
     # How the strategies run in bulk: the most files each batch strategy takes
@@ -246,7 +244,7 @@ class Strategy(ABC):
         """Delete files the caller found, e.g. a batch of a recursive ``rm``'s.
 
         The recursive deletions and moves send their files to it, in batches
-        of the handler's ``rm_batch_size``. A family's handler deletes each by
+        of the handler's ``rm_batch_size``. By default, a handler deletes each by
         ``rm_file``, as many at once as ``operation_limit`` allows. A storage
         deleting several files by one request overrides it, e.g. with
         `rm_files.rm_by_request` and S3's DeleteObjects.
@@ -314,7 +312,7 @@ class Strategy(ABC):
 
         The recursive copies within one storage send their files to it, in
         batches of the handler's ``cp_batch_size``, once each destination's
-        directory is ready. A family's handler copies each by ``cp_file``, as
+        directory is ready. By default, a handler copies each by ``cp_file``, as
         many at once as ``operation_limit`` allows. A storage copying several
         files by one request overrides it, e.g. with `cp_files.cp_by_request`
         and a commit.

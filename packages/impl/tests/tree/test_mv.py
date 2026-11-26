@@ -257,7 +257,8 @@ async def test_implicit_dirs_save_the_dir_requests(
         profile=profile,
     )
     moved, errors = await _collect_with_errors(op)
-    assert (sent, errors) == ([], [])
+    # The root alone, which may have a marker: those below have none listed.
+    assert (sent, errors) == (["rmdir moved"], [])
     # The same outcome: the directories moved too, as one found already gone is.
     assert len(moved) == len(moved_unknown)
     assert op.state.directories_moved == unknown.state.directories_moved == 6

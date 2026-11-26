@@ -32,7 +32,7 @@ from .glob import _tree_glob
 from .walk import _MAX_RUNNING, _root_task
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Sequence
 
     from ..common.handler import Entry, StoragePath
     from .handler import TreeFileOperationHandler
@@ -66,8 +66,9 @@ def _tree_rm(
     volumes. The deletions then start after the first listings, not after the
     last. It also keeps going past a failure, and reports each.
 
-    It loses on object stores, which delete keys in batches: their own
-    ``_rm``, or `_flat_rm`, makes fewer requests there. On a storage deleting a
+    On object stores, it deletes keys in batches of ``rm_batch_size``, a
+    subtree listed by one ``ils_recursive`` where the profile declares
+    ``recursive_ls``. On a storage deleting a
     directory with everything in it in one request, that request wins: the
     profile's ``deletes_directories=True`` says ``rm_tree`` sends it.
 
@@ -167,6 +168,7 @@ def _tree_rm(
             implicit_directories=bool(profile.implicit_directories),
             missing_raises=single,
         )
+        deletion.empties(roots.directories, maxdepth)
 
         tasks: list[PathTask]
         if maxdepth is None and profile.deletes_directories is True:
@@ -354,6 +356,8 @@ class _Deletion(PathAction):
         self.missing_raises = missing_raises
         # The directories holding something that stayed, until they come.
         self.kept: set[_Key] = set()
+        # The roots emptied: each may have a marker, whatever its entry says.
+        self.roots: set[_Key] = set()
         # The outcomes of the batch consumed.
         self.out: list[Any] = []
 
@@ -376,6 +380,11 @@ class _Deletion(PathAction):
 
     async def failed(self, entry: Entry) -> Any:
         return False  # Kept, with all in it.
+
+    def empties(self, roots: Iterable[Entry], maxdepth: int | None) -> None:
+        """Note the roots, which go once emptied, with their markers: none with maxdepth, as what is deeper stays."""
+        if maxdepth is None:
+            self.roots = {self.key(d["name"]) for d in roots}
 
     async def plan_tree(self, entry: Entry) -> None:
         """Plan a root's deletion whole, by one ``rm_tree``."""
@@ -480,8 +489,12 @@ class _Deletion(PathAction):
 
     async def delete_directory(self, entry: Entry) -> bool:
         """Delete an empty directory, unless it went with its last file: whether it is gone."""
-        if self.implicit_directories:
-            return True  # Gone already, as a FileNotFoundError tells.
+        if (
+            self.implicit_directories
+            and not entry.get("marker")
+            and self.key(entry["name"]) not in self.roots
+        ):
+            return True  # Gone with its last file: no object of its own.
         name = _trim(entry["name"])
         try:
             sent = await _write(

@@ -95,9 +95,7 @@ known_implementations: dict[str, KnownImplementation] = {
         "handler": "S3fsHandler",
     },
     "gcsfs.core.GCSFileSystem": {
-        # For buckets without a hierarchical namespace. One with it has folders of
-        # their own, which the flat strategies leave after a recursive rm or mv:
-        # wrap it as a tree. Its handler declares the rest: see GcsfsHandler.
+        # Its handler declares what is known of GCS: see GcsfsHandler.
         "handler": "GcsfsHandler",
     },
     "adlfs.spec.AzureBlobFileSystem": {

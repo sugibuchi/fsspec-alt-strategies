@@ -44,7 +44,7 @@ class _BreadthFirst(SimulatedFileSystem):
 
 def _view(fs: SimulatedFileSystem) -> TreeView:
     # Declared parents first; left unknown, the order is taken so too.
-    profile = StorageProfile(recursive_ls_depth_first_preorder=False)
+    profile = StorageProfile(recursive_ls=False)
     return TreeView(fs, recursive_listing=True, storage_profile=profile)
 
 
@@ -76,7 +76,7 @@ async def test_a_parents_first_listing_declared_depth_first_goes_wrong() -> None
     # Why the declaration: taken as depth first, a directory is done as soon as
     # the listing passes to another, though more of it comes later.
     fs = _fs()
-    profile = StorageProfile(recursive_ls_depth_first_preorder=True)
+    profile = StorageProfile(recursive_ls=True)
     view = TreeView(fs, recursive_listing=True, storage_profile=profile)
     walked, _ = await _collect_with_errors(_tree_walk(view, "data", topdown=False))
     # An rm plans data/a twice too. Its consumer orders a batch by names, so a

@@ -9,6 +9,7 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
+from fsspec_alt_strategies_impl.common.listing import ils_by_directory
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.walk import WalkState, _tree_walk
 from fsspec_alt_strategies_impl_testing import (
@@ -27,9 +28,16 @@ _SETTINGS = {"profile": "storage_profile", "concurrency_limit": "operation_limit
 """The keyword arguments that set the filesystem's profile and limit, by its attribute."""
 
 
+class _ByDirectory(TreeView):
+    """A view whose ``ils_recursive`` lists a directory at a time, depth first, by ``ils_by_directory``."""
+
+    def ils_recursive(self, entry: Any, prefix: bool = False) -> Any:
+        return ils_by_directory(self, entry)
+
+
 def _walk(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
     """`_tree_walk` on a filesystem's own primitives, which ``kwargs`` may replace."""
-    view = TreeView(
+    view = _ByDirectory(
         fs,
         **{k: kwargs.pop(k) for k in _PRIMITIVES & kwargs.keys()},
         **{_SETTINGS[k]: kwargs.pop(k) for k in _SETTINGS.keys() & kwargs.keys()},
@@ -172,8 +180,8 @@ async def test_on_error_raise_stops_at_once(topdown: bool) -> None:
                 topdown=topdown,
                 on_error="raise",
                 concurrency_limit=asyncio.Semaphore(1),
-                # Its default listing, a directory per request, is depth first.
-                profile=StorageProfile(recursive_ls_depth_first_preorder=True),
+                # Its listing, a directory per request, is depth first.
+                profile=StorageProfile(recursive_ls=True),
             )
         )
     if topdown:
@@ -182,7 +190,7 @@ async def test_on_error_raise_stops_at_once(topdown: bool) -> None:
         assert "data/2023" in fs.requested
         assert set(fs.requested) <= {"data", "data/2023", "data/2024"}
     else:
-        # The default listing is read a directory at a time, depth first:
+        # The listing is read a directory at a time, depth first:
         # data/2023 fails, and data/2024, waiting behind it, is never listed.
         assert fs.requested == ["data", "data/2023"]
     assert fs._in_flight == 0
@@ -329,7 +337,7 @@ async def test_bottom_up_each_directory_comes_once_after_all_below_it(
 ) -> None:
     # Recursively listed without maxdepth, as declared, a directory per request with it.
     _tree(any_fs)
-    profile = StorageProfile(recursive_ls_depth_first_preorder=True)
+    profile = StorageProfile(recursive_ls=True)
     view = TreeView(any_fs, recursive_listing=maxdepth is None, storage_profile=profile)
     walk = _tree_walk(view, "data", topdown=False, maxdepth=maxdepth)
     order = [directory async for directory, _, _ in walk]

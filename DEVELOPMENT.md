@@ -13,8 +13,8 @@ ruff, mypy, pytest and coverage settings in `pyproject.toml`, CI, and the docs.
 | `.../states.py`                                         | The states the strategies report, e.g. `FindState`       |
 | `.../wrapper.py`                                        | `known_implementations`: how known ones are wrapped      |
 | `packages/impl/src/fsspec_alt_strategies_impl/`         | The strategies, copied into projects                     |
-| `.../tree/`, `.../flat/`                                | Each family's handler class and strategies               |
-| `.../common/`                                           | What the families share, e.g. `BaseFileSystem`, the jobs |
+| `.../tree/`                                             | The handler class and its strategies                     |
+| `.../common/`                                           | What they share, e.g. `BaseFileSystem`, the listings     |
 | `.../files/`                                            | File objects, their async adapters, and transactions     |
 | `.../wrapper/`, `.../monitor.py`                        | Handlers wrapping fsspec filesystems, `monitored()`      |
 | `.../router.py`                                         | `RoutingHandler`, `RoutingFileSystem`: many storages     |
@@ -44,7 +44,9 @@ CI runs ruff, mypy, zizmor and actionlint, and pytest on every supported Python 
 
 - Run strategies on `SimulatedFileSystem`, with the fixtures `flat_fs`, `hierarchical_fs`, or `any_fs` for both.
   `add_file` and `add_dir` set up files without requests.
-- Start a strategy on a `TreeView` or a `FlatView` of the simulator, e.g. `_tree_rm(TreeView(fs), "data")`. A view is
+- Start a strategy on a `TreeView` or a `FlatView` of the simulator, e.g. `_tree_rm(TreeView(fs), "data")`. A
+  `TreeView` lists a directory per request, or a tree by one listing with `recursive_listing=True`. A `FlatView` lists
+  keys by prefix, as an object store does. A view is
   a handler: it gives the strategy the primitives it calls, and lets a test replace one, e.g. with one that fails.
   It also sets the storage's profile and `operation_limit`, and opens files of the simulator.
 - Assert the requests made, e.g. `fs.stats.calls == {"list": 1, "delete": 3}`: they are what a strategy is for.
@@ -86,8 +88,8 @@ The library aims at large cloud storages, such as data lakes holding millions of
 A storage is implemented in two parts, each with one concern:
 
 - a **storage handler** is how the storage is accessed. A developer writes it: the storage's primitives, its paths,
-  its profile, its limits, and its clients, opened and closed. It subclasses its family's, `TreeFileOperationHandler`
-  or `FlatFileOperationHandler`, which runs the family's strategies;
+  its profile, its limits, and its clients, opened and closed. It subclasses `TreeFileOperationHandler`, which runs
+  the strategies on every storage, its profile telling them what the storage does;
 - a **filesystem**, `BaseFileSystem`, enforces the contract between the client code and the storage. It implements
   fsspec's whole public API on one handler, running the handler's strategies as its recursive methods. Nobody
   overrides its methods.
@@ -107,11 +109,10 @@ a change, is kept in one place: the filesystem.
 _PathHandler                           common/handler.py: paths
 ├── StorageHandler                     common/handler.py: lifecycle, profile, limits, primitives
 │   └── FileOperationHandler           common/handler.py: + Strategy, of common/strategy.py
-│       ├── TreeFileOperationHandler   tree/handler.py
-│       │   └── FsspecTreeHandler      wrapper/tree.py
-│       │       └── AdlfsHandler       wrapper/adlfs.py
-│       └── FlatFileOperationHandler   flat/handler.py
-│           └── FsspecFlatHandler      wrapper/flat.py
+│       └── TreeFileOperationHandler   tree/handler.py
+│           ├── FsspecTreeHandler      wrapper/tree.py
+│           │   └── AdlfsHandler       wrapper/adlfs.py
+│           └── FsspecFlatHandler      wrapper/flat.py: an object store
 │               ├── S3fsHandler        wrapper/s3fs.py
 │               └── GcsfsHandler       wrapper/gcsfs.py
 └── RoutingHandler                     router.py: no primitives
@@ -124,7 +125,7 @@ AsyncFileSystem                        fsspec's
 
 #### The handler
 
-`StorageHandler` holds what both families share:
+`StorageHandler` holds what every handler has:
 
 - **Its lifecycle.** It is made without a request. `await open()` loads its profile with `load_profile()`, once.
   `await aclose()` releases what `open()` made, and a later call opens it again. Its sync `close()` is the
@@ -144,6 +145,7 @@ AsyncFileSystem                        fsspec's
   `pipe_file`, `get_file` or `put_file` one per request it sends.
 - **Its paths:** its `protocol`, `strip_protocol` and `unstrip_protocol`, its `root`, and the path methods below.
 - **The primitives of single paths:** `ils`, `info`, `rm_file`, `rmdir`, `makedirs`, `cp_file` and `mv_file`.
+- **Its recursive listing,** `ils_recursive`, optional, as "Listings" says.
 - **Its files:** `open_file`, with Python's sync API, for fsspec's sync `open`, and `open_async_file`, whose methods
   are awaited, for `open_async` and the strategies. Both raise NotImplementedError by default. A handler gives its
   files either API, e.g. through `AsyncFileAdapter`, and supports fsspec's transactions in `open_file`, as it chooses.
@@ -166,21 +168,13 @@ The filesystem calls only what `StorageHandler` declares, never finding a method
 handler, `dst`. The mixin also declares how its batch strategies run in bulk: `rm_batch_size`, `cp_batch_size` and
 `mv_batch_size`. That is no concern of `StorageHandler`, whose primitives each act on one item.
 
-Each family's handler class implements the strategy methods by its strategies, but the batch ones, whose defaults are
-the mixin's. It adds the primitives its strategies call:
+`TreeFileOperationHandler` implements the strategy methods by the tree strategies, but the batch ones, whose defaults
+are the mixin's. It adds the optional primitives on a whole directory, `rm_tree`, `mv_tree` and `cp_tree`. A storage's
+handler overrides a strategy method to choose another strategy, e.g. its own.
 
-| Class                      | Adds                                                                                          |
-|----------------------------|-----------------------------------------------------------------------------------------------|
-| `TreeFileOperationHandler` | `ils(entry, recursive=True)`, by default a directory per request, and optional `rm_tree`, `mv_tree`, `cp_tree` |
-| `FlatFileOperationHandler` | Required `ils(entry, recursive=True, prefix=...)`                                             |
-
-`ils` is a handler's one listing primitive: a directory's items, or with `recursive` all below it.
-
-A handler's class tells its family. A storage's handler overrides a strategy method to choose another strategy, e.g.
-its own.
-
-`rm_files(entries)` is the strategy deleting files a caller found. The recursive deletions and moves of both families
-send it their files in batches of the handler's `rm_batch_size`, 1 by default. Its default, `rm_files._rm_each_file`,
+`rm_files(entries)` is the strategy deleting files a caller found. The recursive deletions send it their files in
+batches of the handler's `rm_batch_size`, 1 by default. So do the moves copying within a storage whose profile
+declares `renames_files=False`. Its default, `rm_files._rm_each_file`,
 deletes each by `rm_file`, as many at once as `operation_limit` allows. A storage deleting several files by one
 request overrides it with `rm_files.rm_by_request` and that request. It declares its batch, e.g. 1000 on S3 or 256
 for Azure's Blob Batch.
@@ -195,8 +189,7 @@ declares `cp_batch_size` or `mv_batch_size`.
   `cp_entry` or `mv_entry`. Between two storages, each file streams on its own.
 - A file joins its batch once its destination's directory is ready, whatever the directory. A batch goes once full,
   or once the walk has ended with no directory left to make.
-- Each file's outcome then goes to the jobs' `done` or `failed`, as a file's own job would. A copy a destination
-  refused to overwrite is replaced on its own, as without batches.
+- A copy a destination refused to overwrite is replaced on its own, as without batches.
 
 A batch's job holds no permit of `operation_limit`: its operation's requests take theirs, and a permit held around
 them would wait for itself once all were so held.
@@ -249,7 +242,7 @@ An item that exists is named by its entry, a dict as fsspec's `ls` with `detail`
 
 #### The filesystem
 
-`BaseFileSystem` is the one filesystem of both families:
+`BaseFileSystem` is the one filesystem of every handler:
 
 - It takes a handler, as a required argument, and keeps it private, as `_handler`: its strategy methods return
   operations, which callers never get. It exposes neither its profile nor its limits: they are the handler's.
@@ -264,6 +257,8 @@ An item that exists is named by its entry, a dict as fsspec's `ls` with `detail`
   which keeps a trailing "/".
 - It answers and raises as fsspec's methods do, and tells the monitors of each call. A method raises its strategy's
   failures: one as it is, several in an ExceptionGroup.
+- Its `_ils(path, recursive=False, prefix=False, **kwargs)` lists by the handler's `ils`, or with `recursive` its
+  `ils_recursive`. Where the profile declares no `recursive_ls`, it lists a tree by `listing.ils_by_directory`.
 - It has the sync methods fsspec does not make, `mv` and `rmdir`, and fsspec's `dircache`, as the next section says.
 
 A monitor's `Call` names the filesystem whose method was called, by its `_unwrapped()`. That is the filesystem
@@ -322,9 +317,9 @@ fsspec lets a filesystem keep its listings in `dircache`, for its own methods an
 
 A developer chooses, per storage:
 
-- a family, by the handler class a handler subclasses, whose strategy methods run the family's strategies;
 - another strategy for one method, by overriding it, e.g. `glob` with one of the storage's own;
-- a storage's recursive listing, by answering `recursive` in its `ils`, or a directory per request, by `super().ils`;
+- a storage's recursive listing, by implementing `ils_recursive`, which `recursive_ls=True` declares;
+- a listing narrowed by a prefix, by taking `prefix` in it, which `recursive_ls_with_prefix=True` declares;
 - a storage's recursive delete, by implementing `rm_tree`, which `deletes_directories=True` declares;
 - a storage's rename of a directory, by implementing `mv_tree`, which `renames_directories=True` declares;
 - a storage's copy of a directory, by implementing `cp_tree`, which `copies_directories=True` declares.
@@ -332,8 +327,8 @@ A developer chooses, per storage:
 `monitored(fs)` picks the handler of a filesystem from `known_implementations`, a table the developer may replace. An
 entry's `handler` names a `FileOperationHandler` by a string, as the interface never imports the strategies. A bare
 name is one of the built-in handlers in `monitor.py`'s `_BUILT_IN`, e.g. the generic `FsspecTreeHandler` and
-`FsspecFlatHandler`, and a full name is imported. The handler's class is what chooses the strategies. The profile
-names no family, as a family's adaptation to its storage is its handler's.
+`FsspecFlatHandler`, and a full name is imported. `FsspecFlatHandler` wraps an object store: its `ils_recursive`
+lists by the wrapped `find`, and its `rmdir` deletes a directory's marker key.
 
 Only a generic handler takes its profile, limits and batch sizes from its entry, as it knows nothing of the storage.
 A dedicated handler, e.g. `S3fsHandler`, knows its storage, so it declares them as class attributes, beside the code
@@ -341,8 +336,7 @@ relying on them. `monitored()` makes it with the filesystem alone, and refuses a
 
 ### Operations
 
-Each recursive method runs its handler's strategy method, a private strategy of its family, e.g. `tree/rm.py`'s
-`_tree_rm`:
+Each recursive method runs its handler's strategy method, a private strategy, e.g. `tree/rm.py`'s `_tree_rm`:
 
 - It takes the handler it works on: `_tree_rm(handler, path, maxdepth=...)`. A copy or move takes two, `src` and
   `dst`, which are the same handler within one storage.
@@ -356,7 +350,7 @@ Each recursive method runs its handler's strategy method, a private strategy of 
 
 It returns an `Operation`, private, which works as it is iterated, a few requests ahead of the caller:
 
-- It yields what it did, mixed with an exception per failed path. Each exception notes its path.
+- It yields what it did, mixed with an exception per failed path, as the storage raised it, with no note.
 - Its `state` is a frozen dataclass of counts so far, from `fsspec_alt_strategies.states`.
 - Its stopping follows `asyncio.Task`. `cancel()` starts nothing new, but yields what is in flight. `aclose()`, or
   leaving the loop, stops at once, waiting only for writes in flight.
@@ -379,19 +373,10 @@ A strategy replacing an fsspec method answers as it does. Where it departs on pu
 - With `maxdepth`, a move keeps the files deeper than the limit, and the directories holding them. fsspec's deletes
   the whole source.
 
-### Jobs
+### Placement
 
-Two modules serve the strategies changing a storage:
-
-- `common/placement.py`'s `_Placement` places each path of a copy or move, as fsspec's `copy` does, whatever the
-  family. It builds each target by the destination's `join`, and keeps the hints it learns on the way.
-- `common/jobs.py`'s `_Jobs` runs the flat strategies changing a storage: it finds what to change and does it at
-  once. Each request holds a permit of the handler's `operation_limit`, through a `_Queue`. `_FlatJobs` says where
-  the items come from.
-
-A tree copy or move takes only its roots from `placement._place_roots`. Below them, each directory's map value, a
-`(source, destination)` pair, places what is in it. A flat one joins both, as
-`_CopyOrMove(_CopyJobs, _FlatJobs)`, where `_CopyJobs` is `_Placement` and `_Jobs`.
+A copy or move places its roots as fsspec's `copy` does, by `common/placement.py`'s `_place_roots`. Below them, each
+directory's map value, a `(source, destination)` pair, places what is in it, by the destination's `join`.
 
 ### Copies between storages
 
@@ -442,42 +427,57 @@ Within one storage, a call is that storage's own. Between two, a recursive copy 
 `transfer_limit`. By default these stream the data, as the previous section says. A routing handler can copy on the
 server instead, e.g. from a URL. Through nested routers, the outermost router's are used.
 
-The router imports no family: each storage's handler runs its own strategies. Its transaction commits file by file,
+The router imports no strategy: each storage's handler runs its own. Its transaction commits file by file,
 so it is not atomic across storages.
 
-### The tree strategies
+### Listings
 
-The tree strategies list a directory with the handler's `ils`, its entries in any order, and a tree with its
-`ils(entry, recursive=True)`. A recursive listing may leave a directory out, as object stores list only files: the walk
-tells it from the paths below it.
+The strategies list a directory with the handler's `ils(entry)`, its entries in any order. Neither `ils` nor
+`ils_recursive` takes `**kwargs`. A handler may add keyword options of its own to either, each optional, named in its
+docstring. The strategies pass a caller's `ils_kwargs` on as given, so an option the handler does not take raises
+TypeError.
 
-By default, a tree handler's recursive `ils` runs `tree/handler.py`'s `_tree_ils`: depth first, a directory per
-request, one at a time. The strategies never ask it, as they list a directory per request themselves, many at once:
-it serves other callers, e.g. a filesystem's recursive listing. A handler listing a directory alone reaches it by
-`super().ils(entry, recursive=True)`. The generic tree
-handler lists so, but `AdlfsHandler` lists by Azure's own recursive listing. A storage may refuse a recursive listing
-in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`. Its handler's `ils` then falls back on
-`super().ils` itself.
+`ils_recursive(entry, prefix=False)` lists all below a directory by the storage's own listing. It raises
+NotImplementedError by default. Whatever the storage keeps, it lists a tree:
 
-The profile's `recursive_ls_depth_first_preorder` declares the order of a storage's own recursive listing:
+- each directory once, before all below it, all below it together: depth first, in preorder;
+- every directory, those kept only as the prefixes of keys too;
+- a directory's marker, a key ending with "/", as the directory's entry with `"marker": True`, never as an item.
 
-- True: each directory's descendants come together. That covers depth first, siblings in any order, and the byte
-  order of names, as object stores list keys. A subtree nothing prunes is then streamed by one recursive listing.
-- False, the default: nothing is promised, e.g. breadth first, as Dropbox's recursive listing documents no more. Each
-  directory is then listed on its own, a failure failing only itself.
+A file lists itself, and a missing directory raises FileNotFoundError. With `prefix=True`, the entry's name is a
+string all listed start with, e.g. "data/2024-", and nothing missing raises.
 
-The strategies cannot tell one order from another. By the time an entry comes under a directory taken as done, that
-directory may have been reduced, and a move may have deleted it. So the order is declared, never detected.
+`common/listing.py` holds two helpers:
+
+- `implied_directories(keys, top)` turns a key listing in name order into that tree. It makes up each directory
+  before its first key, and turns markers into their directories' entries.
+- `ils_by_directory(handler, entry)` lists a tree by one `ils` per directory, depth first. It serves a handler whose
+  storage refuses its own listing in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`.
+
+The profile declares what `ils_recursive` does, as the strategies cannot tell it:
+
+- `recursive_ls`: it is implemented. A subtree nothing prunes is then streamed by one listing. Without it, each
+  directory is listed on its own, a failure failing only itself.
+- `recursive_ls_with_prefix`: it takes `prefix`. A glob then lists a tree by one listing, narrowed to its patterns'
+  literal prefix. It needs `recursive_ls`, or the profile raises ValueError.
+
+The strategies cannot check the order either. By the time an entry comes under a directory taken as done, that
+directory may have been reduced, and a move may have deleted it. So the contract is declared, never detected.
+
+`FsspecFlatHandler`'s `ils_recursive` lists by the wrapped `find`, through `implied_directories`. `S3fsHandler` lists
+by `_iterdir` with no delimiter, and `GcsfsHandler` by `_find` with a prefix. `AdlfsHandler` lists by one ListBlobs,
+with no prefix.
 
 #### The traversal
 
-The tree strategies run on `common/tree.py`'s `TreeTraversal`, with `common/glob.py`'s tasks:
+The strategies run on `common/tree.py`'s `TreeTraversal`, with `common/glob.py`'s tasks:
 
 - `VisitDirectory` lists a directory by one `ils`, and runs a task per item as the listing streams.
-- `TraverseSubtree` reads a subtree from one recursive `ils`, as it streams, with no task per item. In byte order, a
-  subdirectory listed apart from what is below it is held until its first path comes.
-- `tree/walk.py`'s `_root_task` takes `TraverseSubtree` where the profile declares the order and nothing prunes the
-  root, else `VisitDirectory`, which streams each subtree it can.
+- `TraverseSubtree` reads a subtree from one `ils_recursive`, as it streams, with no task per item.
+- `tree/walk.py`'s `_root_task` takes `TraverseSubtree` where the profile declares `recursive_ls` and nothing prunes
+  the root, else `VisitDirectory`, which streams each subtree it can.
+- A glob with `recursive_ls_with_prefix` lists its root by one `ils_recursive`, narrowed to its patterns' common
+  literal prefix, as `_root_task(prefix=...)` takes it. It prunes the listing as it streams.
 
 What a strategy does on each path is a `PathAction`. So a strategy is a map-reduce:
 
@@ -489,7 +489,7 @@ What a strategy does on each path is a `PathAction`. So a strategy is a map-redu
 
 | Strategies                             | Their action                                             |
 |----------------------------------------|----------------------------------------------------------|
-| `_tree_walk` top down                  | `_WalkTopDown`: each directory, which the caller prunes  |
+| `_tree_walk` top down                  | `_WalkTopDown`: a directory per request, caller pruning  |
 | `_tree_walk` bottom up                 | `_WalkBottomUp`: each directory once all below it is     |
 | `_tree_find`, `_tree_glob`, `_tree_du` | `_Found` and `_Du`, by `tree/find.py`'s `_read`          |
 | `_tree_rm`                             | `_Deletion`: a directory deleted once all in it is       |
@@ -507,46 +507,44 @@ How the traversal goes:
 - **Failures.** A root's failure to list is raised, and each strategy answers as its fsspec method does. A directory's
   failure is emitted with its entry, as the storage raised it. A recursive listing broken off fails its whole subtree:
   nothing is listed again, as a storage resumes its own listing where it can.
-- **Patterns.** They are expanded by the family's glob first, as copies place paths from the common prefix of all
-  matches.
+- **Patterns.** They are expanded by the glob first, as copies place paths from the common prefix of all matches.
 
-### The flat strategies
+The walk lists a directory per request top down, as its caller prunes each. Bottom up, it streams a subtree by one
+listing where the profile declares `recursive_ls`.
 
-The flat strategies list with the handler's `ils(entry, recursive=True, prefix=...)`: every key below the directory
-starting with the prefix, at any depth, in name order, as object stores list them. Without `recursive`, `ils` lists one
-directory, for fsspec's own methods. The two are one request with or without a delimiter, as on S3, GCS and Azure.
+#### Object stores
 
-- The strategies list by a raw prefix, split at its last "/" by `flat._keys._listing`. So `_flat_glob` lists only keys
-  starting as its pattern does, e.g. `data` with the prefix `2024-` for `data/2024-*`.
-- Name order tells when a directory is done, so `_flat_walk` streams its directories. Each key is listed once.
-- Directories are derived from the keys, by `flat/_keys.py`. A key ending with "/" marks a directory.
-- `_flat_rm` deletes in batches of the handler's `rm_batch_size`, by its `rm_files`. A batch may span buckets.
-  `rm_files` yields each key deleted, and the error of each it could not delete, so that the others count as deleted.
-- `_flat_mv` renames with `mv_file` within one storage whose profile says it renames files. Otherwise it copies, then
-  deletes in batches.
-- A listing error ends the operation: there is no other listing to go on with.
+An object store is a handler like any other, its profile declaring what it does:
+
+- With `implicit_directories`, a directory has no object of its own but its marker. `rm` and `mv` call `rmdir` only
+  for a directory whose entry says `"marker": True`, and for a root emptied without `maxdepth`, which may have one.
+- A move within a storage whose profile declares `renames_files=False` copies its files in batches, by `cp_files` in
+  batches of `cp_batch_size`. It then deletes the sources by `rm_files`, in batches of `rm_batch_size`.
+- Elsewhere, a move sends each file by `mv_file`, or by `mv_files` in batches.
+- `rm_files` yields each key deleted, and the error of each it could not delete, so that the others count as deleted.
 
 ### Storage profiles
 
 A `StorageProfile` declares what a storage does that fsspec leaves open. A strategy is right on any storage, and a
 profile only saves requests or data:
 
-| Field                   | Saves                                                                  |
-|-------------------------|------------------------------------------------------------------------|
-| `parents_required`      | False: the `makedirs` of each destination directory written to         |
-| `copy_parents_required` | False: the `makedirs` of each directory the storage copies a file to   |
-| `implicit_directories`  | True: those, and the deletion of each directory                        |
-| `renames_files`         | True: the data copied by `_flat_mv`                                    |
-| `renames_directories`   | True: every request in a directory moved whole by one `mv_tree`        |
-| `deletes_directories`   | True: every request in a directory deleted whole by one `rm_tree`      |
-| `copies_directories`    | True: every request in a directory copied whole by one `cp_tree`       |
-| `case_sensitive`        | False: a path moved onto itself in another case, by one `mv_tree`      |
-| `atomic_writes`         | True: the temporary file and the move of a copy between storages       |
-| `recursive_ls_depth_first_preorder` | True: the names of a tree held until its listing ends      |
+| Field                      | Saves                                                                  |
+|----------------------------|------------------------------------------------------------------------|
+| `parents_required`         | False: the `makedirs` of each destination directory written to         |
+| `copy_parents_required`    | False: the `makedirs` of each directory the storage copies a file to   |
+| `implicit_directories`     | True: those, and the deletion of each directory                        |
+| `renames_files`            | True: the data copied by a move, each file renamed instead             |
+| `renames_directories`      | True: every request in a directory moved whole by one `mv_tree`        |
+| `deletes_directories`      | True: every request in a directory deleted whole by one `rm_tree`      |
+| `copies_directories`       | True: every request in a directory copied whole by one `cp_tree`       |
+| `case_sensitive`           | False: a path moved onto itself in another case, by one `mv_tree`      |
+| `atomic_writes`            | True: the temporary file and the move of a copy between storages       |
+| `recursive_ls`             | True: a request per directory, a subtree listed by one `ils_recursive` |
+| `recursive_ls_with_prefix` | True: the directories a glob lists, by one listing narrowed            |
 
 - A storage has one profile, which never changes. It is the handler's `profile`: `UNKNOWN` unless the handler sets
   what it knows, or what its `load_profile()` finds with a request.
-- A strategy awaits the handler's `open()` as its operation starts, e.g. in its jobs' `setup()`, then reads
+- A strategy awaits the handler's `open()` as its operation starts, then reads
   `profile`. `open()` loads it once, under a lock. A load that fails raises, and the next call tries again.
 - Neither takes a path, so that the profile cannot differ by path. A storage whose behaviour does, e.g. GCS's buckets
   with or without a hierarchical namespace, is several handlers under a router: one per bucket.
@@ -556,8 +554,8 @@ profile only saves requests or data:
   `copies_directories` and `case_sensitive` count only within one storage, and `atomic_writes` only between two.
 - Between two storages, a file copied is written: `parents_required` counts. Within one, it goes by the storage's own
   copy, which may make no parent where a write does, as on Microsoft Graph: `copy_parents_required` counts.
-- `recursive_ls_depth_first_preorder` tells of a tree handler's own recursive `ils` only, as "The tree strategies"
-  says. It is False by default, never None: parents first is the order right on any storage.
+- `recursive_ls` and `recursive_ls_with_prefix` tell of the handler's `ils_recursive`, as "Listings" says. They are
+  False by default, never None: a directory per request is right on any storage.
 - Any other field left None is unknown, and the strategy takes the way right on any storage.
 - `case_sensitive` is the exception: no way is right on both kinds of names. Unknown, paths are compared as fsspec
   compares them, as strings. On a storage whose names are not case-sensitive, a path copied or moved onto itself in

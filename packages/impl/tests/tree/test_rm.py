@@ -97,10 +97,11 @@ async def test_implicit_dirs_save_the_dir_deletions(
     profile = StorageProfile(implicit_directories=True)
     op = _rm(flat_fs, "data", rm_dir=rm_dir, profile=profile)
     deleted, errors = await _collect_with_errors(op)
-    assert (directories, errors) == ([], [])
-    # As a directory found already gone: not yielded.
-    assert sorted(deleted) == sorted(_FILES)
-    assert op.state.directories_deleted == 0
+    # The root alone, which may have a marker: those below have none listed.
+    assert (directories, errors) == (["data"], [])
+    # The others, gone with their last file: not yielded.
+    assert sorted(deleted) == sorted([*_FILES, "data"])
+    assert op.state.directories_deleted == 1
     assert not await flat_fs._exists("data")
     assert await flat_fs._exists("other/kept")
 

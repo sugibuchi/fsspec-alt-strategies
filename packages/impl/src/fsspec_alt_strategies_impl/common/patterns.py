@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Glob patterns, matched as fsspec's ``_glob`` matches them.
 
-Both globs, `_tree_glob` and `_flat_glob`, match with `_Search`, so the two never
-answer differently. A `_Search` also tells which directories the pattern can still
+`_tree_glob` matches with `_Search`, as fsspec's `_glob` matches. A `_Search` also tells which directories the pattern can still
 match in, as `_tree_glob` prunes by directory.
 
 To decide, a directory's path is matched with the pattern's segments, one by one.
@@ -143,6 +142,8 @@ class _Search:
         slash = path.rfind("/", 0, first_magic)
         relative = path[slash + 1 :]
         self.root = _trim(path[: slash + 1])
+        # What every path matched starts with: the pattern up to its first wildcard.
+        self.literal = path[:first_magic]
         self.start = len(self.root) + 1 if self.root else 0
         self.depth = _depth(path, relative, maxdepth)
         self.prefix = _Prefix(relative.split("/"))

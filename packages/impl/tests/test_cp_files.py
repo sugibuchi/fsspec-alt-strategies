@@ -15,8 +15,6 @@ from fsspec_alt_strategies_impl.common.cp_files import (
 )
 from fsspec_alt_strategies_impl.common.handler import FileTransfer
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.cp import _flat_cp
-from fsspec_alt_strategies_impl.flat.mv import _flat_mv
 from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl.tree.mv import _tree_mv
 from fsspec_alt_strategies_impl_testing import (
@@ -220,7 +218,7 @@ async def test_flat_move_in_batches(
         storage_profile=StorageProfile(renames_files=renames),
         rm_batch_size=1000,
     )
-    _, errors = await _collect_with_errors(_flat_mv(view, view, "data", "out"))
+    _, errors = await _collect_with_errors(_tree_mv(view, view, "data", "out"))
     assert errors == []
     assert await _found(flat_fs, "out") == sorted(
         f.replace("data", "out", 1) for f in _FILES
@@ -234,7 +232,7 @@ async def test_flat_move_in_batches(
 async def test_flat_copy_in_batches(flat_fs: SimulatedFileSystem) -> None:
     _tree(flat_fs)
     view = _FlatBatching(flat_fs, 4)
-    copied, errors = await _collect_with_errors(_flat_cp(view, view, "data", "out"))
+    copied, errors = await _collect_with_errors(_tree_cp(view, view, "data", "out"))
     assert errors == []
     assert len(copied) == len(_FILES)
     assert [len(p) for _, p in view.batches] == [4, 3]
@@ -273,7 +271,7 @@ async def test_a_cancelled_move_by_copies_leaves_each_key_in_one_place(
     view = _FlatBatching(
         flat_fs, 2, storage_profile=StorageProfile(renames_files=False)
     )
-    op = _flat_mv(view, view, "data", "out")
+    op = _tree_mv(view, view, "data", "out")
     async for _ in op:
         op.cancel()
     # The keys copied are deleted all the same: none is in both places.

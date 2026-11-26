@@ -80,10 +80,10 @@ async def test_a_directory_failing_yields_its_error(
 ) -> None:
     _tree(any_fs)
 
-    async def ils(entry: dict[str, Any], recursive: bool = False, **kwargs: Any) -> Any:
+    async def ils(entry: dict[str, Any], **kwargs: Any) -> Any:
         if entry["name"].rstrip("/") == "data/2023":
             raise OSError("data/2023")
-        async for e in view_ils(entry, recursive, **kwargs):
+        async for e in view_ils(entry, **kwargs):
             yield e
 
     view = TreeView(any_fs)

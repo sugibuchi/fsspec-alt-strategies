@@ -1,4 +1,4 @@
-"""Tests of `_flat_cp`, placing paths as fsspec's ``copy`` does."""
+"""Tests of `_tree_cp`, placing paths as fsspec's ``copy`` does."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from fsspec.utils import other_paths
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.states import CpState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.cp import _flat_cp
+from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 # A flat storage's: its directories are implicit, and none is made.
@@ -61,10 +61,10 @@ def _views(fs: Any, kwargs: dict[str, Any]) -> tuple[FlatView, FlatView]:
 
 
 def _cp(fs: SimulatedFileSystem, path1: Any, path2: Any, **kwargs: Any) -> Any:
-    """`_flat_cp` within ``fs``, whose primitives ``kwargs`` may replace."""
+    """`_tree_cp` within ``fs``, whose primitives ``kwargs`` may replace."""
     kwargs = {"profile": _FLAT, **kwargs}
     source, destination = _views(fs, kwargs)
-    return _flat_cp(
+    return _tree_cp(
         source, destination, path1, path2, **{"same_storage": True, **kwargs}
     )
 
@@ -212,7 +212,7 @@ async def test_markers_are_not_copied() -> None:
             "concurrency_limit": asyncio.Semaphore(4),
         },
     )
-    op = _flat_cp(
+    op = _tree_cp(
         source, destination, "data", "copied", cp_entry=cp_entry, same_storage=True
     )
     assert await _collect_with_errors(op) == ([("data/a.txt", "copied/a.txt")], [])
@@ -262,8 +262,8 @@ async def test_maxdepth_requests(flat_fs: SimulatedFileSystem) -> None:
         "bucket/data/a.txt",
         "bucket/data/b.txt",
     ]
-    # One listing of every key under the prefix, and a copy per key kept.
-    assert flat_fs.stats.calls == {"list": 1, "copy": 3}
+    # Within maxdepth, a listing per directory: data and data/2023.
+    assert flat_fs.stats.calls == {"list": 2, "copy": 3}
 
 
 async def test_maxdepth_below_1_is_refused(flat_fs: SimulatedFileSystem) -> None:
@@ -288,7 +288,7 @@ async def test_a_copy_between_two_storages_streams_each_key_by_default(
     flat_fs.add_file("data/a/x", b"xx")
     flat_fs.add_file("data/y", b"y")
     other = SimulatedFileSystem(asynchronous=True)
-    op = _flat_cp(FlatView(flat_fs), FlatView(other), "data", "copied")
+    op = _tree_cp(FlatView(flat_fs), FlatView(other), "data", "copied")
     copied, errors = await _collect_with_errors(op)
     assert (sorted(copied), errors) == (
         [("data/a/x", "copied/a/x"), ("data/y", "copied/y")],
@@ -325,7 +325,8 @@ async def test_a_name_the_destination_refuses_is_its_own_error(
     flat_fs.add_file("data/../../escaped.txt", b"2")
     copied, errors = await _collect_with_errors(_cp(flat_fs, "data", "copied"))
     assert copied == [("data/ok.txt", "copied/ok.txt")]
-    assert [type(e) for e in errors] == [ValueError]
+    # Refused, the directory "data/.." its listing implies, and the key below.
+    assert errors and {type(e) for e in errors} == {ValueError}
     assert sorted(flat_fs._file_data) == [
         "copied/ok.txt",
         "data/../../escaped.txt",

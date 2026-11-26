@@ -1,6 +1,6 @@
-"""Tests of `common.filesystem` and `wrapper`: what the families' classes share.
+"""Tests of `common.filesystem` and `wrapper`: what the handlers' classes share.
 
-The families test their filesystems through fsspec's methods. These test the
+The strategies' tests test their filesystems through fsspec's methods. These test the
 data methods a filesystem passes on to a handler wrapping another filesystem,
 and the helpers shaping fsspec's answers.
 """
@@ -26,7 +26,6 @@ from fsspec_alt_strategies_impl.common.filesystem import (
 from fsspec_alt_strategies_impl.common.handler import StorageHandler
 from fsspec_alt_strategies_impl.common.paths import fixed_prefix
 from fsspec_alt_strategies_impl.files.fsspec_async import SyncFileAdapter
-from fsspec_alt_strategies_impl.flat.handler import FlatFileOperationHandler
 from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
 from fsspec_alt_strategies_impl.wrapper.filesystem import FileSystemWrapper
 from fsspec_alt_strategies_impl.wrapper.flat import FsspecFlatHandler
@@ -417,7 +416,7 @@ class _NotingFlat(_Noting, FsspecFlatHandler):
         (lambda fs: fs._copy("data", "copied", recursive=True), 1),
         (lambda fs: fs._mv("data", "moved", recursive=True), 1),
         # A tree find reads its storage's, for its listing's order; a flat one none.
-        (lambda fs: fs._find("data"), {"tree": 1, "flat": 0}),
+        (lambda fs: fs._find("data"), 1),
     ],
 )
 async def test_strategies_load_the_profile_once(
@@ -463,7 +462,7 @@ async def test_a_strategy_overridden_is_the_one_the_filesystem_runs() -> None:
             return super().find(path, **kwargs)
 
     for view in (Flat, TreeView):
-        assert issubclass(view, (TreeFileOperationHandler, FlatFileOperationHandler))
+        assert issubclass(view, (TreeFileOperationHandler, TreeFileOperationHandler))
     fs = SimulatedFileSystem(asynchronous=True)
     fs.add_file("data/a.txt", b"a")
     handler = Flat(fs)

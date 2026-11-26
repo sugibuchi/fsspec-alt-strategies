@@ -6,7 +6,7 @@
 its loop, where ``fs.async_impl`` says it has them, or else its sync ones, each
 in a thread of the handler's own. So a sync filesystem, e.g. a
 ``DirFileSystem`` over a local one, is wrapped as sync, whatever its class. A
-family's handler adds its own primitives.
+wrapper adds its own primitives, e.g. an object store's ``ils_recursive``.
 
 This module depends on `filesystem`, `handler` and `clients` of `common`, and
 `fsspec_async` of `files`.
@@ -140,17 +140,8 @@ class _FsspecHandler(SyncClientSupport, StorageHandler):
 
     # The primitives.
 
-    def ils(
-        self, entry: Entry, recursive: bool = False, **kwargs: Any
-    ) -> AsyncIterator[Entry]:
-        if recursive:
-            # The family's, after this class in a wrapper's MRO, e.g. a tree's by
-            # directory: mypy sees StorageHandler's alone.
-            return super().ils(entry, recursive=True, **kwargs)  # type: ignore[safe-super]
-        else:
-            return self._ls(entry, **kwargs)
-
-    async def _ls(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
+    async def ils(self, entry: Entry, **kwargs: Any) -> AsyncIterator[Entry]:
+        """List a directory by the wrapped one's ``ls``: ``kwargs`` go to it."""
         # fsspec has no listing in pages: the wrapped one's ls, all at once.
         for listed in await self.call("ls", entry["name"], detail=True, **kwargs):
             yield listed

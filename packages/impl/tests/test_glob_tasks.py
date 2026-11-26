@@ -45,7 +45,15 @@ class _Handler:
     def join(self, directory: str, *names: str) -> str:
         return "/".join([directory, *names])
 
-    async def ils(
+    def ils(self, entry: dict[str, Any]) -> AsyncIterator[Any]:
+        return self._ils(entry)
+
+    def ils_recursive(
+        self, entry: dict[str, Any], prefix: bool = False
+    ) -> AsyncIterator[Any]:
+        return self._ils(entry, recursive=True)
+
+    async def _ils(
         self, entry: dict[str, Any], recursive: bool = False
     ) -> AsyncIterator[Any]:
         directory = entry["name"].rstrip("/")
@@ -157,10 +165,9 @@ async def test_a_subtree_streams_in_name_order_with_its_markers() -> None:
     names += ["r/a/b/3", "r/c/5"]
 
     class _InNameOrder(_Handler):
-        async def ils(
-            self, entry: dict[str, Any], recursive: bool = False
+        async def ils_recursive(
+            self, entry: dict[str, Any], prefix: bool = False
         ) -> AsyncIterator[Any]:
-            assert recursive
             for name in names:
                 kind = "directory" if name.endswith("/") else "file"
                 yield {"name": name, "type": kind, "size": int(kind == "file")}

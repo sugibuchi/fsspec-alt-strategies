@@ -1,12 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""The states of the operations several families have, such as a find's.
+"""The states of the operations, such as a find's.
 
-An operation of each family, e.g. the ``find`` of the tree strategies and of
-the flat ones, reports its progress with one state class, which a monitor
-reads. A field that only some of them can count is None in the others: e.g.
-``directories_listed`` of the flat strategies' ``find``, which lists keys,
-not directories.
+An operation reports its progress with one state class, which a monitor
+reads. A field that only some strategies can count is None in the others:
+e.g. ``directories_listed`` of a strategy listing keys, not directories.
 
 This module depends on `monitor`.
 """
@@ -35,8 +33,8 @@ class WalkState(State):
     Attributes
     ----------
     directories_listed : int or None
-        The directories listed so far, those that failed included. None for the
-        flat strategies, which list no directories.
+        The directories listed so far, those that failed included. None for a
+        strategy listing no directories.
     found : int
         The entries found so far.
     """
@@ -52,8 +50,8 @@ class FindState(State):
     Attributes
     ----------
     directories_listed : int or None
-        The directories listed so far, those that failed included. None for the
-        flat strategies, which list no directories.
+        The directories listed so far, those that failed included. None for a
+        strategy listing no directories.
     found : int
         The paths found so far.
     """
@@ -69,8 +67,8 @@ class DuState(State):
     Attributes
     ----------
     directories_listed : int or None
-        The directories listed so far, those that failed included. None for the
-        flat strategies, which list no directories.
+        The directories listed so far, those that failed included. None for a
+        strategy listing no directories.
     files : int
         The files counted so far.
     size : int
@@ -90,8 +88,8 @@ class GlobState(State):
     Attributes
     ----------
     directories_listed : int or None
-        The directories listed so far, those that failed included. None for the
-        flat strategies, which list no directories.
+        The directories listed so far, those that failed included. None for a
+        strategy listing no directories.
     matched : int
         The paths matched so far.
     """
@@ -152,7 +150,7 @@ class MvState(State):
         The files moved so far: copied, and their source deleted.
     directories_moved : int or None
         The source directories deleted so far, once all in them was moved. None
-        for the flat strategies, which delete no directories.
+        for a strategy deleting no directories.
     roots_renamed : int or None
         The directories moved whole, each by one ``mv_tree``, what is in them
         neither found nor counted. None unless the storage moves directories so.

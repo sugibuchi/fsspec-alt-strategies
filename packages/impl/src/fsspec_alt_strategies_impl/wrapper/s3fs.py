@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""s3fs's ``S3FileSystem``, wrapped as a `FlatFileOperationHandler`, with its own listing and copies.
+"""s3fs's ``S3FileSystem``, wrapped as a handler listing keys, with its own listing and copies.
 
-The generic `FsspecFlatHandler` lists a prefix by s3fs's ``_find`` of its
+The generic `FsspecFlatHandler` lists a tree by s3fs's ``_find`` of its
 directory, and copies by its ``_cp_file``. `S3fsHandler` uses what s3fs has
 beside them:
 
-- its recursive ``ils`` is s3fs's ``_iterdir`` with no delimiter: a page of
+- its ``ils_recursive`` is s3fs's ``_iterdir`` with no delimiter: a page of
   ListObjectsV2 at a time, as it comes, narrowed to the prefix in the request.
   The generic one waits for the whole directory, holds it, then filters.
 - its ``cp_file`` copies by the size its listing found, with s3fs's
@@ -17,7 +17,7 @@ It imports nothing of s3fs: it calls the wrapped filesystem's own methods.
 Those are private, as of s3fs 2026.x: where one is missing, it lists or copies
 as the generic handler does.
 
-This module depends on `flat`.
+This module depends on `flat`, and `listing` of `common`.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.profile import StorageProfile
 
+from ..common.listing import implied_directories
 from .flat import FsspecFlatHandler
 
 if TYPE_CHECKING:
@@ -44,6 +45,8 @@ S3FS_PROFILE = StorageProfile(
     deletes_directories=False,
     copies_directories=False,
     case_sensitive=True,
+    recursive_ls=True,
+    recursive_ls_with_prefix=True,
 )
 """S3 through s3fs: directories are prefixes, and its mv is a copy, then a delete."""
 
@@ -70,26 +73,36 @@ class S3fsHandler(FsspecFlatHandler):
     io_concurrency = 8
     rm_batch_size = 1000
 
-    def ils(
-        self, entry: Entry, recursive: bool = False, *, prefix: str = "", **kwargs: Any
+    def ils_recursive(
+        self, entry: Entry, prefix: bool = False, **kwargs: Any
     ) -> AsyncIterator[Entry]:
-        path = entry["name"]
-        if recursive and path and not kwargs and hasattr(self.fs, "_iterdir"):
-            return self._keys(path, prefix)
+        name = entry["name"]
+        if name and not kwargs and hasattr(self.fs, "_iterdir"):
+            top = name.rpartition("/")[0] if prefix else name
+            return implied_directories(self._keys(name, prefix), top)
         else:
-            # A directory, the buckets, or a caller's options, which s3fs's find
-            # takes: as the generic handler lists them.
-            return super().ils(entry, recursive, prefix=prefix, **kwargs)
+            # The buckets, or a caller's options, which s3fs's find takes: as
+            # the generic handler lists them.
+            return super().ils_recursive(entry, prefix, **kwargs)
 
-    async def _keys(self, path: str, prefix: str) -> AsyncIterator[Entry]:
-        """Every key starting with ``path/prefix``, in name order, a page at a time."""
-        bucket, key, _ = self.fs.split_path(path)
-        start = f"{key.rstrip('/')}/{prefix}" if key else prefix
+    async def _keys(self, name: str, prefix: bool) -> AsyncIterator[Entry]:
+        """Every key below ``name``, or starting with it as a prefix, in name order, a page at a time."""
+        bucket, key, _ = self.fs.split_path(name)
+        start = key if prefix else f"{key.rstrip('/')}/" if key else ""
+        listed = False
         try:
             async for entry in self.fs._iterdir(bucket, delimiter="", prefix=start):
+                listed = True
                 yield entry
         except FileNotFoundError:
-            return  # A missing bucket lists nothing, as a missing prefix does.
+            if prefix:
+                return  # A missing bucket lists nothing that starts with it.
+            raise
+        if not listed and not prefix:
+            # A file lists itself, an empty directory nothing, a missing one raises.
+            found = await self.fs._info(name)
+            if found["type"] != "directory":
+                yield found
 
     async def cp_file(
         self,

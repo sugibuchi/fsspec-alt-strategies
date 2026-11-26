@@ -3,9 +3,9 @@
 """Alternative, filesystem-independent strategies for fsspec.
 
 fsspec's defaults assume a flat key space, as object stores have. The strategies
-here come in two families: `tree`, for storages with a hierarchical namespace,
-and `flat`, for object stores. Each family's handler runs them, and the
-`BaseFileSystem` on a handler runs its strategies as its recursive
+here, in `tree`, traverse any storage as a tree: a directory per listing, or
+a subtree by one, as the storage's profile declares. A handler runs them, and
+the `BaseFileSystem` on a handler runs its strategies as its recursive
 methods. The wrappers give them to any existing fsspec filesystem.
 
 They are meant to be copied into a project, not installed. Each class is
@@ -15,8 +15,7 @@ it is the package ``fsspec_alt_strategies``, installed once, so that all
 copies in a project share it.
 
 `monitored`, which wraps a filesystem so that the monitors see its calls, is
-re-exported here. It needs the wrappers of both families: a copy keeping it
-keeps `tree` and `flat`.
+re-exported here. It needs the wrappers: a copy keeping it keeps `tree`.
 
 Source, documentation and releases: https://github.com/sugibuchi/fsspec-alt-strategies
 

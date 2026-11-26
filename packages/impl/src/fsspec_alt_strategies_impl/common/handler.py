@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""What a storage handler holds, whatever its family: the base of `TreeFileOperationHandler` and `FlatFileOperationHandler`.
+"""What a storage handler holds: the base of `TreeFileOperationHandler`.
 
 A storage handler holds what is particular to a storage: its primitives, its
 profile, its limits, and its clients, opened and closed. The strategies take
-handlers, never filesystems. A family's handler class adds the primitives its
-strategies call, e.g. a tree's ``rm_tree``.
+handlers, never filesystems. `TreeFileOperationHandler` adds the primitives
+its strategies may call, e.g. ``rm_tree``.
 
 `FileOperationHandler` is a `StorageHandler` with the methods of `Strategy`,
-which run the strategies on it: what a filesystem takes. A family's subclass
-of it, e.g. `TreeFileOperationHandler`, runs its family's strategies.
+which run the strategies on it: what a filesystem takes. Its subclass,
+`TreeFileOperationHandler`, runs the tree strategies.
 
 The primitives name an item that exists by its entry, and one to be made by
 its path. An entry is a dict whose ``"name"`` alone is sure: a path given by a
@@ -417,22 +417,50 @@ class StorageHandler(_PathHandler):
     # The primitives of single paths, which every handler has.
 
     @abstractmethod
-    def ils(
-        self, entry: Entry, recursive: bool = False, **kwargs: Any
-    ) -> AsyncIterator[Entry]:
-        """List a directory, or all below it, as an async iterator of entries, a page at a time.
+    def ils(self, entry: Entry) -> AsyncIterator[Entry]:
+        """List a directory's items, as an async iterator of entries, a page at a time.
 
-        Without ``recursive``, it lists the directory's items. A file lists
-        itself, as fsspec's ``_ls`` lists it. A missing directory raises
-        FileNotFoundError, when the iteration starts. The entries come in any
-        order: the listing is done when it ends.
+        A file lists itself, as fsspec's ``_ls`` lists it. A missing directory
+        raises FileNotFoundError, when the iteration starts. The entries come
+        in any order: the listing is done when it ends. A storage keeping
+        directories only as the prefixes of keys lists them so, as a listing
+        with a delimiter gives them.
 
-        With ``recursive``, it lists all below the directory, at any depth.
-        Each family says the order and the options: a tree handler lists a
-        tree depth first or by name, and a flat handler lists keys by name,
-        narrowed by a ``prefix``. The filesystem's recursive ``_ils`` calls it
-        so. Here, it raises NotImplementedError: a family's handler gives its
-        default, which a subclass reaches by ``super().ils``.
+        A subclass may take keyword arguments of its own, each optional, for
+        what its storage's listing offers, e.g. a version or a page size. Its
+        docstring names them. The strategies pass a caller's ``ils_kwargs`` to
+        it as given, so that one it does not take raises TypeError.
+        """
+
+    def ils_recursive(self, entry: Entry, prefix: bool = False) -> AsyncIterator[Entry]:
+        """List all below a directory, at any depth, by the storage's own listing, a page at a time.
+
+        A handler implementing it declares the profile's ``recursive_ls``,
+        and ``recursive_ls_with_prefix`` where it takes ``prefix``. Here, it
+        raises NotImplementedError: the strategies then list each directory
+        by `ils`.
+
+        The listing gives a tree, whatever the storage keeps:
+
+        - each directory once, before all below it, all below it together:
+          depth first, in preorder. The order among a directory's items is the
+          storage's, e.g. by name;
+        - every directory, those the storage keeps only as the prefixes of
+          keys too, made up as `implied_directories` makes them;
+        - a directory's marker, a key ending with "/", as the directory's own
+          entry, never as an item, with ``"marker": True``: on a storage with
+          ``implicit_directories``, the strategies delete a directory by
+          ``rmdir`` only where it has one.
+
+        A file lists itself, and a missing directory raises
+        FileNotFoundError, when the iteration starts.
+
+        With ``prefix``, ``entry``'s name is a string that all listed start
+        with, e.g. "data/2024-" lists "data/2024-01/a.csv" and its directory
+        "data/2024-01". Nothing missing raises: no name starting with it lists
+        nothing.
+
+        A subclass may take keyword arguments of its own, as `ils` does.
         """
         raise NotImplementedError(f"{type(self).__name__} lists nothing recursively")
 
@@ -699,8 +727,8 @@ class StorageHandler(_PathHandler):
 class FileOperationHandler(StorageHandler, Strategy):
     """A storage's primitives, with the strategies its filesystem's recursive methods run.
 
-    `BaseFileSystem` takes one. A family's subclass, `TreeFileOperationHandler`
-    or `FlatFileOperationHandler`, runs its family's strategies. A storage's
+    `BaseFileSystem` takes one. Its subclass, `TreeFileOperationHandler`, runs
+    the tree strategies. A storage's
     handler subclasses one, and overrides a strategy to choose another.
 
     Parameters

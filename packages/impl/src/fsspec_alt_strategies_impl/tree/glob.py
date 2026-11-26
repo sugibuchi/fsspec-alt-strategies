@@ -99,10 +99,17 @@ def _tree_glob(
     Once cancelled, it lists no new directory, and yields the matches of the
     listings in flight.
 
-    Requests: one ``ils`` per directory a pattern can match in, as the
-    handler's ``operation_limit`` allows. Without ``maxdepth``, a directory
-    at the pattern's first ``**`` is listed by one recursive ``ils``, with all
-    below it: ``data/*/**/*.csv`` lists ``data``, then each directory in it.
+    Where the profile declares ``recursive_ls_with_prefix``, as an object
+    store lists keys, a tree is listed by one ``ils_recursive``, narrowed to
+    the patterns' literal prefix: ``data/2024-*/*.csv`` lists all starting
+    with ``data/2024-``, in pages, and prunes as they stream.
+
+    Requests: as above, or else one ``ils`` per directory a pattern can match
+    in, as the handler's ``operation_limit`` allows. Without ``maxdepth``, a
+    directory at the pattern's first ``**`` is listed by one
+    ``ils_recursive``, with all below it, where the profile declares
+    ``recursive_ls``: ``data/*/**/*.csv`` lists ``data``, then each
+    directory in it.
     One ``info`` per pattern without wildcards, and per literal root directory
     walked that a pattern matches, e.g. that of ``data/**``.
 
@@ -160,6 +167,16 @@ def _walks(searches: list[_Search]) -> list[tuple[str, list[_Search]]]:
     ]
 
 
+def _shared_start(literals: list[str]) -> str:
+    """The longest string all of `literals` start with."""
+    first, last = min(literals), max(literals)
+    size = next(
+        (i for i, (a, b) in enumerate(zip(first, last, strict=False)) if a != b),
+        len(first),
+    )
+    return first[:size]
+
+
 def _walk(
     handler: TreeFileOperationHandler,
     root: str,
@@ -190,6 +207,8 @@ def _walk(
         count=matched,
         max_running=max_running,
         patterns=searches,
+        # What every match starts with, e.g. "data/2024-" for "data/2024-*/*.csv".
+        prefix=_shared_start([s.literal for s in searches]),
         ils_kwargs=ils_kwargs,
         file_root=False,
         dir_root=bool(root)

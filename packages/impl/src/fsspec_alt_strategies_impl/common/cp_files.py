@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The copy and move of files within one storage, a handler's ``cp_files`` and ``mv_files``: each, or by one request.
 
-`_cp_each_file` and `_mv_each_file` are the defaults of both families'
-handlers: each file by the handler's ``cp_file`` or ``mv_file``, as many at
+`_cp_each_file` and `_mv_each_file` are the defaults of every
+handler: each file by the handler's ``cp_file`` or ``mv_file``, as many at
 once as its ``operation_limit`` allows. A storage copying or moving several
 files by one request, e.g. the Hugging Face Hub's commit, overrides
 ``cp_files`` or ``mv_files`` with `cp_by_request` or `mv_by_request`, given

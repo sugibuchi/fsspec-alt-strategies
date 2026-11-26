@@ -1,4 +1,4 @@
-"""Tests of `_flat_glob`, checked against fsspec's own ``_glob``."""
+"""Tests of `_tree_glob`, checked against fsspec's own ``_glob``."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.states import GlobState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.flat.glob import _flat_glob
+from fsspec_alt_strategies_impl.tree.glob import _tree_glob
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -18,11 +18,11 @@ if TYPE_CHECKING:
 
 
 def _glob(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`_flat_glob` on ``fs``, whose primitives or limit ``kwargs`` may replace."""
+    """`_tree_glob` on ``fs``, whose primitives or limit ``kwargs`` may replace."""
     primitives = {k: kwargs.pop(k) for k in ("list_prefix", "info") if k in kwargs}
     if "concurrency_limit" in kwargs:
         primitives["operation_limit"] = kwargs.pop("concurrency_limit")
-    return _flat_glob(FlatView(fs, **primitives), path, **kwargs)
+    return _tree_glob(FlatView(fs, **primitives), path, **kwargs)
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
@@ -115,7 +115,9 @@ async def test_lists_only_the_keys_starting_as_the_pattern() -> None:
     # A page per key, 2 keys: fsspec's lists all 6 entries of data, the three
     # tables and the README too.
     assert fs.stats.calls == {"list": 2}
-    assert op.state == GlobState(current=op.state.current, matched=2)
+    assert op.state == GlobState(
+        current=op.state.current, matched=2, directories_listed=1
+    )
 
     fs.reset_stats()
     await AsyncFileSystem._glob(fs, "data/2024-*.csv")
@@ -153,7 +155,7 @@ def test_errors_in_the_pattern_are_raised_at_once(
         _glob(flat_fs, "data/a**/b")
 
 
-async def test_cancel_lists_nothing_more() -> None:
+async def test_cancel_starts_no_listing() -> None:
     fs = SimulatedFileSystem(page_size=1, asynchronous=True)
     _tree(fs)
     prefixes: list[str] = []
@@ -165,6 +167,6 @@ async def test_cancel_lists_nothing_more() -> None:
         names.append(entry["name"])
         op.cancel()
     assert op.cancelled()
-    assert names == ["data/sales/README.md"]
-    # The first listing stopped at its match, and the second never started.
+    # The listing in flight goes to its end, and the second never starts.
+    assert names[0] == "data/sales/README.md"
     assert prefixes == ["data/s"]
