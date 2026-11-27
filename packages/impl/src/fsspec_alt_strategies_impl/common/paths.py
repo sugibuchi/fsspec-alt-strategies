@@ -65,14 +65,6 @@ def fixed_prefix(path: str) -> str:
         return trimmed
 
 
-def _trim(path: str) -> str:
-    """A path without its trailing "/", as fsspec's ``_strip_protocol`` leaves it.
-
-    A storage's root stays as it is, e.g. "/" on a local filesystem.
-    """
-    return path.rstrip("/") or path
-
-
 def _check_maxdepth(maxdepth: int | None) -> None:
     """Raise ValueError for a ``maxdepth`` below 1, as fsspec's walk does."""
     if maxdepth is not None and maxdepth < 1:

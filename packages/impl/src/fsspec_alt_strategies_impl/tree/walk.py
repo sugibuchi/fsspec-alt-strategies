@@ -33,7 +33,7 @@ from ..common.glob import (
     _TraversalTask,
 )
 from ..common.operation import Operation
-from ..common.paths import _check_maxdepth, _trim, _triples
+from ..common.paths import _check_maxdepth, _triples
 from ..common.tree import TreeTraversal
 
 if TYPE_CHECKING:
@@ -145,7 +145,9 @@ def _tree_walk(
                         raise error
                     # Its path is the state's current, for a caller yielding it.
                     op.state = replace(
-                        state, current=_trim(entry["name"]), errors=state.errors + 1
+                        state,
+                        current=handler.trim(entry["name"]),
+                        errors=state.errors + 1,
                     )
                     yield error
                     continue
@@ -228,7 +230,9 @@ class _WalkTopDown(VisitDirectory):
         kept = [e async for e in super().prune(entries)]
         if self._listing_error is not None:
             return  # Listed in part: never walked.
-        path, dirs, files = _triples(_trim(self.entry["name"]), kept, detail=True)
+        path, dirs, files = _triples(
+            self.handler.trim(self.entry["name"]), kept, detail=True
+        )
         walked = asyncio.Event()
         await self._emit_event((walked, path, dirs, files))
         await walked.wait()
@@ -282,7 +286,9 @@ class _WalkBottomUp(PathAction):
             ordered = [
                 item for _, item in sorted(zip(places, items, strict=True), key=_first)
             ]
-            path, dirs, files = _triples(_trim(entry["name"]), ordered, detail=True)
+            path, dirs, files = _triples(
+                self.handler.trim(entry["name"]), ordered, detail=True
+            )
             await self._emit_event((None, path, dirs, files))
         return entry
 

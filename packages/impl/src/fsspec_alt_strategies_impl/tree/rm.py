@@ -25,7 +25,7 @@ from fsspec_alt_strategies.states import RmState
 from ..common.glob import PathAction
 from ..common.jobs import _check_batch_size
 from ..common.operation import Operation
-from ..common.paths import _check_maxdepth, _trim
+from ..common.paths import _check_maxdepth
 from ..common.placement import _glob_roots, _Roots
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
@@ -145,11 +145,11 @@ def _tree_rm(
 
         if single:
             # Of unknown kind: its listing tells if it is a file.
-            name = _trim(str(path))
+            name = handler.trim(str(path))
             roots, matched = _Roots([{"name": name, "type": "directory"}]), set[str]()
         else:
             glob = _tree_glob(handler, path, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
-            roots, errors, matched = await _glob_roots(glob, path, maxdepth)
+            roots, errors, matched = await _glob_roots(handler, glob, path, maxdepth)
             for error in errors:
                 op.state = replace(op.state, errors=op.state.errors + 1)
                 yield error
@@ -201,7 +201,7 @@ def _tree_rm(
             # The one root, a file: deleted alone.
             if op.cancelling():
                 return
-            entry = {"name": _trim(str(path)), "type": "file"}
+            entry = {"name": handler.trim(str(path)), "type": "file"}
             deletion.files_found(1)
             for event in await deletion.consume([("file", entry)]):
                 yield deletion.outcome(event)
@@ -405,7 +405,7 @@ class _Deletion(PathAction):
         trees: list[Entry] = []
         for event in events:
             if event[0] == "file":
-                files.append({**event[1], "name": _trim(event[1]["name"])})
+                files.append({**event[1], "name": self.handler.trim(event[1]["name"])})
             elif event[0] == "dir":
                 directories[self.key(event[1]["name"])] = event[1]
             elif event[0] == "tree":
@@ -495,7 +495,7 @@ class _Deletion(PathAction):
             and self.key(entry["name"]) not in self.roots
         ):
             return True  # Gone with its last file: no object of its own.
-        name = _trim(entry["name"])
+        name = self.handler.trim(entry["name"])
         try:
             sent = await _write(
                 self._limited(self.handler.rmdir, {**entry, "name": name})
@@ -512,7 +512,7 @@ class _Deletion(PathAction):
 
     async def delete_tree(self, entry: Entry) -> bool:
         """Delete a root whole, by one ``rm_tree``, as a profile's ``deletes_directories`` lets it."""
-        name = _trim(entry["name"])
+        name = self.handler.trim(entry["name"])
         try:
             sent = await _write(
                 self._limited(self.handler.rm_tree, {**entry, "name": name})
@@ -564,6 +564,6 @@ class _Deletion(PathAction):
             return name
         entry, error = event
         self.op.state = replace(
-            state, current=_trim(entry["name"]), errors=state.errors + 1
+            state, current=self.handler.trim(entry["name"]), errors=state.errors + 1
         )
         return error

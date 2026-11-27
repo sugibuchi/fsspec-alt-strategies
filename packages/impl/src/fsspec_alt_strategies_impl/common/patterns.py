@@ -13,7 +13,7 @@ is ruled out too, as nothing below it can match.
 A path without wildcards is a pattern too, matching only itself: its root, at
 depth 0, below which nothing is listed.
 
-This module depends on `paths`.
+This module depends on nothing else in the package.
 """
 
 from __future__ import annotations
@@ -22,8 +22,6 @@ import re
 from typing import Any
 
 from fsspec.utils import glob_translate
-
-from .paths import _trim
 
 
 def _inside(path: str, directory: str) -> bool:
@@ -87,7 +85,8 @@ class _Search:
             first_magic = min(magic)
             slash = path.rfind("/", 0, first_magic)
             relative = path[slash + 1 :]
-            self.root = _trim(path[: slash + 1])
+            # The directory before the slash, or the root "/" itself.
+            self.root = path[:slash] if slash > 0 else path[: slash + 1]
             self.depth = _depth(path, relative, maxdepth)
             self.prefix = _Prefix(relative.split("/"))
         else:

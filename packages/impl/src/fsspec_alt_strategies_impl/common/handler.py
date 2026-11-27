@@ -280,13 +280,17 @@ class _PathHandler(ABC):
         `verify_path` refuses, e.g. one too short for the storage's paths.
         """
         delimiter = self.delimiter
-        trimmed = path.rstrip(delimiter) or path
+        trimmed = self.trim(path)
         if trimmed == self.root:
             raise ValueError(f"The root has no parent: {path!r}")
         head = trimmed.rpartition(delimiter)[0]
         return self.verified(
             head or (self.root if trimmed.startswith(self.root) else "")
         )
+
+    def trim(self, path: str) -> str:
+        """A path without its trailing ``delimiter``, as a listing may give a directory's name: the root stays as it is."""
+        return path.rstrip(self.delimiter) or path
 
     def name(self, path: str) -> str:
         """The last name of a path, after its last ``delimiter``."""

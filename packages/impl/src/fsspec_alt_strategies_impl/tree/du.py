@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec_alt_strategies.states import DuState
 
 from ..common.operation import Operation
-from ..common.paths import _check_maxdepth, _trim
+from ..common.paths import _check_maxdepth
 from .find import _listed, _read, _Reading
 from .walk import _MAX_RUNNING
 
@@ -85,9 +85,9 @@ def _tree_du(
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
         steps = _read(
             handler,
-            _trim(path),
+            handler.trim(path),
             op,
-            lambda emit, root: _Du(emit, op, root),
+            lambda emit, root: _Du(handler, emit, op, root),
             count=counted,
             max_running=max_running,
             maxdepth=maxdepth,
@@ -117,5 +117,5 @@ class _Du(_Reading):
         async for size in values:
             total += size or 0
         if entry is self.root:
-            self.op.state = _listed(self.op.state, entry)
+            self.op.state = _listed(self.op.state, self.handler.trim(entry["name"]))
         return total

@@ -36,7 +36,7 @@ from ..common.glob import PathAction
 from ..common.handler import FileTransfer
 from ..common.jobs import _check_batch_size, _transfer_of
 from ..common.operation import Operation
-from ..common.paths import _check_maxdepth, _trim
+from ..common.paths import _check_maxdepth
 from ..common.placement import _place_roots, _Placed, _Root
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
@@ -425,7 +425,7 @@ class _Sending(PathAction):
     # The traversal's calls: they plan.
 
     async def map(self, entry: Entry, match: bool, parent_value: Any) -> Any:
-        name = _trim(entry["name"])
+        name = self.src.trim(entry["name"])
         if parent_value is None:
             root = self.roots.get(self.key(name))
             return None if root is None else (name, root.target)
@@ -552,7 +552,7 @@ class _Sending(PathAction):
 
     async def plan_whole(self, root: _Root) -> None:
         """Plan a root going whole, by the storage's one request: a directory whose contents are not traversed, after its parent."""
-        name = _trim(root.entry["name"])
+        name = self.src.trim(root.entry["name"])
         self.wholes.add(self.key(name))
         parent = self.parent(root.target)
         if parent and (not self.implicit_directories or self.parents_required):
@@ -566,7 +566,7 @@ class _Sending(PathAction):
 
     def plan_root_file(self, root: _Root) -> list[Any]:
         """A root file's events, its target placed already."""
-        name = _trim(root.entry["name"])
+        name = self.src.trim(root.entry["name"])
         self.count(files_found=1)
         if (exists := self.dst_entry_exists(name, root.target)) is not None:
             return [(root.entry, exists)]
@@ -719,7 +719,7 @@ class _Sending(PathAction):
         in it. Another, its contents moved, has its source deleted.
         """
         entry, target = planned
-        name = _trim(entry["name"])
+        name = self.src.trim(entry["name"])
         if self.key(name) not in self.wholes:
             return await self.remove(entry, name, target)
         parent = self.parent(target)
@@ -924,6 +924,6 @@ class _Sending(PathAction):
             self.op.state = replace(state, current=source)
             return source, target
         entry, error = event
-        current = _trim(entry["name"]) or state.current
+        current = self.src.trim(entry["name"]) or state.current
         self.op.state = replace(state, current=current, errors=state.errors + 1)
         return cast("Exception", error)

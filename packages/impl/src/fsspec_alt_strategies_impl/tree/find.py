@@ -24,7 +24,7 @@ from fsspec_alt_strategies.states import DuState, FindState, GlobState
 
 from ..common.glob import PathAction
 from ..common.operation import Operation
-from ..common.paths import _check_maxdepth, _trim
+from ..common.paths import _check_maxdepth
 from ..common.tree import TreeTraversal
 from .walk import _MAX_RUNNING, _root_task
 
@@ -92,12 +92,14 @@ def _tree_find(
     async def run(
         op: Operation[dict[str, Any], FindState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
-        root = _trim(path)
+        root = handler.trim(path)
         steps = _read(
             handler,
             root,
             op,
-            lambda emit, root_entry: _Found(emit, op, root_entry, withdirs=withdirs),
+            lambda emit, root_entry: _Found(
+                handler, emit, op, root_entry, withdirs=withdirs
+            ),
             count=found,
             max_running=max_running,
             maxdepth=maxdepth,
@@ -120,14 +122,21 @@ class _Reading(PathAction):
     fails.
     """
 
-    def __init__(self, emit_event: Any, op: Operation[Any, Any], root: Entry) -> None:
+    def __init__(
+        self,
+        handler: TreeFileOperationHandler,
+        emit_event: Any,
+        op: Operation[Any, Any],
+        root: Entry,
+    ) -> None:
         super().__init__(emit_event)
+        self.handler = handler
         self.op = op
         self.root = root
 
     async def visit_child(self, entry: Entry, parent_value: Any) -> bool:
         if entry["type"] == "directory":
-            self.op.state = _listed(self.op.state, entry)
+            self.op.state = _listed(self.op.state, self.handler.trim(entry["name"]))
         return True
 
     async def reduce(
@@ -136,7 +145,7 @@ class _Reading(PathAction):
         async for _ in values:
             pass
         if entry is self.root:
-            self.op.state = _listed(self.op.state, entry)
+            self.op.state = _listed(self.op.state, self.handler.trim(entry["name"]))
 
 
 class _Found(_Reading):
@@ -147,9 +156,15 @@ class _Found(_Reading):
     """
 
     def __init__(
-        self, emit_event: Any, op: Operation[Any, Any], root: Entry, *, withdirs: bool
+        self,
+        handler: TreeFileOperationHandler,
+        emit_event: Any,
+        op: Operation[Any, Any],
+        root: Entry,
+        *,
+        withdirs: bool,
     ) -> None:
-        super().__init__(emit_event, op, root)
+        super().__init__(handler, emit_event, op, root)
         self.withdirs = withdirs
 
     async def map(self, entry: Entry, match: bool, parent_value: Any) -> Any:
@@ -161,11 +176,11 @@ class _Found(_Reading):
             await self._emit_event(entry)
 
 
-def _listed(state: _S, entry: Entry) -> _S:
-    """A state once a directory is counted as listed."""
+def _listed(state: _S, directory: str) -> _S:
+    """A state once a directory is counted as listed: ``directory`` is its trimmed name."""
     return replace(
         state,
-        current=_trim(entry["name"]),
+        current=directory,
         directories_listed=(state.directories_listed or 0) + 1,
     )
 
@@ -222,7 +237,7 @@ async def _read(
             async for event in events:
                 if isinstance(event, tuple):  # A directory failed: (entry, error).
                     entry, error = event
-                    op.state = _failed(op.state, _trim(entry["name"]))
+                    op.state = _failed(op.state, handler.trim(entry["name"]))
                     yield error
                 else:
                     op.state = count(op.state, event)
@@ -237,7 +252,7 @@ async def _read(
         return
     except Exception as error:
         # The root's other failures are a failed directory, as any is.
-        op.state = _failed(op.state, _trim(path), root=True)
+        op.state = _failed(op.state, handler.trim(path), root=True)
         yield error
         return
 
@@ -264,4 +279,4 @@ def _failed(state: _S, directory: str, *, root: bool = False) -> _S:
 async def _info(handler: TreeFileOperationHandler, path: str) -> Entry:
     """A path's ``info``, holding a permit."""
     async with handler.operation_limit:
-        return await handler.info(handler.entry(_trim(path)))
+        return await handler.info(handler.entry(handler.trim(path)))

@@ -48,7 +48,6 @@ from .common.handler import (
     _PathHandler,
 )
 from .common.operation import _collect_with_monitors
-from .common.paths import _trim
 from .common.transfer import _cross_cp_file
 
 if TYPE_CHECKING:
@@ -696,18 +695,16 @@ class RoutingFileSystem(AsyncFileSystem, Monitored):
         placed: dict[str, str] = {}
         errors: list[Exception] = []
         skipped: set[str] = set()
-        base = _trim(self.handler.verified(destination, strip_only_protocol=True))
+        base = self.handler.verified(destination)
 
         for path in sorted(
             paths,
-            key=lambda p: _trim(self.handler.verified(p, strip_only_protocol=True)),
+            key=self.handler.verified,
         ):
             if has_magic(path):
                 continue
 
-            name = _trim(
-                self.handler.verified(path, strip_only_protocol=True)
-            ).rpartition("/")[2]
+            name = self.handler.name(self.handler.verified(path))
             target = f"{base}/{name}" if base else name
             if (other := placed.get(target)) is not None:
                 error = FileExistsError(target)

@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 from fsspec_alt_strategies.states import GlobState
 
 from ..common.operation import Operation
-from ..common.paths import _check_maxdepth, _trim
+from ..common.paths import _check_maxdepth
 from ..common.patterns import _inside, _Search
 from .find import _Found, _read
 from .walk import _MAX_RUNNING
@@ -128,7 +128,7 @@ def _tree_glob(
     """
     _check_maxdepth(maxdepth)
     searches = [
-        _Search(_trim(pattern), pattern.endswith("/"), withdirs, maxdepth)
+        _Search(handler.trim(pattern), pattern.endswith("/"), withdirs, maxdepth)
         for pattern in ([path] if isinstance(path, str) else path)
     ]
 
@@ -207,7 +207,7 @@ def _walk(
         handler,
         root,
         op,
-        lambda emit, root_entry: _Found(emit, op, root_entry, withdirs=True),
+        lambda emit, root_entry: _Found(handler, emit, op, root_entry, withdirs=True),
         count=matched,
         max_running=max_running,
         patterns=searches,

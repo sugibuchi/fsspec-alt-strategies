@@ -28,7 +28,6 @@ from fsspec_alt_strategies.profile import UNKNOWN
 
 from .handler import StoragePath
 from .operation import _collect_with_errors
-from .paths import _trim
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -90,6 +89,7 @@ def _roots_of(
 
 
 async def _glob_roots(
+    handler: StorageHandler,
     glob: Operation[Any, Any],
     pattern: StoragePath | Sequence[StoragePath],
     maxdepth: int | None,
@@ -105,7 +105,7 @@ async def _glob_roots(
     matched: set[str] = set()
     if maxdepth is not None:
         named = [pattern] if isinstance(pattern, str) else pattern
-        literal = {_trim(p) for p in named if not has_magic(p)}
+        literal = {handler.trim(p) for p in named if not has_magic(p)}
         matched = {d["name"] for d in roots.directories if d["name"] not in literal}
     return roots, errors, matched
 
@@ -240,7 +240,7 @@ class _Placement:
     async def glob_roots(self, pattern: StoragePath | Sequence[StoragePath]) -> _Roots:
         """The roots matching glob patterns, noting those a pattern matched. The glob's errors go to ``found``."""
         roots, errors, matched = await _glob_roots(
-            self.glob(pattern), pattern, self.maxdepth
+            self.handler, self.glob(pattern), pattern, self.maxdepth
         )
         self.found.extend(errors)
         self.matched = matched
@@ -249,7 +249,7 @@ class _Placement:
     async def prepare(self) -> _Roots | None:
         """Set where the paths go, as fsspec's ``copy`` places them: the roots, or None if there is nothing to do."""
         # The caller's destination, as the handler verifies it: ValueError if refused.
-        destination = self.dst.verified(_trim(self.path2))
+        destination = self.dst.verified(self.path2)
 
         if not isinstance(self.path1, str):
             roots = await self._place(destination)
@@ -265,7 +265,7 @@ class _Placement:
                 self.prefix = self.prefix.rpartition("/")[0]
             self.base = destination
         else:
-            root = _trim(self.path1)
+            root = self.handler.trim(self.path1)
             if self.same_storage and self.folded(root) == self.folded(destination):
                 # Onto itself: left as it is, unless a move to another case.
                 recased = root != destination and self.verb == "move"
@@ -540,7 +540,7 @@ async def _place_roots(*, move: bool, **kwargs: Any) -> _Placed:
             existing=target in place.existing,
             parent=place.parent_of(target),
             parent_exists=parent is None or not place.needs_mkdir(parent, always=True),
-            matched=_trim(entry["name"]) in place.matched,
+            matched=place.handler.trim(entry["name"]) in place.matched,
             made=not place.needs_mkdir(target, always=True),
             directory=place.directories.get(target),
         )
