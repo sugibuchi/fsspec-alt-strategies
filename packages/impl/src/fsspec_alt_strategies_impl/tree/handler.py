@@ -8,7 +8,7 @@ strategies take it, and it runs them as the methods of `Strategy`: what a
 filesystem takes.
 
 This module depends on `cp`, `du`, `find`, `glob`, `mv`, `rm` and `walk`, and
-`handler` of `common`.
+`handler` and `transfer` of `common`.
 """
 
 from __future__ import annotations

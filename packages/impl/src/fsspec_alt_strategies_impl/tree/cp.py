@@ -17,7 +17,7 @@ places the roots, as fsspec's ``copy`` does. `_Sending` places each path below
 them under its directory's map value, a `(source, destination)` pair, then copies or moves it.
 
 This module depends on `glob`, `rm` and `walk`, and `glob`, `handler`,
-`strategy`, `transfer`, `operation`, `paths` and `tree` of `common`.
+`operation`, `paths`, `strategy`, `transfer` and `tree` of `common`.
 """
 
 from __future__ import annotations

@@ -7,8 +7,8 @@ whole tree first, then deletes each path. `_tree_rm` deletes each directory as
 soon as all below it is, as a map-reduce on `common.tree`'s traversal, by
 `_Deletion`: a directory's reduce deletes its files, then itself.
 
-This module depends on `glob` and `walk`, and `glob`, `strategy`, `transfer`, `operation`,
-`paths` and `tree` of `common`.
+This module depends on `glob` and `walk`, and `glob`, `operation`, `paths`,
+`strategy` and `tree` of `common`.
 """
 
 from __future__ import annotations
