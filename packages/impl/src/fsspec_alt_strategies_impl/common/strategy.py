@@ -13,7 +13,7 @@ own.
 the filesystem runs, watched by the monitors. The filesystem keeps its
 handler private, so that no caller of a filesystem gets an operation.
 
-This module depends on `cp_files` and `rm_files`, for the batch strategies' defaults, and `handler`, `jobs` and `operation`, for their types alone.
+This module depends on `cp_files` and `rm_files`, for the batch strategies' defaults, and `handler`, `operation` and `transfer`, for their types alone.
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ if TYPE_CHECKING:
     )
 
     from .handler import Entry, FileTransfer, StorageHandler, StoragePath
-    from .jobs import _Transfer
     from .operation import Operation
+    from .transfer import _Transfer
 
 __all__ = ["Strategy"]
 
@@ -400,3 +400,9 @@ class Strategy(ABC):
             attribute. It raises only an error failing all the files.
         """
         return _mv_each_file(cast("StorageHandler", self), transfers)
+
+
+def _check_batch_size(batch_size: int, name: str) -> None:
+    """Refuse a handler's batch size below 1, e.g. its ``rm_batch_size``, as no batch could be sent."""
+    if batch_size < 1:
+        raise ValueError(f"{name} must be at least 1: {batch_size}")

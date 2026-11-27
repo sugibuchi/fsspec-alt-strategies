@@ -7,7 +7,7 @@ whole tree first, then deletes each path. `_tree_rm` deletes each directory as
 soon as all below it is, as a map-reduce on `common.tree`'s traversal, by
 `_Deletion`: a directory's reduce deletes its files, then itself.
 
-This module depends on `glob` and `walk`, and `glob`, `jobs`, `operation`,
+This module depends on `glob` and `walk`, and `glob`, `strategy`, `transfer`, `operation`,
 `paths` and `tree` of `common`.
 """
 
@@ -23,10 +23,10 @@ from typing import TYPE_CHECKING, Any
 from fsspec_alt_strategies.states import RmState
 
 from ..common.glob import PathAction
-from ..common.jobs import _check_batch_size
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
 from ..common.placement import _glob_roots, _Roots
+from ..common.strategy import _check_batch_size
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
 from .walk import _MAX_RUNNING, _root_task

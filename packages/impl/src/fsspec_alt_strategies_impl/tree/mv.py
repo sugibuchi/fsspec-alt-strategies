@@ -11,15 +11,15 @@ Where the handler's ``mv_tree`` moves a directory in one request, as a
 storage's rename does, the profile says so. `_tree_mv` then moves each root
 whole with it where it can, and walks only what it cannot move so.
 
-This module depends on `cp` and `walk`, and `jobs` and `paths` of `common`.
+This module depends on `cp` and `walk`, and `paths` and `transfer` of `common`.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..common.jobs import _moves_of
 from ..common.paths import _check_maxdepth
+from ..common.transfer import _moves_of
 from .cp import _transfers
 from .walk import _MAX_RUNNING
 
@@ -29,8 +29,8 @@ if TYPE_CHECKING:
     from fsspec_alt_strategies.states import MvState
 
     from ..common.handler import StorageHandler, StoragePath
-    from ..common.jobs import _Transfer
     from ..common.operation import Operation
+    from ..common.transfer import _Transfer
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []

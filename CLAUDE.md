@@ -112,7 +112,7 @@ code: read it before adding a strategy or a handler.
   filesystem is the caller's.
 - The only functions a strategy takes are:
   - the options fsspec's method takes, such as `walk`'s `on_error`;
-  - a copy's `cp_entry`, and a move's `cp_entry` and `mv_entry`, each a `common.jobs._Transfer` taking the source's
+  - a copy's `cp_entry`, and a move's `cp_entry` and `mv_entry`, each a `common.transfer._Transfer` taking the source's
     entry;
   - the `request` of `rm_by_request`, `cp_by_request` and `mv_by_request`, the storage's request on a batch.
 - Between two storages, `cp_entry` defaults to `common.transfer._across`, which streams the data and leaves no part of

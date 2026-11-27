@@ -1,4 +1,4 @@
-"""Tests of `common.jobs`'s `_Queue`, and of `common.placement`: the permits of a queue, and the placing of a copy's roots.
+"""Tests of `common.placement`: the placing of a copy's roots.
 
 These test what no strategy shows: each permit given back, however a queue
 ends, and the edges of a pattern that no copy reaches.

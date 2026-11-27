@@ -17,7 +17,7 @@ places the roots, as fsspec's ``copy`` does. `_Sending` places each path below
 them under its directory's map value, a `(source, destination)` pair, then copies or moves it.
 
 This module depends on `glob`, `rm` and `walk`, and `glob`, `handler`,
-`jobs`, `operation`, `paths` and `tree` of `common`.
+`strategy`, `transfer`, `operation`, `paths` and `tree` of `common`.
 """
 
 from __future__ import annotations
@@ -34,10 +34,11 @@ from fsspec_alt_strategies.states import CpState, MvState
 
 from ..common.glob import PathAction
 from ..common.handler import FileTransfer
-from ..common.jobs import _check_batch_size, _transfer_of
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
 from ..common.placement import _place_roots, _Placed, _Root
+from ..common.strategy import _check_batch_size
+from ..common.transfer import _transfer_of
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
 from .rm import _bottom_up, _Call, _consumed, _events_for, _Key, _traversals
@@ -52,7 +53,7 @@ if TYPE_CHECKING:
     )
 
     from ..common.handler import Entry, StorageHandler, StoragePath
-    from ..common.jobs import _Transfer
+    from ..common.transfer import _Transfer
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []

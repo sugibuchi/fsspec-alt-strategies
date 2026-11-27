@@ -38,8 +38,8 @@ if TYPE_CHECKING:
     )
 
     from ..common.handler import Entry, StorageHandler, StoragePath
-    from ..common.jobs import _Transfer
     from ..common.operation import Operation
+    from ..common.transfer import _Transfer
 
 __all__ = ["TreeFileOperationHandler"]
 

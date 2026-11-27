@@ -7,8 +7,7 @@ from typing import Any, Self
 import pytest
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.common.jobs import _moves_of
-from fsspec_alt_strategies_impl.common.transfer import _cross_cp_file
+from fsspec_alt_strategies_impl.common.transfer import _cross_cp_file, _moves_of
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 _ATOMIC = StorageProfile(atomic_writes=True)
