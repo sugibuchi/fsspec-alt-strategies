@@ -446,17 +446,6 @@ class _Placement:
         except ValueError:
             return None  # A path at the root: no parent of the destination's.
 
-    async def make_directory(self, path: StoragePath) -> None:
-        """Make a destination directory, keeping the entry ``makedirs`` returns as the parent hint of what goes inside."""
-        made = await self.dst.makedirs(
-            path,
-            exist_ok=True,
-            missing=self.known_missing(path),
-            parent=self.parent_of(path),
-        )
-        if made is not None:
-            self.directories[path] = made
-
 
 class _Moving(_Placement):
     """Where a move's paths go: a single path moved onto itself in another case is renamed whole."""

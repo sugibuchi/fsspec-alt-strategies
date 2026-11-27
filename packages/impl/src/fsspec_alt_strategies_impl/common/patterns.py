@@ -154,14 +154,6 @@ class _Search:
         self.matches = re.compile(regex).match
         self.slash_dirs = ends_with_sep or path.endswith("/**")
 
-    def depth_from(self, directory: str) -> int | None:
-        """How deep to walk from ``directory``, at or above the root, for this pattern."""
-        if self.depth is None:
-            return None
-        between = self.root.count("/") + 1 if self.root else 0
-        above = directory.count("/") + 1 if directory else 0
-        return self.depth + between - above
-
     def _level(self, name: str) -> int | None:
         """How far below the root a path is, 0 for the root, or None if not below."""
         if name == self.root:
