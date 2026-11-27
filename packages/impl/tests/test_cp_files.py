@@ -133,8 +133,8 @@ async def test_a_file_a_batch_refuses_fails_alone() -> None:
     view.refuse["data/a/2"] = PermissionError("data/a/2")
     moved, errors = await _collect_with_errors(_tree_mv(view, view, "data", "out"))
     assert [type(e) for e in errors] == [PermissionError]
-    assert errors[0].__notes__ == ["Moving 'data/a/2' to 'out/a/2' failed."]
-    assert errors[0].source == "data/a/2"
+    assert errors[0] is view.refuse["data/a/2"]  # As the storage raised it.
+    assert not getattr(errors[0], "__notes__", [])
     # It stays, and so do its directories, a and data: the rest moves.
     assert await fs._exists("data/a/2")
     assert sorted(s for s, _ in moved if s in _FILES) == sorted(

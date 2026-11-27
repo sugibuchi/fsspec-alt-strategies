@@ -785,6 +785,7 @@ class _Sending(PathAction):
         transfers = [
             FileTransfer(e, t, missing, hint) for e, t, hint, missing, _ in waiting
         ]
+        names = {t.entry["name"] for t in transfers}
 
         async def transfer() -> tuple[dict[str, Exception | None], list[Exception]]:
             operation = (
@@ -798,10 +799,10 @@ class _Sending(PathAction):
                 async for outcome in files:
                     if not isinstance(outcome, Exception):
                         outcomes[outcome[0]] = None
-                    elif (source := getattr(outcome, "source", None)) is None:
-                        apart.append(outcome)
+                    elif (source := operation.state.current or "") in names:
+                        outcomes[source] = outcome  # The state names its file.
                     else:
-                        outcomes[source] = outcome
+                        apart.append(outcome)
             return outcomes, apart
 
         try:

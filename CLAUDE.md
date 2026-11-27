@@ -70,7 +70,7 @@ code: read it before adding a strategy or a handler.
   `common.cp_files._cp_each_file` and `_mv_each_file`. A storage overrides them with `cp_by_request` or
   `mv_by_request`, and declares `cp_batch_size` or `mv_batch_size`. The recursive copies and moves within one storage
   send them their files in batches, as the traversal plans them, unless the caller gives its own `cp_entry` or
-  `mv_entry`. Each error they yield has its source's path as its `source`.
+  `mv_entry`. Each error is yielded as the storage raised it, the state's `current` naming its source.
 - `BaseFileSystem`, in `common/filesystem.py`, implements fsspec's API on a `FileOperationHandler`, a required
   argument. Nobody overrides its fsspec methods. Its recursive methods, such as `_rm` and `_copy`, run the handler's
   strategy, e.g. its `rm`, and answer as fsspec's method does.
