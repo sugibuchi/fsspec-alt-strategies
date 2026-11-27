@@ -84,16 +84,18 @@ def _dir(name: str) -> dict[str, Any]:
 
 async def test_a_pattern_matching_only_errors_gives_them() -> None:
     error = OSError("x")
-    placed = await _place_roots(move=False, **_placing("x*", "dest", [error]))
-    assert (placed.directories, placed.files, placed.errors) == ([], [], [error])
+    place, roots = await _place_roots(move=False, **_placing("x*", "dest", [error]))
+    assert (roots.directories, roots.files, place.found) == ([], [], [error])
 
 
 async def test_errors_are_given_when_nothing_else_is_to_do() -> None:
     # The first root is in place already, and the second's name is taken.
     found = [_file("a/x"), _file("b/x")]
-    placed = await _place_roots(move=False, **_placing(["a/x", "b/*"], "a", found))
-    assert (placed.directories, placed.files) == ([], [])
-    assert [type(e) for e in placed.errors] == [FileExistsError]
+    place, roots = await _place_roots(
+        move=False, **_placing(["a/x", "b/*"], "a", found)
+    )
+    assert (list(roots.directories), list(roots.files)) == ([], [])
+    assert [type(e) for e in place.found] == [FileExistsError]
 
 
 async def test_a_single_match_already_in_place_is_left() -> None:

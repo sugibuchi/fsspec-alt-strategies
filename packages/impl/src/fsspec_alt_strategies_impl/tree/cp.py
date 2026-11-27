@@ -29,7 +29,7 @@ from contextlib import aclosing
 from dataclasses import replace
 from functools import partial
 from glob import has_magic
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from fsspec.utils import common_prefix
 
@@ -64,11 +64,8 @@ if TYPE_CHECKING:
         Sequence,
     )
 
-    from fsspec_alt_strategies.profile import StorageProfile
-
     from ..common.handler import (
         Entry,
-        FileOperationHandler,
         StorageHandler,
     )
     from ..common.transfer import _Transfer
@@ -270,7 +267,7 @@ def _transfers(
         return _tree_glob(src, pattern, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
 
     async def run(op: Operation[tuple[str, str], Any]) -> AsyncGenerator[Any]:
-        placed = await _place_roots(
+        place, roots = await _place_roots(
             move=move,
             handler=src,
             dst=dst,
@@ -282,35 +279,23 @@ def _transfers(
             path1_entry=path1_entry,
             batching=batching,
         )
-        for error in placed.errors:
+        for error in place.found:
             op.state = replace(op.state, errors=op.state.errors + 1)
             yield error
-        if not placed.directories and not placed.files:
+        if not roots.directories and not roots.files:
             return
 
-        copies = _moves_by_copies(src, placed, move)
-        size = (
-            max(src.cp_batch_size, src.rm_batch_size) if copies else placed.batch_size
-        )
+        copies = _moves_by_copies(src, place)
+        size = max(src.cp_batch_size, src.rm_batch_size) if copies else place.batch_size
         engine = TreeTraversal(
             max_running=max_running,
             max_events=_events_for(size),
             split=src.segments,
         )
         op._on_cancel = engine.cancel
-        action = _Sending(
-            engine._emit_event,
-            op,
-            placed,
-            src,
-            dst,
-            transfer,
-            move=move,
-            copies=copies,
-            maxdepth=maxdepth,
-        )
+        action = _Sending(engine._emit_event, op, place, roots, transfer, copies=copies)
         # A path ending with "/" goes as its contents, never whole.
-        whole = placed.whole and not (isinstance(path1, str) and path1.endswith("/"))
+        whole = place.whole and not (isinstance(path1, str) and path1.endswith("/"))
         tasks, errors = await action.root_tasks(engine, whole, ils_kwargs)
         for error in errors:
             yield action.outcome(error)
@@ -329,15 +314,13 @@ def _transfers(
     return Operation(run, state)
 
 
-def _moves_by_copies(
-    src: TreeFileOperationHandler, placed: _Placed, move: bool
-) -> bool:
+def _moves_by_copies(src: TreeFileOperationHandler, place: _Placement) -> bool:
     """Whether a move copies its files, then deletes them in batches: within a storage renaming no file.
 
     So an object store's move sends one deletion per ``rm_batch_size``
     files, not one per file. Its batch sizes are checked.
     """
-    copies = move and placed.batching and placed.profile.renames_files is False
+    copies = place.move and place.batching and place.profile.renames_files is False
     if copies:
         _check_batch_size(src.cp_batch_size, "cp_batch_size")
         _check_batch_size(src.rm_batch_size, "rm_batch_size")
@@ -378,42 +361,46 @@ class _Sending(PathAction):
         self,
         emit_event: Any,
         op: Operation[Any, Any],
-        placed: _Placed,
-        src: TreeFileOperationHandler,
-        dst: StorageHandler,
+        place: _Placement,
+        roots: _Roots,
         transfer: _Transfer,
         *,
-        move: bool,
         copies: bool = False,
-        maxdepth: int | None,
     ) -> None:
         super().__init__(emit_event)
         self.op = op
-        self.placed = placed
-        self.src = src
-        self.dst = dst
+        # Where the paths go, and what is known of the destination, which the
+        # consumer adds to: the directories made, and those found missing.
+        self.place = place
+        self.found = roots
+        self.src = place.handler
+        self.dst = place.dst
         self.transfer = transfer
-        self.move = move
-        self.maxdepth = maxdepth
-        self.limit = src.operation_limit
-        self.batching = placed.batching
+        self.move = place.move
+        self.maxdepth = place.maxdepth
+        self.limit = self.src.operation_limit
+        self.batching = place.batching
         # A move by copies: the files copied in batches, then their sources
         # deleted in batches of the source's rm_batch_size.
         self.copies = copies
-        self.batch_size = src.cp_batch_size if copies else placed.batch_size
-        self.implicit_directories = placed.implicit_directories
-        self.parents_required = placed.parents_required
+        self.batch_size = self.src.cp_batch_size if copies else place.batch_size
+        self.implicit_directories = place.implicit_directories
+        self.parents_required = place.parents_required
         # One directory per request, its parent existing: each is made before
         # all below it. Not with maxdepth, as fsspec's copy makes no empty
         # directory then.
         self.parents_first = (
-            placed.parents_required
-            and placed.profile.parents_required is True
-            and maxdepth is None
+            place.parents_required
+            and place.profile.parents_required is True
+            and place.maxdepth is None
         )
+        self.files_done = "files_moved" if self.move else "files_copied"
+        self.roots_done = "roots_renamed" if self.move else "roots_copied"
 
-        # The directory roots, by their segments: the map values start there.
-        self.roots = {self.key(r.entry["name"]): r for r in placed.directories}
+        # The directory roots' targets, by their segments: the map values start there.
+        self.roots = {
+            self.key(e["name"]): place.target(e["name"]) for e in roots.directories
+        }
         # The names of the files gone into each source directory: a second of
         # one name, as Google Drive lists, would go where the first went.
         self.names: dict[_Key, set[str]] = {}
@@ -421,32 +408,20 @@ class _Sending(PathAction):
         self.kept: set[_Key] = set()
         # The roots going whole: their "dir" event sends them, with all in them.
         self.wholes: set[_Key] = set()
-
-        # The consumer's alone. The destination directories made, or known to
-        # exist, each with its entry, if known: the parent hint of what goes in
-        # it. Those failing to be made, and those found missing, with all below.
-        self.made: dict[str, Entry | None] = {}
+        # The destination directories failing to be made, with all below.
         self.unmade: set[str] = set()
-        self.missing: set[str] = set()
-        for root in (*placed.directories, *placed.files):
-            if root.missing:
-                self.missing.add(root.target)
-            if root.made:
-                self.made[root.target] = root.directory
-            if root.parent_exists and (parent := self.parent(root.target)):
-                self.made[parent] = root.parent
         # The outcomes of the batch consumed.
         self.out: list[Any] = []
-        if placed.whole:
-            self.count(**{"roots_renamed" if move else "roots_copied": 0})
+        if place.whole:
+            self.count(**{self.roots_done: 0})
 
     # The traversal's calls: they plan.
 
     async def map(self, entry: Entry, match: bool, parent_value: Any) -> Any:
         name = self.src.trim(entry["name"])
         if parent_value is None:
-            root = self.roots.get(self.key(name))
-            return None if root is None else (name, root.target)
+            target = self.roots.get(self.key(name))
+            return None if target is None else (name, target)
         try:
             target = self.dst.join(parent_value[1], self.key(name)[-1])
         except ValueError as error:
@@ -520,8 +495,8 @@ class _Sending(PathAction):
         missing. One whose target exists merges into it, so it is traversed.
         One whose target could not be asked stays where it is.
         """
-        traversed = list(self.placed.directories)
-        wholes: list[_Root] = []
+        traversed = list(self.found.directories)
+        wholes: list[Entry] = []
         errors: list[Any] = []
         if whole:
             goes = await asyncio.gather(*(self.goes_whole(d) for d in traversed))
@@ -531,65 +506,68 @@ class _Sending(PathAction):
                     if outcome is True:
                         wholes.append(root)
                     else:
-                        errors.append((root.entry, outcome))
+                        errors.append((root, outcome))
+        matched = self.place.matched
         tasks = _traversals(
             engine,
             self,
             self.src,
-            [(r.entry, r.matched) for r in traversed],
+            [(e, e["name"] in matched) for e in traversed],
             maxdepth=self.maxdepth,
             ils_kwargs=ils_kwargs,
         )
-        tasks += [_Call(engine, r.target, partial(self.plan_whole, r)) for r in wholes]
+        tasks += [_Call(engine, e["name"], partial(self.plan_whole, e)) for e in wholes]
         tasks += [
-            _Call(engine, r.target, partial(self.plan_root, r))
-            for r in self.placed.files
+            _Call(engine, e["name"], partial(self.plan_root, e))
+            for e in self.found.files
         ]
         return tasks, errors
 
     async def file_root(self) -> list[Any]:
         """The outcomes of the one root, found a file once the traversal ended: it goes alone."""
-        root = self.placed.directories[0]
-        root = root._replace(entry={**root.entry, "type": "file"})
-        return await self.consume(self.plan_root_file(root))
+        entry = {**self.found.directories[0], "type": "file"}
+        return await self.consume(self.plan_root_file(entry))
 
-    async def goes_whole(self, root: _Root) -> bool | Exception:
+    async def goes_whole(self, root: Entry) -> bool | Exception:
         """Whether a root can go whole, as its target is missing: an error asking is returned."""
-        if root.missing:
+        target = self.place.target(root["name"])
+        if self.place.known_missing(target):
             return True
-        if root.existing:
+        if target in self.place.existing:
             return False
         try:
             async with self.limit:
-                await self.dst.info(self.dst.entry(root.target))
+                await self.dst.info(self.dst.entry(target))
         except FileNotFoundError:
             return True
         except Exception as e:
             return e
         return False
 
-    async def plan_whole(self, root: _Root) -> None:
+    async def plan_whole(self, root: Entry) -> None:
         """Plan a root going whole, by the storage's one request: a directory whose contents are not traversed, after its parent."""
-        name = self.src.trim(root.entry["name"])
+        name = self.src.trim(root["name"])
+        target = self.place.target(name)
         self.wholes.add(self.key(name))
-        parent = self.parent(root.target)
+        parent = self.place.parent(target)
         if parent and (not self.implicit_directories or self.parents_required):
             await self._emit_event(("mkdir", name, parent))
-        await self._emit_event(("dir", root.entry, root.target))
+        await self._emit_event(("dir", root, target))
 
-    async def plan_root(self, root: _Root) -> None:
+    async def plan_root(self, root: Entry) -> None:
         """Plan a root that is a file: it goes alone, into its directory made if needed."""
         for event in self.plan_root_file(root):
             await self._emit_event(event)
 
-    def plan_root_file(self, root: _Root) -> list[Any]:
-        """A root file's events, its target placed already."""
-        name = self.src.trim(root.entry["name"])
+    def plan_root_file(self, root: Entry) -> list[Any]:
+        """A root file's events, placed as the placement says."""
+        name = self.src.trim(root["name"])
+        target = self.place.target(name)
         self.count(files_found=1)
-        if (exists := self.dst_entry_exists(name, root.target)) is not None:
-            return [(root.entry, exists)]
-        file = ("file", {**root.entry, "name": name}, root.target, True)
-        parent = self.parent(root.target)
+        if (exists := self.dst_entry_exists(name, target)) is not None:
+            return [(root, exists)]
+        file = ("file", {**root, "name": name}, target, True)
+        parent = self.place.parent(target)
         if parent and self.parents_required:
             return [("mkdir", name, parent), file]
         return [file]
@@ -655,21 +633,6 @@ class _Sending(PathAction):
         out, self.out = self.out, []
         return out
 
-    def parent(self, path: StoragePath) -> str:
-        """A destination path's parent: "" at the root."""
-        try:
-            return self.dst.parent(path)
-        except ValueError:
-            return ""
-
-    def known_missing(self, path: str) -> bool:
-        """Whether nothing is at a destination, as found: it, or a directory above it, was found missing."""
-        while path:
-            if path in self.missing:
-                return True
-            path = self.parent(cast("StoragePath", path))
-        return False
-
     async def make_dst_dir(self, source: str, path: StoragePath) -> None:
         """Make a destination directory once, keeping its entry: its error, if any, yielded as ``source``'s.
 
@@ -678,11 +641,11 @@ class _Sending(PathAction):
         if (
             not path
             or path == self.dst.root
-            or path in self.made
+            or path in self.place.made
             or path in self.unmade
         ):
             return
-        parent = self.parent(path)
+        parent = self.place.parent(path)
         if parent in self.unmade:
             self.unmade.add(path)
             return
@@ -693,21 +656,27 @@ class _Sending(PathAction):
             made = await self.dst.makedirs(
                 path,
                 exist_ok=True,
-                missing=self.known_missing(path),
-                parent=self.made.get(parent),
+                missing=self.place.known_missing(path),
+                parent=self.place.made.get(parent),
             )
 
         if await self.write_limited(mkdir, {"name": source}):
-            self.made[path] = made
+            self.place.made[path] = made
         else:
             self.unmade.add(path)
 
     async def send_files(self, files: list[tuple[Entry, StoragePath, bool]]) -> None:
         """Send files, but those whose directory failed to be made: the source directory of each that stayed is kept."""
         ready = [
-            (e, t, self.made.get(self.parent(t)), self.known_missing(t), alone)
+            (
+                e,
+                t,
+                self.place.made.get(self.place.parent(t)),
+                self.place.known_missing(t),
+                alone,
+            )
             for e, t, alone in files
-            if self.parent(t) not in self.unmade
+            if self.place.parent(t) not in self.unmade
         ]
         # Unless batching, e.g. between two storages, each goes by the transfer.
         alone = [f for f in ready if f[4] or not self.batching]
@@ -740,19 +709,18 @@ class _Sending(PathAction):
         name = self.src.trim(entry["name"])
         if self.key(name) not in self.wholes:
             return await self.remove(entry, name, target)
-        parent = self.parent(target)
+        parent = self.place.parent(target)
         if parent in self.unmade:
             return False  # Its parent's error tells.
         primitive = self.src.mv_tree if self.move else self.src.cp_tree
-        hint = self.made.get(parent)
+        hint = self.place.made.get(parent)
 
         async def send() -> None:
             await primitive(entry, target, parent=hint)
 
         if not await self.write_limited(send, entry):
             return False
-        field = "roots_renamed" if self.move else "roots_copied"
-        self.count(**{field: 1})
+        self.count(**{self.roots_done: 1})
         self.out.append(("done", name, target))
         return True
 
@@ -771,7 +739,7 @@ class _Sending(PathAction):
 
         if not await self.write_limited(send, entry):
             return []
-        self.count(**{"files_moved" if self.move else "files_copied": 1})
+        self.count(**{self.files_done: 1})
         self.out.append(("done", entry["name"], target))
         return [entry["name"]]
 
@@ -845,7 +813,7 @@ class _Sending(PathAction):
             elif error is None and self.copies:
                 gone.append(entry["name"])  # Copied: done once its source is deleted.
             elif error is None:
-                self.count(**{"files_moved" if self.move else "files_copied": 1})
+                self.count(**{self.files_done: 1})
                 self.out.append(("done", entry["name"], target))
                 gone.append(entry["name"])
             elif not isinstance(error, asyncio.CancelledError):
@@ -980,7 +948,7 @@ class _Placement:
     def __init__(
         self,
         *,
-        handler: FileOperationHandler,
+        handler: TreeFileOperationHandler,
         dst: StorageHandler,
         path1: StoragePath | Sequence[StoragePath],
         path2: StoragePath,
@@ -991,7 +959,7 @@ class _Placement:
         batching: bool = False,
         move: bool = False,
     ) -> None:
-        self.handler: FileOperationHandler = handler
+        self.handler = handler
         self.dst: StorageHandler = dst
         self.path1 = path1
         self.path2 = path2
@@ -1023,12 +991,11 @@ class _Placement:
         self.found: list[Exception] = []
 
         # What is known of the destination: the paths found missing or
-        # existing, the directories made or known to exist, and the entries of
-        # those found, each the parent hint of what is made inside it.
+        # existing, and the directories made or known to exist, each with its
+        # entry if known, the parent hint of what is made inside it.
         self.missing: set[str] = set()
         self.existing: set[str] = set()
-        self.made: set[str] = set()
-        self.directories: dict[str, Entry] = {}
+        self.made: dict[str, Entry | None] = {}
 
     async def setup(self) -> None:
         """Open both handlers, and read from the destination's profile how the roots go."""
@@ -1128,7 +1095,7 @@ class _Placement:
             )
         self.prefix, self.base = root, destination
         self.missing.add(destination)
-        self.made.add(self.handler.parent(root))
+        self.made.setdefault(self.handler.parent(root), None)
         # A directory root, as mv_tree takes a file too.
         return _Roots([self.path1_entry or {"name": root}])
 
@@ -1168,7 +1135,7 @@ class _Placement:
         self.base = await self._base(root, destination)
         if self.same_storage:
             # The root's parent exists: e.g. a file renamed in its directory needs no mkdir.
-            self.made.add(root.rpartition("/")[0])
+            self.made.setdefault(root.rpartition("/")[0], None)
 
         entry = self.path1_entry
         if entry is not None and entry["type"] != "directory":
@@ -1193,9 +1160,10 @@ class _Placement:
             else:
                 self.existing.add(destination)
                 into = entry["type"] == "directory"
-                self.made.add(destination if into else destination.rpartition("/")[0])
                 if into:
-                    self.directories[destination] = entry
+                    self.made[destination] = entry
+                else:
+                    self.made.setdefault(destination.rpartition("/")[0], None)
 
         if not into or (isinstance(self.path1, str) and self.path1.endswith("/")):
             return destination
@@ -1224,26 +1192,14 @@ class _Placement:
         else:
             return target
 
-    def root(self, entry: dict[str, Any]) -> _Root:
-        """A root placed, with what is known of its target."""
-        target = self.target(entry["name"])
+    def parent(self, path: str) -> str:
+        """A destination path's parent: "" at the root."""
         try:
-            parent: str | None = self.dst.parent(target)
+            return self.dst.parent(path)
         except ValueError:
-            parent = None  # At the root: no parent of the destination's.
-        return _Root(
-            entry=entry,
-            target=target,
-            missing=self._known_missing(target),
-            existing=target in self.existing,
-            parent=None if parent is None else self.directories.get(parent),
-            parent_exists=parent is None or self._exists(parent),
-            matched=self.handler.trim(entry["name"]) in self.matched,
-            made=self._exists(target),
-            directory=self.directories.get(target),
-        )
+            return ""
 
-    def _known_missing(self, target: str) -> bool:
+    def known_missing(self, target: str) -> bool:
         """Whether a destination, or a directory above it, was found missing: so is all below it."""
         path = target.rstrip("/")
         while path:
@@ -1252,55 +1208,8 @@ class _Placement:
             path = path.rpartition("/")[0]
         return False
 
-    def _exists(self, directory: str) -> bool:
-        """Whether a destination directory needs no mkdir: the root, or one made or known to exist."""
-        return not directory or directory == self.dst.root or directory in self.made
 
-
-class _Root(NamedTuple):
-    """A root of a copy or move, placed: where it goes, and what is known of the destination there.
-
-    ``missing`` is whether nothing is at ``target``, or above it, as found,
-    and ``existing`` whether something is. ``parent`` is the entry of the
-    target's parent, if found, and ``parent_exists`` whether it needs no
-    mkdir: made, found, or the root. ``matched`` is whether a pattern matched
-    it, not named literally: ``maxdepth`` counts one level less below it.
-    ``made`` is whether the target needs no mkdir, and ``directory`` its
-    entry, if found a directory.
-    """
-
-    entry: dict[str, Any]
-    target: StoragePath
-    missing: bool
-    existing: bool
-    parent: Entry | None
-    parent_exists: bool
-    matched: bool
-    made: bool
-    directory: Entry | None
-
-
-class _Placed(NamedTuple):
-    """The roots of a copy or move, placed, and how the destination takes them.
-
-    ``errors`` are those of finding the roots, yielded first. ``whole`` is
-    whether a directory root goes whole, by one ``cp_tree`` or ``mv_tree``,
-    where its target is missing. ``batch_size`` is the source's
-    ``cp_batch_size`` or ``mv_batch_size`` where batching, else 1.
-    """
-
-    directories: list[_Root]
-    files: list[_Root]
-    errors: list[Exception]
-    profile: StorageProfile
-    implicit_directories: bool
-    parents_required: bool
-    batching: bool
-    batch_size: int
-    whole: bool
-
-
-async def _place_roots(**kwargs: Any) -> _Placed:
+async def _place_roots(**kwargs: Any) -> tuple[_Placement, _Roots]:
     """Place the roots of a copy, or of a move, as fsspec's ``copy`` places them.
 
     ``kwargs`` are `_Placement`'s. It opens both handlers, and reads the
@@ -1308,15 +1217,4 @@ async def _place_roots(**kwargs: Any) -> _Placed:
     """
     place = _Placement(**kwargs)
     await place.setup()
-    roots = await place.prepare() or _Roots([])
-    return _Placed(
-        directories=[place.root(d) for d in roots.directories],
-        files=[place.root(f) for f in roots.files],
-        errors=place.found,
-        profile=place.profile,
-        implicit_directories=place.implicit_directories,
-        parents_required=place.parents_required,
-        batching=place.batching,
-        batch_size=place.batch_size,
-        whole=place.whole,
-    )
+    return place, await place.prepare() or _Roots([])
