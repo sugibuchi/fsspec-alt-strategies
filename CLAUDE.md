@@ -123,7 +123,7 @@ code: read it before adding a strategy or a handler.
   - `parent=`, the destination's parent's entry, as `makedirs` returned it or an `info` found it. `cp_tree` and
     `mv_tree` take it too.
 
-  The copy's event consumer keeps them, in `tree.cp._Sending`'s `made` and `missing`.
+  The copy's `tree.cp._Plan` keeps them, in its `made` and `missing`, which the pipeline adds to.
 
   `makedirs` returns the entry of the directory made, or None. Every override of those primitives takes `missing` and
   `parent`, used or not.
@@ -171,7 +171,7 @@ code: read it before adding a strategy or a handler.
 - A wrapper of one library declares its profile, limits and batch sizes as class attributes. A `known_implementations`
   entry gives them only to the generic `FsspecTreeHandler` and `FsspecFlatHandler`. The latter wraps an object store:
   its `ils_recursive` lists by `find`.
-- A copy or move places its roots as fsspec's `copy` does, by `tree.cp._place_roots`, and each path below
+- A copy or move places its roots as fsspec's `copy` does, by `tree.cp._Plan`, and each path below
   them by the destination's `join`, under its directory's map value.
 
 ### Listings
@@ -215,10 +215,18 @@ code: read it before adding a strategy or a handler.
 - Those that only read build on `tree.find._read`, which handles the root as `_find` does.
 - `rm`, `cp` and `mv` each have a `PathAction` of their own, which only plans:
   - `map` places each path;
-  - `reduce` emits each path to delete, copy or move as an event, and a destination directory to make.
+  - `reduce` emits what each path needs as events.
 
-  Their operation consumes the events in batches, by `tree.rm._consumed`. Directories are deleted after all below them,
-  by `tree.rm._bottom_up`. The traversal holds at least a batch of events unread.
+  Their operation consumes the events in batches, by `tree.rm._consumed`. The traversal holds at least a batch of
+  events unread. rm deletes directories after all below them, by `tree.rm._bottom_up`.
+- cp and mv schedule, then run, in `tree/cp.py`:
+  - `_Plan` reads the profile and places the roots, before the traversal starts;
+  - `_Schedule`, the `PathAction`, emits operations as dicts, e.g. `{"op": "mkdir_dst", ...}` or `{"op": "cp_file",
+    ...}`. Which ones depends on the task, the profile and whether both are one storage;
+  - `_Pipeline` runs each batch of them through four stages, each with a batch size: `_MakeDirs`, `_SendFiles`,
+    `_RemoveFiles` and `_RemoveDirs`. Each stage runs its operations, and passes the rest on.
+
+  A decision about what to do goes in `_Schedule`, and how to send it in a stage.
 - A move within a storage declaring `renames_files=False` copies its files in batches, then deletes their sources in
   batches of `rm_batch_size`. Elsewhere, each file moves by `mv_file`, or by its batch strategy.
 ### Packages

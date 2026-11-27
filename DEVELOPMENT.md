@@ -374,8 +374,19 @@ A strategy replacing an fsspec method answers as it does. Where it departs on pu
 
 ### Placement
 
-A copy or move places its roots as fsspec's `copy` does, by `tree/cp.py`'s `_place_roots`. Below them, each
+A copy or move places its roots as fsspec's `copy` does, by `tree/cp.py`'s `_Plan`. Below them, each
 directory's map value, a `(source, destination)` pair, places what is in it, by the destination's `join`.
+
+The traversal's `_Schedule` emits the operations each path needs, as dicts named by their `"op"`:
+
+- `mkdir_dst`, a destination directory;
+- `cp_file` or `mv_file`, a file, and `rm_src_file` after its copy where a move renames no file;
+- `cp_dir` or `mv_dir`, a root going whole;
+- `rm_src_dir`, a source directory a move emptied.
+
+`_Pipeline` runs each batch of them through its stages, in order: `_MakeDirs`, `_SendFiles`, `_RemoveFiles` and
+`_RemoveDirs`. Each takes its own operations, sends them in batches of its size, and passes the rest on. What fails
+keeps its source directory, and each above it, so that no later stage deletes them.
 
 ### Copies between storages
 
@@ -488,7 +499,7 @@ What a strategy does on each path is a `PathAction`. So a strategy is a map-redu
 | `_tree_walk` bottom up                 | `_WalkBottomUp`: each directory once all below it is     |
 | `_tree_find`, `_tree_glob`, `_tree_du` | `_Found` and `_Du`, by `tree/find.py`'s `_read`          |
 | `_tree_rm`                             | `_Deletion`: a directory deleted once all in it is       |
-| `_tree_cp`, `_tree_mv`                 | `_Sending`: directories made first, each file as found   |
+| `_tree_cp`, `_tree_mv`                 | `_Schedule`: each path's operations, run by `_Pipeline`  |
 
 How the traversal goes:
 

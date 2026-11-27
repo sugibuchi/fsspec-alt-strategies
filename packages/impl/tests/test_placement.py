@@ -1,4 +1,4 @@
-"""Tests of `tree.cp`'s and `tree.rm`'s roots: the placing of a copy's roots.
+"""Tests of `tree.cp`'s `_Plan` and `tree.rm`'s roots: the placing of a copy's roots.
 
 These test what no strategy shows: each permit given back, however a queue
 ends, and the edges of a pattern that no copy reaches.
@@ -12,7 +12,7 @@ import pytest
 
 from fsspec_alt_strategies.monitor import State
 from fsspec_alt_strategies_impl.common.operation import Operation
-from fsspec_alt_strategies_impl.tree.cp import _place_roots, _Placement
+from fsspec_alt_strategies_impl.tree.cp import _Plan
 from fsspec_alt_strategies_impl.tree.rm import _Roots, _roots_of
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
@@ -51,8 +51,8 @@ async def _missing(path: str) -> dict[str, Any]:
     raise FileNotFoundError(path)
 
 
-def _placing(path1: Any, path2: str, found: list[Any]) -> dict[str, Any]:
-    """The options of a placing whose glob yields the entries and errors given."""
+async def _plan(path1: Any, path2: str, found: list[Any]) -> _Plan:
+    """A copy's plan, placed, whose glob yields the entries and errors given."""
     storage = TreeView(
         SimulatedFileSystem(hierarchical=True, asynchronous=True), info=_missing
     )
@@ -64,14 +64,10 @@ def _placing(path1: Any, path2: str, found: list[Any]) -> dict[str, Any]:
 
         return Operation(lambda op: entries(), State())
 
-    return {
-        "handler": storage,
-        "dst": storage,
-        "path1": path1,
-        "path2": path2,
-        "same_storage": True,
-        "glob": glob,
-    }
+    plan = _Plan(storage, storage, move=False, same_storage=True, maxdepth=None)
+    await plan.read_profile(batching=False)
+    await plan.place(path1, path2, None, glob)
+    return plan
 
 
 def _file(name: str) -> dict[str, Any]:
@@ -84,30 +80,23 @@ def _dir(name: str) -> dict[str, Any]:
 
 async def test_a_pattern_matching_only_errors_gives_them() -> None:
     error = OSError("x")
-    place, roots = await _place_roots(move=False, **_placing("x*", "dest", [error]))
-    assert (roots.directories, roots.files, place.found) == ([], [], [error])
+    plan = await _plan("x*", "dest", [error])
+    assert (plan.directories, plan.files, plan.errors) == ([], [], [error])
 
 
 async def test_errors_are_given_when_nothing_else_is_to_do() -> None:
     # The first root is in place already, and the second's name is taken.
-    found = [_file("a/x"), _file("b/x")]
-    place, roots = await _place_roots(
-        move=False, **_placing(["a/x", "b/*"], "a", found)
-    )
-    assert (list(roots.directories), list(roots.files)) == ([], [])
-    assert [type(e) for e in place.found] == [FileExistsError]
+    plan = await _plan(["a/x", "b/*"], "a", [_file("a/x"), _file("b/x")])
+    assert (plan.directories, plan.files) == ([], [])
+    assert [type(e) for e in plan.errors] == [FileExistsError]
 
 
 async def test_a_single_match_already_in_place_is_left() -> None:
-    placement = _Placement(**_placing("a/*.txt", "a", [_file("a/x.txt")]))
-    assert await placement.prepare() is None
+    plan = await _plan("a/*.txt", "a", [_file("a/x.txt")])
+    assert (plan.directories, plan.files) == ([], [])
 
 
 async def test_matches_without_a_common_dir_go_under_the_destination() -> None:
-    placement = _Placement(**_placing("*1", "dest", [_dir("x1"), _file("y1")]))
-    assert await placement.prepare() is not None
-    assert placement.prefix == ""
-    assert (placement.target("x1/f"), placement.target("y1")) == (
-        "dest/x1/f",
-        "dest/y1",
-    )
+    plan = await _plan("*1", "dest", [_dir("x1"), _file("y1")])
+    assert plan.prefix == ""
+    assert (plan.target("x1/f"), plan.target("y1")) == ("dest/x1/f", "dest/y1")
