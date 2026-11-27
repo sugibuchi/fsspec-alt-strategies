@@ -185,6 +185,15 @@ async def test_plain_paths_are_asked_for_concurrently() -> None:
     assert fs.stats.max_concurrency == 4  # Not one after another.
 
 
+async def test_a_plain_path_below_a_patterns_root_is_found_by_its_listing() -> None:
+    fs = SimulatedFileSystem(hierarchical=True, asynchronous=True)
+    for path in ["data/a.csv", "data/b.json", "data/c.json"]:
+        fs.add_file(path)
+    entries, _ = await _collect_with_errors(_glob(fs, ["data/*.csv", "data/b.json"]))
+    assert sorted(e["name"] for e in entries) == ["data/a.csv", "data/b.json"]
+    assert fs.stats.calls == {"list": 1}  # The listing of data: no info.
+
+
 async def test_cancel_asks_for_no_more_plain_paths() -> None:
     fs = SimulatedFileSystem(hierarchical=True, latency=0.005, asynchronous=True)
     paths = [f"root/{i:02}.csv" for i in range(20)]

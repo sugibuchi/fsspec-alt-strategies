@@ -10,79 +10,20 @@ A ``**`` matches any number of segments, so only those before the first ``**``
 can rule a directory out. Without a ``**``, a directory as deep as the pattern
 is ruled out too, as nothing below it can match.
 
-This module depends on `handler`, `jobs` and `paths`.
+A path without wildcards is a pattern too, matching only itself: its root, at
+depth 0, below which nothing is listed.
+
+This module depends on `paths`.
 """
 
 from __future__ import annotations
 
-import asyncio
 import re
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from fsspec.utils import glob_translate
 
-from fsspec_alt_strategies.states import GlobState
-
-from .jobs import _Queue
 from .paths import _trim
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
-    from .handler import StorageHandler
-    from .operation import Operation
-
-
-async def _infos(
-    handler: StorageHandler,
-    paths: list[str],
-    op: Operation[dict[str, Any], GlobState],
-    found: set[str],
-) -> AsyncGenerator[dict[str, Any]]:
-    """The ``_info`` of each pattern without wildcards that exists, noted in ``found``.
-
-    They run at once, each holding a permit of the filesystem's
-    ``operation_limit``: a list of plain paths may give many. The entries come
-    as the answers arrive. Once the operation is cancelled, no new ``_info``
-    starts, but those running are yielded.
-    """
-    requests: _Queue[str] = _Queue(handler.operation_limit)
-    requests.waiting.extend(dict.fromkeys(paths))
-
-    async def start() -> None:
-        if op.cancelling():
-            requests.waiting.clear()
-        await requests.start(lambda path: handler.info(handler.entry(path)))
-
-    try:
-        await start()
-
-        while pending := requests.pending():
-            done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            entries = []
-            for task in done:
-                if (path := requests.pop(task)) is None:
-                    continue
-                try:
-                    entries.append((path, task.result()))
-                except FileNotFoundError:
-                    continue
-
-            # Start the next before yielding, so that they run meanwhile.
-            await start()
-
-            for path, entry in entries:
-                found.add(entry["name"].rstrip("/"))
-                state = op.state
-                op.state = GlobState(
-                    errors=state.errors,
-                    current=path,
-                    directories_listed=state.directories_listed,
-                    matched=state.matched + 1,
-                )
-                yield entry
-    finally:
-        await requests.close()
 
 
 def _inside(path: str, directory: str) -> bool:
@@ -136,17 +77,29 @@ class _Search:
     ) -> None:
         self.withdirs = withdirs
 
-        # Split as fsspec does: the literal directory before the first wildcard,
-        # and the pattern below it.
-        first_magic = min(i for i in (path.find(c) for c in "*?[") if i >= 0)
-        slash = path.rfind("/", 0, first_magic)
-        relative = path[slash + 1 :]
-        self.root = _trim(path[: slash + 1])
+        magic = [i for i in (path.find(c) for c in "*?[") if i >= 0]
+        # A path without wildcards: as with fsspec's _glob, it matches itself,
+        # a file or a directory, whatever withdirs says.
+        self.plain = not magic
+        if magic:
+            # Split as fsspec does: the literal directory before the first
+            # wildcard, and the pattern below it.
+            first_magic = min(magic)
+            slash = path.rfind("/", 0, first_magic)
+            relative = path[slash + 1 :]
+            self.root = _trim(path[: slash + 1])
+            self.depth = _depth(path, relative, maxdepth)
+            self.prefix = _Prefix(relative.split("/"))
+        else:
+            # A path without wildcards matches only itself: its root, at depth
+            # 0, so that nothing below it is listed.
+            first_magic = len(path)
+            self.root = path
+            self.depth = 0
+            self.prefix = _Prefix([])
         # What every path matched starts with: the pattern up to its first wildcard.
         self.literal = path[:first_magic]
         self.start = len(self.root) + 1 if self.root else 0
-        self.depth = _depth(path, relative, maxdepth)
-        self.prefix = _Prefix(relative.split("/"))
 
         # The matches come from fsspec's own regular expression, and the prefix
         # only prunes. So pruning can never change them.
@@ -165,14 +118,14 @@ class _Search:
 
     def matched(self, entry: dict[str, Any]) -> bool:
         is_dir = entry["type"] == "directory"
-        if is_dir and not self.withdirs:
+        if is_dir and not self.withdirs and not self.plain:
             return False
 
         name = entry["name"].rstrip("/")
         level = self._level(name)
         if (
             level is None
-            or (level == 0 and not is_dir)
+            or (level == 0 and not is_dir and not self.plain)
             or (self.depth is not None and level > self.depth)
         ):
             return False

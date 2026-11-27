@@ -26,16 +26,16 @@ This module depends on `find` and `walk`, and `operation`, `paths` and `patterns
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import aclosing
 from dataclasses import replace
-from glob import has_magic
 from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.states import GlobState
 
 from ..common.operation import Operation
 from ..common.paths import _check_maxdepth, _trim
-from ..common.patterns import _infos, _inside, _Search
+from ..common.patterns import _inside, _Search
 from .find import _Found, _read
 from .walk import _MAX_RUNNING
 
@@ -110,8 +110,10 @@ def _tree_glob(
     ``ils_recursive``, with all below it, where the profile declares
     ``recursive_ls``: ``data/*/**/*.csv`` lists ``data``, then each
     directory in it.
-    One ``info`` per pattern without wildcards, and per literal root directory
-    walked that a pattern matches, e.g. that of ``data/**``.
+    One ``info`` per literal root walked that a pattern matches, e.g. that of
+    ``data/**``. A path without wildcards is such a root, its ``info`` alone,
+    unless it is below another pattern's root: that pattern's listing then
+    finds it.
 
     ``path`` is a pattern, or patterns, of paths on ``handler``, as its ``ils``
     takes them: a trailing "/" matches only directories. ``maxdepth`` is how
@@ -125,32 +127,38 @@ def _tree_glob(
     whole segment.
     """
     _check_maxdepth(maxdepth)
-    literals: list[str] = []
-    searches: list[_Search] = []
-    for pattern in [path] if isinstance(path, str) else path:
-        trimmed = _trim(pattern)
-        if has_magic(trimmed):
-            searches.append(_Search(trimmed, pattern.endswith("/"), withdirs, maxdepth))
-        else:
-            literals.append(trimmed)
+    searches = [
+        _Search(_trim(pattern), pattern.endswith("/"), withdirs, maxdepth)
+        for pattern in ([path] if isinstance(path, str) else path)
+    ]
 
     async def run(
         op: Operation[dict[str, Any], GlobState],
     ) -> AsyncGenerator[dict[str, Any] | Exception]:
-        found: set[str] = set()
-        infos = _infos(handler, literals, op, found)
-        async for entry in infos:
-            yield entry
+        walks = _walks(searches)
+        alone = [(root, group) for root, group in walks if _alone(root, group)]
+        infos = _infos(handler, alone, op)
+        async with aclosing(infos):
+            async for item in infos:
+                yield item
 
-        for root, group in _walks(searches):
+        for root, group in walks:
             if op.cancelling():
                 return
-            walk = _walk(handler, root, group, op, found, ils_kwargs, max_running)
+            if _alone(root, group):
+                continue
+            walk = _walk(handler, root, group, op, ils_kwargs, max_running)
             async with aclosing(walk):
                 async for match in walk:
                     yield match
 
     return Operation(run, GlobState(directories_listed=0))
+
+
+def _alone(root: str, searches: list[_Search]) -> bool:
+    """Whether no pattern can match below a root, e.g. a path without wildcards alone: its ``info`` tells it all."""
+    entry: Entry = {"name": root, "type": "directory"}
+    return bool(root) and not any(s.descend(entry) for s in searches)
 
 
 def _walks(searches: list[_Search]) -> list[tuple[str, list[_Search]]]:
@@ -182,16 +190,14 @@ def _walk(
     root: str,
     searches: list[_Search],
     op: Operation[dict[str, Any], GlobState],
-    found: set[str],
     ils_kwargs: dict[str, Any] | None,
     max_running: int,
 ) -> AsyncGenerator[dict[str, Any] | Exception]:
     """The matches of patterns in one tree, traversed from ``root``, the patterns pruning it.
 
     As fsspec's ``_glob``: a pattern under a missing directory, or a file,
-    matches nothing. Its find includes the root directory itself, which few
-    patterns match. A match of a pattern without wildcards, in ``found``
-    already, is not yielded again.
+    matches nothing. Its find includes the root itself, which few patterns
+    match: a path without wildcards does, whether a file or a directory.
     """
 
     def matched(state: GlobState, entry: Entry) -> GlobState:
@@ -201,17 +207,55 @@ def _walk(
         handler,
         root,
         op,
-        lambda emit, root_entry: _Found(
-            emit, op, root_entry, withdirs=True, found=found
-        ),
+        lambda emit, root_entry: _Found(emit, op, root_entry, withdirs=True),
         count=matched,
         max_running=max_running,
         patterns=searches,
         # What every match starts with, e.g. "data/2024-" for "data/2024-*/*.csv".
         prefix=_shared_start([s.literal for s in searches]),
         ils_kwargs=ils_kwargs,
-        file_root=False,
+        file_root=any(s.matched({"name": root, "type": "file"}) for s in searches),
         dir_root=bool(root)
-        and root not in found  # A literal's match, found already.
         and any(s.matched({"name": root, "type": "directory"}) for s in searches),
     )
+
+
+async def _infos(
+    handler: TreeFileOperationHandler,
+    roots: list[tuple[str, list[_Search]]],
+    op: Operation[dict[str, Any], GlobState],
+) -> AsyncGenerator[dict[str, Any] | Exception]:
+    """The ``info`` of each root alone that a pattern matches, all sent at once, as they arrive.
+
+    Each holds a permit of the handler's ``operation_limit``: a list of plain
+    paths may give many. A missing root matches nothing, as with fsspec's
+    ``_glob``. Once the operation is cancelled, none starts.
+    """
+
+    async def info(
+        root: str, searches: list[_Search]
+    ) -> tuple[str, list[_Search], Entry | Exception | None]:
+        async with handler.operation_limit:
+            if op.cancelling():
+                return root, searches, None
+            try:
+                return root, searches, await handler.info(handler.entry(root))
+            except FileNotFoundError:
+                return root, searches, None
+            except Exception as error:
+                return root, searches, error
+
+    tasks = [asyncio.ensure_future(info(root, group)) for root, group in roots]
+    try:
+        for next_done in asyncio.as_completed(tasks):
+            root, searches, found = await next_done
+            if isinstance(found, Exception):
+                op.state = replace(op.state, current=root, errors=op.state.errors + 1)
+                yield found
+            elif found is not None and any(s.matched(found) for s in searches):
+                op.state = replace(op.state, current=root, matched=op.state.matched + 1)
+                yield found
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)

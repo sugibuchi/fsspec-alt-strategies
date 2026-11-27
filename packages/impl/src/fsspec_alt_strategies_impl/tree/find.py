@@ -143,29 +143,20 @@ class _Found(_Reading):
     """find's and glob's action: each path matched emitted as it is listed.
 
     ``root`` is never emitted: `_read` asks its ``info`` instead. Without
-    ``withdirs``, only files are. A path in ``found`` already, e.g. a glob's
-    literal, is not emitted again.
+    ``withdirs``, only files are.
     """
 
     def __init__(
-        self,
-        emit_event: Any,
-        op: Operation[Any, Any],
-        root: Entry,
-        *,
-        withdirs: bool,
-        found: set[str] | None = None,
+        self, emit_event: Any, op: Operation[Any, Any], root: Entry, *, withdirs: bool
     ) -> None:
         super().__init__(emit_event, op, root)
         self.withdirs = withdirs
-        self.found = found if found is not None else set()
 
     async def map(self, entry: Entry, match: bool, parent_value: Any) -> Any:
         if (
             match
             and entry is not self.root
             and (self.withdirs or entry["type"] != "directory")
-            and entry["name"].rstrip("/") not in self.found
         ):
             await self._emit_event(entry)
 

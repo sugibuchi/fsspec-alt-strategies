@@ -6,13 +6,11 @@ ends, and the edges of a pattern that no copy reaches.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from fsspec_alt_strategies.monitor import State
-from fsspec_alt_strategies_impl.common.jobs import _Queue
 from fsspec_alt_strategies_impl.common.operation import Operation
 from fsspec_alt_strategies_impl.common.placement import (
     _place_roots,
@@ -24,51 +22,6 @@ from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-
-
-async def test_a_request_taken_done_has_given_back_its_permit() -> None:
-    # A task's done callback runs a turn after it ends, but asyncio.wait reports
-    # it done before: taken off the queue, it must not hold its permit still.
-    limit = asyncio.Semaphore(4)
-    queue: _Queue[int] = _Queue(limit)
-    queue.waiting.extend(range(40))
-
-    async def run(item: int) -> None:
-        for _ in range(item % 3):
-            await asyncio.sleep(0)
-
-    await queue.start(run)
-    while pending := queue.pending():
-        done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            queue.pop(task)
-        # The permits held: the requests running, and one the waiter got for the next.
-        waiter = queue.waiter is not None and queue.waiter.done()
-        assert limit._value == 4 - len(queue.running) - waiter
-        await queue.start(run)
-    assert limit._value == 4
-
-
-async def test_closing_a_queue_gives_back_the_permit_its_waiter_got() -> None:
-    limit = asyncio.Semaphore(1)
-    queue: _Queue[str] = _Queue(limit)
-    queue.waiting.extend(["a", "b"])
-    gate = asyncio.Event()
-
-    async def run(item: str) -> None:
-        await gate.wait()
-
-    await queue.start(run)
-    assert len(queue.running) == 1
-    pending = queue.pending()
-    assert queue.waiter in pending
-    gate.set()
-    await asyncio.wait(pending, return_when=asyncio.ALL_COMPLETED)
-    # The waiter got the permit given back, which nothing took yet.
-    assert queue.waiter is not None and queue.waiter.done()
-    assert limit.locked()
-    await queue.close()
-    assert limit._value == 1
 
 
 def test_roots_of_leave_out_what_a_matching_dir_has() -> None:

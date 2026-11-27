@@ -1,28 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Tsuyoshi SUGIBUCHI
 # SPDX-License-Identifier: Apache-2.0
-"""What the strategies changing a storage share: how each file goes, and requests waiting for permits.
+"""What the strategies changing a storage share: how each file goes.
 
-`_transfer_of` and `_moves_of` say how a copy or a move sends each file. `_Queue`
-holds items waiting for a permit of a concurrency limit, e.g. the ``info`` of
-a glob's literal paths. `_check_batch_size` refuses a handler's batch size
-below 1.
+`_transfer_of` and `_moves_of` say how a copy or a move sends each file.
+`_check_batch_size` refuses a handler's batch size below 1.
 
 This module depends on `handler` and `transfer`.
 """
 
 from __future__ import annotations
 
-import asyncio
-from collections import deque
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from .transfer import _across
 
 if TYPE_CHECKING:
-    from collections.abc import (
-        Awaitable,
-        Callable,
-    )
+    from collections.abc import Awaitable
     from typing import Protocol
 
     from .handler import StorageHandler
@@ -47,9 +40,6 @@ if TYPE_CHECKING:
             missing: bool = False,
             parent: dict[str, Any] | None = None,
         ) -> Awaitable[None]: ...
-
-
-_T = TypeVar("_T")
 
 
 def _transfer_of(
@@ -107,91 +97,6 @@ def _moves_of(
             mv_entry = move
 
     return cp_entry, mv_entry, same_storage
-
-
-class _Queue(Generic[_T]):
-    """Items waiting for a permit of a concurrency limit, and the requests running.
-
-    Each item's request starts once a permit is free, and gives it back once
-    done. When none is free, a waiter task gets the next one: awaited, in
-    `pending`, along with the owner's requests, it picks up the permits that
-    others sharing the limit give back. The owner takes each finished
-    request's item back with `pop`.
-
-    A request's permit is given back once, by whichever comes first: `pop`,
-    or the task's done callback. The callback alone would be late: it runs a
-    turn of the loop after the task ends, and `asyncio.wait` reports a task
-    done before that. An operation ending on it would then end holding a
-    permit. The callback still gives back that of a task nobody pops, e.g.
-    one cancelled before it ran.
-    """
-
-    def __init__(self, limit: asyncio.Semaphore) -> None:
-        self.limit = limit
-        self.waiting: deque[_T] = deque()
-        self.running: dict[asyncio.Task[Any], _T] = {}
-        self.waiter: asyncio.Task[bool] | None = None
-        # The requests whose permit is not given back yet.
-        self.holding: set[asyncio.Task[Any]] = set()
-
-    async def start(self, run: Callable[[_T], Awaitable[Any]]) -> None:
-        """Start the request of each item waiting, while permits are free."""
-        while self.waiting and await self._take():
-            item = self.waiting.popleft()
-            task = asyncio.ensure_future(run(item))
-            self.holding.add(task)
-            task.add_done_callback(self._give_back)
-            self.running[task] = item
-
-    def _give_back(self, task: asyncio.Task[Any]) -> None:
-        """Give back a request's permit, unless it was already."""
-        if task in self.holding:
-            self.holding.remove(task)
-            self.limit.release()
-
-    async def _take(self) -> bool:
-        """Take a permit if one is free now, or got by the waiter."""
-        if self.waiter is not None:
-            if not self.waiter.done():
-                return False
-            self.waiter = None  # Its permit is now this queue's.
-            return True
-
-        if self.limit.locked():
-            return False
-        await self.limit.acquire()  # A permit is free: this does not wait.
-        return True
-
-    def pending(self) -> list[asyncio.Task[Any]]:
-        """The requests running, and the waiter for a permit if items wait."""
-        if self.waiting and self.waiter is None:
-            self.waiter = asyncio.ensure_future(self.limit.acquire())
-        pending = list(self.running)
-        if self.waiting and self.waiter is not None:
-            pending.append(self.waiter)
-        return pending
-
-    def pop(self, task: asyncio.Task[Any]) -> _T | None:
-        """The item of a request done, its permit given back, or None for the waiter, whose permit `start` takes."""
-        self._give_back(task)
-        return self.running.pop(task, None)
-
-    async def close(self) -> None:
-        """Cancel the requests running, stop waiting, and give back a permit got."""
-        tasks = list(self.running)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        for task in tasks:
-            self._give_back(task)
-        self.running.clear()
-
-        waiter, self.waiter = self.waiter, None
-        if waiter is not None:
-            waiter.cancel()
-            await asyncio.gather(waiter, return_exceptions=True)
-            if not waiter.cancelled() and waiter.exception() is None:
-                self.limit.release()
 
 
 def _check_batch_size(batch_size: int, name: str) -> None:
