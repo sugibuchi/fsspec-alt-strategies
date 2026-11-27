@@ -14,7 +14,7 @@ known of its target. The traversal places what is below them.
 `_glob_roots` finds the roots a glob pattern matches, as fsspec's
 ``_expand_path`` finds them, for any operation changing a storage.
 
-This module depends on `handler`, `operation` and `paths`.
+This module depends on `handler`, `operation` and `strategy`.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from fsspec_alt_strategies.profile import UNKNOWN
 
 from .handler import StoragePath
 from .operation import _collect_with_errors
+from .strategy import _check_batch_size
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -130,17 +131,11 @@ class _Placement:
 
     ``glob`` is the strategy's glob of a pattern, within ``maxdepth``, which
     finds the roots of patterns and lists. With ``batching``, `setup` reads
-    the source's ``cp_batch_size``, or ``mv_batch_size`` where ``transfers``
-    is "move", into ``transfer_batch_size``.
+    the source's ``cp_batch_size``, or ``mv_batch_size`` for a ``move``.
 
     The errors of finding the roots go to ``found``, which the operation
     yields first.
     """
-
-    verb = "copy"
-    doing = "Copying"
-    transfers = "copy"
-    """Which of the handler's strategies a batch of files goes to: "copy" for ``cp_files``, "move" for ``mv_files``."""
 
     def __init__(
         self,
@@ -154,84 +149,77 @@ class _Placement:
         maxdepth: int | None = None,
         path1_entry: dict[str, Any] | None = None,
         batching: bool = False,
-        ils_kwargs: dict[str, Any] | None = None,
+        move: bool = False,
     ) -> None:
         self.handler: FileOperationHandler = handler
-        self.maxdepth = maxdepth
-        self.ils_kwargs: dict[str, Any] = ils_kwargs or {}
-        self.glob = glob
-
+        self.dst: StorageHandler = dst
         self.path1 = path1
         self.path2 = path2
         self.same_storage = same_storage
+        self.glob = glob
+        self.maxdepth = maxdepth
         self.path1_entry = path1_entry
         self.batching = batching
-        self.transfer_batch_size = 1
+        self.move = move
+        self.verb = "move" if move else "copy"
 
-        # The profile is the destination's, as what a copy saves depends on
-        # where it writes. Within one storage, it is the source's too. Unknown
-        # until setup awaits it.
-        self.dst: StorageHandler = dst
+        # The destination's, as what a copy saves depends on where it writes.
+        # Unknown until setup reads it.
         self.profile = UNKNOWN
         self.implicit_directories = False
         self.parents_required = True
         self.case_insensitive = False
+        self.whole = False
+        self.batch_size = 1
 
         # Set by prepare: the destination's path, verified, where the prefix goes.
         self.prefix = ""
         self.base = StoragePath("")
-
         # For a list: where each root goes, by the root.
         self.places: dict[str, StoragePath] = {}
-
         # The directory roots a pattern matched, walked one level less deep.
         self.matched: set[str] = set()
-
         # The errors found in finding the roots, e.g. by a glob: yielded first.
         self.found: list[Exception] = []
 
-        # The destinations found missing, and those found existing, which need
-        # no asking again, e.g. by a move renaming a root onto one.
+        # What is known of the destination: the paths found missing or
+        # existing, the directories made or known to exist, and the entries of
+        # those found, each the parent hint of what is made inside it.
         self.missing: set[str] = set()
         self.existing: set[str] = set()
-
-        # The destination directories made, tried, or known to exist: their
-        # copies need not wait for a mkdir.
         self.made: set[str] = set()
-
-        # The entries of the destination directories found or made, by path:
-        # each is the parent hint of what is made inside it.
         self.directories: dict[str, Entry] = {}
 
     async def setup(self) -> None:
-        """Open both handlers, and read the destination's profile, and the source's batch size where batching."""
+        """Open both handlers, and read from the destination's profile how the roots go."""
         await self.handler.open()
-        # The destination's profile, loaded once as its handler opens. A plain
-        # fsspec filesystem a router copies to has an unknown one.
+        # A plain fsspec filesystem a router copies to has an unknown profile.
         await self.dst.open()
-        self.profile = self.dst.profile
+        profile = self.profile = self.dst.profile
+        within = self.same_storage
         # Unknown, directories are made first. Implicit directories need none.
         # Within one storage, a file goes by the storage's own copy or move,
         # whose parents the profile tells apart from a write's.
-        self.implicit_directories = bool(self.profile.implicit_directories)
-        declared = (
-            self.profile.copy_parents_required
-            if self.same_storage
-            else self.profile.parents_required
-        )
-        self.parents_required = declared is not False and not self.implicit_directories
+        implicit = bool(profile.implicit_directories)
+        declared = profile.copy_parents_required if within else profile.parents_required
+        self.parents_required = declared is not False and not implicit
+        # A move between two storages makes its directories, as it deletes them.
+        self.implicit_directories = implicit and (within or not self.move)
+        if self.move and within and not implicit and profile.renames_files is not False:
+            # A rename makes no parent, as a write may.
+            self.parents_required = True
         # Only within one storage are a source and its destination compared.
-        self.case_insensitive = (
-            self.same_storage and self.profile.case_sensitive is False
-        )
+        self.case_insensitive = within and profile.case_sensitive is False
+        # Only within one storage does the profile tell how the source copies or
+        # renames a directory whole. One gone whole would take what is deeper
+        # than maxdepth along.
+        whole = profile.renames_directories if self.move else profile.copies_directories
+        self.whole = within and bool(whole) and self.maxdepth is None
         if self.batching:
             # Within one storage, the source's handler is the destination's.
-            name = "cp_batch_size" if self.transfers == "copy" else "mv_batch_size"
-            self.transfer_batch_size = getattr(self.handler, name)
-            if self.transfer_batch_size < 1:
-                raise ValueError(
-                    f"{name} must be at least 1: {self.transfer_batch_size}"
-                )
+            name = "mv_batch_size" if self.move else "cp_batch_size"
+            self.batch_size = getattr(self.handler, name)
+            _check_batch_size(self.batch_size, name)
 
     def folded(self, path: str) -> str:
         """A path as the storage compares it: folded unless its names are case-sensitive."""
@@ -239,11 +227,10 @@ class _Placement:
 
     async def glob_roots(self, pattern: StoragePath | Sequence[StoragePath]) -> _Roots:
         """The roots matching glob patterns, noting those a pattern matched. The glob's errors go to ``found``."""
-        roots, errors, matched = await _glob_roots(
+        roots, errors, self.matched = await _glob_roots(
             self.handler, self.glob(pattern), pattern, self.maxdepth
         )
         self.found.extend(errors)
-        self.matched = matched
         return roots
 
     async def prepare(self) -> _Roots | None:
@@ -268,7 +255,7 @@ class _Placement:
             root = self.handler.trim(self.path1)
             if self.same_storage and self.folded(root) == self.folded(destination):
                 # Onto itself: left as it is, unless a move to another case.
-                recased = root != destination and self.verb == "move"
+                recased = root != destination and self.move
                 if not recased or self.path1.endswith("/") or self.path2.endswith("/"):
                     return None
                 return self.recased(root, destination)
@@ -287,16 +274,23 @@ class _Placement:
         return roots
 
     def recased(self, root: str, destination: StoragePath) -> _Roots:
-        """The root of a single path moved onto itself in another case, to be renamed.
+        """A single path moved onto itself in another case: renamed whole by one ``mv_tree``, else ValueError.
 
         On a storage whose names are not case-sensitive, only a rename of the
-        root whole changes its case: a move doing so places it, as a root
-        going to a destination found missing. Here, it raises ValueError.
+        root whole changes its case. The destination is the root itself: found
+        existing, it would take the root into itself, so it is taken as
+        missing instead.
         """
-        raise ValueError(
-            f"Cannot {self.verb} {root!r} to {destination!r}, itself in another"
-            " case: the storage renames nothing whole"
-        )
+        if not self.whole:
+            raise ValueError(
+                f"Cannot {self.verb} {root!r} to {destination!r}, itself in another"
+                " case: the storage renames nothing whole"
+            )
+        self.prefix, self.base = root, destination
+        self.missing.add(destination)
+        self.made.add(self.handler.parent(root))
+        # A directory root, as mv_tree takes a file too.
+        return _Roots([self.path1_entry or {"name": root}])
 
     async def _place(self, destination: StoragePath) -> _Roots:
         """Place each root of a list into ``destination``, under its name.
@@ -311,17 +305,15 @@ class _Placement:
         placed: dict[StoragePath, str] = {}
 
         for source in sorted(roots.paths):
-            name = source.rpartition("/")[2]
-            target = self.dst.join(destination, name)
+            target = self.dst.join(destination, self.handler.name(source))
             if (other := placed.get(target)) is not None:
                 error = FileExistsError(target)
                 error.add_note(
-                    f"{self.doing} {source!r} to {target!r} skipped: {other!r} goes"
-                    " there too."
+                    f"{'Moving' if self.move else 'Copying'} {source!r} to {target!r} skipped:"
+                    f" {other!r} goes there too."
                 )
                 self.found.append(error)
                 continue
-
             placed[target] = source
             self.places[source] = target
 
@@ -347,7 +339,7 @@ class _Placement:
     async def _base(self, root: str, destination: StoragePath) -> StoragePath:
         """Where ``root``, a single path, goes: into ``destination``, or onto it.
 
-        What its ``_info`` finds is kept: a destination missing or existing,
+        What its ``info`` finds is kept: a destination missing or existing,
         and the directory it shows to exist, which needs no mkdir.
         """
         if self.path2.endswith("/"):
@@ -367,9 +359,8 @@ class _Placement:
 
         if not into or (isinstance(self.path1, str) and self.path1.endswith("/")):
             return destination
-
-        name = root.rsplit("/", 1)[-1]
-        return self.dst.join(destination, name)
+        else:
+            return self.dst.join(destination, self.handler.name(root))
 
     def target(self, path: str) -> StoragePath:
         """Where a path goes, each name below its root checked by the destination's ``join``.
@@ -384,10 +375,8 @@ class _Placement:
             while root not in self.places and "/" in root:
                 root = root.rpartition("/")[0]
             target = self.dst.join(self.places[root], path[len(root) :])
-        elif self.prefix:
-            target = self.dst.join(self.base, path[len(self.prefix) :])
         else:
-            target = self.dst.join(self.base, path)
+            target = self.dst.join(self.base, path[len(self.prefix) :])
 
         if path.endswith("/") and not target.endswith("/"):
             # A flat storage's marker is a key: its directory's path and a "/".
@@ -395,14 +384,27 @@ class _Placement:
         else:
             return target
 
-    def known_missing(self, target: str) -> bool:
-        """Whether nothing is at a destination, as the operation knows: it, or a directory above it, was found missing.
+    def root(self, entry: dict[str, Any]) -> _Root:
+        """A root placed, with what is known of its target."""
+        target = self.target(entry["name"])
+        try:
+            parent: str | None = self.dst.parent(target)
+        except ValueError:
+            parent = None  # At the root: no parent of the destination's.
+        return _Root(
+            entry=entry,
+            target=target,
+            missing=self._known_missing(target),
+            existing=target in self.existing,
+            parent=None if parent is None else self.directories.get(parent),
+            parent_exists=parent is None or self._exists(parent),
+            matched=self.handler.trim(entry["name"]) in self.matched,
+            made=self._exists(target),
+            directory=self.directories.get(target),
+        )
 
-        All below a destination found missing is missing too, unless another
-        client puts something there meanwhile: the primitives making it are
-        told so, by ``missing=True``, and a storage whose creation never
-        conflicts asks nothing first.
-        """
+    def _known_missing(self, target: str) -> bool:
+        """Whether a destination, or a directory above it, was found missing: so is all below it."""
         path = target.rstrip("/")
         while path:
             if path in self.missing:
@@ -410,67 +412,9 @@ class _Placement:
             path = path.rpartition("/")[0]
         return False
 
-    def needs_mkdir(self, directory: StoragePath, *, always: bool = False) -> bool:
-        """Whether a destination directory is made before what goes in it.
-
-        Never the root, nor one made, tried or known to exist. Else only where
-        the storage requires parents, unless ``always``, e.g. for an empty
-        directory, which nothing else makes.
-        """
-        if directory == self.dst.root or not directory or directory in self.made:
-            return False
-        return always or self.parents_required
-
-    async def replace_file(
-        self,
-        cp_entry: Any,
-        entry: dict[str, Any],
-        destination: StoragePath,
-        refused: FileExistsError,
-    ) -> None:
-        """Copy a file onto one its destination refused to overwrite: deleted first, unless a directory.
-
-        A directory there raises ``refused`` again: ``rm_file`` takes files only.
-        """
-        found = await self.dst.info(self.dst.entry(destination))
-        if found["type"] == "directory":
-            raise refused
-
-        await self.dst.rm_file({**found, "name": destination})
-        await cp_entry(entry, destination, parent=self.parent_of(destination))
-
-    def parent_of(self, path: StoragePath) -> Entry | None:
-        """The entry of a destination's parent, as found or made, as the primitives take it: None if unknown."""
-        try:
-            return self.directories.get(self.dst.parent(path))
-        except ValueError:
-            return None  # A path at the root: no parent of the destination's.
-
-
-class _Moving(_Placement):
-    """Where a move's paths go: a single path moved onto itself in another case is renamed whole."""
-
-    verb = "move"
-    doing = "Moving"
-    transfers = "move"
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.goes_whole = False  # As _place_roots reads it from the profile.
-
-    def recased(self, root: str, destination: StoragePath) -> _Roots:
-        """A single path moved onto itself in another case: renamed by one ``mv_tree``.
-
-        The destination is the root itself. Found existing, it would take the
-        root into itself: it is taken as missing instead.
-        """
-        if not self.goes_whole:
-            return super().recased(root, destination)
-        self.prefix, self.base = root, destination
-        self.missing.add(destination)
-        self.made.add(self.handler.parent(root))
-        # A directory root, as mv_tree takes a file too.
-        return _Roots([self.path1_entry or {"name": root}])
+    def _exists(self, directory: str) -> bool:
+        """Whether a destination directory needs no mkdir: the root, or one made or known to exist."""
+        return not directory or directory == self.dst.root or directory in self.made
 
 
 class _Root(NamedTuple):
@@ -481,6 +425,8 @@ class _Root(NamedTuple):
     target's parent, if found, and ``parent_exists`` whether it needs no
     mkdir: made, found, or the root. ``matched`` is whether a pattern matched
     it, not named literally: ``maxdepth`` counts one level less below it.
+    ``made`` is whether the target needs no mkdir, and ``directory`` its
+    entry, if found a directory.
     """
 
     entry: dict[str, Any]
@@ -514,66 +460,23 @@ class _Placed(NamedTuple):
     whole: bool
 
 
-async def _place_roots(*, move: bool, **kwargs: Any) -> _Placed:
+async def _place_roots(**kwargs: Any) -> _Placed:
     """Place the roots of a copy, or of a move, as fsspec's ``copy`` places them.
 
     ``kwargs`` are `_Placement`'s. It opens both handlers, and reads the
     destination's profile. A path onto itself, left as it is, has no root.
     """
-    place = _Moving(**kwargs) if move else _Placement(**kwargs)
+    place = _Placement(**kwargs)
     await place.setup()
-    whole = _whole(place, move)
-    if isinstance(place, _Moving):
-        place.goes_whole = whole  # Read by recased, in prepare.
     roots = await place.prepare() or _Roots([])
-
-    def placed(entry: dict[str, Any]) -> _Root:
-        target = place.target(entry["name"])
-        try:
-            parent = place.dst.parent(target)
-        except ValueError:
-            parent = None  # At the root: no parent of the destination's.
-        return _Root(
-            entry=entry,
-            target=target,
-            missing=place.known_missing(target),
-            existing=target in place.existing,
-            parent=place.parent_of(target),
-            parent_exists=parent is None or not place.needs_mkdir(parent, always=True),
-            matched=place.handler.trim(entry["name"]) in place.matched,
-            made=not place.needs_mkdir(target, always=True),
-            directory=place.directories.get(target),
-        )
-
     return _Placed(
-        directories=[placed(d) for d in roots.directories],
-        files=[placed(f) for f in roots.files],
+        directories=[place.root(d) for d in roots.directories],
+        files=[place.root(f) for f in roots.files],
         errors=place.found,
         profile=place.profile,
         implicit_directories=place.implicit_directories,
         parents_required=place.parents_required,
         batching=place.batching,
-        batch_size=place.transfer_batch_size if place.batching else 1,
-        whole=whole,
+        batch_size=place.batch_size,
+        whole=place.whole,
     )
-
-
-def _whole(place: _Placement, move: bool) -> bool:
-    """Whether the roots go whole, by one ``cp_tree`` or ``mv_tree``, where they can.
-
-    Only within one storage does the profile tell how the source copies or
-    renames. A directory gone whole would take what is deeper than maxdepth
-    along. A move's own setup follows: a rename makes no parent, as a write
-    may, so its directory is made first unless the profile says it renames
-    no file.
-    """
-    profile = place.profile
-    declared = profile.renames_directories if move else profile.copies_directories
-    if move:
-        place.implicit_directories = place.same_storage and place.implicit_directories
-        place.parents_required = place.parents_required or (
-            place.same_storage
-            and not place.implicit_directories
-            and profile.renames_files is not False
-        )
-    return place.same_storage and bool(declared) and place.maxdepth is None

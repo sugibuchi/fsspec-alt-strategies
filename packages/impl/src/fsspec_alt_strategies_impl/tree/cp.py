@@ -263,7 +263,6 @@ def _transfers(
             maxdepth=maxdepth,
             path1_entry=path1_entry,
             batching=batching,
-            ils_kwargs=ils_kwargs,
         )
         for error in placed.errors:
             op.state = replace(op.state, errors=op.state.errors + 1)
