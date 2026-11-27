@@ -52,7 +52,7 @@ async def test_an_async_filesystem_answers_as_fsspec(
     assert await flat._glob("data/*/*.txt") == await AsyncFileSystem._glob(
         inner, "data/*/*.txt"
     )
-    listed = flat._ils("data/202", recursive=True, prefix=True)
+    listed = flat._handler.ils_recursive(flat._handler.entry("data/202"), prefix=True)
     # The keys starting with the prefix, and the directories they imply.
     assert [e["name"] async for e in listed] == [
         "data/2023",

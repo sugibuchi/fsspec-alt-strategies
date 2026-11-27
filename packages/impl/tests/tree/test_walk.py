@@ -9,12 +9,12 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.common.listing import ils_by_directory
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.walk import WalkState, _tree_walk
 from fsspec_alt_strategies_impl_testing import (
     SimulatedFileSystem,
     TreeView,
+    ils_by_directory,
 )
 
 if TYPE_CHECKING:

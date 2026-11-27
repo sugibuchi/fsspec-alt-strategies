@@ -194,9 +194,8 @@ code: read it before adding a strategy or a handler.
     default, each directory is listed on its own.
   - `recursive_ls_with_prefix`: it takes `prefix`. A glob then lists a tree by one listing, narrowed to its pattern's
     literal prefix. It needs `recursive_ls`.
-- A handler whose storage refuses its own listing, or where it costs more, falls back on
-  `common.listing.ils_by_directory`. The filesystem's recursive `_ils` uses it where the profile declares no
-  `recursive_ls`.
+- A handler whose storage refuses its own listing, or where it costs more, declares no `recursive_ls`: the strategies
+  then list each directory on their own. The filesystem's `_ils` lists one directory, by `ils`.
 - On a storage with `implicit_directories`, a directory has no object of its own but its marker. `rm` and `mv` delete
   a directory by `rmdir` only where its entry says `"marker"`, and a root emptied, which may have one.
 

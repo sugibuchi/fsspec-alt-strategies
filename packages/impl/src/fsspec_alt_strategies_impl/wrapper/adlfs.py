@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from fsspec_alt_strategies.profile import StorageProfile
 
-from ..common.listing import ils_by_directory, implied_directories
+from ..common.listing import implied_directories
 from .tree import FsspecTreeHandler
 
 if TYPE_CHECKING:
@@ -93,20 +93,22 @@ class AdlfsHandler(FsspecTreeHandler):
         else:
             await self.fs._rmdir(container)
 
-    def ils_recursive(
-        self, entry: Entry, prefix: bool = False, **kwargs: Any
-    ) -> AsyncIterator[Entry]:
-        path = entry["name"]
-        container = self.fs.split_path(path)[0] if path.strip("/") else ""
-        own = hasattr(self.fs, "service_client") and hasattr(self.fs, "_details")
+    def ils_recursive(self, entry: Entry, prefix: bool = False) -> AsyncIterator[Entry]:
         if prefix:
             # Not declared: ADLFS_PROFILE has no recursive_ls_with_prefix.
             return super().ils_recursive(entry, prefix)
-        if not (container and own and not kwargs):
-            # The containers, adlfs without its own, or a caller's options:
-            # a directory per request, by adlfs's ls.
-            return ils_by_directory(self, entry, **kwargs)
+        path = entry["name"]
+        if not path.strip("/"):
+            return self._account(entry)
         return implied_directories(self._blobs(path), path)
+
+    async def _account(self, entry: Entry) -> AsyncIterator[Entry]:
+        """All in the account: each container, then all in it by its own listing."""
+        async for container in self.ils(entry):
+            yield container
+            name = self.trim(container["name"])
+            async for below in implied_directories(self._blobs(name), name):
+                yield below
 
     async def _blobs(self, path: str) -> AsyncIterator[Entry]:
         """All below ``path``, by one ListBlobs without a delimiter, a page at a time, in name order.

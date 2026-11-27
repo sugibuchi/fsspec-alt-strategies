@@ -164,8 +164,8 @@ class MyHandler(TreeFileOperationHandler):
   narrowed to its patterns' literal prefix.
 - With `recursive_ls`, a subtree nothing prunes is streamed by one `ils_recursive`, e.g. for a `find` without
   `maxdepth`. Without it, each directory is listed on its own, several at once.
-- A handler whose storage may refuse its own listing falls back on `common.listing.ils_by_directory`, which lists a
-  tree by one `ils` per directory.
+- A handler whose storage may refuse its own listing declares no `recursive_ls`: each directory is then listed by
+  `ils`.
 - `rm_tree`, `mv_tree` and `cp_tree`, a storage's own operations on a whole directory, are optional. The profile
   declares them, by `deletes_directories`, `renames_directories` and `copies_directories`.
 - The strategies are the handler's methods: `walk`, `find`, `glob`, `du`, `rm`, `rm_files`, `cp`, `cp_files`, `mv`

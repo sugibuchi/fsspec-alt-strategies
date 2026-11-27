@@ -13,7 +13,6 @@ import pytest
 from fsspec.asyn import AsyncFileSystem
 
 from fsspec_alt_strategies.profile import StorageProfile
-from fsspec_alt_strategies_impl.common.listing import ils_by_directory
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
 from fsspec_alt_strategies_impl.tree.cp import _tree_cp
 from fsspec_alt_strategies_impl.tree.du import _tree_du
@@ -21,7 +20,11 @@ from fsspec_alt_strategies_impl.tree.find import _tree_find
 from fsspec_alt_strategies_impl.tree.glob import _tree_glob
 from fsspec_alt_strategies_impl.tree.rm import _tree_rm
 from fsspec_alt_strategies_impl.tree.walk import _tree_walk
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
+from fsspec_alt_strategies_impl_testing import (
+    SimulatedFileSystem,
+    TreeView,
+    ils_by_directory,
+)
 
 
 async def _bottom_up(handler: Any, path: Any) -> list[tuple[str, list[str]]]:

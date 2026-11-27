@@ -257,8 +257,7 @@ An item that exists is named by its entry, a dict as fsspec's `ls` with `detail`
   which keeps a trailing "/".
 - It answers and raises as fsspec's methods do, and tells the monitors of each call. A method raises its strategy's
   failures: one as it is, several in an ExceptionGroup.
-- Its `_ils(path, recursive=False, prefix=False, **kwargs)` lists by the handler's `ils`, or with `recursive` its
-  `ils_recursive`. Where the profile declares no `recursive_ls`, it lists a tree by `listing.ils_by_directory`.
+- Its `_ils(path, **kwargs)` lists a directory by the handler's `ils`.
 - It has the sync methods fsspec does not make, `mv` and `rmdir`, and fsspec's `dircache`, as the next section says.
 
 A monitor's `Call` names the filesystem whose method was called, by its `_unwrapped()`. That is the filesystem
@@ -447,12 +446,8 @@ NotImplementedError by default. Whatever the storage keeps, it lists a tree:
 A file lists itself, and a missing directory raises FileNotFoundError. With `prefix=True`, the entry's name is a
 string all listed start with, e.g. "data/2024-", and nothing missing raises.
 
-`common/listing.py` holds two helpers:
-
-- `implied_directories(keys, top)` turns a key listing in name order into that tree. It makes up each directory
-  before its first key, and turns markers into their directories' entries.
-- `ils_by_directory(handler, entry)` lists a tree by one `ils` per directory, depth first. It serves a handler whose
-  storage refuses its own listing in a way only asking tells, e.g. a WebDAV server refusing `Depth: infinity`.
+`common/listing.py`'s `implied_directories(keys, top)` turns a key listing in name order into that tree. It
+makes up each directory before its first key, and turns markers into their directories' entries.
 
 The profile declares what `ils_recursive` does, as the strategies cannot tell it:
 

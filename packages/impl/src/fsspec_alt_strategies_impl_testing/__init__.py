@@ -34,6 +34,7 @@ import math
 import sys
 import time
 from collections import Counter
+from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -54,13 +55,26 @@ from fsspec_alt_strategies_impl.files.fsspec_transaction import (
 from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+    from collections.abc import (
+        AsyncGenerator,
+        AsyncIterator,
+        Awaitable,
+        Callable,
+        Iterator,
+    )
 
     from fsspec_alt_strategies.states import RmState
     from fsspec_alt_strategies_impl.common.handler import StoragePath
     from fsspec_alt_strategies_impl.common.operation import Operation
 
-__all__ = ["CallStats", "FlatView", "SimulatedFileSystem", "TreeView", "dir_ils"]
+__all__ = [
+    "CallStats",
+    "FlatView",
+    "SimulatedFileSystem",
+    "TreeView",
+    "dir_ils",
+    "ils_by_directory",
+]
 
 
 @dataclass
@@ -663,6 +677,59 @@ class SimulatedFileSystem(AsyncFileSystem):
         if not self.hierarchical and parent and not self._dirs[parent]:
             del self._dirs[parent]
             self._detach(parent)
+
+
+async def ils_by_directory(
+    handler: TreeFileOperationHandler, entry: dict[str, Any], **ils_kwargs: Any
+) -> AsyncGenerator[dict[str, Any]]:
+    """List all below a directory depth first, by one ``ils`` per directory, in turn.
+
+    It yields what ``ils_recursive`` yields: each entry below ``entry``, at
+    any depth, depth first in preorder. A directory's entries come in the
+    order its ``ils`` gives them, each subdirectory's followed by all below
+    it. A file lists itself, as ``ils`` lists it. A directory listed twice,
+    e.g. as a prefix and as its marker, is yielded twice, but listed once.
+
+    It is for the tests' views: an ``ils_recursive`` made of their ``ils``.
+
+    Parameters
+    ----------
+    handler : TreeFileOperationHandler
+        The handler whose ``ils`` lists each directory.
+    entry : dict
+        The directory's entry, as a listing gave it or ``handler.entry``
+        made it.
+    **ils_kwargs
+        Given to each ``ils``.
+
+    Yields
+    ------
+    dict
+        The entries below ``entry``, depth first.
+
+    Raises
+    ------
+    Exception
+        The error of a directory that fails to list, as the storage raised
+        it, which ends the listing.
+    """
+    directory = entry["name"].rstrip("/")
+    listed: set[str] = set()
+    async for found in handler.ils(entry, **ils_kwargs):
+        name = found["name"].rstrip("/")
+        if name == directory:
+            # A file lists itself. A directory may list its own marker: it is
+            # no entry below it.
+            if found["type"] != "directory":
+                yield found
+            continue
+        yield found
+        if found["type"] == "directory" and name not in listed:
+            listed.add(name)
+            subtree = ils_by_directory(handler, {**found, "name": name}, **ils_kwargs)
+            async with aclosing(subtree):  # Closed with this one.
+                async for below in subtree:
+                    yield below
 
 
 def dir_ils(fs: Any) -> Callable[[str], AsyncIterator[dict[str, Any]]]:

@@ -30,7 +30,6 @@ from fsspec.callbacks import DEFAULT_CALLBACK
 
 from fsspec_alt_strategies.monitor import Call, Monitored
 
-from .listing import ils_by_directory
 from .operation import _collect_with_monitors, _with_monitors
 
 if TYPE_CHECKING:
@@ -292,34 +291,14 @@ class BaseFileSystem(AsyncFileSystem, Monitored):
 
     # The storage's primitives: the handler's, each on a caller's path, verified by it.
 
-    async def _ils(
-        self, path: str, recursive: bool = False, prefix: bool = False, **kwargs: Any
-    ) -> AsyncGenerator[dict[str, Any]]:
-        """List a directory, or all below it, as an async iterator of entries.
+    async def _ils(self, path: str, **kwargs: Any) -> AsyncGenerator[dict[str, Any]]:
+        """List a directory by the handler's ``ils``, as an async iterator of entries.
 
-        The entries are as fsspec's ``_ls`` gives them with ``detail``. With
-        ``recursive=True``, all below ``path`` come depth first, by the
-        handler's ``ils_recursive`` where its profile declares
-        ``recursive_ls``, else a directory per ``ils``. With ``prefix`` too,
-        ``path`` is a string all names listed start with, where the profile
-        declares ``recursive_ls_with_prefix``. ``kwargs`` go to the handler's
-        listing.
+        The entries are as fsspec's ``_ls`` gives them with ``detail``.
+        ``kwargs`` go to the handler's ``ils``.
         """
         handler = self._handler
-        entry = handler.entry(path)
-        await handler.open()  # Its profile.
-        profile = handler.profile
-        if prefix and not (recursive and profile.recursive_ls_with_prefix):
-            raise ValueError("prefix needs recursive and recursive_ls_with_prefix")
-        if not recursive:
-            listing = handler.ils(entry, **kwargs)
-        elif profile.recursive_ls:
-            if prefix:
-                listing = handler.ils_recursive(entry, prefix=True, **kwargs)
-            else:
-                listing = handler.ils_recursive(entry, **kwargs)
-        else:
-            listing = ils_by_directory(handler, entry, **kwargs)
+        listing = handler.ils(handler.entry(path), **kwargs)
         try:
             async for found in listing:
                 yield found

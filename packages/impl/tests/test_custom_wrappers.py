@@ -124,7 +124,12 @@ _KEYS = {
 
 async def test_s3fs_lists_a_prefix_in_one_streamed_listing() -> None:
     fs, flat = _s3(_KEYS)
-    names = [e["name"] async for e in flat._ils("bkt/data/2024-", True, prefix=True)]
+    names = [
+        e["name"]
+        async for e in flat._handler.ils_recursive(
+            flat._handler.entry("bkt/data/2024-"), prefix=True
+        )
+    ]
     assert names == [
         "bkt/data/2024-01.csv",
         "bkt/data/2024-02",
@@ -135,7 +140,9 @@ async def test_s3fs_lists_a_prefix_in_one_streamed_listing() -> None:
 
 async def test_s3fs_lists_a_bucket_whole() -> None:
     fs, flat = _s3(_KEYS)
-    names = [e["name"] async for e in flat._ils("bkt", True)]
+    names = [
+        e["name"] async for e in flat._handler.ils_recursive(flat._handler.entry("bkt"))
+    ]
     # The directories the keys imply, each before what is below it.
     assert names == sorted([*_KEYS, "bkt/data", "bkt/data/2024-02"])
     assert fs.calls == [("_iterdir", "bkt", "", "")]
@@ -144,8 +151,18 @@ async def test_s3fs_lists_a_bucket_whole() -> None:
 async def test_s3fs_lists_nothing_of_a_missing_bucket() -> None:
     _, flat = _s3(_KEYS)
     with pytest.raises(FileNotFoundError):
-        [e async for e in flat._ils("missing/data", True)]
-    assert [e async for e in flat._ils("missing/data", True, prefix=True)] == []
+        [
+            e
+            async for e in flat._handler.ils_recursive(
+                flat._handler.entry("missing/data")
+            )
+        ]
+    assert [
+        e
+        async for e in flat._handler.ils_recursive(
+            flat._handler.entry("missing/data"), prefix=True
+        )
+    ] == []
 
 
 async def test_s3fs_finds_by_its_listing() -> None:
@@ -182,7 +199,12 @@ async def test_s3fs_moves_by_a_copy_then_a_delete() -> None:
 
 async def test_gcsfs_lists_a_prefix_by_its_find_in_name_order() -> None:
     fs, flat = _gcs(_KEYS)
-    names = [e["name"] async for e in flat._ils("bkt/data/2024-", True, prefix=True)]
+    names = [
+        e["name"]
+        async for e in flat._handler.ils_recursive(
+            flat._handler.entry("bkt/data/2024-"), prefix=True
+        )
+    ]
     assert names == [
         "bkt/data/2024-01.csv",
         "bkt/data/2024-02",
@@ -252,8 +274,13 @@ async def test_gcsfs_off_google_deletes_as_fsspec() -> None:
 async def test_gcsfs_lists_nothing_of_a_missing_bucket() -> None:
     _, flat = _gcs(_KEYS)
     with pytest.raises(FileNotFoundError):
-        [e async for e in flat._ils("missing", True)]
-    assert [e async for e in flat._ils("missing/data", True, prefix=True)] == []
+        [e async for e in flat._handler.ils_recursive(flat._handler.entry("missing"))]
+    assert [
+        e
+        async for e in flat._handler.ils_recursive(
+            flat._handler.entry("missing/data"), prefix=True
+        )
+    ] == []
 
 
 # adlfs: a container client of the Azure SDK, listing blobs in pages.
@@ -337,7 +364,9 @@ def _adl(keys: dict[str, int | None]) -> tuple[_Adl, Any]:
 
 async def test_adlfs_lists_a_tree_in_one_listing_of_pages() -> None:
     fs, tree = _adl(_TREE)
-    entries = [e async for e in tree._ils("c/data", True)]
+    entries = [
+        e async for e in tree._handler.ils_recursive(tree._handler.entry("c/data"))
+    ]
     assert [(e["name"], e["type"], e["size"]) for e in entries] == [
         ("c/data/a.csv", "file", 1),
         ("c/data/sub", "directory", 0),
@@ -359,15 +388,20 @@ async def test_adlfs_finds_by_its_listing() -> None:
 
 async def test_adlfs_lists_a_file_as_itself_and_an_empty_directory_as_nothing() -> None:
     _, tree = _adl(_TREE)
-    assert [e["name"] async for e in tree._ils("c/top.csv", True)] == ["c/top.csv"]
-    assert [e async for e in tree._ils("c/empty", True)] == []
+    assert [
+        e["name"]
+        async for e in tree._handler.ils_recursive(tree._handler.entry("c/top.csv"))
+    ] == ["c/top.csv"]
+    assert [
+        e async for e in tree._handler.ils_recursive(tree._handler.entry("c/empty"))
+    ] == []
 
 
 @pytest.mark.parametrize("path", ["c/missing", "missing", "missing/data"])
 async def test_adlfs_raises_on_a_missing_path(path: str) -> None:
     _, tree = _adl(_TREE)
     with pytest.raises(FileNotFoundError):
-        [e async for e in tree._ils(path, True)]
+        [e async for e in tree._handler.ils_recursive(tree._handler.entry(path))]
 
 
 async def test_adlfs_deletes_a_directory_by_its_blob_and_a_container_by_adlfs() -> None:
@@ -403,7 +437,12 @@ async def test_s3fs_without_its_private_methods_lists_and_copies_as_fsspec() -> 
 
     fs = Bare(_KEYS)
     flat = _s3fs(fs, rm_batch_size=1000, **_LIMITS)
-    names = [e["name"] async for e in flat._ils("bkt/data/2024-", True, prefix=True)]
+    names = [
+        e["name"]
+        async for e in flat._handler.ils_recursive(
+            flat._handler.entry("bkt/data/2024-"), prefix=True
+        )
+    ]
     assert names == [
         "bkt/data/2024-01.csv",
         "bkt/data/2024-02",
@@ -425,41 +464,15 @@ async def test_gcsfs_whose_find_takes_no_prefix_lists_as_fsspec() -> None:
 
     fs = Bare(_KEYS)
     flat = _gcsfs(fs, rm_batch_size=100, **_LIMITS)
-    names = [e["name"] async for e in flat._ils("bkt/data/2024-", True, prefix=True)]
+    names = [
+        e["name"]
+        async for e in flat._handler.ils_recursive(
+            flat._handler.entry("bkt/data/2024-"), prefix=True
+        )
+    ]
     assert names == [
         "bkt/data/2024-01.csv",
         "bkt/data/2024-02",
         "bkt/data/2024-02/a.csv",
     ]
     assert fs.calls == [("_find", "bkt/data")]
-
-
-async def test_adlfs_without_its_client_lists_a_directory_at_a_time() -> None:
-    class Bare(_Adl):
-        def __init__(self, keys: dict[str, int | None]) -> None:
-            super().__init__(keys)
-            del self.service_client
-
-        async def _ls(self, path: str, detail: bool = True, **kwargs: Any) -> Any:
-            self.calls.append(("_ls", path))
-            depth = path.count("/") + 1
-            names = {
-                "/".join(k.split("/")[: depth + 1])
-                for k in self.keys
-                if k.startswith(f"{path}/")
-            }
-            return [await self._info(n) for n in sorted(names)]
-
-    fs = Bare(_TREE)
-    tree = _adlfs(fs, **_LIMITS)
-    names = sorted([e["name"] async for e in tree._ils("c/data", True)])
-    assert names == [
-        "c/data/a.csv",
-        "c/data/sub",
-        "c/data/sub/b.csv",
-        "c/data/sub/c.csv",
-    ]
-    assert [c for c in fs.calls if c[0] == "_ls"] == [
-        ("_ls", "c/data"),
-        ("_ls", "c/data/sub"),
-    ]

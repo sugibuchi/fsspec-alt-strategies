@@ -1,4 +1,4 @@
-"""Tests of `common.listing`: `ils_by_directory`, a recursive listing made of one listing per directory, and `implied_directories`."""
+"""Tests of `common.listing`'s `implied_directories`, and of the testing package's `ils_by_directory`, a recursive listing made of one listing per directory."""
 
 from __future__ import annotations
 
@@ -8,11 +8,12 @@ from typing import Any
 
 import pytest
 
-from fsspec_alt_strategies_impl.common.listing import (
+from fsspec_alt_strategies_impl.common.listing import implied_directories
+from fsspec_alt_strategies_impl_testing import (
+    SimulatedFileSystem,
+    TreeView,
     ils_by_directory,
-    implied_directories,
 )
-from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 
 def _tree(fs: SimulatedFileSystem) -> None:
