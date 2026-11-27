@@ -18,14 +18,13 @@ from contextlib import aclosing
 from dataclasses import replace
 from functools import partial
 from glob import has_magic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from fsspec_alt_strategies.states import RmState
 
 from ..common.glob import PathAction
-from ..common.operation import Operation
+from ..common.operation import Operation, _collect_with_errors
 from ..common.paths import _check_maxdepth
-from ..common.placement import _glob_roots, _Roots
 from ..common.strategy import _check_batch_size
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
@@ -34,10 +33,80 @@ from .walk import _MAX_RUNNING, _root_task
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Sequence
 
-    from ..common.handler import Entry, StoragePath
+    from ..common.handler import Entry, StorageHandler, StoragePath
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
+
+
+class _Roots(NamedTuple):
+    """Where an operation starts: what it walks, and what it handles alone.
+
+    Each root is its entry, so that a copy or move hands it on without asking
+    it again. ``directories`` are walked, or listed, at once. A single path of
+    unknown kind is among them, its entry its ``"name"`` alone, as its listing
+    tells what it is. ``files`` are known files, e.g. glob matches.
+    """
+
+    directories: Sequence[dict[str, Any]]
+    files: Sequence[dict[str, Any]] = ()
+
+    @property
+    def paths(self) -> list[str]:
+        """The paths of all the roots, the directories first."""
+        return [e["name"] for e in (*self.directories, *self.files)]
+
+
+def _roots_of(
+    matches: list[dict[str, Any]],
+    errors: list[Exception],
+    pattern: str | Sequence[str],
+) -> _Roots:
+    """The roots of a glob's matches, as fsspec's ``_expand_path`` finds them.
+
+    A match inside a directory that matches is left out: walking the directory
+    finds it. Matching nothing raises FileNotFoundError, as fsspec does.
+    """
+    if not matches and not errors:
+        raise FileNotFoundError(pattern)
+
+    directories: dict[str, dict[str, Any]] = {}
+    files: list[dict[str, Any]] = []
+
+    # Sorted, a directory comes before all in it.
+    for entry in sorted(matches, key=lambda e: e["name"]):
+        name = entry["name"].rstrip("/")
+        parts = name.split("/")
+        if any("/".join(parts[:i]) in directories for i in range(1, len(parts))):
+            continue
+        if entry["type"] == "directory":
+            directories[name] = {**entry, "name": name}
+        else:
+            files.append({**entry, "name": name})
+
+    return _Roots(list(directories.values()), files)
+
+
+async def _glob_roots(
+    handler: StorageHandler,
+    glob: Operation[Any, Any],
+    pattern: StoragePath | Sequence[StoragePath],
+    maxdepth: int | None,
+) -> tuple[_Roots, list[Exception], set[str]]:
+    """The roots a glob matches, its errors, and the directories a pattern matched.
+
+    With ``maxdepth``, a directory root a pattern matched, not one named
+    literally, is walked one level less deep, as fsspec's glob counted that
+    level already.
+    """
+    matches, errors = await _collect_with_errors(glob)
+    roots = _roots_of(matches, errors, pattern)
+    matched: set[str] = set()
+    if maxdepth is not None:
+        named = [pattern] if isinstance(pattern, str) else pattern
+        literal = {handler.trim(p) for p in named if not has_magic(p)}
+        matched = {d["name"] for d in roots.directories if d["name"] not in literal}
+    return roots, errors, matched
 
 
 def _tree_rm(
@@ -218,7 +287,7 @@ def _traversals(
     maxdepth: int | None,
     ils_kwargs: dict[str, Any] | None,
 ) -> list[PathTask]:
-    """A traversal per directory root, each with whether a pattern matched it, as `common.placement._glob_roots` finds them.
+    """A traversal per directory root, each with whether a pattern matched it, as `_glob_roots` finds them.
 
     Below a pattern's match, ``maxdepth`` counts one level less, as fsspec's
     glob counted that level already: 0 for the root alone.

@@ -171,7 +171,7 @@ code: read it before adding a strategy or a handler.
 - A wrapper of one library declares its profile, limits and batch sizes as class attributes. A `known_implementations`
   entry gives them only to the generic `FsspecTreeHandler` and `FsspecFlatHandler`. The latter wraps an object store:
   its `ils_recursive` lists by `find`.
-- A copy or move places its roots as fsspec's `copy` does, by `common.placement._place_roots`, and each path below
+- A copy or move places its roots as fsspec's `copy` does, by `tree.cp._place_roots`, and each path below
   them by the destination's `join`, under its directory's map value.
 
 ### Listings

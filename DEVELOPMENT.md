@@ -374,7 +374,7 @@ A strategy replacing an fsspec method answers as it does. Where it departs on pu
 
 ### Placement
 
-A copy or move places its roots as fsspec's `copy` does, by `common/placement.py`'s `_place_roots`. Below them, each
+A copy or move places its roots as fsspec's `copy` does, by `tree/cp.py`'s `_place_roots`. Below them, each
 directory's map value, a `(source, destination)` pair, places what is in it, by the destination's `join`.
 
 ### Copies between storages
