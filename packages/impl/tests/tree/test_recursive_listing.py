@@ -164,7 +164,8 @@ async def test_rm_deletes_all(any_fs: SimulatedFileSystem) -> None:
     assert errors == []
     assert not await any_fs._exists("data")
     assert await any_fs._exists("other/x")
-    assert any_fs.stats.calls["list"] == 1
+    # A directory per listing, as _tree_rm always lists: its parallelism.
+    assert any_fs.stats.calls["list"] == 7
 
 
 async def test_rm_with_maxdepth_deletes_as_fsspec(

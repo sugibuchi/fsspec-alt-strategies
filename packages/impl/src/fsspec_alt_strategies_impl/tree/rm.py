@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from fsspec_alt_strategies.states import RmState
 
-from ..common.glob import PathAction
+from ..common.glob import PathAction, TraverseSubtree, VisitDirectory
 from ..common.operation import Operation, _collect_with_errors
 from ..common.paths import _check_maxdepth
 from ..common.strategy import _check_batch_size
@@ -126,8 +126,9 @@ def _tree_rm(
 ) -> Operation[str, RmState]:
     """Delete a directory and everything in it, on a storage whose directories are real.
 
-    The tree is traversed as `_tree_walk` traverses it bottom up, and deleted
-    as it is: each file by ``rm_file`` as its directory's listing finds it,
+    The tree is listed a directory per ``ils``, several at once, never by
+    ``ils_recursive``: so the deletions run as parallel as the listings. It is
+    deleted as it is listed: each file by ``rm_file`` as its directory's listing finds it,
     and each directory by ``rm_dir`` once all below it is gone. So the
     deletions start after the first listing, as many at once as the limit
     lets them, and the deepest directories go first. A directory with
@@ -213,6 +214,7 @@ def _tree_rm(
             [(d, d["name"] in matched) for d in roots.directories],
             maxdepth=maxdepth,
             ils_kwargs=ils_kwargs,
+            task=VisitDirectory,
         )
         if roots.files:
             files = list(roots.files)
@@ -250,9 +252,8 @@ def _flat_rm(
     It assumes a storage whose directories are the prefixes of its keys, as
     the profile's ``implicit_directories=True`` declares: a directory goes
     with its last key. So it deletes only keys, in no order. The tree is
-    traversed as `_tree_walk` traverses it, a subtree by one
-    ``ils_recursive`` where the profile declares ``recursive_ls``. The
-    traversal only lists, and emits each key found. The operation deletes
+    listed by one ``ils_recursive`` per root, which the handler must
+    implement, whatever the profile's ``recursive_ls``. The traversal only lists, and emits each key found. The operation deletes
     them as they come, by the handler's ``rm_files``, in batches of its
     ``rm_batch_size``, as it is once open, several batches at once.
 
@@ -317,6 +318,7 @@ def _flat_rm(
             [(d, d["name"] in matched) for d in roots.directories],
             maxdepth=maxdepth,
             ils_kwargs=ils_kwargs,
+            task=TraverseSubtree,
         )
         if roots.files:
             files = list(roots.files)
@@ -444,14 +446,16 @@ def _traversals(
     *,
     maxdepth: int | None,
     ils_kwargs: dict[str, Any] | None,
+    task: Callable[..., PathTask] = _root_task,
 ) -> list[PathTask]:
     """A traversal per directory root, each with whether a pattern matched it, as `_glob_roots` finds them.
 
+    Each is a ``task``: by default, as `_root_task` chooses by the profile.
     Below a pattern's match, ``maxdepth`` counts one level less, as fsspec's
     glob counted that level already: 0 for the root alone.
     """
     return [
-        _root_task(
+        task(
             engine,
             {**entry, "type": "directory"},
             action,

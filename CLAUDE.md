@@ -216,8 +216,10 @@ code: read it before adding a strategy or a handler.
 - Those that only read build on `tree.find._read`, which handles the root as `_find` does.
 - rm has two strategies, in `tree/rm.py`. A handler chooses one by overriding `rm`:
   - `_tree_rm`, for real directories, deletes in its map-reduce: each file as it is listed, and each directory in its
-    `reduce`, after all below it. The traversal gives the order and the parallelism;
-  - `_flat_rm`, for an object store, only lists in its map-reduce, and emits the keys. Its operation deletes them in
+    `reduce`, after all below it. It lists by `VisitDirectory` alone, a directory per `ils`: the traversal gives the
+    order and the parallelism;
+  - `_flat_rm`, for an object store, only lists in its map-reduce, by `TraverseSubtree` alone, one
+    `ils_recursive` per root, and emits the keys. Its operation deletes them in
     batches of `rm_batch_size`, in no order, and then the markers.
 
   `FsspecFlatHandler` and `FlatView` choose `_flat_rm`. Never make `_tree_rm` batch, nor `_flat_rm` keep an order.
