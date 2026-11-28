@@ -197,9 +197,7 @@ def _tree_rm(
         for error in errors:
             yield error
 
-        engine = TreeTraversal(
-            max_running=max_running, max_events=_MAX_EVENTS, split=handler.segments
-        )
+        engine = TreeTraversal(max_running=max_running, split=handler.segments)
         op._on_cancel = engine.cancel
         deletion = _TreeDeletion(
             engine._emit_event,
@@ -306,7 +304,8 @@ def _flat_rm(
 
         engine = TreeTraversal(
             max_running=max_running,
-            max_events=_events_for(batch_size),
+            # Enough to fill a batch.
+            max_events=max(16, batch_size),
             split=handler.segments,
         )
         op._on_cancel = engine.cancel
@@ -439,15 +438,6 @@ async def _delete(
     except Exception as error:
         return (entry, error)
     return ("deleted", entry["name"], directory) if sent else None
-
-
-_MAX_EVENTS = 16
-"""The events a traversal changing the storage holds unread, at least."""
-
-
-def _events_for(batch_size: int) -> int:
-    """The events a traversal holds unread: enough to fill a batch of its consumer's."""
-    return max(_MAX_EVENTS, batch_size)
 
 
 async def _consumed(

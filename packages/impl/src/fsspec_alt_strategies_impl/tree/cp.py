@@ -47,7 +47,7 @@ from ..common.strategy import _check_batch_size
 from ..common.transfer import _transfer_of
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
-from .rm import _consumed, _events_for, _glob_roots, _Key
+from .rm import _consumed, _glob_roots, _Key
 from .walk import _MAX_RUNNING, _root_task
 
 if TYPE_CHECKING:
@@ -294,7 +294,7 @@ async def _send(
     """Traverse the roots planned, scheduling their operations, and run them through the pipeline: the outcomes."""
     engine = TreeTraversal(
         max_running=max_running,
-        max_events=_events_for(plan.largest_batch),
+        max_events=max(16, plan.largest_batch),  # Enough to fill a batch.
         split=plan.src.segments,
     )
     op._on_cancel = engine.cancel
