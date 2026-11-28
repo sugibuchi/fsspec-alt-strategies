@@ -115,6 +115,31 @@ async def _glob_roots(
     return roots, errors, matched
 
 
+async def _rm_roots(
+    op: Operation[str, RmState],
+    handler: TreeFileOperationHandler,
+    path: StoragePath | Sequence[StoragePath],
+    maxdepth: int | None,
+    ils_kwargs: dict[str, Any] | None,
+) -> tuple[_Roots, list[Exception], set[str]]:
+    """A deletion's roots, its glob's errors, counted, and the directories a pattern matched.
+
+    A single path is of unknown kind: its listing tells if it is a file.
+    """
+    if isinstance(path, str) and not has_magic(path):
+        name = handler.trim(path)
+        return _Roots([{"name": name, "type": "directory"}]), [], set()
+    glob = _tree_glob(handler, path, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
+    roots, errors, matched = await _glob_roots(handler, glob, path, maxdepth)
+    op.state = replace(op.state, errors=op.state.errors + len(errors))
+    return roots, errors, matched
+
+
+def _file_root(handler: TreeFileOperationHandler, path: Any) -> Entry:
+    """The one root, found a file."""
+    return {"name": handler.trim(str(path)), "type": "file"}
+
+
 def _tree_rm(
     handler: TreeFileOperationHandler,
     path: StoragePath | Sequence[StoragePath],
@@ -342,31 +367,6 @@ def _flat_rm(
                 yield _outcome(op, handler, event)
 
     return Operation(run, RmState(directories_deleted=0))
-
-
-async def _rm_roots(
-    op: Operation[str, RmState],
-    handler: TreeFileOperationHandler,
-    path: StoragePath | Sequence[StoragePath],
-    maxdepth: int | None,
-    ils_kwargs: dict[str, Any] | None,
-) -> tuple[_Roots, list[Exception], set[str]]:
-    """A deletion's roots, its glob's errors, counted, and the directories a pattern matched.
-
-    A single path is of unknown kind: its listing tells if it is a file.
-    """
-    if isinstance(path, str) and not has_magic(path):
-        name = handler.trim(path)
-        return _Roots([{"name": name, "type": "directory"}]), [], set()
-    glob = _tree_glob(handler, path, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
-    roots, errors, matched = await _glob_roots(handler, glob, path, maxdepth)
-    op.state = replace(op.state, errors=op.state.errors + len(errors))
-    return roots, errors, matched
-
-
-def _file_root(handler: TreeFileOperationHandler, path: Any) -> Entry:
-    """The one root, found a file."""
-    return {"name": handler.trim(str(path)), "type": "file"}
 
 
 def _found(op: Operation[str, RmState], count: int) -> None:
