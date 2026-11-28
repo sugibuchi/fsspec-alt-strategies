@@ -213,17 +213,17 @@ def _tree_rm(
         tasks: list[PathTask] = [
             VisitDirectory(
                 engine,
-                d,
+                entry,
                 deletion,
                 handler,
                 # Below a pattern's match, one level less: fsspec's glob counted it.
-                maxdepth=maxdepth - (d["name"] in matched)
+                maxdepth=maxdepth - (entry["name"] in matched)
                 if maxdepth is not None
                 else None,
                 ils_kwargs=ils_kwargs,
             )
             # A file, known one, is reduced unlisted.
-            for d in (*roots.directories, *roots.files)
+            for entry in (*roots.directories, *roots.files)
         ]
         try:
             events = engine.events(tasks)
@@ -317,17 +317,17 @@ def _flat_rm(
         tasks: list[PathTask] = [
             TraverseSubtree(
                 engine,
-                d,
+                entry,
                 deletion,
                 handler,
                 # Below a pattern's match, one level less: fsspec's glob counted it.
-                maxdepth=maxdepth - (d["name"] in matched)
+                maxdepth=maxdepth - (entry["name"] in matched)
                 if maxdepth is not None
                 else None,
                 ils_kwargs=ils_kwargs,
             )
             # A file, known one, is reduced unlisted.
-            for d in (*roots.directories, *roots.files)
+            for entry in (*roots.directories, *roots.files)
         ]
         try:
             outcomes = _consumed(engine, tasks, deletion.consume)
