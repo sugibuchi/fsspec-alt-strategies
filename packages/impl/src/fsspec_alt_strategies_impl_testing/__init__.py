@@ -53,6 +53,7 @@ from fsspec_alt_strategies_impl.files.fsspec_transaction import (
     TransactionFile,
 )
 from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
+from fsspec_alt_strategies_impl.tree.rm import _flat_rm
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -1159,6 +1160,16 @@ class FlatView(_Files, TreeFileOperationHandler):
         parent: dict[str, Any] | None = None,
     ) -> None:
         await self._mv_file_entry(entry, path2)
+
+    def rm(
+        self,
+        path: Any,
+        *,
+        maxdepth: int | None = None,
+        ils_kwargs: dict[str, Any] | None = None,
+    ) -> Operation[str, RmState]:
+        """`_flat_rm` of this view: an object store's directories go with their last key."""
+        return _flat_rm(self, path, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
 
     def rm_files(self, entries: list[dict[str, Any]]) -> Operation[str, RmState]:
         # The filesystem's batch deletion, unless given, by one request per batch.

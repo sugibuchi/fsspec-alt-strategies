@@ -1,4 +1,4 @@
-"""Tests of `_tree_rm` on a storage listing keys: it deletes them in batches as it lists."""
+"""Tests of `_flat_rm` on a storage listing keys: it deletes them in batches as it lists."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec_alt_strategies.profile import StorageProfile
 from fsspec_alt_strategies.states import RmState
 from fsspec_alt_strategies_impl.common.operation import _collect_with_errors
-from fsspec_alt_strategies_impl.tree.rm import _tree_rm
+from fsspec_alt_strategies_impl.tree.rm import _flat_rm
 from fsspec_alt_strategies_impl_testing import FlatView, SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -32,8 +32,8 @@ def _view(fs: Any, kwargs: dict[str, Any]) -> FlatView:
 
 
 def _rm(fs: SimulatedFileSystem, path: Any, **kwargs: Any) -> Any:
-    """`_tree_rm` on ``fs``, whose primitives ``kwargs`` may replace."""
-    return _tree_rm(_view(fs, kwargs), path, **kwargs)
+    """`_flat_rm` on ``fs``, whose primitives ``kwargs`` may replace."""
+    return _flat_rm(_view(fs, kwargs), path, **kwargs)
 
 
 _FILES = [
@@ -205,7 +205,7 @@ async def test_markers_are_deleted_by_rmdir() -> None:
         operation_limit=asyncio.Semaphore(4),
         storage_profile=StorageProfile(implicit_directories=True),
     )
-    _, errors = await _collect_with_errors(_tree_rm(view, "data"))
+    _, errors = await _collect_with_errors(_flat_rm(view, "data"))
     assert errors == []
     assert sorted(deleted_keys) == ["data/a.txt", "data/b/c.txt"]
     # A directory with a marker, and the root, which may have one: not data/b.
@@ -274,3 +274,41 @@ async def test_maxdepth_1_of_a_pattern_lists_no_dir_matched(
 async def test_maxdepth_below_1_is_refused(flat_fs: SimulatedFileSystem) -> None:
     with pytest.raises(ValueError, match="maxdepth"):
         _rm(flat_fs, "data", maxdepth=0)
+
+
+async def test_files_matched_or_listed_are_batched_too(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    batches: list[list[str]] = []
+
+    async def rm_files(paths: list[str]) -> None:
+        batches.append(sorted(paths))
+        await flat_fs._rm_files(paths)
+
+    files = ["data/README.md", "data/2023/01/part-0.parquet"]
+    op = _rm(flat_fs, files, rm_files=rm_files, batch_size=10)
+    deleted, errors = await _collect_with_errors(op)
+    assert errors == []
+    # One request for both, rather than one per file.
+    assert batches == [sorted(files)]
+    assert set(files) <= set(deleted)
+    assert op.state.files_found == op.state.files_deleted == 2
+
+
+async def test_a_single_file_is_deleted_by_a_batch(
+    flat_fs: SimulatedFileSystem,
+) -> None:
+    _tree(flat_fs)
+    batches: list[list[str]] = []
+
+    async def rm_files(paths: list[str]) -> None:
+        batches.append(paths)
+        await flat_fs._rm_files(paths)
+
+    path = "data/README.md"
+    deleted, errors = await _collect_with_errors(
+        _rm(flat_fs, path, rm_files=rm_files, batch_size=10)
+    )
+    assert (deleted, errors, batches) == ([path], [], [[path]])
+    assert path not in flat_fs._file_data

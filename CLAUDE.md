@@ -61,8 +61,8 @@ code: read it before adding a strategy or a handler.
 - How the strategies run in bulk is the `Strategy` mixin's, never `StorageHandler`'s: `rm_batch_size`,
   `cp_batch_size` and `mv_batch_size` are declared there, each 1 by default. A primitive acts on one item.
 - `rm_files(entries)` deletes files a caller found: by default `common.rm_files._rm_each_file`, each by `rm_file`. A
-  storage deleting many by one request overrides it with `rm_by_request`, and declares `rm_batch_size`. The
-  recursive deletions send it their files in batches, and so do the moves copying within a storage that declares
+  storage deleting many by one request overrides it with `rm_by_request`, and declares `rm_batch_size`.
+  `_flat_rm` sends it its keys in batches, and so do the moves copying within a storage that declares
   `renames_files=False`. They read the size once the handler is open.
 - `rm_by_request`, `cp_by_request` and `mv_by_request`, in `common/`, and `SyncClientSupport.run_in_thread` are public:
   they are what a storage's handler calls. The strategies stay private.
@@ -213,12 +213,15 @@ code: read it before adding a strategy or a handler.
 - A recursive listing that breaks off fails its whole subtree. Nothing is listed again: a storage resumes its own
   listing, e.g. a page by its continuation token.
 - Those that only read build on `tree.find._read`, which handles the root as `_find` does.
-- `rm`, `cp` and `mv` each have a `PathAction` of their own, which only plans:
-  - `map` places each path;
-  - `reduce` emits what each path needs as events.
+- rm has two strategies, in `tree/rm.py`. A handler chooses one by overriding `rm`:
+  - `_tree_rm`, for real directories, deletes in its map-reduce: each file as it is listed, and each directory in its
+    `reduce`, after all below it. The traversal gives the order and the parallelism;
+  - `_flat_rm`, for an object store, only lists in its map-reduce, and emits the keys. Its operation deletes them in
+    batches of `rm_batch_size`, in no order, and then the markers.
 
-  Their operation consumes the events in batches, by `tree.rm._consumed`. The traversal holds at least a batch of
-  events unread. rm deletes directories after all below them, by `tree.rm._bottom_up`.
+  `FsspecFlatHandler` and `FlatView` choose `_flat_rm`. Never make `_tree_rm` batch, nor `_flat_rm` keep an order.
+- `cp` and `mv` each have a `PathAction` of their own, which only plans. Their operation consumes its events in
+  batches, by `tree.rm._consumed`. The traversal holds at least a batch of events unread.
 - cp and mv schedule, then run, in `tree/cp.py`:
   - `_Plan` reads the profile and places the roots, before the traversal starts;
   - `_Schedule`, the `PathAction`, emits operations as dicts, e.g. `{"op": "mkdir_dst", ...}` or `{"op": "cp_file",

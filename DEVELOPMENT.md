@@ -172,7 +172,7 @@ handler, `dst`. The mixin also declares how its batch strategies run in bulk: `r
 are the mixin's. It adds the optional primitives on a whole directory, `rm_tree`, `mv_tree` and `cp_tree`. A storage's
 handler overrides a strategy method to choose another strategy, e.g. its own.
 
-`rm_files(entries)` is the strategy deleting files a caller found. The recursive deletions send it their files in
+`rm_files(entries)` is the strategy deleting files a caller found. `_flat_rm` sends it its keys in
 batches of the handler's `rm_batch_size`, 1 by default. So do the moves copying within a storage whose profile
 declares `renames_files=False`. Its default, `rm_files._rm_each_file`,
 deletes each by `rm_file`, as many at once as `operation_limit` allows. A storage deleting several files by one
@@ -498,7 +498,8 @@ What a strategy does on each path is a `PathAction`. So a strategy is a map-redu
 | `_tree_walk` top down                  | `_WalkTopDown`: a directory per request, caller pruning  |
 | `_tree_walk` bottom up                 | `_WalkBottomUp`: each directory once all below it is     |
 | `_tree_find`, `_tree_glob`, `_tree_du` | `_Found` and `_Du`, by `tree/find.py`'s `_read`          |
-| `_tree_rm`                             | `_Deletion`: a directory deleted once all in it is       |
+| `_tree_rm`                             | `_TreeDeletion`: each path deleted in its reduce         |
+| `_flat_rm`                             | `_FlatDeletion`: keys emitted, deleted in batches        |
 | `_tree_cp`, `_tree_mv`                 | `_Schedule`: each path's operations, run by `_Pipeline`  |
 
 How the traversal goes:

@@ -165,7 +165,7 @@ class TreeFileOperationHandler(FileOperationHandler):
         maxdepth: int | None = None,
         ils_kwargs: dict[str, Any] | None = None,
     ) -> Operation[str, RmState]:
-        """`_tree_rm` of this handler."""
+        """`_tree_rm` of this handler: an object store's overrides it with `_flat_rm`."""
         return _tree_rm(self, path, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
 
     def cp(

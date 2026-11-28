@@ -34,16 +34,17 @@ from fsspec_alt_strategies.profile import StorageProfile
 from ..common.listing import implied_directories
 from ..common.rm_files import rm_by_request
 from ..tree.handler import TreeFileOperationHandler
+from ..tree.rm import _flat_rm
 from ._base import _FsspecHandler
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
+    from collections.abc import AsyncIterator, Mapping, Sequence
 
     from fsspec import AbstractFileSystem
 
     from fsspec_alt_strategies.states import RmState
 
-    from ..common.handler import Entry
+    from ..common.handler import Entry, StoragePath
     from ..common.operation import Operation
 
 __all__ = ["FsspecFlatHandler"]
@@ -170,6 +171,16 @@ class FsspecFlatHandler(_FsspecHandler, TreeFileOperationHandler):
         for listed in sorted(found.values(), key=_name):
             if listed["name"].startswith(name):
                 yield listed
+
+    def rm(
+        self,
+        path: StoragePath | Sequence[StoragePath],
+        *,
+        maxdepth: int | None = None,
+        ils_kwargs: dict[str, Any] | None = None,
+    ) -> Operation[str, RmState]:
+        """`_flat_rm` of this handler: its directories go with their last key."""
+        return _flat_rm(self, path, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
 
     async def rmdir(self, entry: Entry) -> None:
         """Delete a directory's marker, the key of its name and "/", by the wrapped one's ``rm``: none is no error."""

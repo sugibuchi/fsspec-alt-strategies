@@ -24,6 +24,7 @@ from fsspec_alt_strategies_impl.files.fsspec_transaction import (
     TransactionFile,
 )
 from fsspec_alt_strategies_impl.tree.handler import TreeFileOperationHandler
+from fsspec_alt_strategies_impl.tree.rm import _flat_rm
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem
 
 if TYPE_CHECKING:
@@ -100,6 +101,10 @@ class _FlatHandler(TreeFileOperationHandler):
             operation_concurrency=operation_concurrency, io_concurrency=io_concurrency
         )
         self.inner = inner
+
+    def rm(self, path: Any, **options: Any) -> Any:
+        # Its directories go with their last key: its keys are deleted in batches.
+        return _flat_rm(self, path, **options)
 
     def verify_path(self, path: str) -> None:
         """Nothing: the simulated storage takes any path."""
