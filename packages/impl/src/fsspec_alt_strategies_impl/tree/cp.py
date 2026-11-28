@@ -47,7 +47,7 @@ from ..common.strategy import _check_batch_size
 from ..common.transfer import _transfer_of
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
-from .rm import _Call, _consumed, _events_for, _glob_roots, _Key
+from .rm import _consumed, _events_for, _glob_roots, _Key
 from .walk import _MAX_RUNNING, _root_task
 
 if TYPE_CHECKING:
@@ -58,6 +58,19 @@ if TYPE_CHECKING:
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
+
+
+class _Call(PathTask):
+    """A task on a root that is no traversal: e.g. its copy whole, by one ``cp_tree``."""
+
+    def __init__(
+        self, engine: TreeTraversal, path: str, call: Callable[[], Awaitable[Any]]
+    ) -> None:
+        super().__init__(engine, path)
+        self.call = call
+
+    async def run(self) -> Any:
+        return await self.call()
 
 
 def _tree_cp(

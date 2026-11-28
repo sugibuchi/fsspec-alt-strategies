@@ -471,19 +471,6 @@ _Key = tuple[str, ...]
 """A path by its segments, as the handler's ``segments`` gives them: its parent's is one shorter."""
 
 
-class _Call(PathTask):
-    """A task on a root that is no traversal: e.g. its deletion whole, by one ``rm_tree``."""
-
-    def __init__(
-        self, engine: TreeTraversal, path: str, call: Callable[[], Awaitable[Any]]
-    ) -> None:
-        super().__init__(engine, path)
-        self.call = call
-
-    async def run(self) -> Any:
-        return await self.call()
-
-
 class _TreeDeletion(PathAction):
     """`_tree_rm`'s map-reduce, which deletes: each file in its reduce, and each directory after all below it.
 
