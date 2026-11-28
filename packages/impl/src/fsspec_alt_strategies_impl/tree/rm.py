@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 from contextlib import aclosing
 from dataclasses import replace
-from functools import partial
 from glob import has_magic
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
@@ -210,7 +209,7 @@ def _tree_rm(
         tasks: list[PathTask] = [
             VisitDirectory(
                 engine,
-                {**d, "type": "directory"},
+                d,
                 deletion,
                 handler,
                 # Below a pattern's match, one level less: fsspec's glob counted it.
@@ -219,14 +218,9 @@ def _tree_rm(
                 else None,
                 ils_kwargs=ils_kwargs,
             )
-            for d in roots.directories
+            # A file, known one, is reduced unlisted.
+            for d in (*roots.directories, *roots.files)
         ]
-        if roots.files:
-            files = list(roots.files)
-            _found(op, len(files))
-            tasks.append(
-                _Call(engine, files[0]["name"], partial(deletion.root_files, files))
-            )
         try:
             events = engine.events(tasks)
             async with aclosing(events):
@@ -319,7 +313,7 @@ def _flat_rm(
         tasks: list[PathTask] = [
             TraverseSubtree(
                 engine,
-                {**d, "type": "directory"},
+                d,
                 deletion,
                 handler,
                 # Below a pattern's match, one level less: fsspec's glob counted it.
@@ -328,14 +322,9 @@ def _flat_rm(
                 else None,
                 ils_kwargs=ils_kwargs,
             )
-            for d in roots.directories
+            # A file, known one, is reduced unlisted.
+            for d in (*roots.directories, *roots.files)
         ]
-        if roots.files:
-            files = list(roots.files)
-            _found(op, len(files))
-            tasks.append(
-                _Call(engine, files[0]["name"], partial(deletion.root_files, files))
-            )
         try:
             outcomes = _consumed(engine, tasks, deletion.consume)
             async with aclosing(outcomes):
@@ -540,14 +529,6 @@ class _TreeDeletion(PathAction):
     async def failed(self, entry: Entry) -> Any:
         return False  # Kept, with all in it.
 
-    async def root_files(self, entries: list[Entry]) -> None:
-        """Delete the files given as roots, at once."""
-
-        async def one(entry: Entry) -> None:
-            await self.emitted(await self.delete_file(entry))
-
-        await asyncio.gather(*(one(e) for e in entries))
-
     async def delete_file(self, entry: Entry) -> Any:
         """Delete a file by ``rm_file``: its outcome, as `_delete` gives it."""
         rm_file = self.handler.rm_file
@@ -619,11 +600,6 @@ class _FlatDeletion(PathAction):
 
     async def failed(self, entry: Entry) -> Any:
         return False  # Kept, with all in it.
-
-    async def root_files(self, entries: list[Entry]) -> None:
-        """Plan the deletion of the files given as roots."""
-        for entry in entries:
-            await self._emit_event(("file", entry))
 
     async def consume(self, events: list[Any]) -> list[Any]:
         """Delete what a round of events plans: their outcomes, after the events passed on, e.g. a listing's error."""
