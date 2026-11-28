@@ -35,7 +35,7 @@ from ..common.paths import _check_maxdepth
 from ..common.strategy import _check_batch_size
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
-from .walk import _MAX_RUNNING, _root_task
+from .walk import _MAX_RUNNING
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
@@ -207,15 +207,20 @@ def _tree_rm(
         deletion = _TreeDeletion(
             engine._emit_event, op, handler, whole=whole, missing_raises=single
         )
-        tasks = _traversals(
-            engine,
-            deletion,
-            handler,
-            [(d, d["name"] in matched) for d in roots.directories],
-            maxdepth=maxdepth,
-            ils_kwargs=ils_kwargs,
-            task=VisitDirectory,
-        )
+        tasks: list[PathTask] = [
+            VisitDirectory(
+                engine,
+                {**d, "type": "directory"},
+                deletion,
+                handler,
+                # Below a pattern's match, one level less: fsspec's glob counted it.
+                maxdepth=maxdepth - (d["name"] in matched)
+                if maxdepth is not None
+                else None,
+                ils_kwargs=ils_kwargs,
+            )
+            for d in roots.directories
+        ]
         if roots.files:
             files = list(roots.files)
             _found(op, len(files))
@@ -311,15 +316,20 @@ def _flat_rm(
         # maxdepth, as what is deeper stays, and so do they.
         emptied = [d["name"] for d in roots.directories] if maxdepth is None else []
         deletion = _FlatDeletion(engine._emit_event, op, handler, batch_size, emptied)
-        tasks = _traversals(
-            engine,
-            deletion,
-            handler,
-            [(d, d["name"] in matched) for d in roots.directories],
-            maxdepth=maxdepth,
-            ils_kwargs=ils_kwargs,
-            task=TraverseSubtree,
-        )
+        tasks: list[PathTask] = [
+            TraverseSubtree(
+                engine,
+                {**d, "type": "directory"},
+                deletion,
+                handler,
+                # Below a pattern's match, one level less: fsspec's glob counted it.
+                maxdepth=maxdepth - (d["name"] in matched)
+                if maxdepth is not None
+                else None,
+                ils_kwargs=ils_kwargs,
+            )
+            for d in roots.directories
+        ]
         if roots.files:
             files = list(roots.files)
             _found(op, len(files))
@@ -436,35 +446,6 @@ async def _delete(
     except Exception as error:
         return (entry, error)
     return ("deleted", entry["name"], directory) if sent else None
-
-
-def _traversals(
-    engine: TreeTraversal,
-    action: PathAction,
-    handler: TreeFileOperationHandler,
-    roots: Sequence[tuple[Entry, bool]],
-    *,
-    maxdepth: int | None,
-    ils_kwargs: dict[str, Any] | None,
-    task: Callable[..., PathTask] = _root_task,
-) -> list[PathTask]:
-    """A traversal per directory root, each with whether a pattern matched it, as `_glob_roots` finds them.
-
-    Each is a ``task``: by default, as `_root_task` chooses by the profile.
-    Below a pattern's match, ``maxdepth`` counts one level less, as fsspec's
-    glob counted that level already: 0 for the root alone.
-    """
-    return [
-        task(
-            engine,
-            {**entry, "type": "directory"},
-            action,
-            handler,
-            maxdepth=maxdepth - matched if maxdepth is not None else None,
-            ils_kwargs=ils_kwargs,
-        )
-        for entry, matched in roots
-    ]
 
 
 _MAX_EVENTS = 16

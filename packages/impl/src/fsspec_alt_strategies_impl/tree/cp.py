@@ -47,8 +47,8 @@ from ..common.strategy import _check_batch_size
 from ..common.transfer import _transfer_of
 from ..common.tree import PathTask, TreeTraversal, _write
 from .glob import _tree_glob
-from .rm import _Call, _consumed, _events_for, _glob_roots, _Key, _traversals
-from .walk import _MAX_RUNNING
+from .rm import _Call, _consumed, _events_for, _glob_roots, _Key
+from .walk import _MAX_RUNNING, _root_task
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
@@ -747,14 +747,20 @@ class _Schedule(PathAction):
                         wholes.append(entry)
                     else:
                         errors.append(_error(entry, outcome))
-        tasks = _traversals(
-            engine,
-            self,
-            self.src,
-            [(e, e["name"] in plan.matched) for e in traversed],
-            maxdepth=plan.maxdepth,
-            ils_kwargs=ils_kwargs,
-        )
+        tasks: list[PathTask] = [
+            _root_task(
+                engine,
+                {**e, "type": "directory"},
+                self,
+                self.src,
+                # Below a pattern's match, one level less: fsspec's glob counted it.
+                maxdepth=plan.maxdepth - (e["name"] in plan.matched)
+                if plan.maxdepth is not None
+                else None,
+                ils_kwargs=ils_kwargs,
+            )
+            for e in traversed
+        ]
         tasks += [
             _Call(engine, e["name"], partial(self.emit_all, self.root_whole(e)))
             for e in wholes
