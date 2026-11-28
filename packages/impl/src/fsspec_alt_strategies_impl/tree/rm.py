@@ -201,10 +201,14 @@ def _tree_rm(
             max_running=max_running, max_events=_MAX_EVENTS, split=handler.segments
         )
         op._on_cancel = engine.cancel
-        # rm_tree would delete what is deeper than maxdepth.
-        whole = maxdepth is None and handler.profile.deletes_directories is True
         deletion = _TreeDeletion(
-            engine._emit_event, op, handler, whole=whole, missing_raises=single
+            engine._emit_event,
+            op,
+            handler,
+            # rm_tree would delete what is deeper than maxdepth.
+            use_rm_tree=maxdepth is None
+            and handler.profile.deletes_directories is True,
+            missing_raises=single,
         )
         tasks: list[PathTask] = [
             VisitDirectory(
@@ -494,19 +498,19 @@ class _TreeDeletion(PathAction):
         op: Operation[str, RmState],
         handler: TreeFileOperationHandler,
         *,
-        whole: bool,
+        use_rm_tree: bool,
         missing_raises: bool,
     ) -> None:
         super().__init__(emit_event)
         self.op = op
         self.handler = handler
         # Each directory deleted whole by one rm_tree, unlisted: so only roots are.
-        self.whole = whole
+        self.use_rm_tree = use_rm_tree
         # The one path given, missing, raises, as the walk would find it.
         self.missing_raises = missing_raises
 
     def descends(self, entry: Entry, value: Any) -> bool:
-        return not self.whole
+        return not self.use_rm_tree
 
     async def reduce(
         self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
@@ -514,7 +518,7 @@ class _TreeDeletion(PathAction):
         if entry["type"] != "directory":
             _found(self.op, 1)
             return await self.emitted(await self.delete_file(entry))
-        if self.whole:
+        if self.use_rm_tree:
             return await self.delete_tree(entry)
         gone = True
         async for below in values:
