@@ -171,8 +171,13 @@ code: read it before adding a strategy or a handler.
 - A wrapper of one library declares its profile, limits and batch sizes as class attributes. A `known_implementations`
   entry gives them only to the generic `FsspecTreeHandler` and `FsspecFlatHandler`. The latter wraps an object store:
   its `ils_recursive` lists by `find`.
-- A copy or move places its roots as fsspec's `copy` does, by `tree.cp._Plan`, and each path below
-  them by the destination's `join`, under its directory's map value.
+- A copy or move places a single path as fsspec's `copy` does, by `tree.cp._Plan`. A pattern's matches go under
+  the pattern's literal root, and a list's under their names, each as the traversal finds it: fsspec's common prefix
+  of all the matches is known only at the end. Each path below a match goes by the destination's `join`, under its
+  directory's map value.
+- rm, cp and mv match their patterns in the traversal that acts, never by a glob first. Their tasks take the
+  patterns and `expand=True`, so that a match takes all below it, `maxdepth` counted from each match as fsspec's
+  `_expand_path` counts it: see `common/glob.py`.
 
 ### Listings
 
@@ -226,7 +231,7 @@ code: read it before adding a strategy or a handler.
 - `cp` and `mv` each have a `PathAction` of their own, which only plans. Their operation consumes its events in
   batches, by `tree.rm._consumed`. The traversal holds at least a batch of events unread.
 - cp and mv schedule, then run, in `tree/cp.py`:
-  - `_Plan` reads the profile and places the roots, before the traversal starts;
+  - `_Plan` reads the profile and where the paths given go, before the traversal starts;
   - `_Schedule`, the `PathAction`, emits operations as dicts, e.g. `{"op": "mkdir_dst", ...}` or `{"op": "cp_file",
     ...}`. Which ones depends on the task, the profile and whether both are one storage;
   - `_Pipeline` runs each batch of them through four stages, each with a batch size: `_MakeDirs`, `_SendFiles`,

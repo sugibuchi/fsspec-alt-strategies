@@ -374,8 +374,9 @@ A strategy replacing an fsspec method answers as it does. Where it departs on pu
 
 ### Placement
 
-A copy or move places its roots as fsspec's `copy` does, by `tree/cp.py`'s `_Plan`. Below them, each
-directory's map value, a `(source, destination)` pair, places what is in it, by the destination's `join`.
+A copy or move places a single path as fsspec's `copy` does, by `tree/cp.py`'s `_Plan`. A pattern's matches
+go under its literal root, and a list's under their names, as the traversal finds them. Below a match, each
+directory's map value, a `(source, destination, kind)` triple, places what is in it, by the destination's `join`.
 
 The traversal's `_Schedule` emits the operations each path needs, as dicts named by their `"op"`:
 
@@ -516,7 +517,8 @@ How the traversal goes:
 - **Failures.** A root's failure to list is raised, and each strategy answers as its fsspec method does. A directory's
   failure is emitted with its entry, as the storage raised it. A recursive listing broken off fails its whole subtree:
   nothing is listed again, as a storage resumes its own listing where it can.
-- **Patterns.** They are expanded by the glob first, as copies place paths from the common prefix of all matches.
+- **Patterns.** rm, cp and mv match them in the traversal that acts. With `expand`, a task gives a match all below
+  it, `maxdepth` counted from each match: a literal path's levels, a pattern's match one less.
 
 The walk lists a directory per request top down, as its caller prunes each. Bottom up, it streams a subtree by one
 listing where the profile declares `recursive_ls`.

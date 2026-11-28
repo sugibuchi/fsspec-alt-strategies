@@ -22,6 +22,13 @@ A listing holds a permit of the handler's ``operation_limit`` around each
 step, never across the whole: see `_TraversalTask._listing`. ``maxdepth``
 bounds the directories listed, as fsspec's walk counts it.
 
+With ``expand``, a match takes all below it, as fsspec's ``_expand_path``
+with ``recursive=True`` expands it: every path below is matched, and
+``maxdepth`` counts from each match, not from the root. A path matched
+without wildcards has ``maxdepth`` levels below it, as fsspec's find walks
+it, and a pattern's match one less, as fsspec's glob counted that level
+already. A match below another counts as the outer one's.
+
 An error of the action ends the path's task. Below a `VisitDirectory`, the
 other items run on, then its `reduce` is skipped, and the error goes up in an
 ExceptionGroup, to the strategy running the traversal. A `TraverseSubtree`
@@ -34,6 +41,7 @@ This module depends on `handler`, `patterns` and `tree`.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, Literal
@@ -170,6 +178,8 @@ class _TraversalTask(PathTask):
         top: int | None = None,
         ils_kwargs: dict[str, Any] | None = None,
         parent_value: Any = None,
+        expand: bool = False,
+        above: float | None = None,
     ) -> None:
         super().__init__(engine, entry["name"])
         self.entry = entry
@@ -181,8 +191,13 @@ class _TraversalTask(PathTask):
         self.handler = handler
         self.patterns = patterns
         # The depth listed at most below the root, as fsspec's walk counts it:
-        # 1 lists the root alone.
+        # 1 lists the root alone. With expand, below each match instead.
         self.maxdepth = maxdepth
+        # Whether a match takes all below it: see the module's docstring.
+        self.expand = expand
+        # With expand, the levels left below the directory the path is in,
+        # under a match: None where none is above it.
+        self.above = above
         self.on_error = on_error
         # The root's segments counted: a path's depth is the segments it has more.
         self.top = len(self._segments(entry["name"])) if top is None else top
@@ -201,6 +216,7 @@ class _TraversalTask(PathTask):
             "on_error": self.on_error,
             "top": self.top,
             "ils_kwargs": self.ils_kwargs,
+            "expand": self.expand,
         }
 
     def _segments(self, path: str) -> tuple[str, ...]:
@@ -278,34 +294,65 @@ class _TraversalTask(PathTask):
         them, as it streams: only the subdirectories' segments are held.
         """
         own = self._segments(self.entry["name"])
+        left = self._left(self.entry, self.above)
         subdirs: set[tuple[str, ...]] = set()
         async for found in entries:
             key = self._segments(found["name"])
             if key == own:
                 continue
             if found["type"] == "directory":
-                if key in subdirs or not (self._descend(found) or self._matched(found)):
+                if key in subdirs or not (
+                    self._descend(found, left) or self._matched(found, left)
+                ):
                     continue
                 subdirs.add(key)  # Visited once, kept or not.
-            elif not self._matched(found):
+            elif not self._matched(found, left):
                 continue
             if await self.action.visit_child(found, self._value):
                 yield found
 
-    def _descend(self, entry: Entry) -> bool:
+    def _left(self, entry: Entry, above: float | None) -> float | None:
+        """With ``expand``, the levels below a path to traverse, under a match: None where it is under none.
+
+        ``above`` is its directory's.
+        """
+        if not self.expand:
+            return None
+        if above is not None:
+            return above - 1
+        if self.patterns is None:
+            plain = True
+        else:
+            hits = [p for p in self.patterns if p.matched(entry)]
+            if not hits:
+                return None
+            plain = any(p.plain for p in hits)
+        if self.maxdepth is None:
+            return math.inf
+        return self.maxdepth if plain else self.maxdepth - 1
+
+    def _descend(self, entry: Entry, above: float | None = None) -> bool:
         """Whether a directory is listed: within ``maxdepth``, and as a pattern descends."""
-        if self.maxdepth is not None:
+        if self.expand:
+            left = self._left(entry, above)
+            if left is not None:
+                return left > 0
+        elif self.maxdepth is not None:
             depth = len(self._segments(entry["name"])) - self.top
             if depth >= self.maxdepth:
                 return False
         return self.patterns is None or any(p.descend(entry) for p in self.patterns)
 
-    def _matched(self, entry: Entry) -> bool:
-        """Whether a pattern matches a path: every path does where there is none."""
+    def _matched(self, entry: Entry, above: float | None = None) -> bool:
+        """Whether a pattern matches a path, or with ``expand`` a match above it: every path does where there is none."""
+        if self.expand and above is not None:
+            return True
         return self.patterns is None or any(p.matched(entry) for p in self.patterns)
 
-    def _whole(self, entry: Entry) -> bool:
+    def _whole(self, entry: Entry, above: float | None = None) -> bool:
         """Whether all below a directory is traversed: no pattern prunes it, nor ``maxdepth``."""
+        if self.expand and self._left(entry, above) == math.inf:
+            return True  # A match's, with no maxdepth.
         if self.maxdepth is not None:
             return False  # A listing whole would go past it.
         return self.patterns is None or any(p.whole(entry) for p in self.patterns)
@@ -333,11 +380,11 @@ class VisitDirectory(_TraversalTask):
 
     async def run(self) -> Any:
         entry = self.entry
-        match = self._matched(entry)
+        match = self._matched(entry, self.above)
         value = self._value = await self.action.map(entry, match, self.parent_value)
         if (
             entry.get("type") != "directory"
-            or not self._descend(entry)
+            or not self._descend(entry, self.above)
             or not self.action.descends(entry, value)
         ):
             # A file, a directory kept as matched, or one the action takes
@@ -378,8 +425,13 @@ class VisitDirectory(_TraversalTask):
 
     def _subtree(self, entry: Entry) -> PathTask:
         """All below a subdirectory by one listing, where asked and whole, else listed alone."""
-        options = {**self._options(), "parent_value": self._value}
-        if self.use_one_listing and entry["type"] == "directory" and self._whole(entry):
+        left = self._left(self.entry, self.above)
+        options = {**self._options(), "parent_value": self._value, "above": left}
+        if (
+            self.use_one_listing
+            and entry["type"] == "directory"
+            and self._whole(entry, left)
+        ):
             return TraverseSubtree(
                 self._engine, entry, self.action, self.handler, **options
             )
@@ -466,7 +518,7 @@ class TraverseSubtree(_TraversalTask):
         entries = self._listing(recursive=True)
         try:
             # Its first entry read once the root's map lets it be.
-            span = _Span(self, self.entry, _UNREAD, entries)
+            span = _Span(self, self.entry, _UNREAD, entries, self.above)
             return await span.map_reduce(self.parent_value)
         except Exception as error:
             if error is not self._listing_error:
@@ -502,20 +554,25 @@ class _Span:
         root: Entry,
         next: Entry | None,
         entries: AsyncIterator[Entry],
+        above: float | None = None,
     ) -> None:
         self.task = task
         self.root = root
         self.next = next
         self.entries = entries
+        # With expand, the levels left below the directory's parent, and its own.
+        self.above = above
+        self.left = task._left(root, above)
         # What map returned for the directory: its paths' parent_value.
         self.value: Any = None
 
     async def map_reduce(self, parent_value: Any) -> Any:
         task, root = self.task, self.root
-        match = task._matched(root)
+        match = task._matched(root, self.above)
         value = self.value = await task.action.map(root, match, parent_value)
         directory = root.get("type") == "directory"
-        if directory and task._descend(root) and task.action.descends(root, value):
+        descend = task._descend(root, self.above)
+        if directory and descend and task.action.descends(root, value):
             if self.next is _UNREAD:
                 self.next = await anext(self.entries, None)
             # Its paths visited and traversed, as reduce reads.
@@ -546,7 +603,9 @@ class _Span:
                 break
             elif in_root and next["type"] != "directory":
                 # Else pruned, as a file is.
-                if task._matched(next) and await task.action.visit_child(next, value):
+                if task._matched(next, self.left) and await task.action.visit_child(
+                    next, value
+                ):
                     item = await task.action.map(next, True, value)
                     yield await _reduce(task.action, next, True, item, _no_values())
                 next = await anext(self.entries, None)
@@ -565,7 +624,8 @@ class _Span:
         self.next = next
         for subdir in held.values():  # Listed, with nothing below.
             if subdir is not None:
-                yield await _Span(task, subdir, None, self.entries).map_reduce(value)
+                span = _Span(task, subdir, None, self.entries, self.left)
+                yield await span.map_reduce(value)
 
     async def _enter(
         self,
@@ -613,13 +673,13 @@ class _Span:
             subdir = held.pop(sub)
         else:
             subdir = made if await self._visit(made) else None
-        span = _Span(self.task, subdir or made, next, self.entries)
+        span = _Span(self.task, subdir or made, next, self.entries, self.left)
         return span, subdir is not None
 
     async def _visit(self, subdir: Entry) -> bool:
         """Whether a subdirectory is traversed: as the patterns, then the action, say."""
         task = self.task
-        if not (task._descend(subdir) or task._matched(subdir)):
+        if not (task._descend(subdir, self.left) or task._matched(subdir, self.left)):
             return False
         return await task.action.visit_child(subdir, self.value)
 

@@ -128,7 +128,6 @@ async def test_places_as_fsspec(
         ("data/20*", "copied"),
         ("data/**/*.parquet", "copied"),  # Files only.
         ("data/*.md", "archive"),  # A single file goes into the destination.
-        ("data/2024/*", "copied/"),  # A single directory goes onto it.
     ],
 )
 async def test_a_pattern_places_as_fsspec(
@@ -677,3 +676,15 @@ async def test_a_name_the_destination_refuses_is_its_own_error(
     assert not any(
         "escaped" in p and not p.startswith("data/") for p in hierarchical_fs._file_data
     )
+
+
+async def test_a_pattern_places_below_its_literal_root(
+    any_fs: SimulatedFileSystem,
+) -> None:
+    # fsspec's copy places by the common prefix of all the matches, known only
+    # once all are found: a single directory matched would go onto the
+    # destination. One pass places each under the pattern's literal root.
+    _tree(any_fs)
+    copied, errors = await _collect_with_errors(_cp(any_fs, "data/2024/*", "copied/"))
+    assert errors == []
+    assert copied and all(d.startswith("copied/0") for _, d in copied)
