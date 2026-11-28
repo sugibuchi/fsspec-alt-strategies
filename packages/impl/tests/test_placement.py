@@ -12,8 +12,7 @@ import pytest
 
 from fsspec_alt_strategies.monitor import State
 from fsspec_alt_strategies_impl.common.operation import Operation
-from fsspec_alt_strategies_impl.tree.cp import _Plan
-from fsspec_alt_strategies_impl.tree.rm import _Roots, _roots_of
+from fsspec_alt_strategies_impl.tree.cp import _Plan, _Roots, _roots_of
 from fsspec_alt_strategies_impl_testing import SimulatedFileSystem, TreeView
 
 if TYPE_CHECKING:

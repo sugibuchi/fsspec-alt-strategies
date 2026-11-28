@@ -21,123 +21,30 @@ This module depends on `glob` and `walk`, and `glob`, `operation`, `paths`,
 from __future__ import annotations
 
 import asyncio
+import math
 from contextlib import aclosing
 from dataclasses import replace
 from glob import has_magic
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from fsspec_alt_strategies.states import RmState
 
-from ..common.glob import PathAction, TraverseSubtree, VisitDirectory
-from ..common.operation import Operation, _collect_with_errors
+from ..common.glob import PathAction, TraverseSubtree, VisitDirectory, _no_values
+from ..common.operation import Operation
 from ..common.paths import _check_maxdepth
+from ..common.patterns import _Search
 from ..common.strategy import _check_batch_size
 from ..common.tree import PathTask, TreeTraversal, _write
-from .glob import _tree_glob
+from .glob import _shared_start, _walks
 from .walk import _MAX_RUNNING
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 
-    from ..common.handler import Entry, StorageHandler, StoragePath
+    from ..common.handler import Entry, StoragePath
     from .handler import TreeFileOperationHandler
 
 __all__: list[str] = []
-
-
-class _Roots(NamedTuple):
-    """Where an operation starts: what it walks, and what it handles alone.
-
-    Each root is its entry, so that a copy or move hands it on without asking
-    it again. ``directories`` are walked, or listed, at once. A single path of
-    unknown kind is among them, its entry its ``"name"`` alone, as its listing
-    tells what it is. ``files`` are known files, e.g. glob matches.
-    """
-
-    directories: Sequence[dict[str, Any]]
-    files: Sequence[dict[str, Any]] = ()
-
-    @property
-    def paths(self) -> list[str]:
-        """The paths of all the roots, the directories first."""
-        return [e["name"] for e in (*self.directories, *self.files)]
-
-
-def _roots_of(
-    matches: list[dict[str, Any]],
-    errors: list[Exception],
-    pattern: str | Sequence[str],
-) -> _Roots:
-    """The roots of a glob's matches, as fsspec's ``_expand_path`` finds them.
-
-    A match inside a directory that matches is left out: walking the directory
-    finds it. Matching nothing raises FileNotFoundError, as fsspec does.
-    """
-    if not matches and not errors:
-        raise FileNotFoundError(pattern)
-
-    directories: dict[str, dict[str, Any]] = {}
-    files: list[dict[str, Any]] = []
-
-    # Sorted, a directory comes before all in it.
-    for entry in sorted(matches, key=lambda e: e["name"]):
-        name = entry["name"].rstrip("/")
-        parts = name.split("/")
-        if any("/".join(parts[:i]) in directories for i in range(1, len(parts))):
-            continue
-        if entry["type"] == "directory":
-            directories[name] = {**entry, "name": name}
-        else:
-            files.append({**entry, "name": name})
-
-    return _Roots(list(directories.values()), files)
-
-
-async def _glob_roots(
-    handler: StorageHandler,
-    glob: Operation[Any, Any],
-    pattern: StoragePath | Sequence[StoragePath],
-    maxdepth: int | None,
-) -> tuple[_Roots, list[Exception], set[str]]:
-    """The roots a glob matches, its errors, and the directories a pattern matched.
-
-    With ``maxdepth``, a directory root a pattern matched, not one named
-    literally, is walked one level less deep, as fsspec's glob counted that
-    level already.
-    """
-    matches, errors = await _collect_with_errors(glob)
-    roots = _roots_of(matches, errors, pattern)
-    matched: set[str] = set()
-    if maxdepth is not None:
-        named = [pattern] if isinstance(pattern, str) else pattern
-        literal = {handler.trim(p) for p in named if not has_magic(p)}
-        matched = {d["name"] for d in roots.directories if d["name"] not in literal}
-    return roots, errors, matched
-
-
-async def _rm_roots(
-    op: Operation[str, RmState],
-    handler: TreeFileOperationHandler,
-    path: StoragePath | Sequence[StoragePath],
-    maxdepth: int | None,
-    ils_kwargs: dict[str, Any] | None,
-) -> tuple[_Roots, list[Exception], set[str]]:
-    """A deletion's roots, its glob's errors, counted, and the directories a pattern matched.
-
-    A single path is of unknown kind: its listing tells if it is a file.
-    """
-    if isinstance(path, str) and not has_magic(path):
-        name = handler.trim(path)
-        return _Roots([{"name": name, "type": "directory"}]), [], set()
-    glob = _tree_glob(handler, path, maxdepth=maxdepth, ils_kwargs=ils_kwargs)
-    roots, errors, matched = await _glob_roots(handler, glob, path, maxdepth)
-    op.state = replace(op.state, errors=op.state.errors + len(errors))
-    return roots, errors, matched
-
-
-def _file_root(handler: TreeFileOperationHandler, path: Any) -> Entry:
-    """The one root, found a file."""
-    return {"name": handler.trim(str(path)), "type": "file"}
 
 
 def _tree_rm(
@@ -179,8 +86,10 @@ def _tree_rm(
 
     A glob pattern deletes each path it matches, and all in it, as fsspec's
     ``_rm`` with ``recursive=True`` does. So does a list of paths and
-    patterns. They are matched as `_tree_glob` matches them, in one search,
-    then the directories matched are traversed at once.
+    patterns. They are matched as `_tree_glob` matches them, in the same
+    traversal that deletes: each directory is listed once, and the deletions
+    start with the first match. A literal path missing in a list matches
+    nothing, as fsspec's ``_expand_path`` leaves it out.
 
     With ``maxdepth``, it deletes what fsspec's ``_rm`` deletes with it: the
     paths at most ``maxdepth`` levels below ``path``, or below a pattern's
@@ -197,8 +106,9 @@ def _tree_rm(
 
     Requests: as `_tree_walk` lists bottom up, per root, then one ``rm_file``
     per file and one ``rm_dir`` per directory, each holding a permit of the
-    handler's ``operation_limit``. Patterns, or a list, add the requests of
-    their `_tree_glob`. With ``deletes_directories``, a root costs one
+    handler's ``operation_limit``. Patterns, or a list, list the directories
+    on the way to their matches too, as `_tree_glob` does. With
+    ``deletes_directories``, a root costs one
     ``rm_tree`` instead. ``rm_dir`` is the handler's ``rmdir``: its
     FileNotFoundError counts as deleted.
 
@@ -216,51 +126,24 @@ def _tree_rm(
 
     async def run(op: Operation[str, RmState]) -> AsyncGenerator[str | Exception]:
         await handler.open()
-        roots, errors, matched = await _rm_roots(
-            op, handler, path, maxdepth, ils_kwargs
-        )
-        for error in errors:
-            yield error
-
         engine = TreeTraversal(max_running=max_running, split=handler.segments)
         op._on_cancel = engine.cancel
         deletion = _TreeDeletion(
             engine._emit_event,
             op,
             handler,
+            _Depths(handler, path, maxdepth),
             # rm_tree would delete what is deeper than maxdepth.
             use_rm_tree=maxdepth is None
             and handler.profile.deletes_directories is True,
             missing_raises=single,
         )
-        tasks: list[PathTask] = [
-            VisitDirectory(
-                engine,
-                entry,
-                deletion,
-                handler,
-                # Below a pattern's match, one level less: fsspec's glob counted it.
-                maxdepth=maxdepth - (entry["name"] in matched)
-                if maxdepth is not None
-                else None,
-                ils_kwargs=ils_kwargs,
-            )
-            # A file, known one, is reduced unlisted.
-            for entry in (*roots.directories, *roots.files)
-        ]
-        try:
-            events = engine.events(tasks)
-            async with aclosing(events):
-                async for event in events:
-                    yield _outcome(op, handler, event)
-        except NotADirectoryError:
-            # The one root, a file: deleted alone.
-            if op.cancelling():
-                return
-            _found(op, 1)
-            outcome = await deletion.delete_file(_file_root(handler, path))
-            if outcome:
-                yield _outcome(op, handler, outcome)
+        tasks = deletion.depths.roots(engine, deletion, _RootDirectory, ils_kwargs)
+        events = engine.events(tasks)
+        async with aclosing(events):
+            async for event in events:
+                yield _outcome(op, handler, event)
+        deletion.depths.check(op)
 
     return Operation(run, RmState(directories_deleted=0))
 
@@ -306,8 +189,9 @@ def _flat_rm(
 
     Requests: as `_tree_walk` lists, per root, then one ``rm_files`` per batch
     of ``rm_batch_size`` keys, by default one ``rm_file`` each, and one
-    ``rm_dir`` per marker and root. Patterns, or a list, add the requests of
-    their `_tree_glob`. ``rm_dir`` holds a permit of the handler's
+    ``rm_dir`` per marker and root. A list lists a tree per root, as
+    `_tree_glob` does, narrowed to what its matches start with where the
+    profile declares ``recursive_ls_with_prefix``. ``rm_dir`` holds a permit of the handler's
     ``operation_limit`` while it runs: ``rm_files`` takes its own.
 
     The arguments are as `_tree_rm` takes them. The operation yields each
@@ -317,16 +201,12 @@ def _flat_rm(
     """
     _check_maxdepth(maxdepth)
 
+    single = isinstance(path, str) and not has_magic(path)
+
     async def run(op: Operation[str, RmState]) -> AsyncGenerator[str | Exception]:
         await handler.open()
         batch_size = handler.rm_batch_size
         _check_batch_size(batch_size, "rm_batch_size")
-        roots, errors, matched = await _rm_roots(
-            op, handler, path, maxdepth, ils_kwargs
-        )
-        for error in errors:
-            yield error
-
         engine = TreeTraversal(
             max_running=max_running,
             # Enough to fill a batch.
@@ -334,39 +214,139 @@ def _flat_rm(
             split=handler.segments,
         )
         op._on_cancel = engine.cancel
-        # The roots may have a marker whatever their entry says: none with
-        # maxdepth, as what is deeper stays, and so do they.
-        emptied = [d["name"] for d in roots.directories] if maxdepth is None else []
-        deletion = _FlatDeletion(engine._emit_event, op, handler, batch_size, emptied)
-        tasks: list[PathTask] = [
-            TraverseSubtree(
-                engine,
-                entry,
-                deletion,
-                handler,
-                # Below a pattern's match, one level less: fsspec's glob counted it.
-                maxdepth=maxdepth - (entry["name"] in matched)
-                if maxdepth is not None
-                else None,
-                ils_kwargs=ils_kwargs,
-            )
-            # A file, known one, is reduced unlisted.
-            for entry in (*roots.directories, *roots.files)
-        ]
-        try:
-            outcomes = _consumed(engine, tasks, deletion.consume)
-            async with aclosing(outcomes):
-                async for event in outcomes:
-                    yield _outcome(op, handler, event)
-        except NotADirectoryError:
-            # The one root, a file: deleted alone.
-            if op.cancelling():
-                return
-            _found(op, 1)
-            for event in await deletion.consume([("file", _file_root(handler, path))]):
+        deletion = _FlatDeletion(
+            engine._emit_event,
+            op,
+            handler,
+            _Depths(handler, path, maxdepth),
+            batch_size,
+            missing_raises=single,
+        )
+        # Narrowed to what every match starts with, where the storage lists so.
+        narrowed = handler.profile.recursive_ls_with_prefix is True
+        tasks = deletion.depths.roots(
+            engine, deletion, _RootSubtree, ils_kwargs, narrowed=narrowed
+        )
+        outcomes = _consumed(engine, tasks, deletion.consume)
+        async with aclosing(outcomes):
+            async for event in outcomes:
                 yield _outcome(op, handler, event)
+        deletion.depths.check(op)
 
     return Operation(run, RmState(directories_deleted=0))
+
+
+class _Depths:
+    """What a deletion matches, in one traversal: each path given, and all below each match, as deep as ``maxdepth`` lets it.
+
+    Each path is matched as `_tree_glob` matches it, and ``path/**`` with it,
+    so that the traversal reaches all below each match. A path's `map` value
+    is then how many levels below it are deleted: None for a path only on the
+    way to the matches, which is not. Below a match, a path has one level
+    less than its directory. A match has ``maxdepth`` where named literally,
+    one level less where a pattern matched it, as fsspec's glob counted that
+    level already. A match within another counts as the outer one's.
+    """
+
+    def __init__(
+        self,
+        handler: TreeFileOperationHandler,
+        path: StoragePath | Sequence[StoragePath],
+        maxdepth: int | None,
+    ) -> None:
+        self.handler = handler
+        self.path = path
+        self.maxdepth = maxdepth
+        self.searches: list[_Search] = []
+        self.literals: set[str] = set()
+        for given in [path] if isinstance(path, str) else path:
+            name = handler.trim(given)
+            if not has_magic(given):
+                self.literals.add(name)
+            self.searches.append(_Search(name, given.endswith("/"), True, maxdepth))
+            below = name.rstrip("/") + "/**" if name else "**"
+            self.searches.append(_Search(below, False, True, None))
+        # The trees' roots, made from the paths: not listed.
+        self.tops: set[str] = set()
+        # Whether any path matched was found: none raises, as with fsspec's rm.
+        self.found = False
+
+    def roots(
+        self,
+        engine: TreeTraversal,
+        action: PathAction,
+        task: Callable[..., PathTask],
+        ils_kwargs: dict[str, Any] | None,
+        *,
+        narrowed: bool = False,
+    ) -> list[PathTask]:
+        """A task per tree the paths are in, as `_tree_glob` walks them."""
+        tasks: list[PathTask] = []
+        for root, group in _walks(self.searches):
+            self.tops.add(root)
+            options: dict[str, Any] = {}
+            if narrowed:
+                options["prefix"] = _shared_start([s.literal for s in group])
+            entry = {"name": root, "type": "directory"}
+            tasks.append(
+                task(
+                    engine,
+                    entry,
+                    action,
+                    self.handler,
+                    patterns=group,
+                    ils_kwargs=ils_kwargs,
+                    **options,
+                )
+            )
+        return tasks
+
+    def left(self, entry: Entry, match: bool, parent_value: Any) -> Any:
+        """A path's `map` value: the levels below it to delete, or None."""
+        if parent_value is not None:
+            value = parent_value - 1
+        elif not match:
+            return None
+        elif self.maxdepth is None:
+            value = math.inf
+        elif entry["name"].rstrip("/") in self.literals:
+            value = self.maxdepth
+        else:
+            value = self.maxdepth - 1
+        return value
+
+    def check(self, op: Operation[str, RmState]) -> None:
+        """Raise FileNotFoundError if nothing matched, unless an error may have hidden it."""
+        if not self.found and not op.state.errors and not op.cancelling():
+            raise FileNotFoundError(self.path)
+
+
+class _TraversalRoot(PathTask):
+    """A deletion's root: a file, or missing, as its listing finds it."""
+
+    async def run(self) -> Any:
+        task = cast("Any", self)
+        try:
+            return await super().run()  # type: ignore[safe-super]
+        except NotADirectoryError:
+            # A file: deleted alone, if a path names it.
+            entry = {**task.entry, "type": "file"}
+            if not task._matched(entry):
+                return None
+            value = await task.action.map(entry, True, None)
+            return await task.action.reduce(entry, True, value, _no_values())
+        except FileNotFoundError:
+            if task.action.missing_raises:
+                raise  # The one path given, as fsspec's rm raises.
+            return None  # Matches nothing.
+
+
+class _RootDirectory(_TraversalRoot, VisitDirectory):
+    """A root of `_tree_rm`, listed a directory per ``ils``."""
+
+
+class _RootSubtree(_TraversalRoot, TraverseSubtree):
+    """A root of `_flat_rm`, listed by one ``ils_recursive``."""
 
 
 def _found(op: Operation[str, RmState], count: int) -> None:
@@ -474,6 +454,7 @@ class _TreeDeletion(PathAction):
         emit_event: Any,
         op: Operation[str, RmState],
         handler: TreeFileOperationHandler,
+        depths: _Depths,
         *,
         use_rm_tree: bool,
         missing_raises: bool,
@@ -481,17 +462,29 @@ class _TreeDeletion(PathAction):
         super().__init__(emit_event)
         self.op = op
         self.handler = handler
+        self.depths = depths
         # Each directory deleted whole by one rm_tree, unlisted: so only roots are.
         self.use_rm_tree = use_rm_tree
         # The one path given, missing, raises, as the walk would find it.
         self.missing_raises = missing_raises
 
+    async def map(self, entry: Entry, match: bool, parent_value: Any) -> Any:
+        return self.depths.left(entry, match, parent_value)
+
+    async def visit_child(self, entry: Entry, parent_value: Any) -> bool:
+        return parent_value is None or parent_value > 0
+
     def descends(self, entry: Entry, value: Any) -> bool:
-        return not self.use_rm_tree
+        # One at the limit is deleted unlisted, as fsspec's rm deletes it.
+        return value != 0 and not (self.use_rm_tree and value is not None)
 
     async def reduce(
         self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
     ) -> Any:
+        if value is None:
+            async for _ in values:
+                pass
+            return None  # Only on the way to the matches: kept.
         if entry["type"] != "directory":
             _found(self.op, 1)
             return await self.emitted(await self.delete_file(entry))
@@ -526,6 +519,7 @@ class _TreeDeletion(PathAction):
     async def emitted(self, outcome: Any) -> bool:
         """Emit an outcome, if any: whether the path is gone."""
         if outcome:
+            self.depths.found = True  # It was there.
             await self._emit_event(outcome)
         return outcome is not None and (not outcome or outcome[0] == "deleted")
 
@@ -548,14 +542,20 @@ class _FlatDeletion(PathAction):
         emit_event: Any,
         op: Operation[str, RmState],
         handler: TreeFileOperationHandler,
+        depths: _Depths,
         batch_size: int,
-        roots: list[str],
+        *,
+        missing_raises: bool,
     ) -> None:
         super().__init__(emit_event)
         self.op = op
         self.handler = handler
+        self.depths = depths
         self.batch_size = batch_size
-        self.roots = {self.key(name) for name in roots}
+        self.missing_raises = missing_raises
+        # The directories matched first, which may have a marker whatever their
+        # entry says: none with maxdepth, as what is deeper stays.
+        self.roots: set[_Key] = set()
         # The directories holding a file that stayed, each above it too.
         self.kept: set[_Key] = set()
 
@@ -563,11 +563,28 @@ class _FlatDeletion(PathAction):
         """A path's key, by the handler's segments: never verified, as a listing gave it."""
         return tuple(self.handler.segments(name))
 
+    async def map(self, entry: Entry, match: bool, parent_value: Any) -> Any:
+        value = self.depths.left(entry, match, parent_value)
+        if value == math.inf and parent_value is None:
+            self.roots.add(self.key(entry["name"]))
+        return value
+
+    async def visit_child(self, entry: Entry, parent_value: Any) -> bool:
+        return parent_value is None or parent_value > 0
+
+    def descends(self, entry: Entry, value: Any) -> bool:
+        return value != 0
+
     async def reduce(
         self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
     ) -> Any:
+        if value is None:
+            async for _ in values:
+                pass
+            return None  # Only on the way to the matches: kept.
         if entry["type"] != "directory":
             _found(self.op, 1)
+            self.depths.found = True
             await self._emit_event(("file", entry))
             return True
         planned = True
@@ -575,6 +592,10 @@ class _FlatDeletion(PathAction):
             planned &= below is True
         if not planned:
             return False  # Kept, with what failed to list in it.
+        # An object store's directory exists by its keys, or its marker: one
+        # listed, unlike a root, which is the path given.
+        name = entry["name"].rstrip("/")
+        self.depths.found |= bool(entry.get("marker")) or name not in self.depths.tops
         if entry.get("marker") or self.key(entry["name"]) in self.roots:
             await self._emit_event(("dir", entry))
         return True
