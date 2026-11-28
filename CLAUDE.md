@@ -204,8 +204,9 @@ code: read it before adding a strategy or a handler.
 - The strategies run on `common.tree.TreeTraversal`, with `common.glob`'s tasks: `VisitDirectory`, a directory per
   listing, and `TraverseSubtree`, a subtree by one `ils_recursive`. `tree.walk._root_task` chooses between them by
   the profile. Never write another walk.
-- What a strategy does on each path is a `common.glob.PathAction`: `map` before what is below a path, `visit_child`
-  to prune each item then listed, and `reduce` reading the values below it as they end. A task holds a permit of
+- What a strategy does on each path is a `common.glob.PathAction`: `map` before what is below a path, `descends`
+  to leave a directory unlisted, `visit_child` to prune each item then listed, and `reduce` reading the values below
+  it as they end. A directory an action takes whole, e.g. by `rm_tree`, is a `descends` of False, never a task apart. A task holds a permit of
   `operation_limit` around each page of a listing, never across it.
 - A write goes through `common.tree._write`, under a permit checked against the operation's `cancelling()`. So none
   starts once cancelled, and a close waits for those in flight.

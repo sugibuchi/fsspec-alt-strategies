@@ -650,3 +650,22 @@ async def test_a_directory_given_with_a_slash_goes_whole_by_its_name(
     assert errors == []
     assert seen == ["data"]
     assert deleted == ["data"]
+
+
+async def test_rm_tree_lists_nothing_where_a_subtree_is_listed_whole(
+    hierarchical_fs: SimulatedFileSystem,
+) -> None:
+    _tree(hierarchical_fs)
+    seen: list[str] = []
+
+    async def rm_tree(path: str) -> None:
+        seen.append(path)
+        for key in [k for k in hierarchical_fs._file_data if k.startswith(path + "/")]:
+            del hierarchical_fs._file_data[key]
+
+    profile = StorageProfile(deletes_directories=True, recursive_ls=True)
+    op = _rm(hierarchical_fs, "data", rm_tree=rm_tree, profile=profile)
+    deleted, errors = await _collect_with_errors(op)
+    # The root's map takes it whole: its ils_recursive is never sent.
+    assert (deleted, errors, seen) == (["data"], [], ["data"])
+    assert hierarchical_fs.stats.calls == {}

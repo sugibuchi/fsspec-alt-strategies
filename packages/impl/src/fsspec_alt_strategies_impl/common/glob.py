@@ -101,6 +101,14 @@ class PathAction:
         """
         return None
 
+    def descends(self, entry: Entry, value: Any) -> bool:
+        """Whether the traversal goes below a directory, given what `map` returned for it: True by default.
+
+        False reduces it with no values, unlisted, as a directory at a
+        ``maxdepth``: e.g. one the action deleted whole.
+        """
+        return True
+
     async def visit_child(self, entry: Entry, parent_value: Any) -> bool:
         """Whether an item of a directory listed is traversed: False prunes it with all below it.
 
@@ -327,8 +335,13 @@ class VisitDirectory(_TraversalTask):
         entry = self.entry
         match = self._matched(entry)
         value = self._value = await self.action.map(entry, match, self.parent_value)
-        if entry.get("type") != "directory" or not self._descend(entry):
-            # A file, or a directory kept as matched: reduced with no values.
+        if (
+            entry.get("type") != "directory"
+            or not self._descend(entry)
+            or not self.action.descends(entry, value)
+        ):
+            # A file, a directory kept as matched, or one the action takes
+            # whole: reduced with no values.
             return await _reduce(self.action, entry, match, value, _no_values())
         try:
             # Listed, its items visited and their subtasks run, as reduce reads.
@@ -380,6 +393,10 @@ class VisitDirectory(_TraversalTask):
                 use_one_listing=self.use_one_listing,
                 **options,
             )
+
+
+_UNREAD: Any = object()
+"""A subtree's first entry, before its root's `PathAction.map` lets it be read."""
 
 
 async def _no_values() -> AsyncGenerator[Any]:
@@ -448,8 +465,8 @@ class TraverseSubtree(_TraversalTask):
         # Listed as the task starts: one pending, or cancelled, holds nothing.
         entries = self._listing(recursive=True)
         try:
-            first = await anext(entries, None)
-            span = _Span(self, self.entry, first, entries)
+            # Its first entry read once the root's map lets it be.
+            span = _Span(self, self.entry, _UNREAD, entries)
             return await span.map_reduce(self.parent_value)
         except Exception as error:
             if error is not self._listing_error:
@@ -497,11 +514,17 @@ class _Span:
         task, root = self.task, self.root
         match = task._matched(root)
         value = self.value = await task.action.map(root, match, parent_value)
-        if root.get("type") == "directory" and task._descend(root):
+        directory = root.get("type") == "directory"
+        if directory and task._descend(root) and task.action.descends(root, value):
+            if self.next is _UNREAD:
+                self.next = await anext(self.entries, None)
             # Its paths visited and traversed, as reduce reads.
             return await _reduce(task.action, root, match, value, self._values())
-        if root.get("type") == "directory":
-            # A directory matched alone: reduced with no values, nothing below.
+        if self.next is _UNREAD:
+            self.next = None  # The subtree's root, taken whole: none listed.
+        elif directory:
+            # A directory matched alone, or taken whole: reduced with no
+            # values, nothing below.
             self.next = await self._skip()
         return await _reduce(task.action, root, match, value, _no_values())
 

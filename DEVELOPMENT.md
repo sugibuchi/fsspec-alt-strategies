@@ -488,6 +488,8 @@ The strategies run on `common/tree.py`'s `TreeTraversal`, with `common/glob.py`'
 What a strategy does on each path is a `PathAction`. So a strategy is a map-reduce:
 
 - `map` acts on a path before what is below it, given its parent directory's `map` value.
+- `descends`, given a directory's `map` value, may leave it unlisted: it is then reduced with no values. `_tree_rm`
+  so deletes a directory whole by `rm_tree`, its listing never sent.
 - `visit_child` is then called on each item the directory's listing gives, in its order, and may prune it with all
   below it. Each item kept is a subtask.
 - `reduce` reads the values of the items in the path as they end, in no order, from an async generator. That

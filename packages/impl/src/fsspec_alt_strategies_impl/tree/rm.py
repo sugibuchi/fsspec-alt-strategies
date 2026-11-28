@@ -201,23 +201,19 @@ def _tree_rm(
             max_running=max_running, max_events=_MAX_EVENTS, split=handler.segments
         )
         op._on_cancel = engine.cancel
-        deletion = _TreeDeletion(engine._emit_event, op, handler)
-        tasks: list[PathTask]
-        if maxdepth is None and handler.profile.deletes_directories is True:
-            # Each deleted whole, by one rm_tree, with no traversal.
-            tasks = [
-                _Call(engine, d["name"], partial(deletion.delete_tree, d, single))
-                for d in roots.directories
-            ]
-        else:
-            tasks = _traversals(
-                engine,
-                deletion,
-                handler,
-                [(d, d["name"] in matched) for d in roots.directories],
-                maxdepth=maxdepth,
-                ils_kwargs=ils_kwargs,
-            )
+        # rm_tree would delete what is deeper than maxdepth.
+        whole = maxdepth is None and handler.profile.deletes_directories is True
+        deletion = _TreeDeletion(
+            engine._emit_event, op, handler, whole=whole, missing_raises=single
+        )
+        tasks = _traversals(
+            engine,
+            deletion,
+            handler,
+            [(d, d["name"] in matched) for d in roots.directories],
+            maxdepth=maxdepth,
+            ils_kwargs=ils_kwargs,
+        )
         if roots.files:
             files = list(roots.files)
             _found(op, len(files))
@@ -523,10 +519,20 @@ class _TreeDeletion(PathAction):
         emit_event: Any,
         op: Operation[str, RmState],
         handler: TreeFileOperationHandler,
+        *,
+        whole: bool,
+        missing_raises: bool,
     ) -> None:
         super().__init__(emit_event)
         self.op = op
         self.handler = handler
+        # Each directory deleted whole by one rm_tree, unlisted: so only roots are.
+        self.whole = whole
+        # The one path given, missing, raises, as the walk would find it.
+        self.missing_raises = missing_raises
+
+    def descends(self, entry: Entry, value: Any) -> bool:
+        return not self.whole
 
     async def reduce(
         self, entry: Entry, match: bool, value: Any, values: AsyncGenerator[Any]
@@ -534,6 +540,8 @@ class _TreeDeletion(PathAction):
         if entry["type"] != "directory":
             _found(self.op, 1)
             return await self.emitted(await self.delete_file(entry))
+        if self.whole:
+            return await self.delete_tree(entry)
         gone = True
         async for below in values:
             gone &= below is True
@@ -560,13 +568,13 @@ class _TreeDeletion(PathAction):
         rm_file = self.handler.rm_file
         return await _delete(self.op, self.handler, rm_file, entry, directory=False)
 
-    async def delete_tree(self, entry: Entry, missing_raises: bool) -> None:
-        """Delete a root whole, by one ``rm_tree``: missing, the one path given raises, as the walk would find it."""
+    async def delete_tree(self, entry: Entry) -> bool:
+        """Delete a directory whole, by one ``rm_tree``: whether it is gone."""
         rm_tree = self.handler.rm_tree
         outcome = await _delete(self.op, self.handler, rm_tree, entry, directory=True)
-        if outcome == () and missing_raises:
+        if outcome == () and self.missing_raises:
             raise FileNotFoundError(self.handler.trim(entry["name"]))
-        await self.emitted(outcome)
+        return await self.emitted(outcome)
 
     async def emitted(self, outcome: Any) -> bool:
         """Emit an outcome, if any: whether the path is gone."""
